@@ -38,6 +38,7 @@ export function DashboardPage() {
   const managementKey = useAuthStore((state) => state.managementKey);
   const config = useConfigStore((state) => state.config);
   const usageSummary = useDashboardUsageSummary();
+  const refreshUsageSummary = usageSummary.refresh;
 
   const models = useModelsStore((state) => state.models);
   const modelsLoading = useModelsStore((state) => state.loading);
@@ -175,8 +176,8 @@ export function DashboardPage() {
   const refreshDashboard = useCallback(async () => {
     setCurrentTime(new Date());
     setCardRefreshSignal((value) => value + 1);
-    await Promise.all([refreshStats(), fetchModels(), usageSummary.refresh()]);
-  }, [fetchModels, refreshStats, usageSummary.refresh]);
+    await Promise.all([refreshStats(), fetchModels(), refreshUsageSummary()]);
+  }, [fetchModels, refreshStats, refreshUsageSummary]);
 
   useEffect(() => {
     void Promise.all([refreshStats(), fetchModels()]);

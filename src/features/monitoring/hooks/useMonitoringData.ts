@@ -40,6 +40,39 @@ const isRecord = (value: unknown): value is RecordLike =>
 const padNumber = (value: number) => String(value).padStart(2, '0');
 const MONITORING_EVENTS_PAGE_LIMIT = 500;
 
+interface MonitoringEventsPageState {
+  scopeKey: string;
+  beforeMs: number | null;
+  items: MonitoringAnalyticsEventRow[];
+  hasMore: boolean;
+  loadingMore: boolean;
+  lastPageKey: string;
+}
+
+const createEventsPageState = (scopeKey = ''): MonitoringEventsPageState => ({
+  scopeKey,
+  beforeMs: null,
+  items: [],
+  hasMore: false,
+  loadingMore: false,
+  lastPageKey: '',
+});
+
+const buildEventsPageKey = (
+  scopeKey: string,
+  beforeMs: number | null,
+  pageItems: MonitoringAnalyticsEventRow[],
+  nextBeforeMs: number
+) =>
+  [
+    scopeKey,
+    beforeMs ?? 'root',
+    nextBeforeMs,
+    pageItems.length,
+    pageItems[0]?.event_hash ?? '',
+    pageItems[pageItems.length - 1]?.event_hash ?? '',
+  ].join(':');
+
 const buildLocalDayKey = (timestampMs: number) => {
   const date = new Date(timestampMs);
   return `${date.getFullYear()}-${padNumber(date.getMonth() + 1)}-${padNumber(date.getDate())}`;
@@ -2181,10 +2214,9 @@ export function useMonitoringData({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [analyticsNowMs, setAnalyticsNowMs] = useState(() => Date.now());
-  const [eventsBeforeMs, setEventsBeforeMs] = useState<number | null>(null);
-  const [eventItems, setEventItems] = useState<MonitoringAnalyticsEventRow[]>([]);
-  const [eventsHasMore, setEventsHasMore] = useState(false);
-  const [eventsLoadingMore, setEventsLoadingMore] = useState(false);
+  const [eventsPageState, setEventsPageState] = useState<MonitoringEventsPageState>(() =>
+    createEventsPageState()
+  );
 
   const analyticsBounds = useMemo(() => {
     const bounds = getRangeBounds(timeRange, analyticsNowMs, customTimeRange);
@@ -2304,12 +2336,14 @@ export function useMonitoringData({
     [analyticsBounds, analyticsFilters, analyticsGranularity, searchApiKeyHash, searchQuery]
   );
 
-  useEffect(() => {
-    setEventsBeforeMs(null);
-    setEventItems([]);
-    setEventsHasMore(false);
-    setEventsLoadingMore(false);
-  }, [analyticsScopeKey]);
+  const activeEventsPageState =
+    eventsPageState.scopeKey === analyticsScopeKey
+      ? eventsPageState
+      : createEventsPageState(analyticsScopeKey);
+  const eventsBeforeMs = activeEventsPageState.beforeMs;
+  const eventItems = activeEventsPageState.items;
+  const eventsHasMore = activeEventsPageState.hasMore;
+  const eventsLoadingMore = activeEventsPageState.loadingMore;
 
   const analytics = useMonitoringAnalytics({
     fromMs: analyticsBounds?.startMs,
@@ -2333,33 +2367,79 @@ export function useMonitoringData({
     },
     throttleMs: 1_000,
   });
+  const analyticsData = analytics.data;
 
   useEffect(() => {
-    const page = analytics.data?.events;
+    const page = analyticsData?.events;
     if (!page) return;
-    setEventItems((previous) =>
-      eventsBeforeMs ? mergeAnalyticsEventItems(previous, page.items) : page.items
+    const requestBeforeMs = eventsBeforeMs;
+    const pageKey = buildEventsPageKey(
+      analyticsScopeKey,
+      requestBeforeMs,
+      page.items,
+      page.next_before_ms
     );
-    setEventsHasMore(page.has_more);
-    setEventsLoadingMore(false);
-  }, [analytics.data?.events, eventsBeforeMs]);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setEventsPageState((previous) => {
+        const base =
+          previous.scopeKey === analyticsScopeKey
+            ? previous
+            : createEventsPageState(analyticsScopeKey);
+        if (base.lastPageKey === pageKey) return base;
+        return {
+          scopeKey: analyticsScopeKey,
+          beforeMs: base.beforeMs,
+          items: requestBeforeMs ? mergeAnalyticsEventItems(base.items, page.items) : page.items,
+          hasMore: page.has_more,
+          loadingMore: false,
+          lastPageKey: pageKey,
+        };
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [analyticsData?.events, analyticsScopeKey, eventsBeforeMs]);
 
   useEffect(() => {
     if (analytics.error) {
-      setEventsLoadingMore(false);
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setEventsPageState((previous) =>
+          previous.loadingMore ? { ...previous, loadingMore: false } : previous
+        );
+      });
+      return () => {
+        cancelled = true;
+      };
     }
   }, [analytics.error]);
 
   const loadMoreEvents = useCallback(() => {
     if (analytics.loading || eventsLoadingMore || !eventsHasMore) return;
-    const nextBeforeMs = analytics.data?.events?.next_before_ms;
+    const nextBeforeMs = analyticsData?.events?.next_before_ms;
     if (!nextBeforeMs) return;
-    setEventsLoadingMore(true);
-    setEventsBeforeMs(nextBeforeMs);
-  }, [analytics.data?.events?.next_before_ms, analytics.loading, eventsHasMore, eventsLoadingMore]);
+    setEventsPageState((previous) => {
+      const base =
+        previous.scopeKey === analyticsScopeKey
+          ? previous
+          : createEventsPageState(analyticsScopeKey);
+      if (base.loadingMore) return base;
+      return { ...base, beforeMs: nextBeforeMs, loadingMore: true };
+    });
+  }, [
+    analyticsData?.events?.next_before_ms,
+    analytics.loading,
+    analyticsScopeKey,
+    eventsHasMore,
+    eventsLoadingMore,
+  ]);
 
   const allRows = useMemo(() => {
-    const details = analytics.data
+    const details = analyticsData
       ? buildUsageDetailsFromAnalyticsEvents(eventItems)
       : collectUsageDetailsWithEndpoint(usage);
     return buildEventRows(
@@ -2376,7 +2456,7 @@ export function useMonitoringData({
     authFileMap,
     authMetaMap,
     channelByAuthIndex,
-    analytics.data,
+    analyticsData,
     eventItems,
     modelPrices,
     sourceInfoMap,
@@ -2392,95 +2472,84 @@ export function useMonitoringData({
 
   const summary = useMemo(
     () =>
-      analytics.data?.summary
-        ? buildSummaryFromAnalytics(analytics.data.summary)
+      analyticsData?.summary
+        ? buildSummaryFromAnalytics(analyticsData.summary)
         : buildMonitoringSummary(statsRows),
-    [analytics.data?.summary, statsRows]
+    [analyticsData, statsRows]
   );
   const timelineData = useMemo(
     () =>
-      analytics.data?.timeline
+      analyticsData?.timeline
         ? {
             granularity:
-              analytics.data.granularity === 'hour' ? ('hour' as const) : ('day' as const),
-            points: buildTimelineFromAnalytics(analytics.data.timeline, analytics.data.granularity),
+              analyticsData.granularity === 'hour' ? ('hour' as const) : ('day' as const),
+            points: buildTimelineFromAnalytics(analyticsData.timeline, analyticsData.granularity),
           }
         : buildTimeline(statsRows, timeRange, customTimeRange),
-    [analytics.data?.granularity, analytics.data?.timeline, customTimeRange, statsRows, timeRange]
+    [analyticsData, customTimeRange, statsRows, timeRange]
   );
   const hourlyDistribution = useMemo(
     () =>
-      analytics.data?.hourly_distribution
-        ? buildHourlyDistributionFromAnalytics(analytics.data.hourly_distribution)
+      analyticsData?.hourly_distribution
+        ? buildHourlyDistributionFromAnalytics(analyticsData.hourly_distribution)
         : buildHourlyDistribution(statsRows),
-    [analytics.data?.hourly_distribution, statsRows]
+    [analyticsData, statsRows]
   );
   const modelShareRows = useMemo(
     () =>
-      analytics.data?.model_share
-        ? buildModelShareRowsFromAnalytics(analytics.data.model_share, analytics.data.model_stats)
+      analyticsData?.model_share
+        ? buildModelShareRowsFromAnalytics(analyticsData.model_share, analyticsData.model_stats)
         : buildModelShareRows(statsRows),
-    [analytics.data?.model_share, analytics.data?.model_stats, statsRows]
+    [analyticsData, statsRows]
   );
   const channelRows = useMemo(
     () =>
-      analytics.data?.channel_share
-        ? buildChannelRowsFromAnalytics(
-            analytics.data.channel_share,
-            authMetaMap,
-            channelByAuthIndex
-          )
+      analyticsData?.channel_share
+        ? buildChannelRowsFromAnalytics(analyticsData.channel_share, authMetaMap, channelByAuthIndex)
         : buildChannelRows(statsRows),
-    [analytics.data?.channel_share, authMetaMap, channelByAuthIndex, statsRows]
+    [analyticsData, authMetaMap, channelByAuthIndex, statsRows]
   );
   const modelRows = useMemo(
     () =>
-      analytics.data?.model_stats
-        ? buildModelRowsFromAnalytics(analytics.data.model_stats)
+      analyticsData?.model_stats
+        ? buildModelRowsFromAnalytics(analyticsData.model_stats)
         : buildModelRows(statsRows),
-    [analytics.data?.model_stats, statsRows]
+    [analyticsData, statsRows]
   );
   const failureSourceRows = useMemo(
     () =>
-      analytics.data?.failure_sources
+      analyticsData?.failure_sources
         ? buildFailureSourceRowsFromAnalytics(
-            analytics.data.failure_sources,
+            analyticsData.failure_sources,
             authMetaMap,
             channelByAuthIndex
           )
         : buildFailureSourceRows(statsRows),
-    [analytics.data?.failure_sources, authMetaMap, channelByAuthIndex, statsRows]
+    [analyticsData, authMetaMap, channelByAuthIndex, statsRows]
   );
   const taskBuckets = useMemo(
     () =>
-      analytics.data?.task_buckets
+      analyticsData?.task_buckets
         ? buildTaskBucketsFromAnalytics(
-            analytics.data.task_buckets,
+            analyticsData.task_buckets,
             authMetaMap,
             authFileMap,
             sourceInfoMap,
             channelByAuthIndex
           )
         : buildTaskBuckets(statsRows),
-    [
-      analytics.data?.task_buckets,
-      authFileMap,
-      authMetaMap,
-      channelByAuthIndex,
-      sourceInfoMap,
-      statsRows,
-    ]
+    [analyticsData, authFileMap, authMetaMap, channelByAuthIndex, sourceInfoMap, statsRows]
   );
   const recentFailures = useMemo(
     () =>
-      analytics.data?.recent_failures
+      analyticsData?.recent_failures
         ? buildFailureRowsFromAnalytics(
-            analytics.data.recent_failures,
+            analyticsData.recent_failures,
             authMetaMap,
             channelByAuthIndex
           )
         : buildFailureRows(statsRows),
-    [analytics.data?.recent_failures, authMetaMap, channelByAuthIndex, statsRows]
+    [analyticsData, authMetaMap, channelByAuthIndex, statsRows]
   );
 
   const metadata = useMemo<MonitoringMetadata>(() => {

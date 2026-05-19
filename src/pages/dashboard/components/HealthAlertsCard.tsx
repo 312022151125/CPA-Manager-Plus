@@ -58,12 +58,26 @@ export function HealthAlertsCard({
   }, [enabled]);
 
   useEffect(() => {
-    void refreshLogs();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      void refreshLogs();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [refreshLogs]);
 
   useEffect(() => {
     if (!refreshSignal) return;
-    void refreshLogs();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      void refreshLogs();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [refreshLogs, refreshSignal]);
 
   useEffect(() => {
