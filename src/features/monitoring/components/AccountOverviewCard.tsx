@@ -30,7 +30,6 @@ import {
   getAccountStatusDotClassName,
   getAccountStatusLabel,
   getAccountStatusTone,
-  getCodexPlanLabel,
   getSuccessRateClassName,
   type AccountQuotaState,
   type AccountQuotaWindow,
@@ -131,9 +130,8 @@ function AccountQuotaPanel({
       ? new Date(quotaState.lastRefreshedAt).toLocaleString(locale)
       : '';
   const singleQuotaEntry = quotaEntries.length === 1 ? quotaEntries[0] : null;
-  const singlePlanLabel = singleQuotaEntry ? getCodexPlanLabel(singleQuotaEntry.planType, t) : null;
   const quotaMetaText = [
-    singlePlanLabel ? `${t('codex_quota.plan_label')}: ${singlePlanLabel}` : '',
+    ...(singleQuotaEntry?.metaLabels ?? []),
     lastQuotaSync ? `${t('monitoring.last_sync')}: ${lastQuotaSync}` : '',
   ]
     .filter(Boolean)
@@ -179,7 +177,7 @@ function AccountQuotaPanel({
         size={14}
         className={quotaLoading ? styles.refreshIconSpinning : styles.refreshIcon}
       />
-      <span>{t('codex_quota.refresh_button')}</span>
+      <span>{t('monitoring.account_quota_refresh_button')}</span>
     </button>
   );
 
@@ -198,7 +196,7 @@ function AccountQuotaPanel({
             size={14}
             className={quotaLoading ? styles.refreshIconSpinning : styles.refreshIcon}
           />
-          <span>{t('codex_quota.retry_button')}</span>
+          <span>{t('monitoring.account_quota_retry_button')}</span>
         </button>
       ) : null}
     </div>
@@ -208,19 +206,19 @@ function AccountQuotaPanel({
     <section className={styles.quotaSection}>
       <div className={styles.quotaSectionHeader}>
         <div className={styles.quotaSectionTitleGroup}>
-          <strong>{t('codex_quota.title')}</strong>
+          <strong>{t('monitoring.account_quota_title')}</strong>
           {quotaMetaText ? <span>{quotaMetaText}</span> : null}
         </div>
         {renderRefreshButton()}
       </div>
 
       {quotaLoading && quotaEntries.length === 0
-        ? renderStateMessage(t('codex_quota.loading'))
+        ? renderStateMessage(t('monitoring.account_quota_loading'))
         : null}
 
       {!quotaLoading && quotaState?.status === 'error' && quotaEntries.length === 0
         ? renderStateMessage(
-            t('codex_quota.load_failed', {
+            t('monitoring.account_quota_load_failed', {
               message: quotaState.error || t('common.unknown_error'),
             }),
             undefined,
@@ -229,49 +227,62 @@ function AccountQuotaPanel({
         : null}
 
       {!quotaLoading && quotaState?.status === 'success' && quotaEntries.length === 0
-        ? renderStateMessage(t('codex_quota.empty_windows'), t('codex_quota.idle'))
+        ? renderStateMessage(
+            t('monitoring.account_quota_empty'),
+            t('monitoring.account_quota_idle')
+          )
         : null}
 
       {!quotaState && quotaEntries.length === 0
-        ? renderStateMessage(t('codex_quota.empty_windows'), t('codex_quota.idle'))
+        ? renderStateMessage(
+            t('monitoring.account_quota_empty'),
+            t('monitoring.account_quota_idle')
+          )
         : null}
 
       {singleQuotaEntry ? (
         singleQuotaEntry.error ? (
           renderStateMessage(
-            t('codex_quota.load_failed', { message: singleQuotaEntry.error }),
+            t('monitoring.account_quota_load_failed', { message: singleQuotaEntry.error }),
             undefined,
             true
           )
         ) : singleQuotaEntry.windows.length > 0 ? (
           renderQuotaWindows(singleQuotaEntry.windows)
         ) : (
-          renderStateMessage(t('codex_quota.empty_windows'), t('codex_quota.idle'))
+          renderStateMessage(
+            singleQuotaEntry.emptyMessage ?? t('monitoring.account_quota_empty'),
+            t('monitoring.account_quota_idle')
+          )
         )
       ) : quotaEntries.length > 0 ? (
         <div className={styles.quotaEntryGrid}>
           {quotaEntries.map((entry) => {
-            const planLabel = getCodexPlanLabel(entry.planType, t);
+            const entryMetaText =
+              entry.metaLabels && entry.metaLabels.length > 0
+                ? entry.metaLabels.join(' · ')
+                : `${entry.providerLabel} · ${entry.fileName}`;
             return (
               <div key={entry.key} className={styles.quotaEntryCard}>
                 <div className={styles.quotaEntryHeader}>
                   <div className={styles.quotaEntryMain}>
                     <strong>{entry.authLabel}</strong>
-                    <small>
-                      {planLabel ? `${t('codex_quota.plan_label')}: ${planLabel}` : entry.fileName}
-                    </small>
+                    <small>{entryMetaText}</small>
                   </div>
                 </div>
 
                 {entry.error
                   ? renderStateMessage(
-                      t('codex_quota.load_failed', { message: entry.error }),
+                      t('monitoring.account_quota_load_failed', { message: entry.error }),
                       undefined,
                       true
                     )
                   : entry.windows.length > 0
                     ? renderQuotaWindows(entry.windows)
-                    : renderStateMessage(t('codex_quota.empty_windows'), t('codex_quota.idle'))}
+                    : renderStateMessage(
+                        entry.emptyMessage ?? t('monitoring.account_quota_empty'),
+                        t('monitoring.account_quota_idle')
+                      )}
               </div>
             );
           })}
