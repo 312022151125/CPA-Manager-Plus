@@ -27,7 +27,7 @@ const createAccountRow = (overrides: Partial<MonitoringAccountRow> = {}): Monito
 });
 
 describe('accountOverviewQuotaTargets', () => {
-  it('builds quota targets from the full account auth state instead of filtered row auth indices', () => {
+  it('builds supported quota targets from the full account auth state instead of filtered row auth indices', () => {
     const authStateByRowId = new Map<string, MonitoringAccountAuthState>([
       [
         'account@example.com',
@@ -74,8 +74,9 @@ describe('accountOverviewQuotaTargets', () => {
     );
 
     expect(result.get('account@example.com')).toMatchObject([
-      { authIndex: '1', fileName: 'alpha.json', authLabel: 'Alpha' },
-      { authIndex: '2', fileName: 'beta.json', authLabel: 'Beta' },
+      { provider: 'codex', authIndex: '1', fileName: 'alpha.json', authLabel: 'Alpha' },
+      { provider: 'codex', authIndex: '2', fileName: 'beta.json', authLabel: 'Beta' },
+      { provider: 'claude', authIndex: '3', fileName: 'gamma.json', authLabel: 'Gamma' },
     ]);
   });
 
@@ -113,10 +114,74 @@ describe('accountOverviewQuotaTargets', () => {
 
     expect(result.get('account@example.com')).toMatchObject([
       {
+        provider: 'codex',
         authIndex: '1',
         fileName: 'codex-without-account.json',
         accountId: null,
       },
+    ]);
+  });
+
+  it('includes every quota-supported provider while skipping disabled and runtime-only files', () => {
+    const authStateByRowId = new Map<string, MonitoringAccountAuthState>([
+      [
+        'account@example.com',
+        {
+          files: [
+            {
+              name: 'antigravity.json',
+              type: 'antigravity',
+              authIndex: '1',
+              label: 'Antigravity',
+            },
+            {
+              name: 'gemini-cli.json',
+              type: 'gemini-cli',
+              authIndex: '2',
+              label: 'Gemini CLI',
+            },
+            {
+              name: 'kimi.json',
+              type: 'kimi',
+              authIndex: '3',
+              label: 'Kimi',
+            },
+            {
+              name: 'runtime-gemini-cli.json',
+              type: 'gemini-cli',
+              authIndex: '4',
+              runtimeOnly: true,
+              label: 'Runtime Gemini CLI',
+            },
+            {
+              name: 'disabled-claude.json',
+              type: 'claude',
+              authIndex: '5',
+              disabled: true,
+              label: 'Disabled Claude',
+            },
+          ],
+          toggleableFileNames: [],
+          enabledState: 'enabled',
+        },
+      ],
+    ]);
+
+    const result = buildMonitoringAccountQuotaTargetsByAccount(
+      [
+        createAccountRow({
+          id: 'account@example.com',
+          account: 'account@example.com',
+          authIndices: ['1'],
+        }),
+      ],
+      authStateByRowId
+    );
+
+    expect(result.get('account@example.com')).toMatchObject([
+      { provider: 'antigravity', fileName: 'antigravity.json' },
+      { provider: 'gemini-cli', fileName: 'gemini-cli.json' },
+      { provider: 'kimi', fileName: 'kimi.json' },
     ]);
   });
 });

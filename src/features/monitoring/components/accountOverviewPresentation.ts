@@ -1,5 +1,6 @@
 import type { TFunction } from 'i18next';
 import type { MonitoringAccountAuthState } from '@/features/monitoring/accountOverviewState';
+import type { MonitoringAccountQuotaProvider } from '@/features/monitoring/accountOverviewQuotaTargets';
 import type { MonitoringAccountRow } from '@/features/monitoring/hooks/useMonitoringData';
 import { normalizePlanType } from '@/utils/quota';
 import { formatCompactNumber, formatUsd } from '@/utils/usage';
@@ -17,9 +18,13 @@ export type AccountQuotaWindow = {
 
 export type AccountQuotaEntry = {
   key: string;
+  provider: MonitoringAccountQuotaProvider;
+  providerLabel: string;
   authLabel: string;
   fileName: string;
   planType: string | null;
+  metaLabels?: string[];
+  emptyMessage?: string;
   windows: AccountQuotaWindow[];
   error?: string;
 };

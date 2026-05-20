@@ -37,9 +37,7 @@ import {
   type AccountSortState,
   type MonitoringAccountOverviewMode,
 } from '@/features/monitoring/accountOverviewState';
-import {
-  buildMonitoringAccountQuotaTargetsByAccount,
-} from '@/features/monitoring/accountOverviewQuotaTargets';
+import { buildMonitoringAccountQuotaTargetsByAccount } from '@/features/monitoring/accountOverviewQuotaTargets';
 import {
   AccountExpandedDetails,
   AccountOverviewCard,
@@ -56,10 +54,7 @@ import {
 } from '@/features/monitoring/components/MonitoringStatusHeader';
 import { MonitoringSummarySection } from '@/features/monitoring/components/MonitoringSummarySection';
 import { RealtimeEventsPanel } from '@/features/monitoring/components/RealtimeEventsPanel';
-import {
-  type AccountQuotaEntry,
-  type AccountQuotaState,
-} from '@/features/monitoring/components/accountOverviewPresentation';
+import { type AccountQuotaState } from '@/features/monitoring/components/accountOverviewPresentation';
 import {
   buildAccountOptions,
   buildAccountOverviewColumns,
@@ -67,6 +62,7 @@ import {
   buildApiKeyOptions,
   buildApiKeyOverviewColumns,
   buildAuthFilesByAuthIndex,
+  buildAccountQuotaErrorEntry,
   buildChannelOptions,
   buildModelOptions,
   buildPaginationState,
@@ -689,14 +685,7 @@ export function MonitoringCenterPage() {
           result.reason instanceof Error
             ? result.reason.message
             : String(result.reason || t('common.unknown_error'));
-        return {
-          key: fallback.key,
-          authLabel: fallback.authLabel,
-          fileName: fallback.fileName,
-          planType: fallback.planType,
-          windows: [],
-          error,
-        } satisfies AccountQuotaEntry;
+        return buildAccountQuotaErrorEntry(fallback, error, t);
       });
 
       const hasSuccess = entries.some((entry) => !entry.error);
