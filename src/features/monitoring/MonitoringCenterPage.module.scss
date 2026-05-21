@@ -1148,6 +1148,14 @@
     border-radius: 20px;
   }
 
+  .summaryCard,
+  .summaryCardPrimary,
+  .summaryCardSecondary {
+    height: 128px;
+    min-height: 128px;
+    border-radius: var(--app-radius-md);
+  }
+
   .masthead,
   .panel {
     padding: 18px;
@@ -1214,7 +1222,7 @@
   }
 
   .summaryCardSecondary .summaryValue {
-    font-size: 22px;
+    font-size: 26px;
   }
 
   .priceActionsBar {

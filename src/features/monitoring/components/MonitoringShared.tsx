@@ -1,10 +1,40 @@
-import type { ReactNode } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
 import { Select } from '@/components/ui/Select';
+import {
+  IconArrowDownToLine,
+  IconArrowUpFromLine,
+  IconBinary,
+  IconCheck,
+  IconDatabaseZap,
+  IconDollarSign,
+  IconInbox,
+  IconX,
+  type IconProps,
+} from '@/components/ui/icons';
 import type { MonitoringStatusTone } from '@/features/monitoring/hooks/useMonitoringData';
 import styles from '../MonitoringCenterPage.module.scss';
+
+export type SummaryCardIcon =
+  | 'calls'
+  | 'success'
+  | 'failure'
+  | 'cost'
+  | 'tokens'
+  | 'input'
+  | 'output'
+  | 'cache';
+
+export type SummaryCardAccent =
+  | 'blue'
+  | 'green'
+  | 'red'
+  | 'amber'
+  | 'indigo'
+  | 'cyan'
+  | 'violet'
+  | 'teal';
 
 export type SummaryCardProps = {
   label: string;
@@ -12,6 +42,8 @@ export type SummaryCardProps = {
   meta: string;
   tone?: MonitoringStatusTone;
   variant?: 'primary' | 'secondary';
+  icon?: SummaryCardIcon;
+  accent?: SummaryCardAccent;
 };
 
 type PaginationControlsProps = {
@@ -32,22 +64,73 @@ const parsePageSize = (value: string, fallback: number) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-export function SummaryCard({ label, value, meta, tone, variant = 'primary' }: SummaryCardProps) {
+const summaryIconMap: Record<SummaryCardIcon, ComponentType<IconProps>> = {
+  calls: IconInbox,
+  success: IconCheck,
+  failure: IconX,
+  cost: IconDollarSign,
+  tokens: IconBinary,
+  input: IconArrowDownToLine,
+  output: IconArrowUpFromLine,
+  cache: IconDatabaseZap,
+};
+
+const summaryAccentClassMap: Record<SummaryCardAccent, string> = {
+  blue: styles.summaryAccentBlue,
+  green: styles.summaryAccentGreen,
+  red: styles.summaryAccentRed,
+  amber: styles.summaryAccentAmber,
+  indigo: styles.summaryAccentIndigo,
+  cyan: styles.summaryAccentCyan,
+  violet: styles.summaryAccentViolet,
+  teal: styles.summaryAccentTeal,
+};
+
+export function SummaryCard({
+  label,
+  value,
+  meta,
+  tone,
+  variant = 'primary',
+  icon,
+  accent = 'blue',
+}: SummaryCardProps) {
+  const Icon = icon ? summaryIconMap[icon] : null;
   const cardClassName = [
+    'card',
     styles.summaryCard,
     variant === 'secondary' ? styles.summaryCardSecondary : styles.summaryCardPrimary,
+    summaryAccentClassMap[accent],
   ]
     .filter(Boolean)
     .join(' ');
 
   return (
-    <Card className={cardClassName}>
-      <span className={styles.summaryLabel}>{label}</span>
-      <strong className={`${styles.summaryValue} ${tone ? styles[`tone${tone}`] : ''}`}>
-        {value}
-      </strong>
-      <span className={styles.summaryMeta}>{meta}</span>
-    </Card>
+    <div className={cardClassName}>
+      <div className={styles.summaryCardHeader}>
+        {Icon ? (
+          <span className={styles.summaryIcon}>
+            <Icon size={20} />
+          </span>
+        ) : null}
+        <span className={styles.summaryLabel} title={label}>
+          {label}
+        </span>
+      </div>
+      <div className={styles.summaryCardBody}>
+        <strong className={`${styles.summaryValue} ${tone ? styles[`tone${tone}`] : ''}`}>
+          {value}
+        </strong>
+        <span className={styles.summaryMeta} title={meta}>
+          {meta}
+        </span>
+      </div>
+      <div className={styles.summaryCardChart} aria-hidden="true">
+        <svg viewBox="0 0 100 30" preserveAspectRatio="none">
+          <path d="M0,25 Q15,5 30,20 T60,10 T100,25" />
+        </svg>
+      </div>
+    </div>
   );
 }
 
