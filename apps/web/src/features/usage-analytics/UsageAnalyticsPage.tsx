@@ -78,6 +78,7 @@ import {
   buildUsageHeatmapSummaryCards,
   buildUsageOverviewSummaryCards,
   buildUsageTrendSummaryCards,
+  formatUsageDurationMs,
 } from './usageAnalyticsPresentation';
 import styles from './UsageAnalyticsPage.module.scss';
 
@@ -995,9 +996,6 @@ function CostRankChart({ rows, title }: { rows: UsageRankRow[]; title: string })
   );
 }
 
-const formatNullableMs = (value: number | null | undefined) =>
-  value === null || value === undefined ? '-' : `${Math.round(value)}ms`;
-
 const buildHealthChartOption = (
   timeline: UsageTimelinePoint[],
   t: ReturnType<typeof useTranslation>['t'],
@@ -1034,7 +1032,7 @@ const buildHealthChartOption = (
           const entry = item as { marker?: string; seriesName?: string; data?: number };
           const value =
             entry.seriesName === t('usage_analytics.metric_average_latency')
-              ? formatNullableMs(Number(entry.data ?? 0))
+              ? formatUsageDurationMs(Number(entry.data ?? 0))
               : formatPercent(Number(entry.data ?? 0));
           return tooltipRowHtml(
             chartTheme,
@@ -1074,7 +1072,7 @@ const buildHealthChartOption = (
     {
       axisLabel: {
         color: chartTheme.healthColors.latency,
-        formatter: (value: number) => formatNullableMs(value),
+        formatter: (value: number) => formatUsageDurationMs(value),
       },
       position: 'right',
       scale: true,
@@ -2851,7 +2849,7 @@ function DrilldownPreviewPanel({ rows, locale }: { rows: UsageDrilldownEvent[]; 
                   <td>{row.model}</td>
                   <td>{maskApiKeyHash(row.apiKeyHash)}</td>
                   <td>{compactNumber(row.totalTokens)}</td>
-                  <td>{formatNullableMs(row.latencyMs)}</td>
+                  <td>{formatUsageDurationMs(row.latencyMs)}</td>
                   <td>
                     <span className={row.failed ? styles.statusFailed : styles.statusSuccess}>
                       {row.failed
