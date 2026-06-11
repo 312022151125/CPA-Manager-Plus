@@ -174,7 +174,7 @@
   "account_actions": {
     "eyebrow": "Account Action Queue",
     "title": "待处理账号",
-    "description": "请求监控发现 OAuth token 被撤销或认证不可用时，会先自动禁用对应认证文件，并在这里等待你确认删除、重新启用、忽略或标记为已处理。",
+    "description": "请求监控发现 OAuth token 被撤销、认证不可用或工作区停用时，会记录为待处理候选，并在这里等待你确认删除、重新启用、忽略或标记为已处理。",
     "pending_count": "待处理",
     "visible_count": "当前列表",
     "status_filter": "状态筛选",

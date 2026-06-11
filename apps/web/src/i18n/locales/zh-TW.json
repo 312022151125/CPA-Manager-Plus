@@ -173,7 +173,7 @@
   "account_actions": {
     "eyebrow": "Account Action Queue",
     "title": "待處理帳號",
-    "description": "請求監控發現 OAuth token 被撤銷或認證不可用時，會先自動停用對應驗證檔案，並在這裡等待你確認刪除、重新啟用、忽略或標記為已處理。",
+    "description": "請求監控發現 OAuth token 被撤銷、驗證不可用或工作區停用時，會記錄為待處理候選，並在這裡等待你確認刪除、重新啟用、忽略或標記為已處理。",
     "pending_count": "待處理",
     "visible_count": "目前列表",
     "status_filter": "狀態篩選",

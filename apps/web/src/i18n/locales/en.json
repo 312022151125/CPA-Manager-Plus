@@ -185,7 +185,7 @@
   "account_actions": {
     "eyebrow": "Account Action Queue",
     "title": "Pending Accounts",
-    "description": "When request monitoring sees a revoked OAuth token or unavailable authentication, CPA Manager Plus disables the auth file first and keeps it here for you to confirm deletion, re-enable, ignore, or mark resolved.",
+    "description": "When request monitoring sees a revoked OAuth token, unavailable authentication, or a deactivated workspace, CPA Manager Plus records a pending candidate here for you to confirm deletion, re-enable, ignore, or mark resolved.",
     "pending_count": "Pending",
     "visible_count": "Visible",
     "status_filter": "Status filter",
