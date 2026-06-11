@@ -241,9 +241,14 @@ func authFileFromMap(file map[string]any) authFile {
 		AuthIndex:       stringField(file, "auth_index", "authIndex", "auth-index"),
 		Provider:        strings.ToLower(stringField(file, "provider", "type")),
 		AccountSnapshot: stringField(file, "account", "email", "label", "display_account", "displayAccount"),
-		AccountID:       stringField(file, "account_id", "accountId", "sub", "id"),
-		Disabled:        boolField(file, "disabled"),
-		Raw:             file,
+		AccountID: stringField(
+			file,
+			"account_id", "accountId", "chatgpt_account_id", "chatgptAccountId",
+			"project_id", "projectId", "gemini_virtual_project", "geminiVirtualProject",
+			"sub", "id",
+		),
+		Disabled: boolField(file, "disabled"),
+		Raw:      file,
 	}
 }
 

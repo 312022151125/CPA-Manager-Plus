@@ -133,3 +133,60 @@ func TestDeleteRejectsMismatchedCurrentAuthFile(t *testing.T) {
 		t.Fatalf("status = %q", current.Status)
 	}
 }
+
+func TestDeleteAcceptsCurrentAuthFileProjectID(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(t.TempDir() + "/usage.sqlite")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	var deleted bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /auth-files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"name":       "gemini-auth.json",
+				"auth_index": "gemini-1",
+				"provider":   "gemini-cli",
+				"account":    "vertex@example.com",
+				"project_id": "vertex-project-42",
+			}})
+		case "DELETE /auth-files":
+			deleted = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	if err := st.SaveSetup(ctx, store.Setup{CPAUpstreamURL: server.URL, ManagementKey: "mgmt"}); err != nil {
+		t.Fatalf("save setup: %v", err)
+	}
+	item, err := st.UpsertAccountActionCandidate(ctx, model.AccountActionCandidateUpsert{
+		ActionType:        model.AccountActionTypeDelete,
+		Provider:          "gemini-cli",
+		AuthFileName:      "gemini-auth.json",
+		AuthIndex:         "gemini-1",
+		AccountSnapshot:   "vertex@example.com",
+		AccountIDSnapshot: "vertex-project-42",
+		Reason:            "workspace deactivated",
+	})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	svc := New(st, managerconfigsvc.New(config.Config{}, st, collectorsvc.New(nil)), server.Client())
+	updated, err := svc.DeleteAuthFile(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !deleted {
+		t.Fatal("expected DELETE /auth-files")
+	}
+	if updated.Status != model.AccountActionStatusDeleted {
+		t.Fatalf("status = %q", updated.Status)
+	}
+}
