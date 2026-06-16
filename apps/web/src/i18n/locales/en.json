@@ -239,6 +239,7 @@
   "account_actions": {
     "eyebrow": "Auth Issue Queue",
     "title": "Auth Issue Handling",
+    "back_to_monitoring": "Back to Monitoring",
     "description": "When request monitoring sees a revoked OAuth token, unavailable authentication, or a deactivated workspace, CPA Manager Plus records an auth issue candidate here for you to confirm deletion, re-enable, ignore, or mark resolved.",
     "pending_count": "Pending",
     "visible_count": "Visible",
