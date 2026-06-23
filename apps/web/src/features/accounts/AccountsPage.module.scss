@@ -1154,3 +1154,801 @@
     font-size: 22px;
   }
 }
+
+/* Refreshed workspace layout, aligned with Usage Analytics. */
+.container {
+  --accounts-surface: var(--bg-primary);
+  --accounts-muted-surface: var(--surface-subtle);
+  --accounts-border: var(--border-color);
+  --accounts-strong-border: var(--border-primary);
+  --accounts-text: var(--text-primary);
+  --accounts-muted: var(--text-secondary);
+  --accounts-primary: var(--primary-color);
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  color: var(--accounts-text);
+}
+
+.pageHeader {
+  align-items: center;
+  padding: 0 2px;
+
+  h1 {
+    font-size: 24px;
+    line-height: 1.2;
+    letter-spacing: 0;
+  }
+
+  p {
+    max-width: 760px;
+    line-height: 1.5;
+  }
+}
+
+.controlsPanel,
+.tablePanel,
+.loadingPanel,
+.valuePanel,
+.rulePanel {
+  border: 1px solid var(--accounts-border);
+  border-radius: 14px;
+  background: var(--accounts-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.controlsPanel {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 18px;
+}
+
+.controlsTabsRow {
+  min-width: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border-bottom: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
+  scrollbar-width: thin;
+}
+
+.tabs {
+  width: fit-content;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: var(--accounts-muted-surface);
+}
+
+.tabButton {
+  min-height: 34px;
+  height: 34px;
+  padding: 0 14px;
+  border-bottom: 0;
+  border-left: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
+  color: color-mix(in srgb, var(--accounts-muted) 84%, var(--accounts-text));
+  font-size: 13px;
+  line-height: 1;
+
+  &:first-child {
+    border-left: 0;
+  }
+
+  &:hover {
+    background: color-mix(in srgb, var(--accounts-primary) 5%, var(--accounts-surface));
+    color: var(--accounts-text);
+  }
+
+  small {
+    min-width: 18px;
+    min-height: 18px;
+    padding: 2px 6px;
+    background: color-mix(in srgb, var(--accounts-primary) 12%, var(--accounts-surface));
+    color: var(--accounts-primary);
+  }
+}
+
+.tabButtonActive,
+.tabButtonActive:hover {
+  border-bottom-color: transparent;
+  border-left-color: transparent;
+  background: color-mix(in srgb, var(--accounts-primary) 12%, var(--accounts-surface));
+  color: var(--accounts-primary);
+  font-weight: 800;
+}
+
+.tabButtonActive + .tabButton {
+  border-left-color: transparent;
+}
+
+.controlsFilterSection {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px 16px;
+  background: color-mix(in srgb, var(--accounts-muted-surface) 34%, var(--accounts-surface));
+}
+
+.toolbar {
+  grid-template-columns: minmax(260px, 1.5fr) repeat(4, minmax(128px, 0.8fr)) auto;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+
+  :global(.input),
+  :global(button) {
+    min-height: 36px;
+  }
+}
+
+.advancedPanel {
+  padding-top: 12px;
+  border-top: 1px dashed color-mix(in srgb, var(--accounts-border) 76%, transparent);
+}
+
+.columnSettings {
+  align-items: center;
+
+  label {
+    min-height: 28px;
+    border-radius: 8px;
+    background: var(--accounts-surface);
+    font-weight: 700;
+  }
+}
+
+.metricsGrid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metricCard {
+  --metric-accent: var(--accounts-primary);
+  position: relative;
+  isolation: isolate;
+  align-items: flex-start;
+  min-height: 112px;
+  padding: 12px;
+  overflow: hidden;
+  border-color: var(--accounts-border);
+  border-radius: var(--app-radius-md);
+  background: var(--accounts-surface);
+  box-shadow: var(--shadow);
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+
+  &:hover {
+    border-color: var(--accounts-strong-border);
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-1px);
+  }
+}
+
+.metricCardblue {
+  --metric-accent: #3b82f6;
+}
+
+.metricCardgreen {
+  --metric-accent: #10b981;
+}
+
+.metricCardamber {
+  --metric-accent: #f59e0b;
+}
+
+.metricCardred {
+  --metric-accent: #ef4444;
+}
+
+.metricCardviolet {
+  --metric-accent: #7c3aed;
+}
+
+.metricIcon {
+  position: relative;
+  z-index: 1;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--metric-accent) 12%, transparent);
+  color: var(--metric-accent);
+}
+
+.metricBody {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+
+  span {
+    color: var(--accounts-muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  strong {
+    margin-top: 8px;
+    font-size: 24px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.05;
+    overflow-wrap: anywhere;
+  }
+
+  small {
+    margin-top: 6px;
+    color: var(--accounts-muted);
+    line-height: 1.35;
+  }
+}
+
+.metricSparkline {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 0;
+  width: 42%;
+  min-width: 70px;
+  height: 30px;
+  opacity: 0.2;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      135deg,
+      transparent 0 18%,
+      var(--metric-accent) 18% 22%,
+      transparent 22% 44%,
+      var(--metric-accent) 44% 48%,
+      transparent 48% 68%,
+      var(--metric-accent) 68% 72%,
+      transparent 72%
+    ),
+    linear-gradient(to top, color-mix(in srgb, var(--metric-accent) 18%, transparent), transparent);
+  border-radius: 8px;
+}
+
+.panelHeader {
+  min-width: 0;
+
+  h2 {
+    font-size: 16px;
+    line-height: 1.3;
+  }
+
+  p {
+    line-height: 1.5;
+  }
+}
+
+.tablePanel,
+.valuePanel {
+  overflow: hidden;
+}
+
+.batchBar {
+  padding: 12px 16px;
+  background: color-mix(in srgb, var(--accounts-muted-surface) 34%, var(--accounts-surface));
+}
+
+.tableScroller {
+  border-top: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
+}
+
+.accountTable,
+.compactTable {
+  th,
+  td {
+    border-bottom-color: color-mix(in srgb, var(--accounts-border) 72%, transparent);
+  }
+
+  th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: color-mix(in srgb, var(--accounts-muted-surface) 78%, var(--accounts-surface));
+    color: var(--accounts-muted);
+    letter-spacing: 0;
+  }
+
+  tbody tr {
+    transition: background-color 0.14s ease;
+  }
+
+  tbody tr:hover {
+    background: color-mix(in srgb, var(--accounts-primary) 5%, var(--accounts-surface));
+  }
+}
+
+.accountCell {
+  gap: 3px;
+
+  strong {
+    color: var(--accounts-text);
+    font-size: 13px;
+  }
+
+  span {
+    color: var(--accounts-muted);
+  }
+}
+
+.providerPill,
+.badge,
+.priority,
+.priorityBad {
+  min-height: 22px;
+  border-radius: 8px;
+}
+
+.statusBadge,
+.statusBadgeButton {
+  min-height: 21px;
+  border-radius: 7px;
+}
+
+.quotaTrack {
+  height: 8px;
+  background: color-mix(in srgb, var(--accounts-border) 62%, transparent);
+}
+
+.rowSelected {
+  background: color-mix(in srgb, var(--accounts-primary) 8%, var(--accounts-surface));
+}
+
+.rowActions {
+  min-width: max-content;
+}
+
+.pagination {
+  padding: 12px 16px;
+  background: color-mix(in srgb, var(--accounts-muted-surface) 28%, var(--accounts-surface));
+}
+
+.splitGrid,
+.oauthGrid {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: 16px;
+}
+
+.rulePanel {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  padding: 16px;
+
+  h2 {
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.3;
+  }
+}
+
+.ruleList {
+  gap: 8px;
+
+  div {
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accounts-muted-surface) 78%, var(--accounts-surface));
+  }
+}
+
+.drawerBackdrop {
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(2px);
+}
+
+.drawer {
+  gap: 12px;
+  width: min(560px, 100vw);
+  padding: 18px;
+  background: var(--accounts-surface);
+}
+
+.drawerHeader {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--accounts-border);
+}
+
+.drawerTabs {
+  gap: 2px;
+  padding: 3px;
+  overflow-x: auto;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: var(--accounts-muted-surface);
+
+  button {
+    min-height: 30px;
+    border-radius: 8px;
+  }
+}
+
+.drawerSummary {
+  gap: 8px;
+
+  div {
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accounts-muted-surface) 82%, var(--accounts-surface));
+  }
+}
+
+.drawerSection {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accounts-muted-surface) 36%, var(--accounts-surface));
+}
+
+.trendChart {
+  margin: 16px;
+  border-color: var(--accounts-border);
+  background: color-mix(in srgb, var(--accounts-muted-surface) 62%, var(--accounts-surface));
+}
+
+@include tablet {
+  .toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metricsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .splitGrid,
+  .oauthGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@include mobile {
+  .container {
+    gap: 14px;
+  }
+
+  .pageHeader {
+    align-items: stretch;
+  }
+
+  .controlsTabsRow,
+  .controlsFilterSection {
+    padding-inline: 12px;
+  }
+
+  .tabs {
+    width: max-content;
+    max-width: none;
+  }
+
+  .toolbar,
+  .metricsGrid,
+  .drawerSummary {
+    grid-template-columns: 1fr;
+  }
+
+  .metricCard {
+    min-height: 96px;
+  }
+
+  .batchBar,
+  .panelHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .drawer {
+    width: 100vw;
+  }
+}
+
+.batchBar {
+  display: grid;
+  grid-template-columns: minmax(180px, auto) 1fr;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.batchBar > span {
+  min-width: 0;
+}
+
+.batchBarActive {
+  grid-template-columns: minmax(160px, auto) minmax(260px, 0.72fr) minmax(420px, 1fr);
+}
+
+.batchActions,
+.batchSecondaryActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.batchSecondaryActions {
+  flex-wrap: wrap;
+}
+
+.accountTable {
+  min-width: 1060px;
+
+  th,
+  td {
+    padding: 9px 12px;
+  }
+}
+
+.colSelect {
+  width: 44px;
+}
+
+.colAccount {
+  width: 22%;
+}
+
+.colProvider {
+  width: 86px;
+}
+
+.colPlan {
+  width: 86px;
+}
+
+.colStatus {
+  width: 152px;
+}
+
+.colQuota {
+  width: 150px;
+}
+
+.colReset {
+  width: 104px;
+}
+
+.colPriority {
+  width: 82px;
+}
+
+.colValue {
+  width: 108px;
+}
+
+.colRecent {
+  width: 126px;
+}
+
+.colActions {
+  width: 82px;
+}
+
+.statusStack {
+  gap: 3px;
+  max-width: 100%;
+
+  small {
+    display: block;
+    width: 100%;
+    max-width: 128px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.quotaCellHeader {
+  align-items: center;
+
+  strong {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.quotaCell {
+  gap: 6px;
+}
+
+.quotaTrack {
+  max-width: 138px;
+}
+
+.rowActions {
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.rowActionMenu {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accounts-muted);
+}
+
+.rowActionMenu:hover {
+  background: color-mix(in srgb, var(--accounts-primary) 7%, var(--accounts-surface));
+  color: var(--accounts-primary);
+  transform: none;
+}
+
+.metricCard {
+  min-height: 104px;
+}
+
+.metricSparkline {
+  display: none;
+}
+
+@include tablet {
+  .batchBar,
+  .batchBarActive {
+    grid-template-columns: 1fr;
+  }
+
+  .batchActions,
+  .batchSecondaryActions {
+    justify-content: flex-start;
+  }
+}
+
+@include mobile {
+  .accountTable {
+    min-width: 980px;
+  }
+
+  .batchActions,
+  .batchSecondaryActions {
+    align-items: stretch;
+    flex-direction: column;
+
+    :global(.btn),
+    :global(.select-trigger) {
+      width: 100%;
+    }
+  }
+}
+
+.drawerUsageStack {
+  display: grid;
+  gap: 12px;
+}
+
+.drawerUsagePanel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accounts-muted-surface) 36%, var(--accounts-surface));
+}
+
+.drawerUsageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+
+  h3 {
+    margin: 0 0 4px;
+    color: var(--accounts-text);
+    font-size: 14px;
+  }
+
+  p {
+    margin: 0;
+    color: var(--accounts-muted);
+    font-size: 12px;
+  }
+
+  > strong {
+    color: var(--accounts-text);
+    font-size: 18px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+}
+
+.drawerUsageMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.drawerUsageMetric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  min-height: 58px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--accounts-border) 84%, transparent);
+  border-radius: 8px;
+  background: var(--accounts-surface);
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--accounts-muted);
+    font-size: 11px;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--accounts-text);
+    font-size: 15px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.drawerQuotaMeter {
+  display: grid;
+  gap: 8px;
+}
+
+.drawerQuotaMeterHeader,
+.drawerQuotaMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.drawerQuotaMeterHeader {
+  color: var(--accounts-muted);
+  font-size: 12px;
+  font-weight: 700;
+
+  strong {
+    color: var(--accounts-text);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+}
+
+.drawerQuotaTrack {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accounts-border) 62%, transparent);
+}
+
+.drawerQuotaBar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.drawerQuotaMeta {
+  color: var(--accounts-muted);
+  font-size: 12px;
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.drawerUsageError {
+  margin: 0;
+  color: var(--danger-color);
+  font-size: 12px;
+  line-height: 1.5;
+}

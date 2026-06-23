@@ -4,6 +4,7 @@ import type { TFunction } from 'i18next';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
+import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/DropdownMenu';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
@@ -619,7 +620,9 @@ export function AccountsPage() {
   );
   const selectedFileNames = useMemo(
     () =>
-      Array.from(new Set(selectedRows.filter((row) => !row.runtimeOnly).map((row) => row.fileName))),
+      Array.from(
+        new Set(selectedRows.filter((row) => !row.runtimeOnly).map((row) => row.fileName))
+      ),
     [selectedRows]
   );
   const selectedHasPartialSharedAuthFile = useMemo(
@@ -627,10 +630,7 @@ export function AccountsPage() {
     [files, selectedFiles]
   );
   const selectedCodexRows = useMemo(
-    () =>
-      selectedRows.filter(
-        (row) => !row.runtimeOnly && row.provider === CODEX_CONFIG.type
-      ),
+    () => selectedRows.filter((row) => !row.runtimeOnly && row.provider === CODEX_CONFIG.type),
     [selectedRows]
   );
   const selectedRow = useMemo(
@@ -851,7 +851,14 @@ export function AccountsPage() {
             t,
           });
         case CLAUDE_CONFIG.type:
-          return refreshQuotaWithConfig<ClaudeQuotaState, { windows: ClaudeQuotaState['windows']; extraUsage?: ClaudeQuotaState['extraUsage']; planType?: string | null }>({
+          return refreshQuotaWithConfig<
+            ClaudeQuotaState,
+            {
+              windows: ClaudeQuotaState['windows'];
+              extraUsage?: ClaudeQuotaState['extraUsage'];
+              planType?: string | null;
+            }
+          >({
             config: CLAUDE_CONFIG,
             file: row.raw,
             setQuota: setClaudeQuota,
@@ -882,14 +889,7 @@ export function AccountsPage() {
           return false;
       }
     },
-    [
-      setAntigravityQuota,
-      setClaudeQuota,
-      setCodexQuota,
-      setKimiQuota,
-      setXaiQuota,
-      t,
-    ]
+    [setAntigravityQuota, setClaudeQuota, setCodexQuota, setKimiQuota, setXaiQuota, t]
   );
 
   const refreshQuotaRows = useCallback(
@@ -1130,12 +1130,9 @@ export function AccountsPage() {
     [providerFilter]
   );
 
-  const reloadOauthRules = useCallback(
-    async () => {
-      await Promise.all([loadOauthExcluded(), loadOauthModelAlias()]);
-    },
-    [loadOauthExcluded, loadOauthModelAlias]
-  );
+  const reloadOauthRules = useCallback(async () => {
+    await Promise.all([loadOauthExcluded(), loadOauthModelAlias()]);
+  }, [loadOauthExcluded, loadOauthModelAlias]);
 
   const toggleColumn = (column: AccountColumn, visible: boolean) => {
     setHiddenColumns((prev) => {
@@ -1161,7 +1158,7 @@ export function AccountsPage() {
     icon: ReactNode,
     tone: 'blue' | 'green' | 'amber' | 'red' | 'violet' = 'blue'
   ) => (
-    <section key={key} className={styles.metricCard}>
+    <section key={key} className={`${styles.metricCard} ${styles[`metricCard${tone}`]}`}>
       <div className={`${styles.metricIcon} ${styles[`metricIcon${tone}`]}`}>{icon}</div>
       <div className={styles.metricBody}>
         <span>{label}</span>
@@ -1175,7 +1172,11 @@ export function AccountsPage() {
     const tabs: Array<{ id: AccountsView; label: string; badge?: number }> = [
       { id: 'accounts', label: t('accounts.tab_accounts') },
       { id: 'quota', label: t('accounts.tab_quota'), badge: recommendations.length },
-      { id: 'inspection', label: t('accounts.tab_inspection'), badge: metrics.needsInspectionAction },
+      {
+        id: 'inspection',
+        label: t('accounts.tab_inspection'),
+        badge: metrics.needsInspectionAction,
+      },
       { id: 'oauth', label: t('accounts.tab_oauth') },
       { id: 'value', label: t('accounts.tab_value') },
     ];
@@ -1288,114 +1289,147 @@ export function AccountsPage() {
     </section>
   );
 
-  const renderBatchBar = () => (
-    <section className={styles.batchBar}>
-      <span>
-        {t('accounts.selected_count', {
-          count: selectionCount,
-        })}
-      </span>
-      <div className={styles.batchActions}>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => refreshQuotaRows(selectedRows)}
-          disabled={selectionCount === 0 || quotaRefreshing}
-          loading={quotaRefreshing}
-        >
-          <IconRefreshCw size={15} />
-          {t('accounts.refresh_quota')}
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => void batchDownload(selectedFileNames)}
-          disabled={disableControls || selectedFileNames.length === 0}
-        >
-          <IconDownload size={15} />
-          {t('auth_files.batch_download')}
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => handleBatchStatus(true)}
-          disabled={disableControls || selectionCount === 0 || statusUpdating}
-        >
-          <IconCheck size={15} />
-          {t('accounts.enable')}
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => handleBatchStatus(false)}
-          disabled={disableControls || selectionCount === 0 || statusUpdating}
-        >
-          <IconX size={15} />
-          {t('accounts.disable')}
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => void patchWebsocketsRows(selectedRows, true)}
-          disabled={disableControls || selectedCodexRows.length === 0 || batchFieldsUpdating}
-          loading={batchFieldsUpdating}
-        >
-          {t('auth_files.batch_websockets_enable')}
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => void patchWebsocketsRows(selectedRows, false)}
-          disabled={disableControls || selectedCodexRows.length === 0 || batchFieldsUpdating}
-        >
-          {t('auth_files.batch_websockets_disable')}
-        </Button>
-        <Select
-          value={priorityDraft}
-          options={PRIORITY_OPTIONS}
-          onChange={setPriorityDraft}
-          ariaLabel={t('accounts.priority_select')}
-          className={styles.prioritySelect}
-        />
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={disableControls || selectionCount === 0 || batchFieldsUpdating}
-          loading={batchFieldsUpdating}
-          onClick={() => patchPriorityRows(selectedRows, Number(priorityDraft))}
-        >
-          {t('accounts.set_priority')}
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={disableControls || selectionCount === 0 || batchFieldsUpdating}
-          onClick={() => patchPriorityRows(selectedRows, 0)}
-        >
-          {t('accounts.restore_default')}
-        </Button>
-        <Button
-          variant="danger"
-          size="sm"
-          disabled={
-            disableControls || selectedFileNames.length === 0 || selectedHasPartialSharedAuthFile
-          }
-          onClick={() => {
-            if (selectedHasPartialSharedAuthFile) return;
-            batchDelete(selectedFileNames);
-          }}
-        >
-          <IconTrash2 size={15} />
-          {t('common.delete')}
-        </Button>
-      </div>
-    </section>
-  );
+  const renderBatchBar = () => {
+    const hasSelection = selectionCount > 0;
 
-  const getAntigravityPlanLabel = (
-    plan: string | null | undefined,
-    fallback?: string | null
-  ) => {
+    return (
+      <section className={`${styles.batchBar} ${hasSelection ? styles.batchBarActive : ''}`}>
+        <span>
+          {t('accounts.selected_count', {
+            count: selectionCount,
+          })}
+        </span>
+        <div className={styles.batchActions}>
+          {!hasSelection ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => refreshQuotaRows(rows)}
+              disabled={quotaRefreshing || rows.length === 0}
+              loading={quotaRefreshing}
+              title={t('accounts.refresh_quota')}
+            >
+              <IconRefreshCw size={15} />
+              {t('accounts.refresh_quota')}
+            </Button>
+          ) : null}
+          {hasSelection ? (
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => refreshQuotaRows(selectedRows)}
+                disabled={quotaRefreshing}
+                loading={quotaRefreshing}
+                title={t('accounts.refresh_quota')}
+              >
+                <IconRefreshCw size={15} />
+                {t('accounts.refresh_quota')}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => handleBatchStatus(true)}
+                disabled={disableControls || statusUpdating}
+                title={t('accounts.enable')}
+              >
+                <IconCheck size={15} />
+                {t('accounts.enable')}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => handleBatchStatus(false)}
+                disabled={disableControls || statusUpdating}
+                title={t('accounts.disable')}
+              >
+                <IconX size={15} />
+                {t('accounts.disable')}
+              </Button>
+            </>
+          ) : null}
+        </div>
+        {hasSelection ? (
+          <div className={styles.batchSecondaryActions}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void batchDownload(selectedFileNames)}
+              disabled={disableControls || selectedFileNames.length === 0}
+              title={t('auth_files.batch_download')}
+            >
+              <IconDownload size={15} />
+              {t('auth_files.batch_download')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void patchWebsocketsRows(selectedRows, true)}
+              disabled={disableControls || selectedCodexRows.length === 0 || batchFieldsUpdating}
+              loading={batchFieldsUpdating}
+              title={t('auth_files.batch_websockets_enable')}
+            >
+              {t('auth_files.batch_websockets_enable')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void patchWebsocketsRows(selectedRows, false)}
+              disabled={disableControls || selectedCodexRows.length === 0 || batchFieldsUpdating}
+              title={t('auth_files.batch_websockets_disable')}
+            >
+              {t('auth_files.batch_websockets_disable')}
+            </Button>
+            <Select
+              value={priorityDraft}
+              options={PRIORITY_OPTIONS}
+              onChange={setPriorityDraft}
+              ariaLabel={t('accounts.priority_select')}
+              className={styles.prioritySelect}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={disableControls || batchFieldsUpdating}
+              loading={batchFieldsUpdating}
+              onClick={() => patchPriorityRows(selectedRows, Number(priorityDraft))}
+              title={t('accounts.set_priority')}
+            >
+              {t('accounts.set_priority')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={disableControls || batchFieldsUpdating}
+              onClick={() => patchPriorityRows(selectedRows, 0)}
+              title={t('accounts.restore_default')}
+            >
+              {t('accounts.restore_default')}
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={
+                disableControls ||
+                selectedFileNames.length === 0 ||
+                selectedHasPartialSharedAuthFile
+              }
+              onClick={() => {
+                if (selectedHasPartialSharedAuthFile) return;
+                batchDelete(selectedFileNames);
+              }}
+              title={t('common.delete')}
+            >
+              <IconTrash2 size={15} />
+              {t('common.delete')}
+            </Button>
+          </div>
+        ) : null}
+      </section>
+    );
+  };
+
+  const getAntigravityPlanLabel = (plan: string | null | undefined, fallback?: string | null) => {
     if (plan === 'free') return t('antigravity_subscription.plan_free');
     if (plan === 'pro') return t('antigravity_subscription.plan_pro');
     if (plan === 'ultra') return t('antigravity_subscription.plan_ultra');
@@ -1466,7 +1500,10 @@ export function AccountsPage() {
         );
       } else if (antigravitySubscription.status === 'loading') {
         badges.push(
-          <span key="antigravity-loading" className={`${styles.statusBadge} ${styles.statusBadgeinfo}`}>
+          <span
+            key="antigravity-loading"
+            className={`${styles.statusBadge} ${styles.statusBadgeinfo}`}
+          >
             {t('antigravity_subscription.loading_short')}
           </span>
         );
@@ -1500,11 +1537,124 @@ export function AccountsPage() {
     return badges.length > 0 ? <div className={styles.statusBadgeRow}>{badges}</div> : null;
   };
 
+  const buildRowMenuItems = (row: AccountRow): DropdownMenuItem[] => [
+    {
+      key: 'models',
+      label: t('auth_files.models_button'),
+      icon: <IconModelCluster size={15} />,
+      onClick: () => void showModels(row.raw),
+      disabled: row.runtimeOnly,
+    },
+    {
+      key: 'prefix-proxy',
+      label: t('auth_files.prefix_proxy_button'),
+      icon: <IconSettings size={15} />,
+      onClick: () => void openPrefixProxyEditor(row.raw),
+      disabled: disableControls || row.runtimeOnly,
+    },
+    ...(canResetCodexQuota(row)
+      ? [
+          {
+            key: 'reset-quota',
+            label: t('codex_quota.reset_action_button'),
+            icon: <IconRefreshCw size={15} />,
+            onClick: () => resetCodexQuotaForRow(row),
+          } satisfies DropdownMenuItem,
+        ]
+      : []),
+    {
+      key: 'download',
+      label: t('auth_files.download_button'),
+      icon: <IconDownload size={15} />,
+      onClick: () => void handleDownload(row.fileName),
+      disabled: row.runtimeOnly,
+    },
+    {
+      key: 'delete',
+      label: t('auth_files.delete_button'),
+      icon: <IconTrash2 size={15} />,
+      onClick: () => handleDelete(row.fileName),
+      disabled: disableControls || row.runtimeOnly || deleting === row.fileName,
+      tone: 'danger',
+    },
+  ];
+
+  const renderRowActions = (row: AccountRow) => (
+    <div className={styles.rowActions}>
+      <Button
+        variant="ghost"
+        size="sm"
+        iconOnly
+        onClick={() => setSelectedRowKey(row.selectionKey)}
+        title={t('accounts.open_detail', { name: row.fileName })}
+        aria-label={t('accounts.open_detail', { name: row.fileName })}
+      >
+        <IconChevronRight size={16} />
+      </Button>
+      <DropdownMenu
+        items={buildRowMenuItems(row)}
+        ariaLabel={t('accounts.col_actions')}
+        triggerIcon={<IconMoreVertical size={16} />}
+        triggerClassName={styles.rowActionMenu}
+      />
+    </div>
+  );
+
+  const renderPagination = () => (
+    <footer className={styles.pagination}>
+      <span>
+        {t('accounts.total_rows', {
+          total: filteredRows.length,
+        })}
+      </span>
+      <div className={styles.paginationControls}>
+        <Select
+          value={String(pageSize)}
+          options={PAGE_SIZE_OPTIONS}
+          onChange={(value) => setPageSize(Number(value))}
+          ariaLabel={t('accounts.page_size')}
+        />
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+          disabled={currentPage <= 1}
+        >
+          {t('common.previous')}
+        </Button>
+        <span>
+          {currentPage} / {totalPages}
+        </span>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+          disabled={currentPage >= totalPages}
+        >
+          {t('common.next')}
+        </Button>
+      </div>
+    </footer>
+  );
+
   const renderAccountTable = (rowsToRender = pageRows, paged = true) => (
     <section className={styles.tablePanel}>
       {paged ? renderBatchBar() : null}
       <div className={styles.tableScroller}>
         <table className={styles.accountTable}>
+          <colgroup>
+            {paged ? <col className={styles.colSelect} /> : null}
+            <col className={styles.colAccount} />
+            {isColumnVisible('provider') ? <col className={styles.colProvider} /> : null}
+            {isColumnVisible('plan') ? <col className={styles.colPlan} /> : null}
+            {isColumnVisible('status') ? <col className={styles.colStatus} /> : null}
+            {isColumnVisible('quota') ? <col className={styles.colQuota} /> : null}
+            {isColumnVisible('reset') ? <col className={styles.colReset} /> : null}
+            {isColumnVisible('priority') ? <col className={styles.colPriority} /> : null}
+            {isColumnVisible('value') ? <col className={styles.colValue} /> : null}
+            {isColumnVisible('recent') ? <col className={styles.colRecent} /> : null}
+            <col className={styles.colActions} />
+          </colgroup>
           <thead>
             <tr>
               {paged ? (
@@ -1566,17 +1716,25 @@ export function AccountsPage() {
                   </td>
                   {isColumnVisible('provider') ? (
                     <td>
-                      <span className={styles.providerPill}>{getProviderLabel(row.provider, t)}</span>
+                      <span className={styles.providerPill}>
+                        {getProviderLabel(row.provider, t)}
+                      </span>
                     </td>
                   ) : null}
                   {isColumnVisible('plan') ? <td>{row.planType ?? '-'}</td> : null}
                   {isColumnVisible('status') ? (
                     <td>
                       <div className={styles.statusStack}>
-                        <span className={`${styles.badge} ${row.disabled ? styles.badgeMuted : styles.badgeGood}`}>
-                          {row.disabled ? t('accounts.status_disabled') : t('accounts.status_available')}
+                        <span
+                          className={`${styles.badge} ${row.disabled ? styles.badgeMuted : styles.badgeGood}`}
+                        >
+                          {row.disabled
+                            ? t('accounts.status_disabled')
+                            : t('accounts.status_available')}
                         </span>
-                        {row.statusMessage ? <small>{row.statusMessage}</small> : null}
+                        {row.statusMessage ? (
+                          <small title={row.statusMessage}>{row.statusMessage}</small>
+                        ) : null}
                         {row.inspection && row.inspection.action !== 'keep' ? (
                           <small className={styles.inspectionHint}>
                             {t('accounts.inspection_action', {
@@ -1594,7 +1752,9 @@ export function AccountsPage() {
                     <td>
                       <div className={styles.quotaCell}>
                         <div className={styles.quotaCellHeader}>
-                          <span className={`${styles.badge} ${getQuotaStatusClass(row.quota.status)}`}>
+                          <span
+                            className={`${styles.badge} ${getQuotaStatusClass(row.quota.status)}`}
+                          >
                             {t(quotaStatusLabelKey(row.quota.status))}
                           </span>
                           <strong>{formatPercent(remaining)}</strong>
@@ -1611,7 +1771,13 @@ export function AccountsPage() {
                   {isColumnVisible('reset') ? <td>{row.quota.resetLabel}</td> : null}
                   {isColumnVisible('priority') ? (
                     <td>
-                      <span className={row.priority !== null && row.priority < 0 ? styles.priorityBad : styles.priority}>
+                      <span
+                        className={
+                          row.priority !== null && row.priority < 0
+                            ? styles.priorityBad
+                            : styles.priority
+                        }
+                      >
                         {row.priority ?? 0}
                       </span>
                     </td>
@@ -1631,71 +1797,7 @@ export function AccountsPage() {
                       )}
                     </td>
                   ) : null}
-                  <td onClick={(event) => event.stopPropagation()}>
-                    <div className={styles.rowActions}>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        iconOnly
-                        onClick={() => setSelectedRowKey(row.selectionKey)}
-                        aria-label={t('accounts.open_detail', { name: row.fileName })}
-                      >
-                        <IconMoreVertical size={16} />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        iconOnly
-                        onClick={() => void showModels(row.raw)}
-                        disabled={row.runtimeOnly}
-                        aria-label={t('auth_files.models_button')}
-                      >
-                        <IconModelCluster size={16} />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        iconOnly
-                        onClick={() => void openPrefixProxyEditor(row.raw)}
-                        disabled={disableControls || row.runtimeOnly}
-                        aria-label={t('auth_files.prefix_proxy_button')}
-                      >
-                        <IconSettings size={16} />
-                      </Button>
-                      {canResetCodexQuota(row) ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          iconOnly
-                          onClick={() => resetCodexQuotaForRow(row)}
-                          aria-label={t('codex_quota.reset_action_button')}
-                        >
-                          <IconRefreshCw size={16} />
-                        </Button>
-                      ) : null}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        iconOnly
-                        onClick={() => void handleDownload(row.fileName)}
-                        disabled={row.runtimeOnly}
-                        aria-label={t('auth_files.download_button')}
-                      >
-                        <IconDownload size={16} />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        iconOnly
-                        onClick={() => handleDelete(row.fileName)}
-                        disabled={disableControls || row.runtimeOnly}
-                        loading={deleting === row.fileName}
-                        aria-label={t('auth_files.delete_button')}
-                      >
-                        <IconTrash2 size={16} />
-                      </Button>
-                    </div>
-                  </td>
+                  <td onClick={(event) => event.stopPropagation()}>{renderRowActions(row)}</td>
                 </tr>
               );
             })}
@@ -1713,42 +1815,7 @@ export function AccountsPage() {
           }
         />
       ) : null}
-      {paged ? (
-        <footer className={styles.pagination}>
-          <span>
-            {t('accounts.total_rows', {
-              total: filteredRows.length,
-            })}
-          </span>
-          <div className={styles.paginationControls}>
-            <Select
-              value={String(pageSize)}
-              options={PAGE_SIZE_OPTIONS}
-              onChange={(value) => setPageSize(Number(value))}
-              ariaLabel={t('accounts.page_size')}
-            />
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-              disabled={currentPage <= 1}
-            >
-              {t('common.previous')}
-            </Button>
-            <span>
-              {currentPage} / {totalPages}
-            </span>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
-              disabled={currentPage >= totalPages}
-            >
-              {t('common.next')}
-            </Button>
-          </div>
-        </footer>
-      ) : null}
+      {paged ? renderPagination() : null}
     </section>
   );
 
@@ -1856,28 +1923,98 @@ export function AccountsPage() {
         );
       }
       if (detailTab === 'value') {
+        const requests =
+          valueRow?.requests ?? selectedRow.usage.success + selectedRow.usage.failure;
+        const successRate = valueRow?.successRate ?? selectedRow.usage.successRate;
+        const inputTokens = valueRow?.inputTokens ?? 0;
+        const outputTokens = valueRow?.outputTokens ?? 0;
+        const totalTokens = inputTokens + outputTokens;
+        const estimatedCost = valueRow?.estimatedCost ?? requests * 0.018;
+        const quotaRemaining = selectedRow.quota.remainingPercent;
+        const quotaWidth = Math.max(0, Math.min(100, quotaRemaining ?? 0));
+
         return (
-          <section className={styles.drawerSection}>
-            <h3>{t('accounts.value_title')}</h3>
-            <dl>
-              <div>
-                <dt>{t('accounts.value_requests')}</dt>
-                <dd>{valueRow ? formatCompactNumber(valueRow.requests) : '-'}</dd>
+          <div className={styles.drawerUsageStack}>
+            <section className={styles.drawerUsagePanel}>
+              <div className={styles.drawerUsageHeader}>
+                <div>
+                  <h3>{t('accounts.value_title')}</h3>
+                  <p>
+                    {valueRow
+                      ? t(`accounts.value_source_${valueRow.source}`)
+                      : t('accounts.value_source_recent')}
+                  </p>
+                </div>
+                <strong>{formatMoney(estimatedCost)}</strong>
               </div>
-              <div>
-                <dt>{t('accounts.value_success_rate')}</dt>
-                <dd>{valueRow ? formatPercent(valueRow.successRate, 1) : '-'}</dd>
+              <div className={styles.drawerUsageMetricGrid}>
+                <div className={styles.drawerUsageMetric}>
+                  <span>{t('accounts.value_requests')}</span>
+                  <strong>{formatCompactNumber(requests)}</strong>
+                </div>
+                <div className={styles.drawerUsageMetric}>
+                  <span>{t('accounts.value_success_rate')}</span>
+                  <strong>{formatPercent(successRate, 1)}</strong>
+                </div>
+                <div className={styles.drawerUsageMetric}>
+                  <span>{t('accounts.value_input_tokens')}</span>
+                  <strong>{inputTokens > 0 ? formatCompactNumber(inputTokens) : '-'}</strong>
+                </div>
+                <div className={styles.drawerUsageMetric}>
+                  <span>{t('accounts.value_output_tokens')}</span>
+                  <strong>{outputTokens > 0 ? formatCompactNumber(outputTokens) : '-'}</strong>
+                </div>
+                <div className={styles.drawerUsageMetric}>
+                  <span>{t('usage_analytics.trend_metric_totalTokens')}</span>
+                  <strong>{totalTokens > 0 ? formatCompactNumber(totalTokens) : '-'}</strong>
+                </div>
+                <div className={styles.drawerUsageMetric}>
+                  <span>{t('accounts.value_recent')}</span>
+                  <strong>
+                    {valueRow?.lastSeenMs
+                      ? formatTimestamp(valueRow.lastSeenMs, i18n.language)
+                      : '-'}
+                  </strong>
+                </div>
               </div>
-              <div>
-                <dt>{t('accounts.value_estimated')}</dt>
-                <dd>{valueRow ? formatMoney(valueRow.estimatedCost) : '-'}</dd>
+            </section>
+            <section className={styles.drawerUsagePanel}>
+              <div className={styles.drawerUsageHeader}>
+                <div>
+                  <h3>{t('accounts.detail_quota')}</h3>
+                  <p>{selectedRow.quota.source}</p>
+                </div>
+                <span
+                  className={`${styles.badge} ${getQuotaStatusClass(selectedRow.quota.status)}`}
+                >
+                  {t(quotaStatusLabelKey(selectedRow.quota.status))}
+                </span>
               </div>
-              <div>
-                <dt>{t('accounts.value_source')}</dt>
-                <dd>{valueRow ? t(`accounts.value_source_${valueRow.source}`) : '-'}</dd>
+              <div className={styles.drawerQuotaMeter}>
+                <div className={styles.drawerQuotaMeterHeader}>
+                  <span>{t('accounts.detail_quota')}</span>
+                  <strong>{formatPercent(quotaRemaining)}</strong>
+                </div>
+                <div className={styles.drawerQuotaTrack} aria-hidden="true">
+                  <span
+                    className={`${styles.drawerQuotaBar} ${getRemainingBarClass(selectedRow)}`}
+                    style={{ width: `${quotaWidth}%` }}
+                  />
+                </div>
+                <div className={styles.drawerQuotaMeta}>
+                  <span>
+                    {t('accounts.detail_used')}: {formatPercent(selectedRow.quota.usedPercent)}
+                  </span>
+                  <span>
+                    {t('accounts.detail_reset')}: {selectedRow.quota.resetLabel}
+                  </span>
+                </div>
               </div>
-            </dl>
-          </section>
+              {selectedRow.quota.error ? (
+                <p className={styles.drawerUsageError}>{selectedRow.quota.error}</p>
+              ) : null}
+            </section>
+          </div>
         );
       }
       if (detailTab === 'events') {
@@ -1931,8 +2068,7 @@ export function AccountsPage() {
                   </thead>
                   <tbody>
                     {rowEvents.map((event) => {
-                      const requestLabel =
-                        event.request_id || event.event_hash.slice(0, 10) || '-';
+                      const requestLabel = event.request_id || event.event_hash.slice(0, 10) || '-';
                       const statusLabel = event.failed
                         ? event.fail_status_code
                           ? `${t('accounts.detail_event_failed')} ${event.fail_status_code}`
@@ -1941,7 +2077,10 @@ export function AccountsPage() {
                       return (
                         <tr key={event.event_hash}>
                           <td>{formatTimestamp(event.timestamp_ms, i18n.language)}</td>
-                          <td className={styles.monoCell} title={event.request_id || event.event_hash}>
+                          <td
+                            className={styles.monoCell}
+                            title={event.request_id || event.event_hash}
+                          >
                             {requestLabel}
                           </td>
                           <td title={event.resolved_model || event.model}>
@@ -2144,7 +2283,6 @@ export function AccountsPage() {
   const renderAccountsOverview = () => (
     <>
       {renderMetrics()}
-      {renderToolbar()}
       {error ? <div className={styles.errorBox}>{error}</div> : null}
       {loading ? (
         <div className={styles.loadingPanel}>
@@ -2160,7 +2298,9 @@ export function AccountsPage() {
   const renderQuotaView = () => {
     const lowRows = rows.filter((row) => row.quota.status === 'low');
     const exhaustedRows = rows.filter((row) => row.quota.status === 'exhausted');
-    const pendingRows = rows.filter((row) => row.quota.status === 'unknown' || row.quota.status === 'loading');
+    const pendingRows = rows.filter(
+      (row) => row.quota.status === 'unknown' || row.quota.status === 'loading'
+    );
     const criticalRecommendations = recommendations.filter(
       (item) => getRecommendationRank(item.priority) >= getRecommendationRank('high')
     );
@@ -2171,10 +2311,38 @@ export function AccountsPage() {
     return (
       <>
         <section className={styles.metricsGrid}>
-          {renderMetricCard('low-quota', t('accounts.metric_low'), lowRows.length, t('accounts.metric_low_meta'), <IconShield size={24} />, 'amber')}
-          {renderMetricCard('exhausted', t('accounts.quota_metric_exhausted'), exhaustedRows.length, t('accounts.quota_metric_exhausted_meta'), <IconX size={24} />, 'red')}
-          {renderMetricCard('pending', t('accounts.quota_metric_pending'), pendingRows.length, t('accounts.quota_metric_pending_meta'), <IconRefreshCw size={24} />, 'blue')}
-          {renderMetricCard('recommend', t('accounts.quota_metric_recommend'), criticalRecommendations.length, t('accounts.quota_metric_recommend_meta'), <IconTrendingUp size={24} />, 'green')}
+          {renderMetricCard(
+            'low-quota',
+            t('accounts.metric_low'),
+            lowRows.length,
+            t('accounts.metric_low_meta'),
+            <IconShield size={24} />,
+            'amber'
+          )}
+          {renderMetricCard(
+            'exhausted',
+            t('accounts.quota_metric_exhausted'),
+            exhaustedRows.length,
+            t('accounts.quota_metric_exhausted_meta'),
+            <IconX size={24} />,
+            'red'
+          )}
+          {renderMetricCard(
+            'pending',
+            t('accounts.quota_metric_pending'),
+            pendingRows.length,
+            t('accounts.quota_metric_pending_meta'),
+            <IconRefreshCw size={24} />,
+            'blue'
+          )}
+          {renderMetricCard(
+            'recommend',
+            t('accounts.quota_metric_recommend'),
+            criticalRecommendations.length,
+            t('accounts.quota_metric_recommend_meta'),
+            <IconTrendingUp size={24} />,
+            'green'
+          )}
         </section>
         <section className={styles.splitGrid}>
           <div className={styles.tablePanel}>
@@ -2226,14 +2394,20 @@ export function AccountsPage() {
                     <tr key={`${item.row.fileName}:${item.action}`}>
                       <td>
                         <div className={styles.accountCell}>
-                          <strong title={item.row.accountLabel}>{getDisplayAccount(item.row)}</strong>
-                          <span title={item.row.fileName}>{getDisplayFileName(item.row.fileName)}</span>
+                          <strong title={item.row.accountLabel}>
+                            {getDisplayAccount(item.row)}
+                          </strong>
+                          <span title={item.row.fileName}>
+                            {getDisplayFileName(item.row.fileName)}
+                          </span>
                         </div>
                       </td>
                       <td>{formatPercent(item.row.quota.remainingPercent)}</td>
                       <td>{t(getRecommendationActionLabelKey(item.action))}</td>
                       <td>
-                        <span className={`${styles.badge} ${getRecommendationPriorityClass(item.priority)}`}>
+                        <span
+                          className={`${styles.badge} ${getRecommendationPriorityClass(item.priority)}`}
+                        >
                           {t(`accounts.recommend_priority_${item.priority}`)}
                         </span>
                       </td>
@@ -2253,7 +2427,10 @@ export function AccountsPage() {
               </table>
             </div>
             {recommendations.length === 0 ? (
-              <EmptyState title={t('accounts.quota_no_recommendations')} description={t('accounts.quota_no_recommendations_desc')} />
+              <EmptyState
+                title={t('accounts.quota_no_recommendations')}
+                description={t('accounts.quota_no_recommendations_desc')}
+              />
             ) : null}
           </div>
           <aside className={styles.rulePanel}>
@@ -2281,10 +2458,40 @@ export function AccountsPage() {
   const renderInspectionView = () => (
     <>
       <section className={styles.metricsGrid}>
-        {renderMetricCard('last-run', t('accounts.inspection_metric_last'), latestRun ? `#${latestRun.id}` : '-', latestRun ? formatTimestamp(latestRun.startedAtMs, i18n.language) : t('accounts.detail_no_inspection'), <IconEye size={24} />, 'blue')}
-        {renderMetricCard('disable', t('accounts.inspection_metric_disable'), inspectionResults.filter((item) => item.action === 'disable').length, t('accounts.inspection_metric_disable_meta'), <IconX size={24} />, 'red')}
-        {renderMetricCard('enable', t('accounts.inspection_metric_enable'), inspectionResults.filter((item) => item.action === 'enable').length, t('accounts.inspection_metric_enable_meta'), <IconCheck size={24} />, 'green')}
-        {renderMetricCard('reauth', t('accounts.inspection_metric_reauth'), inspectionResults.filter((item) => item.action === 'reauth').length, t('accounts.inspection_metric_reauth_meta'), <IconShield size={24} />, 'amber')}
+        {renderMetricCard(
+          'last-run',
+          t('accounts.inspection_metric_last'),
+          latestRun ? `#${latestRun.id}` : '-',
+          latestRun
+            ? formatTimestamp(latestRun.startedAtMs, i18n.language)
+            : t('accounts.detail_no_inspection'),
+          <IconEye size={24} />,
+          'blue'
+        )}
+        {renderMetricCard(
+          'disable',
+          t('accounts.inspection_metric_disable'),
+          inspectionResults.filter((item) => item.action === 'disable').length,
+          t('accounts.inspection_metric_disable_meta'),
+          <IconX size={24} />,
+          'red'
+        )}
+        {renderMetricCard(
+          'enable',
+          t('accounts.inspection_metric_enable'),
+          inspectionResults.filter((item) => item.action === 'enable').length,
+          t('accounts.inspection_metric_enable_meta'),
+          <IconCheck size={24} />,
+          'green'
+        )}
+        {renderMetricCard(
+          'reauth',
+          t('accounts.inspection_metric_reauth'),
+          inspectionResults.filter((item) => item.action === 'reauth').length,
+          t('accounts.inspection_metric_reauth_meta'),
+          <IconShield size={24} />,
+          'amber'
+        )}
       </section>
       <section className={styles.tablePanel}>
         <div className={styles.panelHeader}>
@@ -2297,7 +2504,11 @@ export function AccountsPage() {
             </p>
           </div>
           <div className={styles.headerActions}>
-            <Button variant="secondary" size="sm" onClick={() => navigate('/codex-inspection/server')}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => navigate('/codex-inspection/server')}
+            >
               <IconChevronRight size={15} />
               {t('accounts.open_server_inspection')}
             </Button>
@@ -2343,7 +2554,11 @@ export function AccountsPage() {
                         <span title={item.fileName}>{getDisplayFileName(item.fileName)}</span>
                       </div>
                     </td>
-                    <td>{item.disabled ? t('accounts.status_disabled') : t('accounts.status_available')}</td>
+                    <td>
+                      {item.disabled
+                        ? t('accounts.status_disabled')
+                        : t('accounts.status_available')}
+                    </td>
                     <td>{item.statusCode ?? '-'}</td>
                     <td>{t(`accounts.action_${item.action}`, { defaultValue: item.action })}</td>
                     <td>{item.actionReason || '-'}</td>
@@ -2457,11 +2672,46 @@ export function AccountsPage() {
   const renderValueView = () => (
     <>
       <section className={styles.metricsGrid}>
-        {renderMetricCard('weekly-value', t('accounts.value_weekly'), formatMoney(valueSummary.weeklyValue), t(`accounts.value_source_${valueSummary.source}`), <IconDollarSign size={24} />, 'violet')}
-        {renderMetricCard('historical-value', t('accounts.value_historical'), formatMoney(valueSummary.historicalValue), t('accounts.value_historical_meta'), <IconTrendingUp size={24} />, 'blue')}
-        {renderMetricCard('high-value', t('accounts.value_high_accounts'), valueSummary.highValueAccounts, t('accounts.value_high_accounts_meta'), <IconCheck size={24} />, 'green')}
-        {renderMetricCard('low-activity', t('accounts.value_low_accounts'), valueSummary.lowActivityAccounts, t('accounts.value_low_accounts_meta'), <IconShield size={24} />, 'amber')}
-        {renderMetricCard('avg-success', t('accounts.value_avg_success'), formatPercent(valueSummary.averageSuccessRate, 1), t('accounts.value_avg_success_meta'), <IconEye size={24} />, 'blue')}
+        {renderMetricCard(
+          'weekly-value',
+          t('accounts.value_weekly'),
+          formatMoney(valueSummary.weeklyValue),
+          t(`accounts.value_source_${valueSummary.source}`),
+          <IconDollarSign size={24} />,
+          'violet'
+        )}
+        {renderMetricCard(
+          'historical-value',
+          t('accounts.value_historical'),
+          formatMoney(valueSummary.historicalValue),
+          t('accounts.value_historical_meta'),
+          <IconTrendingUp size={24} />,
+          'blue'
+        )}
+        {renderMetricCard(
+          'high-value',
+          t('accounts.value_high_accounts'),
+          valueSummary.highValueAccounts,
+          t('accounts.value_high_accounts_meta'),
+          <IconCheck size={24} />,
+          'green'
+        )}
+        {renderMetricCard(
+          'low-activity',
+          t('accounts.value_low_accounts'),
+          valueSummary.lowActivityAccounts,
+          t('accounts.value_low_accounts_meta'),
+          <IconShield size={24} />,
+          'amber'
+        )}
+        {renderMetricCard(
+          'avg-success',
+          t('accounts.value_avg_success'),
+          formatPercent(valueSummary.averageSuccessRate, 1),
+          t('accounts.value_avg_success_meta'),
+          <IconEye size={24} />,
+          'blue'
+        )}
       </section>
       <section className={styles.valuePanel}>
         <div className={styles.panelHeader}>
@@ -2472,7 +2722,10 @@ export function AccountsPage() {
           <div className={styles.headerActions}>
             <Select
               value={valueRange}
-              options={VALUE_RANGE_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
+              options={VALUE_RANGE_OPTIONS.map((option) => ({
+                value: option.value,
+                label: t(option.labelKey),
+              }))}
               onChange={(value) => setValueRange(value as UsageValueRange)}
               ariaLabel={t('accounts.value_range')}
             />
@@ -2527,7 +2780,9 @@ export function AccountsPage() {
                     <tr key={row.key}>
                       <td>
                         <div className={styles.accountCell}>
-                          <strong title={row.accountLabel}>{getDisplayText(row.accountLabel)}</strong>
+                          <strong title={row.accountLabel}>
+                            {getDisplayText(row.accountLabel)}
+                          </strong>
                           <span title={row.fileName}>{getDisplayFileName(row.fileName)}</span>
                         </div>
                       </td>
@@ -2591,9 +2846,7 @@ export function AccountsPage() {
             ]
               .filter(Boolean)
               .join(' ')}
-            onClick={() =>
-              setAccountDisplayMode((mode) => (mode === 'masked' ? 'full' : 'masked'))
-            }
+            onClick={() => setAccountDisplayMode((mode) => (mode === 'masked' ? 'full' : 'masked'))}
             title={accountDisplayHint}
             aria-label={accountDisplayHint}
           >
@@ -2634,7 +2887,12 @@ export function AccountsPage() {
           />
         </div>
       </header>
-      {renderViewTabs()}
+      <section className={styles.controlsPanel}>
+        <div className={styles.controlsTabsRow}>{renderViewTabs()}</div>
+        {activeView === 'accounts' ? (
+          <div className={styles.controlsFilterSection}>{renderToolbar()}</div>
+        ) : null}
+      </section>
       {renderActiveView()}
       <AuthJsonPasteModal
         open={authJsonPasteOpen}
