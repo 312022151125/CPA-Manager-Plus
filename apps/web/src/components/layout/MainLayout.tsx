@@ -623,8 +623,10 @@ export function MainLayout() {
   const activeNavItem =
     [...navItems]
       .sort((a, b) => b.path.length - a.path.length)
-      .find((item) => matchesNavPath(item, currentPath)) ?? navItems[0];
-  const currentRouteLabel = activeNavItem?.label ?? fullBrandName;
+      .find((item) => matchesNavPath(item, currentPath)) ?? null;
+  const standaloneRouteLabel =
+    currentPath === '/accounts' ? t('nav.accounts', { defaultValue: t('accounts.title') }) : null;
+  const currentRouteLabel = activeNavItem?.label ?? standaloneRouteLabel ?? fullBrandName;
 
   return (
     <div
