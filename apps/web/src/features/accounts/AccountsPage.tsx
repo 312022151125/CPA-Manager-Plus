@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { TFunction } from 'i18next';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -10,9 +11,12 @@ import { Input } from '@/components/ui/Input';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
 import { Select } from '@/components/ui/Select';
+import { SegmentedTabs, type SegmentedTabItem } from '@/components/ui/SegmentedTabs';
 import {
   IconCheck,
+  IconChevronDown,
   IconChevronRight,
+  IconChevronUp,
   IconDollarSign,
   IconDownload,
   IconEye,
@@ -69,6 +73,9 @@ import {
   sortAccountRows,
   type AccountQuotaBand,
   type AccountRow,
+  type AccountRowSort,
+  type AccountRowSortDirection,
+  type AccountRowSortKey,
   type AccountStatusFilter,
 } from '@/features/accounts/model/accountRows';
 import {
@@ -133,6 +140,7 @@ type AccountColumn =
   | 'priority'
   | 'value'
   | 'recent';
+type SortableAccountColumn = Extract<AccountRowSortKey, 'reset' | 'priority' | 'recent'>;
 type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
 
@@ -168,6 +176,15 @@ const ACCOUNT_COLUMNS: AccountColumn[] = [
   'value',
   'recent',
 ];
+
+const ACCOUNT_SORT_DEFAULT_DIRECTIONS: Record<
+  SortableAccountColumn,
+  AccountRowSortDirection
+> = {
+  reset: 'asc',
+  priority: 'desc',
+  recent: 'desc',
+};
 
 const getProviderLabel = (provider: string, t: TFunction) => {
   const key = `auth_files.filter_${provider}`;
@@ -436,6 +453,10 @@ export function AccountsPage() {
   const [search, setSearch] = useState('');
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<Set<AccountColumn>>(new Set());
+  const [accountSort, setAccountSort] = useState<AccountRowSort>({
+    key: 'default',
+    direction: 'desc',
+  });
   const [priorityDraft, setPriorityDraft] = useState('0');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -606,9 +627,10 @@ export function AccountsPage() {
           plan: planFilter,
           quotaBand: quotaBandFilter,
           search,
-        })
+        }),
+        accountSort
       ),
-    [planFilter, providerFilter, quotaBandFilter, rows, search, statusFilter]
+    [accountSort, planFilter, providerFilter, quotaBandFilter, rows, search, statusFilter]
   );
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
@@ -1150,6 +1172,55 @@ export function AccountsPage() {
 
   const estimatedWeeklyValue = valueSummary.weeklyValue;
 
+  const handleAccountSort = (key: SortableAccountColumn) => {
+    setAccountSort((prev) => {
+      if (prev.key === key) {
+        return {
+          key,
+          direction: prev.direction === 'asc' ? 'desc' : 'asc',
+        };
+      }
+      return {
+        key,
+        direction: ACCOUNT_SORT_DEFAULT_DIRECTIONS[key],
+      };
+    });
+    setPage(1);
+  };
+
+  const renderSortableHeader = (key: SortableAccountColumn, labelKey: string) => {
+    const isActive = accountSort.key === key;
+    const SortIcon = isActive
+      ? accountSort.direction === 'desc'
+        ? IconChevronDown
+        : IconChevronUp
+      : null;
+
+    return (
+      <th
+        aria-sort={
+          isActive ? (accountSort.direction === 'desc' ? 'descending' : 'ascending') : 'none'
+        }
+      >
+        <button
+          type="button"
+          className={[
+            styles.sortableHeaderButton,
+            isActive ? styles.sortableHeaderButtonActive : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          onClick={() => handleAccountSort(key)}
+        >
+          <span>{t(labelKey)}</span>
+          <span className={styles.sortIndicator} aria-hidden="true">
+            {SortIcon ? <SortIcon size={14} /> : null}
+          </span>
+        </button>
+      </th>
+    );
+  };
+
   const renderMetricCard = (
     key: string,
     label: string,
@@ -1169,7 +1240,7 @@ export function AccountsPage() {
   );
 
   const renderViewTabs = () => {
-    const tabs: Array<{ id: AccountsView; label: string; badge?: number }> = [
+    const tabs: Array<SegmentedTabItem<AccountsView> & { badge?: number }> = [
       { id: 'accounts', label: t('accounts.tab_accounts') },
       { id: 'quota', label: t('accounts.tab_quota'), badge: recommendations.length },
       {
@@ -1181,21 +1252,22 @@ export function AccountsPage() {
       { id: 'value', label: t('accounts.tab_value') },
     ];
     return (
-      <div className={styles.tabs} role="tablist" aria-label={t('accounts.tabs_label')}>
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={activeView === tab.id}
-            className={`${styles.tabButton} ${activeView === tab.id ? styles.tabButtonActive : ''}`}
-            onClick={() => setActiveView(tab.id)}
-          >
-            <span>{tab.label}</span>
-            {tab.badge ? <small>{tab.badge}</small> : null}
-          </button>
-        ))}
-      </div>
+      <SegmentedTabs
+        items={tabs.map((tab) => ({
+          id: tab.id,
+          label: (
+            <span className={styles.tabLabel}>
+              <span>{tab.label}</span>
+              {tab.badge ? <small className={styles.tabBadge}>{tab.badge}</small> : null}
+            </span>
+          ),
+        }))}
+        activeTab={activeView}
+        onChange={setActiveView}
+        ariaLabel={t('accounts.tabs_label')}
+        idBase="accounts-tab"
+        className={styles.tabs}
+      />
     );
   };
 
@@ -1289,68 +1361,106 @@ export function AccountsPage() {
     </section>
   );
 
+  const renderAccountDisplayToggle = () => (
+    <Button
+      variant="secondary"
+      size="sm"
+      className={[
+        styles.accountDisplayButton,
+        accountDisplayMode === 'full' ? styles.accountDisplayButtonActive : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      onClick={() => setAccountDisplayMode((mode) => (mode === 'masked' ? 'full' : 'masked'))}
+      title={accountDisplayHint}
+      aria-label={accountDisplayHint}
+    >
+      <AccountDisplayIcon size={15} />
+      {t(
+        accountDisplayMode === 'masked'
+          ? 'quota_management.account_display_masked'
+          : 'quota_management.account_display_full'
+      )}
+    </Button>
+  );
+
   const renderBatchBar = () => {
     const hasSelection = selectionCount > 0;
+    const refreshTargets = hasSelection ? selectedRows : rows;
 
     return (
-      <section className={`${styles.batchBar} ${hasSelection ? styles.batchBarActive : ''}`}>
+      <section className={styles.batchBar}>
         <span>
           {t('accounts.selected_count', {
             count: selectionCount,
           })}
         </span>
         <div className={styles.batchActions}>
-          {!hasSelection ? (
+          {renderAccountDisplayToggle()}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => refreshQuotaRows(refreshTargets)}
+            disabled={quotaRefreshing || refreshTargets.length === 0}
+            loading={quotaRefreshing}
+            title={t('accounts.refresh_quota')}
+          >
+            <IconRefreshCw size={15} />
+            {t('accounts.refresh_quota')}
+          </Button>
+        </div>
+      </section>
+    );
+  };
+
+  const renderFloatingBatchActions = () => {
+    if (selectionCount === 0) return null;
+
+    const content = (
+      <div className={styles.floatingBatchActionContainer}>
+        <div className={styles.floatingBatchActionBar}>
+          <div className={styles.floatingBatchActionLeft}>
+            <span className={styles.batchSelectionText}>
+              {t('accounts.selected_count', {
+                count: selectionCount,
+              })}
+            </span>
+            <Button variant="ghost" size="sm" onClick={deselectAll}>
+              {t('auth_files.batch_deselect')}
+            </Button>
+          </div>
+          <div className={styles.floatingBatchActionRight}>
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => refreshQuotaRows(rows)}
-              disabled={quotaRefreshing || rows.length === 0}
+              onClick={() => refreshQuotaRows(selectedRows)}
+              disabled={quotaRefreshing || selectedRows.length === 0}
               loading={quotaRefreshing}
               title={t('accounts.refresh_quota')}
             >
               <IconRefreshCw size={15} />
               {t('accounts.refresh_quota')}
             </Button>
-          ) : null}
-          {hasSelection ? (
-            <>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => refreshQuotaRows(selectedRows)}
-                disabled={quotaRefreshing}
-                loading={quotaRefreshing}
-                title={t('accounts.refresh_quota')}
-              >
-                <IconRefreshCw size={15} />
-                {t('accounts.refresh_quota')}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => handleBatchStatus(true)}
-                disabled={disableControls || statusUpdating}
-                title={t('accounts.enable')}
-              >
-                <IconCheck size={15} />
-                {t('accounts.enable')}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => handleBatchStatus(false)}
-                disabled={disableControls || statusUpdating}
-                title={t('accounts.disable')}
-              >
-                <IconX size={15} />
-                {t('accounts.disable')}
-              </Button>
-            </>
-          ) : null}
-        </div>
-        {hasSelection ? (
-          <div className={styles.batchSecondaryActions}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => handleBatchStatus(true)}
+              disabled={disableControls || statusUpdating}
+              title={t('accounts.enable')}
+            >
+              <IconCheck size={15} />
+              {t('accounts.enable')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => handleBatchStatus(false)}
+              disabled={disableControls || statusUpdating}
+              title={t('accounts.disable')}
+            >
+              <IconX size={15} />
+              {t('accounts.disable')}
+            </Button>
             <Button
               variant="secondary"
               size="sm"
@@ -1424,9 +1534,11 @@ export function AccountsPage() {
               {t('common.delete')}
             </Button>
           </div>
-        ) : null}
-      </section>
+        </div>
+      </div>
     );
+
+    return typeof document === 'undefined' ? content : createPortal(content, document.body);
   };
 
   const getAntigravityPlanLabel = (plan: string | null | undefined, fallback?: string | null) => {
@@ -1681,10 +1793,16 @@ export function AccountsPage() {
               {isColumnVisible('plan') ? <th>{t('accounts.col_plan')}</th> : null}
               {isColumnVisible('status') ? <th>{t('accounts.col_status')}</th> : null}
               {isColumnVisible('quota') ? <th>{t('accounts.col_quota')}</th> : null}
-              {isColumnVisible('reset') ? <th>{t('accounts.col_reset')}</th> : null}
-              {isColumnVisible('priority') ? <th>{t('accounts.col_priority')}</th> : null}
+              {isColumnVisible('reset')
+                ? renderSortableHeader('reset', 'accounts.col_reset')
+                : null}
+              {isColumnVisible('priority')
+                ? renderSortableHeader('priority', 'accounts.col_priority')
+                : null}
               {isColumnVisible('value') ? <th>{t('accounts.col_value')}</th> : null}
-              {isColumnVisible('recent') ? <th>{t('accounts.col_recent')}</th> : null}
+              {isColumnVisible('recent')
+                ? renderSortableHeader('recent', 'accounts.col_recent')
+                : null}
               <th>{t('accounts.col_actions')}</th>
             </tr>
           </thead>
@@ -2821,6 +2939,39 @@ export function AccountsPage() {
     </>
   );
 
+  const renderPageActions = () => (
+    <div className={styles.headerActions}>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => setAuthJsonPasteOpen(true)}
+        disabled={disableControls || authJsonPasteSaving}
+        loading={authJsonPasteSaving}
+      >
+        <IconFileText size={15} />
+        {t('auth_files.paste_button')}
+      </Button>
+      <Button
+        variant="primary"
+        size="sm"
+        onClick={handleUploadClick}
+        disabled={disableControls || uploading}
+        loading={uploading}
+      >
+        <IconPlus size={15} />
+        {t('auth_files.upload_button')}
+      </Button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json,application/json"
+        multiple
+        hidden
+        onChange={(event) => void handleFileChange(event)}
+      />
+    </div>
+  );
+
   const renderActiveView = () => {
     if (activeView === 'quota') return renderQuotaView();
     if (activeView === 'inspection') return renderInspectionView();
@@ -2831,69 +2982,17 @@ export function AccountsPage() {
 
   return (
     <div className={styles.container} lang={i18n.language}>
-      <header className={styles.pageHeader}>
-        <div>
-          <h1>{t('accounts.title')}</h1>
-          <p>{t('accounts.subtitle')}</p>
-        </div>
-        <div className={styles.headerActions}>
-          <Button
-            variant="secondary"
-            size="sm"
-            className={[
-              styles.accountDisplayButton,
-              accountDisplayMode === 'full' ? styles.accountDisplayButtonActive : '',
-            ]
-              .filter(Boolean)
-              .join(' ')}
-            onClick={() => setAccountDisplayMode((mode) => (mode === 'masked' ? 'full' : 'masked'))}
-            title={accountDisplayHint}
-            aria-label={accountDisplayHint}
-          >
-            <AccountDisplayIcon size={15} />
-            {t(
-              accountDisplayMode === 'masked'
-                ? 'quota_management.account_display_masked'
-                : 'quota_management.account_display_full'
-            )}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setAuthJsonPasteOpen(true)}
-            disabled={disableControls || authJsonPasteSaving}
-            loading={authJsonPasteSaving}
-          >
-            <IconFileText size={15} />
-            {t('auth_files.paste_button')}
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={handleUploadClick}
-            disabled={disableControls || uploading}
-            loading={uploading}
-          >
-            <IconPlus size={15} />
-            {t('auth_files.upload_button')}
-          </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".json,application/json"
-            multiple
-            hidden
-            onChange={(event) => void handleFileChange(event)}
-          />
-        </div>
-      </header>
       <section className={styles.controlsPanel}>
-        <div className={styles.controlsTabsRow}>{renderViewTabs()}</div>
+        <div className={styles.controlsTabsRow}>
+          {renderViewTabs()}
+          {renderPageActions()}
+        </div>
         {activeView === 'accounts' ? (
           <div className={styles.controlsFilterSection}>{renderToolbar()}</div>
         ) : null}
       </section>
       {renderActiveView()}
+      {renderFloatingBatchActions()}
       <AuthJsonPasteModal
         open={authJsonPasteOpen}
         saving={authJsonPasteSaving}

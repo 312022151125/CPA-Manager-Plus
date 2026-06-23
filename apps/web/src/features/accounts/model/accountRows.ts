@@ -32,6 +32,13 @@ export type AccountStatusFilter =
   | 'low'
   | 'exhausted'
   | 'inspection';
+export type AccountRowSortKey = 'default' | 'reset' | 'priority' | 'recent';
+export type AccountRowSortDirection = 'asc' | 'desc';
+
+export interface AccountRowSort {
+  key: AccountRowSortKey;
+  direction: AccountRowSortDirection;
+}
 
 export interface AccountQuotaSummary {
   status: AccountQuotaStatus;
@@ -457,17 +464,15 @@ export const filterAccountRows = (
   });
 };
 
-export const sortAccountRows = (rows: AccountRow[]): AccountRow[] =>
-  [...rows].sort((left, right) => {
-    const leftRisk = getRiskRank(left);
-    const rightRisk = getRiskRank(right);
-    if (leftRisk !== rightRisk) return rightRisk - leftRisk;
-    if (left.provider !== right.provider) return left.provider.localeCompare(right.provider);
-    return left.fileName.localeCompare(right.fileName, undefined, {
-      numeric: true,
-      sensitivity: 'base',
-    });
+export const sortAccountRows = (rows: AccountRow[], sort?: AccountRowSort): AccountRow[] => {
+  const defaultSorted = [...rows].sort(compareDefaultAccountRows);
+  if (!sort || sort.key === 'default') return defaultSorted;
+
+  return defaultSorted.sort((left, right) => {
+    const byColumn = compareAccountRowsBySort(left, right, sort);
+    return byColumn === 0 ? compareDefaultAccountRows(left, right) : byColumn;
   });
+};
 
 export const getProviderOptions = (rows: AccountRow[]) =>
   Array.from(new Set(rows.map((row) => row.provider))).sort();
@@ -506,4 +511,70 @@ const getRiskRank = (row: AccountRow) => {
   if (row.disabled) return 2;
   if (row.statusMessage) return 1;
   return 0;
+};
+
+const compareDefaultAccountRows = (left: AccountRow, right: AccountRow) => {
+  const leftRisk = getRiskRank(left);
+  const rightRisk = getRiskRank(right);
+  if (leftRisk !== rightRisk) return rightRisk - leftRisk;
+  if (left.provider !== right.provider) return left.provider.localeCompare(right.provider);
+  return left.fileName.localeCompare(right.fileName, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+};
+
+const compareAccountRowsBySort = (
+  left: AccountRow,
+  right: AccountRow,
+  sort: AccountRowSort
+) => {
+  if (sort.key === 'priority') {
+    return compareNumbers(left.priority ?? 0, right.priority ?? 0, sort.direction);
+  }
+  if (sort.key === 'recent') {
+    const leftTotal = left.usage.success + left.usage.failure;
+    const rightTotal = right.usage.success + right.usage.failure;
+    return compareNumbers(leftTotal, rightTotal, sort.direction);
+  }
+  if (sort.key === 'reset') {
+    return compareResetLabels(left.quota.resetLabel, right.quota.resetLabel, sort.direction);
+  }
+  return 0;
+};
+
+const compareNumbers = (
+  left: number,
+  right: number,
+  direction: AccountRowSortDirection
+) => {
+  const result = left - right;
+  return direction === 'asc' ? result : -result;
+};
+
+const compareResetLabels = (
+  leftRaw: string,
+  rightRaw: string,
+  direction: AccountRowSortDirection
+) => {
+  const left = normalizeResetSortLabel(leftRaw);
+  const right = normalizeResetSortLabel(rightRaw);
+  if (!left && !right) return 0;
+  if (!left) return 1;
+  if (!right) return -1;
+
+  const result = left.localeCompare(right, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+  return direction === 'asc' ? result : -result;
+};
+
+const normalizeResetSortLabel = (value: string) => {
+  const label = readString(value);
+  const normalized = label.toLowerCase();
+  if (!label || label === '-' || normalized.includes('unknown') || label.includes('未知')) {
+    return null;
+  }
+  return label;
 };

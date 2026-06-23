@@ -431,6 +431,12 @@ const findDetailButtonByName = (renderer: ReactTestRenderer, fileName: string) =
   return button;
 };
 
+const getAccountTableRowTexts = (renderer: ReactTestRenderer) => {
+  const table = renderer.root.findByType('table');
+  const body = table.findByType('tbody');
+  return body.findAllByType('tr').map((row) => readText(row));
+};
+
 const treeText = (renderer: ReactTestRenderer) => readText(renderer.toJSON());
 
 const createDeferred = <T,>() => {
@@ -550,6 +556,40 @@ describe('AccountsPage replacement flows', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it('sorts account table rows from sortable headers', async () => {
+    mocks.files = [
+      {
+        ...makeCodexFile('low.json', 'auth-low', 'low@example.com'),
+        priority: -1,
+        recent_requests: [{ success: 1, failed: 0 }],
+      },
+      {
+        ...makeCodexFile('middle.json', 'auth-middle', 'middle@example.com'),
+        priority: 2,
+        recent_requests: [{ success: 3, failed: 2 }],
+      },
+      {
+        ...makeCodexFile('high.json', 'auth-high', 'high@example.com'),
+        priority: 10,
+        recent_requests: [{ success: 2, failed: 1 }],
+      },
+    ];
+
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.col_priority').props.onClick();
+    });
+
+    expect(getAccountTableRowTexts(renderer)[0]).toContain('high.json');
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.col_recent').props.onClick();
+    });
+
+    expect(getAccountTableRowTexts(renderer)[0]).toContain('middle.json');
   });
 
   it('loads detail events filtered by auth file and auth index', async () => {
