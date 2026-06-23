@@ -1,0 +1,669 @@
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { isValidElement } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Button } from '@/components/ui/Button';
+import type { AuthFileItem } from '@/types';
+import { AccountsPage } from './AccountsPage';
+
+type AnalyticsRequestForTest = {
+  filters?: {
+    auth_files?: string[];
+    auth_indices?: string[];
+  };
+  include?: {
+    events_page?: unknown;
+  };
+};
+
+type AnalyticsResponseForTest = {
+  generated_at_ms: number;
+  granularity: string;
+  events?: {
+    items: Array<Record<string, unknown>>;
+    next_before_ms: number;
+    has_more: boolean;
+  };
+  account_stats?: unknown[];
+  timeline?: unknown[];
+};
+
+const makeCodexFile = (name: string, authIndex: string, account: string): AuthFileItem =>
+  ({
+    name,
+    type: 'codex',
+    provider: 'codex',
+    authIndex,
+    account,
+    priority: 0,
+    disabled: false,
+  }) as AuthFileItem;
+
+const makeAnalyticsEvent = (
+  overrides: Partial<Record<string, unknown>>
+): Record<string, unknown> => ({
+  request_id: 'req-1',
+  event_hash: 'event-1',
+  timestamp_ms: 1,
+  model: 'gpt-5',
+  endpoint: '/v1/chat/completions',
+  method: 'POST',
+  path: '/v1/chat/completions',
+  auth_index: 'auth-1',
+  source: 'codex.json',
+  source_hash: 'source-hash',
+  api_key_hash: 'api-key-hash',
+  account_snapshot: 'codex@example.com',
+  auth_label_snapshot: 'codex@example.com',
+  auth_file_snapshot: 'codex.json',
+  auth_provider_snapshot: 'codex',
+  input_tokens: 10,
+  output_tokens: 5,
+  cached_tokens: 0,
+  cache_read_tokens: 0,
+  cache_creation_tokens: 0,
+  reasoning_tokens: 0,
+  total_tokens: 15,
+  latency_ms: 120,
+  failed: false,
+  ...overrides,
+});
+
+const makeEventsResponse = (
+  event: Record<string, unknown>
+): AnalyticsResponseForTest => ({
+  generated_at_ms: 1,
+  granularity: 'day',
+  events: {
+    items: [event],
+    next_before_ms: 0,
+    has_more: false,
+  },
+});
+
+const makeEmptyAnalyticsResponse = (): AnalyticsResponseForTest => ({
+  generated_at_ms: 1,
+  granularity: 'day',
+  account_stats: [],
+  timeline: [],
+});
+
+const defaultGetAnalytics = async (
+  _base: string,
+  _key: string | undefined,
+  request: unknown
+): Promise<AnalyticsResponseForTest> => {
+  const include = (request as AnalyticsRequestForTest).include;
+  if (include?.events_page) {
+    return makeEventsResponse(makeAnalyticsEvent({}));
+  }
+  return makeEmptyAnalyticsResponse();
+};
+
+const { mocks } = vi.hoisted(() => {
+  (
+    globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+  ).IS_REACT_ACT_ENVIRONMENT = true;
+
+  const codexFile = {
+    name: 'codex.json',
+    type: 'codex',
+    provider: 'codex',
+    authIndex: 'auth-1',
+    account: 'codex@example.com',
+    priority: 0,
+    disabled: false,
+  } as AuthFileItem;
+
+  return {
+    mocks: {
+      files: [codexFile] as AuthFileItem[],
+      selectedFiles: new Set<string>(),
+      selectionCount: 0,
+      batchFieldsUpdating: false,
+      navigate: vi.fn(),
+      showNotification: vi.fn(),
+      showConfirmation: vi.fn(),
+      loadFiles: vi.fn(async () => undefined),
+      batchPatchFields: vi.fn(async () => ({ success: 1, failed: 0, failedNames: [] })),
+      batchSetStatus: vi.fn(async () => undefined),
+      batchDownload: vi.fn(async () => undefined),
+      batchDelete: vi.fn(),
+      loadExcluded: vi.fn(async () => undefined),
+      loadModelAlias: vi.fn(async () => undefined),
+      listCodexInspectionRuns: vi.fn(async () => ({ items: [] })),
+      getCodexInspectionRun: vi.fn(async () => ({ run: null, results: [] })),
+      getActiveQuotaCooldowns: vi.fn(async () => []),
+      getAnalytics: vi.fn(
+        async (_base: string, _key: string | undefined, _request: unknown): Promise<unknown> => ({
+          generated_at_ms: 1,
+          granularity: 'day',
+          account_stats: [],
+          timeline: [],
+        })
+      ),
+      panelFeatureAvailability: {
+        checking: false,
+        managerServiceBase: 'http://manager.local:18317',
+        requestMonitoringAvailable: false,
+        serverCodexInspectionAvailable: false,
+      },
+      lastExcludedEditorProps: null as null | {
+        open: boolean;
+        provider?: string;
+        onClose: () => void;
+      },
+      lastAliasEditorProps: null as null | {
+        open: boolean;
+        provider?: string;
+        onClose: () => void;
+      },
+      quotaState: {
+        antigravityQuota: {},
+        claudeQuota: {},
+        codexQuota: {},
+        kimiQuota: {},
+        xaiQuota: {},
+        setAntigravityQuota: vi.fn(),
+        setClaudeQuota: vi.fn(),
+        setCodexQuota: vi.fn(),
+        setKimiQuota: vi.fn(),
+        setXaiQuota: vi.fn(),
+      },
+      t: (key: string, options?: Record<string, unknown>) => {
+        if (options && typeof options.name === 'string') return `${key}:${options.name}`;
+        return key;
+      },
+    },
+  };
+});
+
+vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => {} },
+  useTranslation: () => ({
+    t: mocks.t,
+    i18n: { language: 'en' },
+  }),
+}));
+
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => mocks.navigate,
+}));
+
+vi.mock('@/hooks/useHeaderRefresh', () => ({
+  useHeaderRefresh: () => {},
+}));
+
+vi.mock('@/hooks/usePanelFeatureAvailability', () => ({
+  usePanelFeatureAvailability: () => mocks.panelFeatureAvailability,
+}));
+
+vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
+  useAuthFilesData: () => ({
+    files: mocks.files,
+    selectedFiles: mocks.selectedFiles,
+    selectionCount: mocks.selectionCount,
+    loading: false,
+    error: '',
+    uploading: false,
+    authJsonPasteSaving: false,
+    deleting: {},
+    batchFieldsUpdating: mocks.batchFieldsUpdating,
+    fileInputRef: { current: null },
+    loadFiles: mocks.loadFiles,
+    handleUploadClick: vi.fn(),
+    handleFileChange: vi.fn(),
+    savePastedAuthJson: vi.fn(async () => 'saved.json'),
+    handleDelete: vi.fn(),
+    handleDownload: vi.fn(async () => undefined),
+    toggleSelect: vi.fn(),
+    selectAllVisible: vi.fn(),
+    deselectAll: vi.fn(),
+    batchDownload: mocks.batchDownload,
+    batchSetStatus: mocks.batchSetStatus,
+    batchPatchFields: mocks.batchPatchFields,
+    batchDelete: mocks.batchDelete,
+  }),
+}));
+
+vi.mock('@/features/authFiles/hooks/useAuthFilesOauth', () => ({
+  useAuthFilesOauth: () => ({
+    excluded: {},
+    excludedError: null,
+    modelAlias: {},
+    modelAliasError: null,
+    allProviderModels: {},
+    providerList: ['codex'],
+    loadExcluded: mocks.loadExcluded,
+    loadModelAlias: mocks.loadModelAlias,
+    deleteExcluded: vi.fn(),
+    deleteModelAlias: vi.fn(),
+    handleMappingUpdate: vi.fn(async () => undefined),
+    handleDeleteLink: vi.fn(),
+    handleToggleFork: vi.fn(async () => undefined),
+    handleRenameAlias: vi.fn(async () => undefined),
+    handleDeleteAlias: vi.fn(),
+  }),
+}));
+
+vi.mock('@/features/authFiles/hooks/useAntigravitySubscriptions', () => ({
+  useAntigravitySubscriptions: () => ({
+    subscriptions: {},
+    refreshSubscription: vi.fn(async () => undefined),
+  }),
+}));
+
+vi.mock('@/features/authFiles/hooks/useAuthFilesModels', () => ({
+  useAuthFilesModels: () => ({
+    modelsModalOpen: false,
+    modelsLoading: false,
+    modelsList: [],
+    modelsFileName: '',
+    modelsFileType: '',
+    modelsError: '',
+    showModels: vi.fn(),
+    closeModelsModal: vi.fn(),
+  }),
+}));
+
+vi.mock('@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor', () => ({
+  useAuthFilesPrefixProxyEditor: () => ({
+    prefixProxyEditor: null,
+    prefixProxyUpdatedText: '',
+    prefixProxyDirty: false,
+    openPrefixProxyEditor: vi.fn(),
+    closePrefixProxyEditor: vi.fn(),
+    handlePrefixProxyChange: vi.fn(),
+    handlePrefixProxySave: vi.fn(async () => undefined),
+  }),
+}));
+
+vi.mock('@/features/authFiles/components/AuthJsonPasteModal', () => ({
+  AuthJsonPasteModal: () => null,
+}));
+
+vi.mock('@/features/authFiles/components/AuthFileModelsModal', () => ({
+  AuthFileModelsModal: () => null,
+}));
+
+vi.mock('@/features/authFiles/components/AuthFilesPrefixProxyEditorModal', () => ({
+  AuthFilesPrefixProxyEditorModal: () => null,
+}));
+
+vi.mock('@/features/authFiles/components/OAuthExcludedCard', () => ({
+  OAuthExcludedCard: (props: { onAdd: () => void; onEdit: (provider: string) => void }) => (
+    <div>
+      <button type="button" onClick={props.onAdd}>
+        oauth-excluded-add
+      </button>
+      <button type="button" onClick={() => props.onEdit('codex')}>
+        oauth-excluded-edit
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock('@/features/authFiles/components/OAuthModelAliasCard', () => ({
+  OAuthModelAliasCard: (props: {
+    onAdd: () => void;
+    onEditProvider: (provider: string) => void;
+  }) => (
+    <div>
+      <button type="button" onClick={props.onAdd}>
+        oauth-alias-add
+      </button>
+      <button type="button" onClick={() => props.onEditProvider('codex')}>
+        oauth-alias-edit
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock('@/features/authFiles/components/OAuthEditorModals', () => ({
+  OAuthExcludedEditorModal: (props: {
+    open: boolean;
+    provider?: string;
+    onClose: () => void;
+  }) => {
+    mocks.lastExcludedEditorProps = props;
+    return props.open ? <div>oauth-excluded-editor-open</div> : null;
+  },
+  OAuthModelAliasEditorModal: (props: {
+    open: boolean;
+    provider?: string;
+    onClose: () => void;
+  }) => {
+    mocks.lastAliasEditorProps = props;
+    return props.open ? <div>oauth-alias-editor-open</div> : null;
+  },
+}));
+
+vi.mock('@/features/oauth/CodexReauthDialog', () => ({
+  CodexReauthDialog: () => null,
+}));
+
+vi.mock('@/services/api', () => ({
+  monitoringAnalyticsApi: {
+    getAnalytics: mocks.getAnalytics,
+  },
+  usageServiceApi: {
+    listCodexInspectionRuns: mocks.listCodexInspectionRuns,
+    getCodexInspectionRun: mocks.getCodexInspectionRun,
+    getActiveQuotaCooldowns: mocks.getActiveQuotaCooldowns,
+  },
+}));
+
+vi.mock('@/stores', () => ({
+  useNotificationStore: (
+    selector?: (state: {
+      showNotification: typeof mocks.showNotification;
+      showConfirmation: typeof mocks.showConfirmation;
+    }) => unknown
+  ) => {
+    const state = {
+      showNotification: mocks.showNotification,
+      showConfirmation: mocks.showConfirmation,
+    };
+    return selector ? selector(state) : state;
+  },
+  useAuthStore: (
+    selector: (state: { connectionStatus: 'connected'; managementKey: string }) => unknown
+  ) => selector({ connectionStatus: 'connected', managementKey: 'manager-key' }),
+  useQuotaStore: (
+    selector: (state: {
+      antigravityQuota: Record<string, never>;
+      claudeQuota: Record<string, never>;
+      codexQuota: Record<string, never>;
+      kimiQuota: Record<string, never>;
+      xaiQuota: Record<string, never>;
+      setAntigravityQuota: () => void;
+      setClaudeQuota: () => void;
+      setCodexQuota: () => void;
+      setKimiQuota: () => void;
+      setXaiQuota: () => void;
+    }) => unknown
+  ) => selector(mocks.quotaState),
+}));
+
+vi.mock('@/utils/clipboard', () => ({
+  copyToClipboard: vi.fn(async () => true),
+}));
+
+const readText = (value: unknown): string => {
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  if (Array.isArray(value)) return value.map(readText).join('');
+  if (isValidElement<{ children?: unknown }>(value)) return readText(value.props.children);
+  if (value && typeof value === 'object' && 'children' in value) {
+    return readText((value as { children?: unknown }).children);
+  }
+  return '';
+};
+
+const findButtonByText = (renderer: ReactTestRenderer, text: string) => {
+  const button = renderer.root
+    .findAllByType(Button)
+    .find((node) => readText(node.props.children).includes(text));
+  if (!button) throw new Error(`Button not found: ${text}`);
+  return button;
+};
+
+const findHostButtonByText = (renderer: ReactTestRenderer, text: string) => {
+  const button = renderer.root
+    .findAll((node) => node.type === 'button')
+    .find((node) => readText(node.props.children).includes(text));
+  if (!button) throw new Error(`Host button not found: ${text}`);
+  return button;
+};
+
+const renderAccountsPage = async () => {
+  let renderer: ReactTestRenderer | null = null;
+  await act(async () => {
+    renderer = create(<AccountsPage />);
+    await Promise.resolve();
+  });
+  return renderer!;
+};
+
+const findDetailButtonByName = (renderer: ReactTestRenderer, fileName: string) => {
+  const button = renderer.root
+    .findAll((node) => node.type === 'button')
+    .find((node) => node.props['aria-label'] === `accounts.open_detail:${fileName}`);
+  if (!button) throw new Error(`Detail button not found: ${fileName}`);
+  return button;
+};
+
+const treeText = (renderer: ReactTestRenderer) => readText(renderer.toJSON());
+
+const createDeferred = <T,>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+};
+
+describe('AccountsPage replacement flows', () => {
+  beforeEach(() => {
+    mocks.files = [makeCodexFile('codex.json', 'auth-1', 'codex@example.com')];
+    mocks.selectedFiles = new Set<string>();
+    mocks.selectionCount = 0;
+    mocks.batchFieldsUpdating = false;
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: false,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.navigate.mockClear();
+    mocks.showNotification.mockClear();
+    mocks.batchPatchFields.mockClear();
+    mocks.batchDelete.mockClear();
+    mocks.getAnalytics.mockReset();
+    mocks.getAnalytics.mockImplementation(defaultGetAnalytics);
+    mocks.loadFiles.mockClear();
+    mocks.loadExcluded.mockClear();
+    mocks.loadModelAlias.mockClear();
+    mocks.lastExcludedEditorProps = null;
+    mocks.lastAliasEditorProps = null;
+  });
+
+  it('opens OAuth editors inline instead of navigating to auth-files routes', async () => {
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.tab_oauth').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'oauth-excluded-add').props.onClick();
+    });
+
+    expect(mocks.navigate).not.toHaveBeenCalledWith(
+      expect.stringContaining('/auth-files/oauth-excluded'),
+      expect.anything()
+    );
+    expect(mocks.lastExcludedEditorProps?.open).toBe(true);
+    expect(mocks.lastExcludedEditorProps?.provider).toBe('');
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'oauth-alias-edit').props.onClick();
+    });
+
+    expect(mocks.navigate).not.toHaveBeenCalledWith(
+      expect.stringContaining('/auth-files/oauth-model-alias'),
+      expect.anything()
+    );
+    expect(mocks.lastAliasEditorProps?.open).toBe(true);
+    expect(mocks.lastAliasEditorProps?.provider).toBe('codex');
+  });
+
+  it('patches Codex websockets through auth-index aware batch fields', async () => {
+    mocks.selectedFiles = new Set(['codex.json\u0000auth-1']);
+    mocks.selectionCount = 1;
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      await findButtonByText(renderer, 'auth_files.batch_websockets_enable').props.onClick();
+    });
+
+    expect(mocks.batchPatchFields).toHaveBeenCalledWith(
+      [{ name: 'codex.json', authIndex: 'auth-1' }],
+      { websockets: true }
+    );
+  });
+
+  it('disables batch delete for partial shared auth-file selections', async () => {
+    mocks.files = [
+      makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com'),
+      makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com'),
+    ];
+    mocks.selectedFiles = new Set(['shared-codex.json\u0000auth-1']);
+    mocks.selectionCount = 1;
+
+    const renderer = await renderAccountsPage();
+    const deleteButton = findButtonByText(renderer, 'common.delete');
+
+    expect(deleteButton.props.disabled).toBe(true);
+
+    await act(async () => {
+      deleteButton.props.onClick?.();
+    });
+
+    expect(mocks.batchDelete).not.toHaveBeenCalled();
+  });
+
+  it('uses unique table row keys for shared auth accounts', async () => {
+    mocks.files = [
+      makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com'),
+      makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com'),
+    ];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await renderAccountsPage();
+      const duplicateKeyWarning = errorSpy.mock.calls.some((call) =>
+        call.some(
+          (item) =>
+            typeof item === 'string' &&
+            item.includes('Encountered two children with the same key')
+        )
+      );
+      expect(duplicateKeyWarning).toBe(false);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('loads detail events filtered by auth file and auth index', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const renderer = await renderAccountsPage();
+    mocks.getAnalytics.mockClear();
+
+    const detailButton = renderer.root
+      .findAll((node) => node.type === 'button')
+      .find(
+        (node) =>
+          typeof node.props['aria-label'] === 'string' &&
+          node.props['aria-label'].startsWith('accounts.open_detail:')
+      );
+    if (!detailButton) throw new Error('Detail button not found');
+
+    await act(async () => {
+      detailButton.props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_events').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const eventRequest = mocks.getAnalytics.mock.calls
+      .map((call) => call[2] as AnalyticsRequestForTest)
+      .find((request) => request.include?.events_page);
+
+    expect(eventRequest?.filters).toEqual({
+      auth_files: ['codex.json'],
+      auth_indices: ['auth-1'],
+    });
+    expect(eventRequest?.include?.events_page).toMatchObject({ limit: 20 });
+  });
+
+  it('ignores stale detail-event responses after switching rows', async () => {
+    mocks.files = [
+      makeCodexFile('codex-a.json', 'auth-a', 'first@example.com'),
+      makeCodexFile('codex-b.json', 'auth-b', 'second@example.com'),
+    ];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+
+    const firstEvents = createDeferred<AnalyticsResponseForTest>();
+    const secondEvents = createDeferred<AnalyticsResponseForTest>();
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        if (!analyticsRequest.include?.events_page) {
+          return makeEmptyAnalyticsResponse();
+        }
+        const fileName = analyticsRequest.filters?.auth_files?.[0];
+        if (fileName === 'codex-a.json') return firstEvents.promise;
+        if (fileName === 'codex-b.json') return secondEvents.promise;
+        return makeEventsResponse(makeAnalyticsEvent({}));
+      }
+    );
+
+    const renderer = await renderAccountsPage();
+    mocks.getAnalytics.mockClear();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex-a.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_events').props.onClick();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex-b.json').props.onClick();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      secondEvents.resolve(
+        makeEventsResponse(
+          makeAnalyticsEvent({
+            request_id: 'req-second',
+            event_hash: 'event-second',
+            auth_index: 'auth-b',
+            source: 'codex-b.json',
+          })
+        )
+      );
+      await Promise.resolve();
+    });
+
+    expect(treeText(renderer)).toContain('req-second');
+
+    await act(async () => {
+      firstEvents.resolve(
+        makeEventsResponse(
+          makeAnalyticsEvent({
+            request_id: 'req-first',
+            event_hash: 'event-first',
+            auth_index: 'auth-a',
+            source: 'codex-a.json',
+          })
+        )
+      );
+      await Promise.resolve();
+    });
+
+    expect(treeText(renderer)).toContain('req-second');
+    expect(treeText(renderer)).not.toContain('req-first');
+  });
+});

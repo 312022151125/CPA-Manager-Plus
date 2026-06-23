@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { useNavigate } from 'react-router-dom';
@@ -12,16 +12,21 @@ import { Select } from '@/components/ui/Select';
 import {
   IconCheck,
   IconChevronRight,
-  IconCopy,
   IconDollarSign,
   IconDownload,
   IconEye,
+  IconEyeOff,
+  IconFileText,
   IconFilter,
   IconMoreVertical,
+  IconModelCluster,
+  IconPlus,
   IconRefreshCw,
   IconSearch,
+  IconSettings,
   IconShield,
   IconSlidersHorizontal,
+  IconTrash2,
   IconTrendingUp,
   IconX,
 } from '@/components/ui/icons';
@@ -37,6 +42,23 @@ import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { useAuthFilesData } from '@/features/authFiles/hooks/useAuthFilesData';
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
+import { useAntigravitySubscriptions } from '@/features/authFiles/hooks/useAntigravitySubscriptions';
+import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
+import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
+import { AuthJsonPasteModal } from '@/features/authFiles/components/AuthJsonPasteModal';
+import { AuthFileModelsModal } from '@/features/authFiles/components/AuthFileModelsModal';
+import { AuthFilesPrefixProxyEditorModal } from '@/features/authFiles/components/AuthFilesPrefixProxyEditorModal';
+import { OAuthExcludedCard } from '@/features/authFiles/components/OAuthExcludedCard';
+import {
+  OAuthExcludedEditorModal,
+  OAuthModelAliasEditorModal,
+} from '@/features/authFiles/components/OAuthEditorModals';
+import { OAuthModelAliasCard } from '@/features/authFiles/components/OAuthModelAliasCard';
+import { CodexReauthDialog } from '@/features/oauth/CodexReauthDialog';
+import {
+  createCodexReauthTargetFromAuthFile,
+  type CodexReauthTarget,
+} from '@/features/oauth/codexReauthModel';
 import {
   buildAccountMetrics,
   buildAccountRows,
@@ -56,6 +78,13 @@ import {
   type AccountRecommendationPriority,
 } from '@/features/accounts/model/quotaRecommendations';
 import {
+  buildAuthFileCodexInspectionMap,
+  getAuthFilePatchTarget,
+  getAuthFileCodexInspectionKeyForFile,
+  getAuthFileCodexStatus,
+  hasPartialSharedAuthFileSelection,
+} from '@/features/authFiles/model/authFilesPageModel';
+import {
   buildUsageValueRowsFromMonitoring,
   buildUsageValueRowsFromRecent,
   buildUsageValueSummary,
@@ -66,20 +95,28 @@ import {
 } from '@/features/accounts/model/usageValueRows';
 import { buildOAuthRulePreviewRows } from '@/features/accounts/model/oauthRulePreview';
 import {
-  authFilesApi,
   monitoringAnalyticsApi,
   usageServiceApi,
   type CodexInspectionRun,
   type CodexInspectionResult,
   type MonitoringAnalyticsAccountStatRow,
+  type MonitoringAnalyticsEventRow,
   type MonitoringAnalyticsTimelinePoint,
+  type QuotaCooldownInfo,
 } from '@/services/api';
 import type {
   AuthFileItem,
   ClaudeQuotaState,
+  CodexQuotaState,
   KimiQuotaState,
   XaiQuotaState,
 } from '@/types';
+import type { AuthJsonInputType } from '@/features/authFiles/sessionAuthConverter';
+import {
+  DEFAULT_QUOTA_ACCOUNT_DISPLAY_MODE,
+  type QuotaAccountDisplayMode,
+} from '@/features/quota/quotaPageUiState';
+import { maskQuotaAccountText } from '@/components/quota/quotaDisplay';
 import { useAuthStore, useNotificationStore, useQuotaStore } from '@/stores';
 import { copyToClipboard } from '@/utils/clipboard';
 import styles from './AccountsPage.module.scss';
@@ -117,6 +154,8 @@ const VALUE_RANGE_OPTIONS: Array<{ value: UsageValueRange; labelKey: string; hou
   { value: '7d', labelKey: 'accounts.range_7d', hours: 24 * 7 },
   { value: '30d', labelKey: 'accounts.range_30d', hours: 24 * 30 },
 ];
+const DETAIL_EVENTS_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
+const DETAIL_EVENTS_LIMIT = 20;
 
 const ACCOUNT_COLUMNS: AccountColumn[] = [
   'provider',
@@ -158,6 +197,11 @@ const formatTimestamp = (value: number | null, locale: string) => {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
+};
+
+const formatDurationMs = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return '-';
+  return `${Math.round(value)} ms`;
 };
 
 const quotaStatusLabelKey = (status: AccountRow['quota']['status']) => {
@@ -306,14 +350,54 @@ export function AccountsPage() {
     selectionCount,
     loading,
     error,
+    uploading,
+    authJsonPasteSaving,
+    deleting,
+    batchFieldsUpdating,
+    fileInputRef,
     loadFiles,
+    handleUploadClick,
+    handleFileChange,
+    savePastedAuthJson,
+    handleDelete,
+    handleDownload,
     toggleSelect,
     selectAllVisible,
     deselectAll,
+    batchDownload,
     batchSetStatus,
+    batchPatchFields,
+    batchDelete,
   } = useAuthFilesData();
 
-  const oauthState = useAuthFilesOauth({ viewMode: 'list', files });
+  const [oauthViewMode, setOauthViewMode] = useState<'diagram' | 'list'>('list');
+  const oauthState = useAuthFilesOauth({ viewMode: oauthViewMode, files });
+  const {
+    subscriptions: antigravitySubscriptions,
+    refreshSubscription: refreshAntigravitySubscription,
+  } = useAntigravitySubscriptions();
+  const {
+    modelsModalOpen,
+    modelsLoading,
+    modelsList,
+    modelsFileName,
+    modelsFileType,
+    modelsError,
+    showModels,
+    closeModelsModal,
+  } = useAuthFilesModels();
+  const {
+    prefixProxyEditor,
+    prefixProxyUpdatedText,
+    prefixProxyDirty,
+    openPrefixProxyEditor,
+    closePrefixProxyEditor,
+    handlePrefixProxyChange,
+    handlePrefixProxySave,
+  } = useAuthFilesPrefixProxyEditor({
+    disableControls: connectionStatus !== 'connected',
+    loadFiles,
+  });
 
   const antigravityQuota = useQuotaStore((state) => state.antigravityQuota);
   const claudeQuota = useQuotaStore((state) => state.claudeQuota);
@@ -342,7 +426,6 @@ export function AccountsPage() {
   const [inspectionLoading, setInspectionLoading] = useState(false);
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
-  const [priorityUpdating, setPriorityUpdating] = useState(false);
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>('overview');
   const [providerFilter, setProviderFilter] = useState('all');
@@ -364,7 +447,26 @@ export function AccountsPage() {
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageError, setUsageError] = useState('');
   const [oauthPreviewModel, setOauthPreviewModel] = useState('gpt-5');
+  const [oauthExcludedEditorProvider, setOauthExcludedEditorProvider] = useState<string | null>(
+    null
+  );
+  const [oauthModelAliasEditorProvider, setOauthModelAliasEditorProvider] = useState<string | null>(
+    null
+  );
   const [executingRecommendations, setExecutingRecommendations] = useState(false);
+  const [authJsonPasteOpen, setAuthJsonPasteOpen] = useState(false);
+  const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
+  const [detailEventsRowKey, setDetailEventsRowKey] = useState<string | null>(null);
+  const [detailEvents, setDetailEvents] = useState<MonitoringAnalyticsEventRow[]>([]);
+  const [detailEventsLoading, setDetailEventsLoading] = useState(false);
+  const [detailEventsError, setDetailEventsError] = useState('');
+  const [quotaCooldowns, setQuotaCooldowns] = useState<Map<string, QuotaCooldownInfo>>(
+    () => new Map()
+  );
+  const [accountDisplayMode, setAccountDisplayMode] = useState<QuotaAccountDisplayMode>(
+    DEFAULT_QUOTA_ACCOUNT_DISPLAY_MODE
+  );
+  const detailEventsRequestIdRef = useRef(0);
 
   const loadInspectionSummary = useCallback(async () => {
     if (
@@ -409,6 +511,31 @@ export function AccountsPage() {
     managementKey,
   ]);
 
+  const loadQuotaCooldowns = useCallback(async () => {
+    if (!featureAvailability.managerServiceBase) {
+      setQuotaCooldowns((current) => (current.size === 0 ? current : new Map()));
+      return;
+    }
+
+    try {
+      const items = await usageServiceApi.getActiveQuotaCooldowns(
+        featureAvailability.managerServiceBase,
+        managementKey
+      );
+      const next = new Map<string, QuotaCooldownInfo>();
+      for (const item of items) {
+        if (!item.authFileName) continue;
+        const existing = next.get(item.authFileName);
+        if (!existing || (item.recoverAtMs ?? 0) > (existing.recoverAtMs ?? 0)) {
+          next.set(item.authFileName, item);
+        }
+      }
+      setQuotaCooldowns(next);
+    } catch {
+      // Cooldown badges are a derived hint; keep the last known state on transient failures.
+    }
+  }, [featureAvailability.managerServiceBase, managementKey]);
+
   const loadOauthExcluded = oauthState.loadExcluded;
   const loadOauthModelAlias = oauthState.loadModelAlias;
 
@@ -416,10 +543,17 @@ export function AccountsPage() {
     await Promise.all([
       loadFiles(),
       loadInspectionSummary(),
+      loadQuotaCooldowns(),
       loadOauthExcluded(),
       loadOauthModelAlias(),
     ]);
-  }, [loadFiles, loadInspectionSummary, loadOauthExcluded, loadOauthModelAlias]);
+  }, [
+    loadFiles,
+    loadInspectionSummary,
+    loadOauthExcluded,
+    loadOauthModelAlias,
+    loadQuotaCooldowns,
+  ]);
 
   useHeaderRefresh(handleRefresh);
 
@@ -427,9 +561,36 @@ export function AccountsPage() {
     void handleRefresh();
   }, [handleRefresh]);
 
+  const handleSavePastedAuthJson = useCallback(
+    async (type: AuthJsonInputType, fileName: string, jsonText: string) => {
+      await savePastedAuthJson(type, fileName, jsonText);
+      setAuthJsonPasteOpen(false);
+    },
+    [savePastedAuthJson]
+  );
+
+  const handleCodexReauthSuccess = useCallback(async () => {
+    await loadFiles();
+    setCodexReauthTarget(null);
+  }, [loadFiles]);
+
   const rows = useMemo(
     () => buildAccountRows(files, quotaStores, inspectionResults),
     [files, inspectionResults, quotaStores]
+  );
+  const codexInspectionMap = useMemo(
+    () =>
+      buildAuthFileCodexInspectionMap(
+        inspectionResults.map((item) => ({
+          fileName: item.fileName,
+          authIndex: item.authIndex ?? null,
+          statusCode: item.statusCode ?? null,
+          action: item.action ?? null,
+          usedPercent: item.usedPercent ?? null,
+          isQuota: item.isQuota ?? null,
+        }))
+      ),
+    [inspectionResults]
   );
   const metrics = useMemo(() => buildAccountMetrics(rows), [rows]);
   const providerOptions = useMemo(() => getProviderOptions(rows), [rows]);
@@ -453,16 +614,33 @@ export function AccountsPage() {
   const currentPage = Math.min(page, totalPages);
   const pageRows = filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const selectedRows = useMemo(
-    () => rows.filter((row) => selectedFiles.has(row.fileName)),
+    () => rows.filter((row) => selectedFiles.has(row.selectionKey)),
     [rows, selectedFiles]
   );
+  const selectedFileNames = useMemo(
+    () =>
+      Array.from(new Set(selectedRows.filter((row) => !row.runtimeOnly).map((row) => row.fileName))),
+    [selectedRows]
+  );
+  const selectedHasPartialSharedAuthFile = useMemo(
+    () => hasPartialSharedAuthFileSelection(files, selectedFiles),
+    [files, selectedFiles]
+  );
+  const selectedCodexRows = useMemo(
+    () =>
+      selectedRows.filter(
+        (row) => !row.runtimeOnly && row.provider === CODEX_CONFIG.type
+      ),
+    [selectedRows]
+  );
   const selectedRow = useMemo(
-    () => rows.find((row) => row.fileName === selectedRowKey) ?? null,
+    () => rows.find((row) => row.selectionKey === selectedRowKey) ?? null,
     [rows, selectedRowKey]
   );
   const selectablePageRows = pageRows.filter((row) => !row.runtimeOnly);
   const allPageSelected =
-    selectablePageRows.length > 0 && selectablePageRows.every((row) => selectedFiles.has(row.fileName));
+    selectablePageRows.length > 0 &&
+    selectablePageRows.every((row) => selectedFiles.has(row.selectionKey));
   const disableControls = connectionStatus !== 'connected';
   const valueSummary = useMemo(
     () => buildUsageValueSummary(usageRows, usageSource),
@@ -477,6 +655,33 @@ export function AccountsPage() {
     [usageRows]
   );
   const latestRun = inspectionRuns[0] ?? null;
+  const getDisplayText = useCallback(
+    (value: string) => (accountDisplayMode === 'full' ? value : maskQuotaAccountText(value)),
+    [accountDisplayMode]
+  );
+  const getDisplayAccount = useCallback(
+    (row: AccountRow) => getDisplayText(row.accountLabel),
+    [getDisplayText]
+  );
+  const getDisplayFileName = useCallback(
+    (fileName: string) => getDisplayText(fileName),
+    [getDisplayText]
+  );
+  const accountDisplayHint = t(
+    accountDisplayMode === 'masked'
+      ? 'quota_management.show_full_credentials_hint'
+      : 'quota_management.show_masked_credentials_hint'
+  );
+  const AccountDisplayIcon = accountDisplayMode === 'masked' ? IconEyeOff : IconEye;
+  const getCodexStatusForRow = useCallback(
+    (row: AccountRow) =>
+      getAuthFileCodexStatus(
+        row.raw,
+        codexQuota[row.fileName],
+        codexInspectionMap.get(getAuthFileCodexInspectionKeyForFile(row.raw))
+      ),
+    [codexInspectionMap, codexQuota]
+  );
   const oauthPreviewRows = useMemo(
     () =>
       buildOAuthRulePreviewRows({
@@ -564,6 +769,76 @@ export function AccountsPage() {
     void loadUsageValues();
   }, [loadUsageValues]);
 
+  const loadDetailEvents = useCallback(
+    async (row: AccountRow) => {
+      const requestId = detailEventsRequestIdRef.current + 1;
+      detailEventsRequestIdRef.current = requestId;
+      const shouldCommit = () => detailEventsRequestIdRef.current === requestId;
+
+      setDetailEventsRowKey(row.selectionKey);
+      setDetailEvents([]);
+      setDetailEventsError('');
+
+      if (
+        featureAvailability.checking ||
+        !featureAvailability.requestMonitoringAvailable ||
+        !featureAvailability.managerServiceBase ||
+        !managementKey
+      ) {
+        setDetailEventsLoading(false);
+        return;
+      }
+
+      setDetailEventsLoading(true);
+      try {
+        const toMs = Date.now();
+        const authIndex = row.authIndex ? String(row.authIndex) : '';
+        const response = await monitoringAnalyticsApi.getAnalytics(
+          featureAvailability.managerServiceBase,
+          managementKey,
+          {
+            from_ms: toMs - DETAIL_EVENTS_RANGE_MS,
+            to_ms: toMs,
+            now_ms: toMs,
+            filters: {
+              auth_files: [row.fileName],
+              ...(authIndex ? { auth_indices: [authIndex] } : {}),
+            },
+            include: {
+              events_page: {
+                limit: DETAIL_EVENTS_LIMIT,
+                before_ms: null,
+                before_id: null,
+              },
+              granularity: 'day',
+            },
+          }
+        );
+        if (!shouldCommit()) return;
+        setDetailEvents(response.events?.items ?? []);
+      } catch (err: unknown) {
+        if (!shouldCommit()) return;
+        setDetailEventsError(err instanceof Error ? err.message : t('notification.load_failed'));
+      } finally {
+        if (shouldCommit()) {
+          setDetailEventsLoading(false);
+        }
+      }
+    },
+    [
+      featureAvailability.checking,
+      featureAvailability.managerServiceBase,
+      featureAvailability.requestMonitoringAvailable,
+      managementKey,
+      t,
+    ]
+  );
+
+  useEffect(() => {
+    if (detailTab !== 'events' || !selectedRow) return;
+    void loadDetailEvents(selectedRow);
+  }, [detailTab, loadDetailEvents, selectedRow]);
+
   const refreshQuotaForRow = useCallback(
     async (row: AccountRow) => {
       if (row.disabled || row.runtimeOnly) return false;
@@ -642,6 +917,78 @@ export function AccountsPage() {
     [refreshQuotaForRow, showNotification, t]
   );
 
+  const canResetCodexQuota = useCallback(
+    (row: AccountRow) => {
+      if (row.provider !== CODEX_CONFIG.type || row.disabled || row.runtimeOnly) return false;
+      return CODEX_CONFIG.canResetQuota?.(row.raw, codexQuota[row.fileName]) === true;
+    },
+    [codexQuota]
+  );
+
+  const resetCodexQuotaForRow = useCallback(
+    (row: AccountRow) => {
+      if (!canResetCodexQuota(row) || !CODEX_CONFIG.resetQuota) return;
+      const quota = codexQuota[row.fileName];
+      const resetCount = quota?.rateLimitResetCreditsAvailableCount ?? 0;
+      const displayName = getDisplayAccount(row);
+
+      showConfirmation({
+        title: t('codex_quota.reset_confirm_title'),
+        message: t('codex_quota.reset_confirm_message', {
+          name: displayName,
+          count: resetCount,
+        }),
+        confirmText: t('codex_quota.reset_button', { count: resetCount }),
+        cancelText: t('common.cancel'),
+        variant: 'primary',
+        onConfirm: async () => {
+          setCodexQuota((prev) => ({
+            ...prev,
+            [row.fileName]: CODEX_CONFIG.buildLoadingState(),
+          }));
+
+          try {
+            const data = await CODEX_CONFIG.resetQuota?.(row.raw, t);
+            if (data === undefined) {
+              throw new Error(t('common.unknown_error'));
+            }
+            setCodexQuota((prev) => ({
+              ...prev,
+              [row.fileName]: CODEX_CONFIG.buildSuccessState(data),
+            }));
+            showNotification(t('codex_quota.reset_success', { name: displayName }), 'success');
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : t('common.unknown_error');
+            const status =
+              typeof err === 'object' && err !== null && 'status' in err
+                ? Number((err as { status?: unknown }).status)
+                : undefined;
+            setCodexQuota((prev) => ({
+              ...prev,
+              [row.fileName]: CODEX_CONFIG.buildErrorState(
+                message,
+                Number.isFinite(status) ? status : undefined
+              ) as CodexQuotaState,
+            }));
+            showNotification(
+              t('codex_quota.reset_failed', { name: displayName, message }),
+              'error'
+            );
+          }
+        },
+      });
+    },
+    [
+      canResetCodexQuota,
+      codexQuota,
+      getDisplayAccount,
+      setCodexQuota,
+      showConfirmation,
+      showNotification,
+      t,
+    ]
+  );
+
   const handleBatchStatus = useCallback(
     async (enabled: boolean, targets = selectedRows) => {
       const names = targets.filter((row) => !row.runtimeOnly).map((row) => row.fileName);
@@ -660,27 +1007,26 @@ export function AccountsPage() {
 
   const patchPriorityRows = useCallback(
     async (targets: AccountRow[], priority: number) => {
-      const patchable = targets.filter((row) => !row.runtimeOnly);
-      if (patchable.length === 0) return;
-      setPriorityUpdating(true);
-      try {
-        const results = await Promise.allSettled(
-          patchable.map((row) => authFilesApi.patchFields(row.fileName, { priority }))
-        );
-        const successCount = results.filter((result) => result.status === 'fulfilled').length;
-        await loadFiles();
-        showNotification(
-          t('accounts.priority_update_result', {
-            success: successCount,
-            total: patchable.length,
-          }),
-          successCount === patchable.length ? 'success' : 'warning'
-        );
-      } finally {
-        setPriorityUpdating(false);
-      }
+      const patchTargets = targets
+        .filter((row) => !row.runtimeOnly)
+        .map((row) => getAuthFilePatchTarget(row.raw));
+      await batchPatchFields(patchTargets, { priority });
     },
-    [loadFiles, showNotification, t]
+    [batchPatchFields]
+  );
+
+  const patchWebsocketsRows = useCallback(
+    async (targets: AccountRow[], websockets: boolean) => {
+      const patchTargets = targets
+        .filter((row) => !row.runtimeOnly && row.provider === CODEX_CONFIG.type)
+        .map((row) => getAuthFilePatchTarget(row.raw));
+      if (patchTargets.length === 0) {
+        showNotification(t('accounts.no_codex_accounts_selected'), 'info');
+        return;
+      }
+      await batchPatchFields(patchTargets, { websockets });
+    },
+    [batchPatchFields, showNotification, t]
   );
 
   const executeRecommendation = useCallback(
@@ -694,13 +1040,13 @@ export function AccountsPage() {
       } else if (item.action === 'restore-default') {
         await patchPriorityRows([item.row], 0);
       } else if (item.action === 'reauth') {
-        navigate('/oauth');
+        setCodexReauthTarget(createCodexReauthTargetFromAuthFile(item.row.raw));
       } else {
-        setSelectedRowKey(item.row.fileName);
+        setSelectedRowKey(item.row.selectionKey);
         setDetailTab('strategy');
       }
     },
-    [handleBatchStatus, navigate, patchPriorityRows, refreshQuotaRows]
+    [handleBatchStatus, patchPriorityRows, refreshQuotaRows]
   );
 
   const executeRecommendedActions = () => {
@@ -735,7 +1081,7 @@ export function AccountsPage() {
       showNotification(t('accounts.value_unmatched_detail'), 'info');
       return;
     }
-    setSelectedRowKey(targetRow.fileName);
+    setSelectedRowKey(targetRow.selectionKey);
     setDetailTab('value');
   };
 
@@ -754,6 +1100,42 @@ export function AccountsPage() {
       copied ? 'success' : 'error'
     );
   };
+
+  const copyTextWithNotification = useCallback(
+    async (text: string) => {
+      const copied = await copyToClipboard(text);
+      showNotification(
+        copied
+          ? t('notification.link_copied', { defaultValue: 'Copied to clipboard' })
+          : t('notification.copy_failed', { defaultValue: 'Copy failed' }),
+        copied ? 'success' : 'error'
+      );
+    },
+    [showNotification, t]
+  );
+
+  const openOauthExcludedEditor = useCallback(
+    (provider?: string) => {
+      const providerValue = (provider || (providerFilter !== 'all' ? providerFilter : '')).trim();
+      setOauthExcludedEditorProvider(providerValue);
+    },
+    [providerFilter]
+  );
+
+  const openOauthModelAliasEditor = useCallback(
+    (provider?: string) => {
+      const providerValue = (provider || (providerFilter !== 'all' ? providerFilter : '')).trim();
+      setOauthModelAliasEditorProvider(providerValue);
+    },
+    [providerFilter]
+  );
+
+  const reloadOauthRules = useCallback(
+    async () => {
+      await Promise.all([loadOauthExcluded(), loadOauthModelAlias()]);
+    },
+    [loadOauthExcluded, loadOauthModelAlias]
+  );
 
   const toggleColumn = (column: AccountColumn, visible: boolean) => {
     setHiddenColumns((prev) => {
@@ -927,6 +1309,15 @@ export function AccountsPage() {
         <Button
           variant="secondary"
           size="sm"
+          onClick={() => void batchDownload(selectedFileNames)}
+          disabled={disableControls || selectedFileNames.length === 0}
+        >
+          <IconDownload size={15} />
+          {t('auth_files.batch_download')}
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={() => handleBatchStatus(true)}
           disabled={disableControls || selectionCount === 0 || statusUpdating}
         >
@@ -942,6 +1333,23 @@ export function AccountsPage() {
           <IconX size={15} />
           {t('accounts.disable')}
         </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => void patchWebsocketsRows(selectedRows, true)}
+          disabled={disableControls || selectedCodexRows.length === 0 || batchFieldsUpdating}
+          loading={batchFieldsUpdating}
+        >
+          {t('auth_files.batch_websockets_enable')}
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => void patchWebsocketsRows(selectedRows, false)}
+          disabled={disableControls || selectedCodexRows.length === 0 || batchFieldsUpdating}
+        >
+          {t('auth_files.batch_websockets_disable')}
+        </Button>
         <Select
           value={priorityDraft}
           options={PRIORITY_OPTIONS}
@@ -952,8 +1360,8 @@ export function AccountsPage() {
         <Button
           variant="secondary"
           size="sm"
-          disabled={disableControls || selectionCount === 0 || priorityUpdating}
-          loading={priorityUpdating}
+          disabled={disableControls || selectionCount === 0 || batchFieldsUpdating}
+          loading={batchFieldsUpdating}
           onClick={() => patchPriorityRows(selectedRows, Number(priorityDraft))}
         >
           {t('accounts.set_priority')}
@@ -961,14 +1369,136 @@ export function AccountsPage() {
         <Button
           variant="secondary"
           size="sm"
-          disabled={disableControls || selectionCount === 0 || priorityUpdating}
+          disabled={disableControls || selectionCount === 0 || batchFieldsUpdating}
           onClick={() => patchPriorityRows(selectedRows, 0)}
         >
           {t('accounts.restore_default')}
         </Button>
+        <Button
+          variant="danger"
+          size="sm"
+          disabled={
+            disableControls || selectedFileNames.length === 0 || selectedHasPartialSharedAuthFile
+          }
+          onClick={() => {
+            if (selectedHasPartialSharedAuthFile) return;
+            batchDelete(selectedFileNames);
+          }}
+        >
+          <IconTrash2 size={15} />
+          {t('common.delete')}
+        </Button>
       </div>
     </section>
   );
+
+  const getAntigravityPlanLabel = (
+    plan: string | null | undefined,
+    fallback?: string | null
+  ) => {
+    if (plan === 'free') return t('antigravity_subscription.plan_free');
+    if (plan === 'pro') return t('antigravity_subscription.plan_pro');
+    if (plan === 'ultra') return t('antigravity_subscription.plan_ultra');
+    if (plan === 'ultra-lite') return t('antigravity_subscription.plan_ultra_lite');
+    return fallback || plan || t('antigravity_subscription.plan_unknown');
+  };
+
+  const renderRowGovernanceBadges = (row: AccountRow) => {
+    const codexStatus = getCodexStatusForRow(row);
+    const quotaCooldown = quotaCooldowns.get(row.fileName);
+    const antigravitySubscription = antigravitySubscriptions[row.fileName];
+    const badges: ReactNode[] = [];
+
+    codexStatus.badges.forEach((badge) => {
+      const label = t(badge.labelKey, {
+        defaultValue: badge.defaultLabel,
+        ...badge.labelParams,
+      });
+      const title = badge.titleKey
+        ? t(badge.titleKey, {
+            defaultValue: badge.defaultTitle ?? badge.defaultLabel,
+            ...badge.labelParams,
+          })
+        : (badge.defaultTitle ?? label);
+      badges.push(
+        <span
+          key={`codex-${badge.kind}`}
+          className={`${styles.statusBadge} ${styles[`statusBadge${badge.tone}`]}`}
+          title={title}
+        >
+          {label}
+        </span>
+      );
+    });
+
+    if (quotaCooldown) {
+      badges.push(
+        <span
+          key="quota-cooldown"
+          className={`${styles.statusBadge} ${styles.statusBadgeinfo}`}
+          title={t('auth_files.quota_cooldown_badge_title', {
+            recoverAt: formatTimestamp(quotaCooldown.recoverAtMs, i18n.language),
+            owner: quotaCooldown.owner || 'cpamp_usage_429',
+          })}
+        >
+          {t('auth_files.quota_cooldown_badge', {
+            recoverAt: formatTimestamp(quotaCooldown.recoverAtMs, i18n.language),
+          })}
+        </span>
+      );
+    }
+
+    if (row.provider === ANTIGRAVITY_CONFIG.type && !row.runtimeOnly) {
+      if (!antigravitySubscription) {
+        badges.push(
+          <button
+            key="antigravity-refresh"
+            type="button"
+            className={styles.statusBadgeButton}
+            onClick={(event) => {
+              event.stopPropagation();
+              void refreshAntigravitySubscription(row.raw);
+            }}
+            disabled={disableControls}
+          >
+            {t('antigravity_subscription.refresh_short')}
+          </button>
+        );
+      } else if (antigravitySubscription.status === 'loading') {
+        badges.push(
+          <span key="antigravity-loading" className={`${styles.statusBadge} ${styles.statusBadgeinfo}`}>
+            {t('antigravity_subscription.loading_short')}
+          </span>
+        );
+      } else if (antigravitySubscription.status === 'error') {
+        badges.push(
+          <span
+            key="antigravity-error"
+            className={`${styles.statusBadge} ${styles.statusBadgedanger}`}
+            title={antigravitySubscription.error || t('common.unknown_error')}
+          >
+            {t('antigravity_subscription.error_badge')}
+          </span>
+        );
+      } else if (antigravitySubscription.data) {
+        const planLabel = getAntigravityPlanLabel(
+          antigravitySubscription.data.plan,
+          antigravitySubscription.data.tierName || antigravitySubscription.data.tierId
+        );
+        badges.push(
+          <span
+            key="antigravity-plan"
+            className={`${styles.statusBadge} ${styles.statusBadgeinfo}`}
+            title={antigravitySubscription.data.tierName || planLabel}
+          >
+            {t('antigravity_subscription.plan_badge', { plan: planLabel })}
+          </span>
+        );
+      }
+    }
+
+    return badges.length > 0 ? <div className={styles.statusBadgeRow}>{badges}</div> : null;
+  };
 
   const renderAccountTable = (rowsToRender = pageRows, paged = true) => (
     <section className={styles.tablePanel}>
@@ -987,8 +1517,8 @@ export function AccountsPage() {
                         return;
                       }
                       selectablePageRows.forEach((row) => {
-                        if (selectedFiles.has(row.fileName)) {
-                          toggleSelect(row.fileName);
+                        if (selectedFiles.has(row.selectionKey)) {
+                          toggleSelect(row.selectionKey);
                         }
                       });
                     }}
@@ -1014,15 +1544,15 @@ export function AccountsPage() {
               const recentTotal = row.usage.success + row.usage.failure;
               return (
                 <tr
-                  key={row.fileName}
-                  className={selectedRowKey === row.fileName ? styles.rowSelected : ''}
-                  onClick={() => setSelectedRowKey(row.fileName)}
+                  key={row.selectionKey}
+                  className={selectedRowKey === row.selectionKey ? styles.rowSelected : ''}
+                  onClick={() => setSelectedRowKey(row.selectionKey)}
                 >
                   {paged ? (
                     <td className={styles.selectCol} onClick={(event) => event.stopPropagation()}>
                       <SelectionCheckbox
-                        checked={selectedFiles.has(row.fileName)}
-                        onChange={() => toggleSelect(row.fileName)}
+                        checked={selectedFiles.has(row.selectionKey)}
+                        onChange={() => toggleSelect(row.selectionKey)}
                         disabled={row.runtimeOnly}
                         ariaLabel={t('accounts.select_account', { name: row.fileName })}
                       />
@@ -1030,8 +1560,8 @@ export function AccountsPage() {
                   ) : null}
                   <td>
                     <div className={styles.accountCell}>
-                      <strong>{row.accountLabel}</strong>
-                      <span>{row.fileName}</span>
+                      <strong title={row.accountLabel}>{getDisplayAccount(row)}</strong>
+                      <span title={row.fileName}>{getDisplayFileName(row.fileName)}</span>
                     </div>
                   </td>
                   {isColumnVisible('provider') ? (
@@ -1056,6 +1586,7 @@ export function AccountsPage() {
                             })}
                           </small>
                         ) : null}
+                        {renderRowGovernanceBadges(row)}
                       </div>
                     </td>
                   ) : null}
@@ -1101,15 +1632,69 @@ export function AccountsPage() {
                     </td>
                   ) : null}
                   <td onClick={(event) => event.stopPropagation()}>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      iconOnly
-                      onClick={() => setSelectedRowKey(row.fileName)}
-                      aria-label={t('accounts.open_detail', { name: row.fileName })}
-                    >
-                      <IconMoreVertical size={16} />
-                    </Button>
+                    <div className={styles.rowActions}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        iconOnly
+                        onClick={() => setSelectedRowKey(row.selectionKey)}
+                        aria-label={t('accounts.open_detail', { name: row.fileName })}
+                      >
+                        <IconMoreVertical size={16} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        iconOnly
+                        onClick={() => void showModels(row.raw)}
+                        disabled={row.runtimeOnly}
+                        aria-label={t('auth_files.models_button')}
+                      >
+                        <IconModelCluster size={16} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        iconOnly
+                        onClick={() => void openPrefixProxyEditor(row.raw)}
+                        disabled={disableControls || row.runtimeOnly}
+                        aria-label={t('auth_files.prefix_proxy_button')}
+                      >
+                        <IconSettings size={16} />
+                      </Button>
+                      {canResetCodexQuota(row) ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          iconOnly
+                          onClick={() => resetCodexQuotaForRow(row)}
+                          aria-label={t('codex_quota.reset_action_button')}
+                        >
+                          <IconRefreshCw size={16} />
+                        </Button>
+                      ) : null}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        iconOnly
+                        onClick={() => void handleDownload(row.fileName)}
+                        disabled={row.runtimeOnly}
+                        aria-label={t('auth_files.download_button')}
+                      >
+                        <IconDownload size={16} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        iconOnly
+                        onClick={() => handleDelete(row.fileName)}
+                        disabled={disableControls || row.runtimeOnly}
+                        loading={deleting === row.fileName}
+                        aria-label={t('auth_files.delete_button')}
+                      >
+                        <IconTrash2 size={16} />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -1180,6 +1765,8 @@ export function AccountsPage() {
     const valueRow = usageRows.find(
       (row) => row.row?.fileName === selectedRow.fileName || row.fileName === selectedRow.fileName
     );
+    const selectedCodexQuota =
+      selectedRow.provider === CODEX_CONFIG.type ? codexQuota[selectedRow.fileName] : undefined;
     const renderActiveDetail = () => {
       if (detailTab === 'quota') {
         return (
@@ -1206,6 +1793,12 @@ export function AccountsPage() {
                 <div>
                   <dt>{t('common.error')}</dt>
                   <dd>{selectedRow.quota.error}</dd>
+                </div>
+              ) : null}
+              {typeof selectedCodexQuota?.rateLimitResetCreditsAvailableCount === 'number' ? (
+                <div>
+                  <dt>{t('codex_quota.reset_credits_label')}</dt>
+                  <dd>{selectedCodexQuota.rateLimitResetCreditsAvailableCount}</dd>
                 </div>
               ) : null}
             </dl>
@@ -1288,10 +1881,91 @@ export function AccountsPage() {
         );
       }
       if (detailTab === 'events') {
+        const rowEvents = detailEventsRowKey === selectedRow.selectionKey ? detailEvents : [];
+        const eventsUnavailable =
+          !featureAvailability.requestMonitoringAvailable ||
+          !featureAvailability.managerServiceBase ||
+          !managementKey;
+
         return (
           <section className={styles.drawerSection}>
-            <h3>{t('accounts.detail_event_log')}</h3>
-            <p>{t('accounts.detail_event_log_desc')}</p>
+            <div className={styles.sectionHeaderInline}>
+              <div>
+                <h3>{t('accounts.detail_event_log')}</h3>
+                <p>{t('accounts.detail_event_log_desc')}</p>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void loadDetailEvents(selectedRow)}
+                disabled={eventsUnavailable || detailEventsLoading}
+                loading={detailEventsLoading}
+              >
+                <IconRefreshCw size={14} />
+                {t('common.refresh')}
+              </Button>
+            </div>
+            {eventsUnavailable ? (
+              <p>{t('accounts.detail_events_unavailable')}</p>
+            ) : detailEventsLoading ? (
+              <div className={styles.inlineLoading}>
+                <LoadingSpinner size={16} />
+                <span>{t('common.loading')}</span>
+              </div>
+            ) : detailEventsError ? (
+              <div className="error-box">{detailEventsError}</div>
+            ) : rowEvents.length === 0 ? (
+              <p>{t('accounts.detail_events_empty')}</p>
+            ) : (
+              <div className={styles.detailEventsTableWrap}>
+                <table className={styles.detailEventsTable}>
+                  <thead>
+                    <tr>
+                      <th>{t('accounts.detail_event_col_time')}</th>
+                      <th>{t('accounts.detail_event_col_request')}</th>
+                      <th>{t('accounts.detail_event_col_model')}</th>
+                      <th>{t('accounts.detail_event_col_status')}</th>
+                      <th>{t('accounts.detail_event_col_tokens')}</th>
+                      <th>{t('accounts.detail_event_col_latency')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rowEvents.map((event) => {
+                      const requestLabel =
+                        event.request_id || event.event_hash.slice(0, 10) || '-';
+                      const statusLabel = event.failed
+                        ? event.fail_status_code
+                          ? `${t('accounts.detail_event_failed')} ${event.fail_status_code}`
+                          : t('accounts.detail_event_failed')
+                        : t('accounts.detail_event_success');
+                      return (
+                        <tr key={event.event_hash}>
+                          <td>{formatTimestamp(event.timestamp_ms, i18n.language)}</td>
+                          <td className={styles.monoCell} title={event.request_id || event.event_hash}>
+                            {requestLabel}
+                          </td>
+                          <td title={event.resolved_model || event.model}>
+                            {event.resolved_model || event.model || '-'}
+                          </td>
+                          <td>
+                            <span
+                              className={`${styles.eventStatus} ${
+                                event.failed ? styles.eventStatusFailed : styles.eventStatusSuccess
+                              }`}
+                              title={event.fail_summary || undefined}
+                            >
+                              {statusLabel}
+                            </span>
+                          </td>
+                          <td>{formatCompactNumber(event.total_tokens)}</td>
+                          <td>{formatDurationMs(event.latency_ms)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         );
       }
@@ -1328,9 +2002,10 @@ export function AccountsPage() {
         <aside className={styles.drawer} onClick={(event) => event.stopPropagation()}>
           <header className={styles.drawerHeader}>
             <div>
-              <strong>{selectedRow.accountLabel}</strong>
+              <strong title={selectedRow.accountLabel}>{getDisplayAccount(selectedRow)}</strong>
               <span>
-                {selectedRow.provider} · {selectedRow.planType ?? '-'} · {selectedRow.fileName}
+                {selectedRow.provider} · {selectedRow.planType ?? '-'} ·{' '}
+                {getDisplayFileName(selectedRow.fileName)}
               </span>
             </div>
             <Button
@@ -1368,11 +2043,50 @@ export function AccountsPage() {
               {t('accounts.refresh_quota')}
             </Button>
             <Button
+              variant="secondary"
+              onClick={() => void showModels(selectedRow.raw)}
+              disabled={selectedRow.runtimeOnly}
+            >
+              <IconModelCluster size={16} />
+              {t('auth_files.models_button')}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => void openPrefixProxyEditor(selectedRow.raw)}
+              disabled={disableControls || selectedRow.runtimeOnly}
+            >
+              <IconSettings size={16} />
+              {t('auth_files.prefix_proxy_button')}
+            </Button>
+            {canResetCodexQuota(selectedRow) ? (
+              <Button variant="secondary" onClick={() => resetCodexQuotaForRow(selectedRow)}>
+                <IconRefreshCw size={16} />
+                {t('codex_quota.reset_action_button')}
+              </Button>
+            ) : null}
+            <Button
               variant={selectedRow.disabled ? 'secondary' : 'danger'}
               onClick={() => handleBatchStatus(selectedRow.disabled, [selectedRow])}
               disabled={statusUpdating || selectedRow.runtimeOnly}
             >
               {selectedRow.disabled ? t('accounts.enable') : t('accounts.disable')}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => void handleDownload(selectedRow.fileName)}
+              disabled={selectedRow.runtimeOnly}
+            >
+              <IconDownload size={16} />
+              {t('auth_files.download_button')}
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => handleDelete(selectedRow.fileName)}
+              disabled={disableControls || selectedRow.runtimeOnly}
+              loading={deleting === selectedRow.fileName}
+            >
+              <IconTrash2 size={16} />
+              {t('auth_files.delete_button')}
             </Button>
           </footer>
         </aside>
@@ -1512,8 +2226,8 @@ export function AccountsPage() {
                     <tr key={`${item.row.fileName}:${item.action}`}>
                       <td>
                         <div className={styles.accountCell}>
-                          <strong>{item.row.accountLabel}</strong>
-                          <span>{item.row.fileName}</span>
+                          <strong title={item.row.accountLabel}>{getDisplayAccount(item.row)}</strong>
+                          <span title={item.row.fileName}>{getDisplayFileName(item.row.fileName)}</span>
                         </div>
                       </td>
                       <td>{formatPercent(item.row.quota.remainingPercent)}</td>
@@ -1623,8 +2337,10 @@ export function AccountsPage() {
                   <tr key={item.id}>
                     <td>
                       <div className={styles.accountCell}>
-                        <strong>{item.displayAccount || item.fileName}</strong>
-                        <span>{item.fileName}</span>
+                        <strong title={item.displayAccount || item.fileName}>
+                          {getDisplayText(item.displayAccount || item.fileName)}
+                        </strong>
+                        <span title={item.fileName}>{getDisplayFileName(item.fileName)}</span>
                       </div>
                     </td>
                     <td>{item.disabled ? t('accounts.status_disabled') : t('accounts.status_available')}</td>
@@ -1636,7 +2352,13 @@ export function AccountsPage() {
                         variant="secondary"
                         size="sm"
                         onClick={() => {
-                          setSelectedRowKey(item.fileName);
+                          const targetRow =
+                            rows.find(
+                              (row) =>
+                                row.fileName === item.fileName &&
+                                String(row.authIndex ?? '') === String(item.authIndex ?? '')
+                            ) ?? rows.find((row) => row.fileName === item.fileName);
+                          setSelectedRowKey(targetRow?.selectionKey ?? null);
                           setDetailTab('strategy');
                         }}
                       >
@@ -1665,57 +2387,31 @@ export function AccountsPage() {
 
   const renderOAuthView = () => (
     <section className={styles.oauthGrid}>
-      <div className={styles.tablePanel}>
-        <div className={styles.panelHeader}>
-          <div>
-            <h2>{t('accounts.oauth_rules_title')}</h2>
-            <p>{t('accounts.oauth_rules_desc')}</p>
-          </div>
-          <div className={styles.headerActions}>
-            <Button variant="secondary" size="sm" onClick={() => navigate('/auth-files/oauth-excluded')}>
-              {t('accounts.open_oauth_excluded')}
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => navigate('/auth-files/oauth-model-alias')}>
-              {t('accounts.open_oauth_alias')}
-            </Button>
-          </div>
-        </div>
-        <div className={styles.ruleColumns}>
-          <section>
-            <h3>{t('accounts.oauth_excluded_title')}</h3>
-            {Object.keys(oauthState.excluded).length > 0 ? (
-              Object.entries(oauthState.excluded).map(([provider, models]) => (
-                <div key={provider} className={styles.ruleRow}>
-                  <strong>{getProviderLabel(provider, t)}</strong>
-                  <span>{models.join(', ')}</span>
-                  <Button variant="ghost" size="sm" onClick={() => oauthState.deleteExcluded(provider)}>
-                    {t('common.delete')}
-                  </Button>
-                </div>
-              ))
-            ) : (
-              <p className={styles.emptyText}>{t('accounts.oauth_no_excluded')}</p>
-            )}
-          </section>
-          <section>
-            <h3>{t('accounts.oauth_alias_title')}</h3>
-            {Object.keys(oauthState.modelAlias).length > 0 ? (
-              Object.entries(oauthState.modelAlias).map(([provider, mappings]) => (
-                <div key={provider} className={styles.ruleRow}>
-                  <strong>{getProviderLabel(provider, t)}</strong>
-                  <span>
-                    {mappings.map((item) => `${item.name} -> ${item.alias}`).join(', ')}
-                  </span>
-                  <Button variant="ghost" size="sm" onClick={() => oauthState.deleteModelAlias(provider)}>
-                    {t('common.delete')}
-                  </Button>
-                </div>
-              ))
-            ) : (
-              <p className={styles.emptyText}>{t('accounts.oauth_no_alias')}</p>
-            )}
-          </section>
-        </div>
+      <div className={styles.oauthCardStack}>
+        <OAuthExcludedCard
+          disableControls={disableControls}
+          excludedError={oauthState.excludedError}
+          excluded={oauthState.excluded}
+          onAdd={() => openOauthExcludedEditor()}
+          onEdit={openOauthExcludedEditor}
+          onDelete={oauthState.deleteExcluded}
+        />
+        <OAuthModelAliasCard
+          disableControls={disableControls}
+          viewMode={oauthViewMode}
+          onViewModeChange={setOauthViewMode}
+          onAdd={() => openOauthModelAliasEditor()}
+          onEditProvider={openOauthModelAliasEditor}
+          onDeleteProvider={oauthState.deleteModelAlias}
+          modelAliasError={oauthState.modelAliasError}
+          modelAlias={oauthState.modelAlias}
+          allProviderModels={oauthState.allProviderModels}
+          onUpdate={oauthState.handleMappingUpdate}
+          onDeleteLink={oauthState.handleDeleteLink}
+          onToggleFork={oauthState.handleToggleFork}
+          onRenameAlias={oauthState.handleRenameAlias}
+          onDeleteAlias={oauthState.handleDeleteAlias}
+        />
       </div>
       <aside className={styles.rulePanel}>
         <h2>{t('accounts.oauth_preview_title')}</h2>
@@ -1831,8 +2527,8 @@ export function AccountsPage() {
                     <tr key={row.key}>
                       <td>
                         <div className={styles.accountCell}>
-                          <strong>{row.accountLabel}</strong>
-                          <span>{row.fileName}</span>
+                          <strong title={row.accountLabel}>{getDisplayText(row.accountLabel)}</strong>
+                          <span title={row.fileName}>{getDisplayFileName(row.fileName)}</span>
                         </div>
                       </td>
                       <td>{getProviderLabel(row.provider, t)}</td>
@@ -1886,18 +2582,118 @@ export function AccountsPage() {
           <p>{t('accounts.subtitle')}</p>
         </div>
         <div className={styles.headerActions}>
-          <Button variant="secondary" size="sm" onClick={() => navigate('/auth-files')}>
-            <IconCopy size={15} />
-            {t('accounts.tab_auth_files')}
+          <Button
+            variant="secondary"
+            size="sm"
+            className={[
+              styles.accountDisplayButton,
+              accountDisplayMode === 'full' ? styles.accountDisplayButtonActive : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            onClick={() =>
+              setAccountDisplayMode((mode) => (mode === 'masked' ? 'full' : 'masked'))
+            }
+            title={accountDisplayHint}
+            aria-label={accountDisplayHint}
+          >
+            <AccountDisplayIcon size={15} />
+            {t(
+              accountDisplayMode === 'masked'
+                ? 'quota_management.account_display_masked'
+                : 'quota_management.account_display_full'
+            )}
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => navigate('/quota')}>
-            <IconRefreshCw size={15} />
-            {t('accounts.legacy_quota_entry')}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setAuthJsonPasteOpen(true)}
+            disabled={disableControls || authJsonPasteSaving}
+            loading={authJsonPasteSaving}
+          >
+            <IconFileText size={15} />
+            {t('auth_files.paste_button')}
           </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleUploadClick}
+            disabled={disableControls || uploading}
+            loading={uploading}
+          >
+            <IconPlus size={15} />
+            {t('auth_files.upload_button')}
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            multiple
+            hidden
+            onChange={(event) => void handleFileChange(event)}
+          />
         </div>
       </header>
       {renderViewTabs()}
       {renderActiveView()}
+      <AuthJsonPasteModal
+        open={authJsonPasteOpen}
+        saving={authJsonPasteSaving}
+        disabled={disableControls}
+        onClose={() => {
+          if (!authJsonPasteSaving) setAuthJsonPasteOpen(false);
+        }}
+        onSave={handleSavePastedAuthJson}
+      />
+      <AuthFileModelsModal
+        open={modelsModalOpen}
+        fileName={modelsFileName}
+        fileType={modelsFileType}
+        loading={modelsLoading}
+        error={modelsError}
+        models={modelsList}
+        excluded={oauthState.excluded}
+        onClose={closeModelsModal}
+        onCopyText={copyTextWithNotification}
+      />
+      <AuthFilesPrefixProxyEditorModal
+        disableControls={disableControls}
+        editor={prefixProxyEditor}
+        updatedText={prefixProxyUpdatedText}
+        dirty={prefixProxyDirty}
+        onClose={closePrefixProxyEditor}
+        onCopyText={copyTextWithNotification}
+        onSave={handlePrefixProxySave}
+        onChange={handlePrefixProxyChange}
+      />
+      <OAuthExcludedEditorModal
+        open={oauthExcludedEditorProvider !== null}
+        provider={oauthExcludedEditorProvider ?? ''}
+        files={files}
+        excluded={oauthState.excluded}
+        modelAlias={oauthState.modelAlias}
+        disabled={disableControls}
+        unsupported={oauthState.excludedError === 'unsupported'}
+        onClose={() => setOauthExcludedEditorProvider(null)}
+        onSaved={reloadOauthRules}
+      />
+      <OAuthModelAliasEditorModal
+        open={oauthModelAliasEditorProvider !== null}
+        provider={oauthModelAliasEditorProvider ?? ''}
+        files={files}
+        excluded={oauthState.excluded}
+        modelAlias={oauthState.modelAlias}
+        disabled={disableControls}
+        unsupported={oauthState.modelAliasError === 'unsupported'}
+        onClose={() => setOauthModelAliasEditorProvider(null)}
+        onSaved={reloadOauthRules}
+      />
+      <CodexReauthDialog
+        open={Boolean(codexReauthTarget)}
+        target={codexReauthTarget}
+        onClose={() => setCodexReauthTarget(null)}
+        onSuccess={handleCodexReauthSuccess}
+      />
     </div>
   );
 }
