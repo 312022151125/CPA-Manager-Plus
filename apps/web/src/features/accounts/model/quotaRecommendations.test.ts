@@ -15,6 +15,7 @@ const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
 
   return {
     key: raw.name,
+    selectionKey: `${raw.name}\u0000-`,
     fileName: raw.name,
     accountLabel: raw.name,
     provider: 'codex',

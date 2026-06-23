@@ -49,6 +49,19 @@ describe('accountRows', () => {
     expect(rows[0].planType).toBe('plus');
   });
 
+  it('builds selection keys with auth indexes for shared auth rows', () => {
+    const rows = buildAccountRows(
+      [
+        { name: 'shared.codex.json', type: 'codex', authIndex: '0' },
+        { name: 'plain.codex.json', type: 'codex' },
+      ],
+      emptyStores()
+    );
+
+    expect(rows[0].selectionKey).toBe('shared.codex.json\u00000');
+    expect(rows[1].selectionKey).toBe('plain.codex.json\u0000-');
+  });
+
   it('builds account metrics from quota, disabled state, usage, and inspection results', () => {
     const files: AuthFileItem[] = [
       {

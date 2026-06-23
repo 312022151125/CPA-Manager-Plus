@@ -12,6 +12,7 @@ import {
   sumRecentRequests,
   type RecentRequestBucket,
 } from '@/utils/recentRequests';
+import { getAuthFileSelectionKey } from '@/features/authFiles/model/authFilesPageModel';
 
 export type AccountQuotaStatus =
   | 'unknown'
@@ -62,6 +63,7 @@ export interface AccountUsageSummary {
 
 export interface AccountRow {
   key: string;
+  selectionKey: string;
   fileName: string;
   accountLabel: string;
   provider: string;
@@ -385,8 +387,10 @@ export const buildAccountRows = (
     const provider = normalizeAccountProvider(file);
     const quota = resolveAccountQuota(file, stores);
     const authIndex = readAuthIndex(file);
+    const selectionKey = getAuthFileSelectionKey(file);
     return {
       key: file.name,
+      selectionKey,
       fileName: file.name,
       accountLabel: resolveAccountLabel(file),
       provider,
