@@ -48,10 +48,10 @@
 .metricCard {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  min-height: 92px;
-  padding: 16px;
+  min-height: 78px;
+  padding: 12px;
   border: 1px solid var(--glass-border);
   border-radius: $radius-md;
   background: var(--glass-bg);
@@ -59,9 +59,9 @@
 }
 
 .metricIcon {
-  width: 44px;
-  height: 44px;
-  flex: 0 0 44px;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -107,7 +107,7 @@
   strong {
     margin-top: 2px;
     color: var(--text-primary);
-    font-size: 22px;
+    font-size: 20px;
     line-height: 1.2;
   }
 
@@ -148,6 +148,20 @@
 
 .searchField {
   min-width: 0;
+}
+
+.filterField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+
+  > span {
+    color: var(--text-tertiary, var(--text-secondary));
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1;
+  }
 }
 
 .advancedPanel {
@@ -249,18 +263,30 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border-color);
-
-  > span {
-    color: var(--text-secondary);
-    font-size: 13px;
-    font-weight: 700;
-  }
 
   @include mobile {
     align-items: stretch;
     flex-direction: column;
+  }
+}
+
+.batchSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+
+  > span {
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  > small {
+    color: var(--text-tertiary, var(--text-secondary));
+    font-size: 12px;
   }
 }
 
@@ -284,7 +310,7 @@
 
   th,
   td {
-    padding: 10px 12px;
+    padding: 9px 12px;
     border-bottom: 1px solid var(--border-color);
     color: var(--text-primary);
     font-size: 13px;
@@ -465,7 +491,7 @@
 .quotaCell {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -481,10 +507,21 @@
 }
 
 .quotaTrack {
-  height: 7px;
+  height: 6px;
   overflow: hidden;
   border-radius: 999px;
   background: color-mix(in srgb, var(--border-color) 58%, transparent);
+}
+
+.quotaSubtext {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .quotaBar {

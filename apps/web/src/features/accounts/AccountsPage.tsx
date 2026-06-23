@@ -314,6 +314,18 @@ const getColumnLabelKey = (column: AccountColumn) => {
   }
 };
 
+const getReadableStatusMessage = (message: string, t: TFunction) => {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized === 'unauthorized' || normalized === 'unauthenticated') {
+    return t('accounts.status_message_unauthorized');
+  }
+  if (normalized === 'expired' || normalized === 'token_expired') {
+    return t('accounts.status_message_expired');
+  }
+  return message;
+};
+
 const getValueRangeMs = (range: UsageValueRange) =>
   (VALUE_RANGE_OPTIONS.find((option) => option.value === range)?.hours ?? 24 * 7) * 60 * 60 * 1000;
 
@@ -452,7 +464,9 @@ export function AccountsPage() {
   const [quotaBandFilter, setQuotaBandFilter] = useState<AccountQuotaBand>('all');
   const [search, setSearch] = useState('');
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
-  const [hiddenColumns, setHiddenColumns] = useState<Set<AccountColumn>>(new Set());
+  const [hiddenColumns, setHiddenColumns] = useState<Set<AccountColumn>>(
+    () => new Set(['provider', 'plan', 'value'])
+  );
   const [accountSort, setAccountSort] = useState<AccountRowSort>({
     key: 'default',
     direction: 'desc',
@@ -688,6 +702,29 @@ export function AccountsPage() {
   const getDisplayFileName = useCallback(
     (fileName: string) => getDisplayText(fileName),
     [getDisplayText]
+  );
+  const getQuotaSubtext = useCallback(
+    (row: AccountRow) => {
+      if (row.disabled) return t('accounts.quota_subtext_account_disabled');
+      if (row.quota.status === 'unknown') {
+        return row.quota.source === 'none'
+          ? t('accounts.quota_subtext_no_cache')
+          : t('accounts.quota_subtext_pending');
+      }
+      if (row.quota.status === 'loading') return t('accounts.quota_subtext_loading');
+      if (row.quota.status === 'error') {
+        return row.quota.error
+          ? t('accounts.quota_subtext_error', { message: row.quota.error })
+          : t('accounts.quota_subtext_error_unknown');
+      }
+      if (row.quota.usedPercent !== null) {
+        return t('accounts.quota_subtext_used', {
+          percent: formatPercent(row.quota.usedPercent),
+        });
+      }
+      return '';
+    },
+    [t]
   );
   const accountDisplayHint = t(
     accountDisplayMode === 'masked'
@@ -1282,53 +1319,65 @@ export function AccountsPage() {
           aria-label={t('accounts.search_label')}
         />
       </div>
-      <Select
-        value={providerFilter}
-        options={[
-          { value: 'all', label: t('accounts.filter_all') },
-          ...providerOptions.map((provider) => ({
-            value: provider,
-            label: getProviderLabel(provider, t),
-          })),
-        ]}
-        onChange={setProviderFilter}
-        ariaLabel={t('accounts.provider_filter')}
-      />
-      <Select
-        value={statusFilter}
-        options={[
-          { value: 'all', label: t('accounts.status_all') },
-          { value: 'available', label: t('accounts.status_available') },
-          { value: 'low', label: t('accounts.status_low') },
-          { value: 'exhausted', label: t('accounts.status_exhausted') },
-          { value: 'disabled', label: t('accounts.status_disabled') },
-          { value: 'problem', label: t('accounts.status_problem') },
-          { value: 'inspection', label: t('accounts.status_inspection') },
-        ]}
-        onChange={(value) => setStatusFilter(value as AccountStatusFilter)}
-        ariaLabel={t('accounts.status_filter')}
-      />
-      <Select
-        value={planFilter}
-        options={[
-          { value: 'all', label: t('accounts.plan_all') },
-          ...planOptions.map((plan) => ({ value: plan, label: plan })),
-        ]}
-        onChange={setPlanFilter}
-        ariaLabel={t('accounts.plan_filter')}
-      />
-      <Select
-        value={quotaBandFilter}
-        options={[
-          { value: 'all', label: t('accounts.quota_all') },
-          { value: 'ge50', label: t('accounts.quota_ge50') },
-          { value: 'between20and50', label: t('accounts.quota_between20and50') },
-          { value: 'lt20', label: t('accounts.quota_lt20') },
-          { value: 'spent', label: t('accounts.quota_spent') },
-        ]}
-        onChange={(value) => setQuotaBandFilter(value as AccountQuotaBand)}
-        ariaLabel={t('accounts.quota_filter')}
-      />
+      <div className={styles.filterField}>
+        <span>{t('accounts.col_provider')}</span>
+        <Select
+          value={providerFilter}
+          options={[
+            { value: 'all', label: t('accounts.filter_all') },
+            ...providerOptions.map((provider) => ({
+              value: provider,
+              label: getProviderLabel(provider, t),
+            })),
+          ]}
+          onChange={setProviderFilter}
+          ariaLabel={t('accounts.provider_filter')}
+        />
+      </div>
+      <div className={styles.filterField}>
+        <span>{t('accounts.col_status')}</span>
+        <Select
+          value={statusFilter}
+          options={[
+            { value: 'all', label: t('accounts.status_all') },
+            { value: 'available', label: t('accounts.status_available') },
+            { value: 'low', label: t('accounts.status_low') },
+            { value: 'exhausted', label: t('accounts.status_exhausted') },
+            { value: 'disabled', label: t('accounts.status_disabled') },
+            { value: 'problem', label: t('accounts.status_problem') },
+            { value: 'inspection', label: t('accounts.status_inspection') },
+          ]}
+          onChange={(value) => setStatusFilter(value as AccountStatusFilter)}
+          ariaLabel={t('accounts.status_filter')}
+        />
+      </div>
+      <div className={styles.filterField}>
+        <span>{t('accounts.col_plan')}</span>
+        <Select
+          value={planFilter}
+          options={[
+            { value: 'all', label: t('accounts.plan_all') },
+            ...planOptions.map((plan) => ({ value: plan, label: plan })),
+          ]}
+          onChange={setPlanFilter}
+          ariaLabel={t('accounts.plan_filter')}
+        />
+      </div>
+      <div className={styles.filterField}>
+        <span>{t('accounts.col_quota')}</span>
+        <Select
+          value={quotaBandFilter}
+          options={[
+            { value: 'all', label: t('accounts.quota_all') },
+            { value: 'ge50', label: t('accounts.quota_ge50') },
+            { value: 'between20and50', label: t('accounts.quota_between20and50') },
+            { value: 'lt20', label: t('accounts.quota_lt20') },
+            { value: 'spent', label: t('accounts.quota_spent') },
+          ]}
+          onChange={(value) => setQuotaBandFilter(value as AccountQuotaBand)}
+          ariaLabel={t('accounts.quota_filter')}
+        />
+      </div>
       <Button
         variant="secondary"
         size="sm"
@@ -1390,11 +1439,14 @@ export function AccountsPage() {
 
     return (
       <section className={styles.batchBar}>
-        <span>
-          {t('accounts.selected_count', {
-            count: selectionCount,
-          })}
-        </span>
+        <div className={styles.batchSummary}>
+          <span>
+            {t('accounts.selected_count', {
+              count: selectionCount,
+            })}
+          </span>
+          {!hasSelection ? <small>{t('accounts.batch_hint')}</small> : null}
+        </div>
         <div className={styles.batchActions}>
           {renderAccountDisplayToggle()}
           <Button
@@ -1408,6 +1460,30 @@ export function AccountsPage() {
             <IconRefreshCw size={15} />
             {t('accounts.refresh_quota')}
           </Button>
+          {hasSelection ? (
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => handleBatchStatus(true)}
+                disabled={disableControls || statusUpdating}
+                title={t('accounts.enable')}
+              >
+                <IconCheck size={15} />
+                {t('accounts.enable')}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => handleBatchStatus(false)}
+                disabled={disableControls || statusUpdating}
+                title={t('accounts.disable')}
+              >
+                <IconX size={15} />
+                {t('accounts.disable')}
+              </Button>
+            </>
+          ) : null}
         </div>
       </section>
     );
@@ -1674,6 +1750,22 @@ export function AccountsPage() {
           } satisfies DropdownMenuItem,
         ]
       : []),
+    row.disabled
+      ? {
+          key: 'enable',
+          label: t('accounts.enable'),
+          icon: <IconCheck size={15} />,
+          onClick: () => void handleBatchStatus(true, [row]),
+          disabled: disableControls || statusUpdating || row.runtimeOnly,
+        }
+      : {
+          key: 'disable',
+          label: t('accounts.disable'),
+          icon: <IconX size={15} />,
+          onClick: () => void handleBatchStatus(false, [row]),
+          disabled: disableControls || statusUpdating || row.runtimeOnly,
+          tone: 'danger',
+        },
     {
       key: 'download',
       label: t('auth_files.download_button'),
@@ -1810,6 +1902,8 @@ export function AccountsPage() {
             {rowsToRender.map((row) => {
               const remaining = row.quota.remainingPercent;
               const recentTotal = row.usage.success + row.usage.failure;
+              const readableStatusMessage = getReadableStatusMessage(row.statusMessage, t);
+              const quotaSubtext = getQuotaSubtext(row);
               return (
                 <tr
                   key={row.selectionKey}
@@ -1850,8 +1944,8 @@ export function AccountsPage() {
                             ? t('accounts.status_disabled')
                             : t('accounts.status_available')}
                         </span>
-                        {row.statusMessage ? (
-                          <small title={row.statusMessage}>{row.statusMessage}</small>
+                        {readableStatusMessage ? (
+                          <small title={row.statusMessage}>{readableStatusMessage}</small>
                         ) : null}
                         {row.inspection && row.inspection.action !== 'keep' ? (
                           <small className={styles.inspectionHint}>
@@ -1877,12 +1971,19 @@ export function AccountsPage() {
                           </span>
                           <strong>{formatPercent(remaining)}</strong>
                         </div>
-                        <div className={styles.quotaTrack} aria-hidden="true">
-                          <span
-                            className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
-                            style={{ width: `${remaining ?? 0}%` }}
-                          />
-                        </div>
+                        {quotaSubtext ? (
+                          <small className={styles.quotaSubtext} title={quotaSubtext}>
+                            {quotaSubtext}
+                          </small>
+                        ) : null}
+                        {remaining !== null ? (
+                          <div className={styles.quotaTrack} aria-hidden="true">
+                            <span
+                              className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
+                              style={{ width: `${remaining}%` }}
+                            />
+                          </div>
+                        ) : null}
                       </div>
                     </td>
                   ) : null}
