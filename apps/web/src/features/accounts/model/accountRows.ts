@@ -6,13 +6,21 @@ import type {
   KimiQuotaState,
   XaiQuotaState,
 } from '@/types';
-import type { CodexInspectionResult } from '@/services/api/usageService';
+import type { CodexInspectionResult, UsageHeaderSnapshot } from '@/services/api/usageService';
 import {
   normalizeRecentRequestBuckets,
   sumRecentRequests,
   type RecentRequestBucket,
 } from '@/utils/recentRequests';
 import { getAuthFileSelectionKey } from '@/features/authFiles/model/authFilesPageModel';
+import {
+  buildObservedCodexQuotaFromHeaderSnapshot,
+  getHeaderSnapshotErrorCode,
+  getHeaderSnapshotErrorKind,
+  getHeaderSnapshotPlanType,
+  getHeaderSnapshotTraceId,
+  hasUsageHeaderDiagnosticSignal,
+} from '@/utils/usageHeaderSnapshots';
 
 export type AccountQuotaStatus =
   | 'unknown'
@@ -34,6 +42,7 @@ export type AccountStatusFilter =
   | 'inspection';
 export type AccountRowSortKey = 'default' | 'reset' | 'priority' | 'recent';
 export type AccountRowSortDirection = 'asc' | 'desc';
+export type AccountQuotaSource = 'cache' | 'observed-header' | 'none';
 
 export interface AccountRowSort {
   key: AccountRowSortKey;
@@ -46,8 +55,16 @@ export interface AccountQuotaSummary {
   usedPercent: number | null;
   resetLabel: string;
   planType: string | null;
-  source: 'cache' | 'none';
+  source: AccountQuotaSource;
   error?: string;
+  observedAtMs?: number;
+  observedTraceId?: string;
+  observedErrorKind?: string;
+  observedErrorCode?: string;
+  activeLimit?: string | null;
+  creditsBalance?: string | null;
+  rateLimitReachedType?: string | null;
+  primaryOverSecondaryLimitPercent?: number | null;
 }
 
 export interface AccountInspectionSummary {
@@ -105,6 +122,11 @@ export interface AccountQuotaStores {
   xaiQuota: Record<string, XaiQuotaState>;
 }
 
+export interface AccountQuotaOverrides {
+  codexQuotaBySelectionKey?: Map<string, CodexQuotaState>;
+  codexHeaderSnapshotBySelectionKey?: Map<string, UsageHeaderSnapshot>;
+}
+
 export interface AccountRowFilters {
   provider: string;
   status: AccountStatusFilter;
@@ -115,6 +137,21 @@ export interface AccountRowFilters {
 
 const QUOTA_LOW_THRESHOLD = 20;
 const QUOTA_OK_THRESHOLD = 50;
+
+type AccountQuotaObservationFields = Partial<
+  Pick<
+    AccountQuotaSummary,
+    | 'source'
+    | 'observedAtMs'
+    | 'observedTraceId'
+    | 'observedErrorKind'
+    | 'observedErrorCode'
+    | 'activeLimit'
+    | 'creditsBalance'
+    | 'rateLimitReachedType'
+    | 'primaryOverSecondaryLimitPercent'
+  >
+>;
 
 const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
 
@@ -177,8 +214,10 @@ const getQuotaStatusFromRemaining = (remainingPercent: number | null): AccountQu
 
 const quotaFromUsedWindows = (
   windows: Array<{ usedPercent: number | null; resetLabel?: string }>,
-  planType: string | null
+  planType: string | null,
+  options: AccountQuotaObservationFields = {}
 ): AccountQuotaSummary => {
+  const source = options.source ?? 'cache';
   const usedValues = windows
     .map((window) => window.usedPercent)
     .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
@@ -189,7 +228,8 @@ const quotaFromUsedWindows = (
       usedPercent: null,
       resetLabel: '-',
       planType,
-      source: 'cache',
+      ...options,
+      source,
     };
   }
 
@@ -202,8 +242,76 @@ const quotaFromUsedWindows = (
     usedPercent,
     resetLabel,
     planType,
-    source: 'cache',
+    ...options,
+    source,
   };
+};
+
+const quotaObservationFields = (
+  quota: CodexQuotaState
+): AccountQuotaObservationFields => {
+  if (!quota.observedFromUsageHeaders) return { source: 'cache' };
+  return {
+    source: 'observed-header',
+    observedAtMs: quota.observedAtMs,
+    observedTraceId: quota.observedTraceId,
+    observedErrorKind: quota.observedErrorKind,
+    observedErrorCode: quota.observedErrorCode,
+    activeLimit: quota.activeLimit,
+    creditsBalance: quota.creditsBalance,
+    rateLimitReachedType: quota.rateLimitReachedType,
+    primaryOverSecondaryLimitPercent: quota.primaryOverSecondaryLimitPercent,
+  };
+};
+
+const quotaObservationFieldsFromSnapshot = (
+  snapshot: UsageHeaderSnapshot | undefined
+): AccountQuotaObservationFields => {
+  if (!hasUsageHeaderDiagnosticSignal(snapshot)) return {};
+  const observedQuota = buildObservedCodexQuotaFromHeaderSnapshot(snapshot);
+  return {
+    source: 'observed-header',
+    observedAtMs: snapshot?.timestamp_ms,
+    observedTraceId: getHeaderSnapshotTraceId(snapshot) || undefined,
+    observedErrorKind: getHeaderSnapshotErrorKind(snapshot) || undefined,
+    observedErrorCode: getHeaderSnapshotErrorCode(snapshot) || undefined,
+    activeLimit: observedQuota?.activeLimit ?? undefined,
+    creditsBalance: observedQuota?.creditsBalance ?? undefined,
+    rateLimitReachedType: observedQuota?.rateLimitReachedType ?? undefined,
+    primaryOverSecondaryLimitPercent:
+      observedQuota?.primaryOverSecondaryLimitPercent ?? undefined,
+  };
+};
+
+const hasObservedQuotaFields = (fields: AccountQuotaObservationFields): boolean =>
+  Object.values(fields).some((value) => value !== undefined);
+
+const mergeQuotaObservationFields = (
+  summary: AccountQuotaSummary,
+  fields: AccountQuotaObservationFields
+): AccountQuotaSummary => {
+  if (!hasObservedQuotaFields(fields)) return summary;
+  const merged: AccountQuotaSummary = { ...summary };
+  if (fields.observedAtMs !== undefined) merged.observedAtMs = fields.observedAtMs;
+  if (fields.observedTraceId !== undefined) merged.observedTraceId = fields.observedTraceId;
+  if (fields.observedErrorKind !== undefined) {
+    merged.observedErrorKind = fields.observedErrorKind;
+  }
+  if (fields.observedErrorCode !== undefined) {
+    merged.observedErrorCode = fields.observedErrorCode;
+  }
+  if (fields.activeLimit !== undefined) merged.activeLimit = fields.activeLimit;
+  if (fields.creditsBalance !== undefined) merged.creditsBalance = fields.creditsBalance;
+  if (fields.rateLimitReachedType !== undefined) {
+    merged.rateLimitReachedType = fields.rateLimitReachedType;
+  }
+  if (fields.primaryOverSecondaryLimitPercent !== undefined) {
+    merged.primaryOverSecondaryLimitPercent = fields.primaryOverSecondaryLimitPercent;
+  }
+  if (summary.source === 'none' && fields.source) {
+    merged.source = fields.source;
+  }
+  return merged;
 };
 
 const quotaFromRemainingFractions = (
@@ -247,7 +355,8 @@ const quotaFromError = (error: string | undefined, planType: string | null): Acc
 
 export const resolveAccountQuota = (
   file: AuthFileItem,
-  stores: AccountQuotaStores
+  stores: AccountQuotaStores,
+  overrides?: AccountQuotaOverrides
 ): AccountQuotaSummary => {
   const provider = normalizeAccountProvider(file);
   const filePlanType = readPlanType(file);
@@ -263,11 +372,36 @@ export const resolveAccountQuota = (
   }
 
   if (provider === 'codex') {
-    const quota = stores.codexQuota[file.name];
-    if (!quota) return emptyQuota(filePlanType);
-    if (quota.status === 'loading') return loadingQuota(quota.planType ?? filePlanType);
-    if (quota.status === 'error') return quotaFromError(quota.error, quota.planType ?? filePlanType);
-    return quotaFromUsedWindows(quota.windows, quota.planType ?? filePlanType);
+    const selectionKey = getAuthFileSelectionKey(file);
+    const quota =
+      overrides?.codexQuotaBySelectionKey?.get(selectionKey) ?? stores.codexQuota[file.name];
+    const headerSnapshot = overrides?.codexHeaderSnapshotBySelectionKey?.get(selectionKey);
+    const headerObservationFields = quotaObservationFieldsFromSnapshot(headerSnapshot);
+    const headerPlanType = readString(getHeaderSnapshotPlanType(headerSnapshot)).toLowerCase();
+    const observedPlanType = headerPlanType || filePlanType;
+    if (!quota) {
+      return mergeQuotaObservationFields(emptyQuota(observedPlanType), headerObservationFields);
+    }
+    if (quota.status === 'loading') {
+      return mergeQuotaObservationFields(
+        loadingQuota(quota.planType ?? observedPlanType),
+        headerObservationFields
+      );
+    }
+    if (quota.status === 'error') {
+      return mergeQuotaObservationFields(
+        quotaFromError(quota.error, quota.planType ?? observedPlanType),
+        headerObservationFields
+      );
+    }
+    return mergeQuotaObservationFields(
+      quotaFromUsedWindows(
+        quota.windows,
+        quota.planType ?? observedPlanType,
+        quotaObservationFields(quota)
+      ),
+      headerObservationFields
+    );
   }
 
   if (provider === 'claude') {
@@ -387,14 +521,15 @@ const buildUsageSummary = (file: AuthFileItem): AccountUsageSummary => {
 export const buildAccountRows = (
   files: AuthFileItem[],
   stores: AccountQuotaStores,
-  inspectionResults?: CodexInspectionResult[]
+  inspectionResults?: CodexInspectionResult[],
+  overrides?: AccountQuotaOverrides
 ): AccountRow[] => {
   const inspectionByFile = buildInspectionMap(inspectionResults);
   return files.map((file) => {
     const provider = normalizeAccountProvider(file);
-    const quota = resolveAccountQuota(file, stores);
     const authIndex = readAuthIndex(file);
     const selectionKey = getAuthFileSelectionKey(file);
+    const quota = resolveAccountQuota(file, stores, overrides);
     return {
       key: file.name,
       selectionKey,
@@ -458,6 +593,14 @@ export const filterAccountRows = (
       row.authIndex,
       row.projectId,
       row.statusMessage,
+      row.quota.source,
+      row.quota.error,
+      row.quota.observedTraceId,
+      row.quota.observedErrorKind,
+      row.quota.observedErrorCode,
+      row.quota.activeLimit,
+      row.quota.creditsBalance,
+      row.quota.rateLimitReachedType,
       row.inspection?.actionReason,
     ];
     return values.some((value) => readString(value).toLowerCase().includes(search));

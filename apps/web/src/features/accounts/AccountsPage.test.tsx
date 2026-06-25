@@ -3,6 +3,7 @@ import { isValidElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '@/components/ui/Button';
 import type { AuthFileItem } from '@/types';
+import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import { AccountsPage } from './AccountsPage';
 
 type AnalyticsRequestForTest = {
@@ -25,6 +26,13 @@ type AnalyticsResponseForTest = {
   };
   account_stats?: unknown[];
   timeline?: unknown[];
+};
+
+type HeaderSnapshotsResponseForTest = {
+  generated_at_ms: number;
+  from_ms: number;
+  to_ms: number;
+  items: UsageHeaderSnapshot[];
 };
 
 const makeCodexFile = (name: string, authIndex: string, account: string): AuthFileItem =>
@@ -141,6 +149,12 @@ const { mocks } = vi.hoisted(() => {
           timeline: [],
         })
       ),
+      getHeaderSnapshots: vi.fn(async (): Promise<HeaderSnapshotsResponseForTest> => ({
+        generated_at_ms: 1,
+        from_ms: 0,
+        to_ms: 1,
+        items: [],
+      })),
       panelFeatureAvailability: {
         checking: false,
         managerServiceBase: 'http://manager.local:18317',
@@ -344,6 +358,7 @@ vi.mock('@/features/oauth/CodexReauthDialog', () => ({
 vi.mock('@/services/api', () => ({
   monitoringAnalyticsApi: {
     getAnalytics: mocks.getAnalytics,
+    getHeaderSnapshots: mocks.getHeaderSnapshots,
   },
   usageServiceApi: {
     listCodexInspectionRuns: mocks.listCodexInspectionRuns,
@@ -414,6 +429,14 @@ const findHostButtonByText = (renderer: ReactTestRenderer, text: string) => {
   return button;
 };
 
+const findInputByAriaLabel = (renderer: ReactTestRenderer, label: string) => {
+  const input = renderer.root
+    .findAll((node) => node.type === 'input')
+    .find((node) => node.props['aria-label'] === label);
+  if (!input) throw new Error(`Input not found: ${label}`);
+  return input;
+};
+
 const renderAccountsPage = async () => {
   let renderer: ReactTestRenderer | null = null;
   await act(async () => {
@@ -465,6 +488,13 @@ describe('AccountsPage replacement flows', () => {
     mocks.batchDelete.mockClear();
     mocks.getAnalytics.mockReset();
     mocks.getAnalytics.mockImplementation(defaultGetAnalytics);
+    mocks.getHeaderSnapshots.mockReset();
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 1,
+      from_ms: 0,
+      to_ms: 1,
+      items: [],
+    });
     mocks.loadFiles.mockClear();
     mocks.loadExcluded.mockClear();
     mocks.loadModelAlias.mockClear();
@@ -590,6 +620,60 @@ describe('AccountsPage replacement flows', () => {
     });
 
     expect(getAccountTableRowTexts(renderer)[0]).toContain('middle.json');
+  });
+
+  it('searches and renders diagnostic-only Codex usage header snapshots', async () => {
+    mocks.files = [
+      makeCodexFile('codex-diagnostic.json', 'auth-1', 'diagnostic@example.com'),
+      makeCodexFile('codex-other.json', 'auth-2', 'other@example.com'),
+    ];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 1,
+      from_ms: 0,
+      to_ms: 1,
+      items: [
+        {
+          event_hash: 'diagnostic-only',
+          timestamp_ms: 1700000000000,
+          auth_file_snapshot: 'codex-diagnostic.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'diagnostic@example.com',
+          auth_provider_snapshot: 'codex',
+          header_trace_id: 'trace-diagnostic-only',
+          header_error_kind: 'rate_limit',
+          header_error_code: 'usage_limit_reached',
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findInputByAriaLabel(renderer, 'accounts.search_label').props.onChange({
+        target: { value: 'trace-diagnostic-only' },
+      });
+    });
+
+    const rowTexts = getAccountTableRowTexts(renderer);
+    expect(rowTexts).toHaveLength(1);
+    expect(rowTexts[0]).toContain('codex-diagnostic.json');
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex-diagnostic.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+
+    expect(treeText(renderer)).toContain('accounts.quota_source_observed_header');
+    expect(treeText(renderer)).toContain('trace-diagnostic-only');
+    expect(treeText(renderer)).toContain('usage_limit_reached');
   });
 
   it('loads detail events filtered by auth file and auth index', async () => {

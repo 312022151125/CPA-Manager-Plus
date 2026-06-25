@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { TFunction } from 'i18next';
@@ -41,6 +41,7 @@ import {
   CODEX_CONFIG,
   KIMI_CONFIG,
   XAI_CONFIG,
+  buildObservedCodexQuotaState,
   type QuotaConfig,
 } from '@/components/quota';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
@@ -70,6 +71,7 @@ import {
   filterAccountRows,
   getPlanOptions,
   getProviderOptions,
+  normalizeAccountProvider,
   sortAccountRows,
   type AccountQuotaBand,
   type AccountRow,
@@ -90,6 +92,7 @@ import {
   getAuthFilePatchTarget,
   getAuthFileCodexInspectionKeyForFile,
   getAuthFileCodexStatus,
+  getAuthFileSelectionKey,
   hasPartialSharedAuthFileSelection,
 } from '@/features/authFiles/model/authFilesPageModel';
 import {
@@ -111,6 +114,7 @@ import {
   type MonitoringAnalyticsEventRow,
   type MonitoringAnalyticsTimelinePoint,
   type QuotaCooldownInfo,
+  type UsageHeaderSnapshot,
 } from '@/services/api';
 import type {
   AuthFileItem,
@@ -127,6 +131,10 @@ import {
 import { maskQuotaAccountText } from '@/components/quota/quotaDisplay';
 import { useAuthStore, useNotificationStore, useQuotaStore } from '@/stores';
 import { copyToClipboard } from '@/utils/clipboard';
+import {
+  buildUsageHeaderSnapshotLookup,
+  getHighConfidenceUsageHeaderSnapshotForAuthFile,
+} from '@/utils/usageHeaderSnapshots';
 import styles from './AccountsPage.module.scss';
 
 type AccountsView = 'accounts' | 'quota' | 'inspection' | 'oauth' | 'value';
@@ -434,7 +442,7 @@ export function AccountsPage() {
   const codexQuota = useQuotaStore((state) => state.codexQuota);
   const kimiQuota = useQuotaStore((state) => state.kimiQuota);
   const xaiQuota = useQuotaStore((state) => state.xaiQuota);
-  const quotaStores = useMemo(
+  const baseQuotaStores = useMemo(
     () => ({
       antigravityQuota,
       claudeQuota,
@@ -499,10 +507,16 @@ export function AccountsPage() {
   const [quotaCooldowns, setQuotaCooldowns] = useState<Map<string, QuotaCooldownInfo>>(
     () => new Map()
   );
+  const [headerSnapshots, setHeaderSnapshots] = useState<UsageHeaderSnapshot[]>([]);
   const [accountDisplayMode, setAccountDisplayMode] = useState<QuotaAccountDisplayMode>(
     DEFAULT_QUOTA_ACCOUNT_DISPLAY_MODE
   );
   const detailEventsRequestIdRef = useRef(0);
+  const headerSnapshotReqIdRef = useRef(0);
+  const headerSnapshotContextRef = useRef({
+    managerServiceBase: featureAvailability.managerServiceBase,
+    managementKey,
+  });
 
   const loadInspectionSummary = useCallback(async () => {
     if (
@@ -572,6 +586,54 @@ export function AccountsPage() {
     }
   }, [featureAvailability.managerServiceBase, managementKey]);
 
+  const loadHeaderSnapshots = useCallback(async () => {
+    if (
+      featureAvailability.checking ||
+      !featureAvailability.requestMonitoringAvailable ||
+      !featureAvailability.managerServiceBase
+    ) {
+      setHeaderSnapshots((current) => (current.length === 0 ? current : []));
+      return;
+    }
+
+    const id = ++headerSnapshotReqIdRef.current;
+    try {
+      const response = await monitoringAnalyticsApi.getHeaderSnapshots(
+        featureAvailability.managerServiceBase,
+        managementKey,
+        {
+          days: 30,
+          limit: 1000,
+        }
+      );
+      if (id !== headerSnapshotReqIdRef.current) return;
+      setHeaderSnapshots(response.items ?? []);
+    } catch {
+      // Header snapshots are passive diagnostics; transient failures should not block accounts.
+    }
+  }, [
+    featureAvailability.checking,
+    featureAvailability.managerServiceBase,
+    featureAvailability.requestMonitoringAvailable,
+    managementKey,
+  ]);
+
+  useLayoutEffect(() => {
+    const prev = headerSnapshotContextRef.current;
+    if (
+      prev.managerServiceBase === featureAvailability.managerServiceBase &&
+      prev.managementKey === managementKey
+    ) {
+      return;
+    }
+    headerSnapshotContextRef.current = {
+      managerServiceBase: featureAvailability.managerServiceBase,
+      managementKey,
+    };
+    headerSnapshotReqIdRef.current += 1;
+    setHeaderSnapshots((current) => (current.length === 0 ? current : []));
+  }, [featureAvailability.managerServiceBase, managementKey]);
+
   const loadOauthExcluded = oauthState.loadExcluded;
   const loadOauthModelAlias = oauthState.loadModelAlias;
 
@@ -580,12 +642,14 @@ export function AccountsPage() {
       loadFiles(),
       loadInspectionSummary(),
       loadQuotaCooldowns(),
+      loadHeaderSnapshots(),
       loadOauthExcluded(),
       loadOauthModelAlias(),
     ]);
   }, [
     loadFiles,
     loadInspectionSummary,
+    loadHeaderSnapshots,
     loadOauthExcluded,
     loadOauthModelAlias,
     loadQuotaCooldowns,
@@ -610,9 +674,52 @@ export function AccountsPage() {
     setCodexReauthTarget(null);
   }, [loadFiles]);
 
+  const headerSnapshotLookup = useMemo(
+    () => buildUsageHeaderSnapshotLookup(headerSnapshots),
+    [headerSnapshots]
+  );
+  const getDisplayCodexQuota = useCallback(
+    (file: AuthFileItem): CodexQuotaState | undefined => {
+      if (normalizeAccountProvider(file) !== CODEX_CONFIG.type) return undefined;
+      const activeQuota = codexQuota[file.name];
+      if (activeQuota && activeQuota.status !== 'idle' && activeQuota.status !== 'error') {
+        return activeQuota;
+      }
+      if (activeQuota?.status === 'error' && activeQuota.errorStatus === 401) {
+        return activeQuota;
+      }
+      const observedQuota = buildObservedCodexQuotaState(
+        file,
+        getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, file),
+        t
+      );
+      return observedQuota ?? activeQuota;
+    },
+    [codexQuota, headerSnapshotLookup, t]
+  );
+  const accountQuotaOverrides = useMemo(() => {
+    const codexQuotaBySelectionKey = new Map<string, CodexQuotaState>();
+    const codexHeaderSnapshotBySelectionKey = new Map<string, UsageHeaderSnapshot>();
+    files.forEach((file) => {
+      const selectionKey = getAuthFileSelectionKey(file);
+      const headerSnapshot = getHighConfidenceUsageHeaderSnapshotForAuthFile(
+        headerSnapshotLookup,
+        file
+      );
+      if (headerSnapshot) {
+        codexHeaderSnapshotBySelectionKey.set(selectionKey, headerSnapshot);
+      }
+      const quota = getDisplayCodexQuota(file);
+      if (quota) {
+        codexQuotaBySelectionKey.set(selectionKey, quota);
+      }
+    });
+    return { codexQuotaBySelectionKey, codexHeaderSnapshotBySelectionKey };
+  }, [files, getDisplayCodexQuota, headerSnapshotLookup]);
+
   const rows = useMemo(
-    () => buildAccountRows(files, quotaStores, inspectionResults),
-    [files, inspectionResults, quotaStores]
+    () => buildAccountRows(files, baseQuotaStores, inspectionResults, accountQuotaOverrides),
+    [accountQuotaOverrides, baseQuotaStores, files, inspectionResults]
   );
   const codexInspectionMap = useMemo(
     () =>
@@ -707,6 +814,9 @@ export function AccountsPage() {
     (row: AccountRow) => {
       if (row.disabled) return t('accounts.quota_subtext_account_disabled');
       if (row.quota.status === 'unknown') {
+        if (row.quota.source === 'observed-header') {
+          return t('accounts.quota_subtext_observed_pending');
+        }
         return row.quota.source === 'none'
           ? t('accounts.quota_subtext_no_cache')
           : t('accounts.quota_subtext_pending');
@@ -726,6 +836,20 @@ export function AccountsPage() {
     },
     [t]
   );
+  const getQuotaSourceLabel = useCallback(
+    (source: AccountRow['quota']['source']) => {
+      switch (source) {
+        case 'observed-header':
+          return t('accounts.quota_source_observed_header');
+        case 'cache':
+          return t('accounts.quota_source_cache');
+        case 'none':
+        default:
+          return t('accounts.quota_source_none');
+      }
+    },
+    [t]
+  );
   const accountDisplayHint = t(
     accountDisplayMode === 'masked'
       ? 'quota_management.show_full_credentials_hint'
@@ -733,13 +857,19 @@ export function AccountsPage() {
   );
   const AccountDisplayIcon = accountDisplayMode === 'masked' ? IconEyeOff : IconEye;
   const getCodexStatusForRow = useCallback(
-    (row: AccountRow) =>
-      getAuthFileCodexStatus(
+    (row: AccountRow) => {
+      const headerSnapshot = getHighConfidenceUsageHeaderSnapshotForAuthFile(
+        headerSnapshotLookup,
+        row.raw
+      );
+      return getAuthFileCodexStatus(
         row.raw,
-        codexQuota[row.fileName],
-        codexInspectionMap.get(getAuthFileCodexInspectionKeyForFile(row.raw))
-      ),
-    [codexInspectionMap, codexQuota]
+        getDisplayCodexQuota(row.raw),
+        codexInspectionMap.get(getAuthFileCodexInspectionKeyForFile(row.raw)),
+        headerSnapshot
+      );
+    },
+    [codexInspectionMap, getDisplayCodexQuota, headerSnapshotLookup]
   );
   const oauthPreviewRows = useMemo(
     () =>
@@ -2073,8 +2203,44 @@ export function AccountsPage() {
               </div>
               <div>
                 <dt>{t('accounts.detail_source')}</dt>
-                <dd>{selectedRow.quota.source}</dd>
+                <dd>{getQuotaSourceLabel(selectedRow.quota.source)}</dd>
               </div>
+              {selectedRow.quota.observedAtMs ? (
+                <div>
+                  <dt>{t('accounts.detail_observed_at')}</dt>
+                  <dd>{formatTimestamp(selectedRow.quota.observedAtMs, i18n.language)}</dd>
+                </div>
+              ) : null}
+              {selectedRow.quota.observedTraceId ? (
+                <div>
+                  <dt>{t('accounts.detail_header_trace')}</dt>
+                  <dd>{selectedRow.quota.observedTraceId}</dd>
+                </div>
+              ) : null}
+              {selectedRow.quota.observedErrorKind ? (
+                <div>
+                  <dt>{t('accounts.detail_header_error_kind')}</dt>
+                  <dd>{selectedRow.quota.observedErrorKind}</dd>
+                </div>
+              ) : null}
+              {selectedRow.quota.observedErrorCode ? (
+                <div>
+                  <dt>{t('accounts.detail_header_error_code')}</dt>
+                  <dd>{selectedRow.quota.observedErrorCode}</dd>
+                </div>
+              ) : null}
+              {selectedRow.quota.activeLimit ? (
+                <div>
+                  <dt>{t('accounts.detail_active_limit')}</dt>
+                  <dd>{selectedRow.quota.activeLimit}</dd>
+                </div>
+              ) : null}
+              {selectedRow.quota.rateLimitReachedType ? (
+                <div>
+                  <dt>{t('accounts.detail_rate_limit_reached_type')}</dt>
+                  <dd>{selectedRow.quota.rateLimitReachedType}</dd>
+                </div>
+              ) : null}
               {selectedRow.quota.error ? (
                 <div>
                   <dt>{t('common.error')}</dt>
@@ -2201,7 +2367,7 @@ export function AccountsPage() {
               <div className={styles.drawerUsageHeader}>
                 <div>
                   <h3>{t('accounts.detail_quota')}</h3>
-                  <p>{selectedRow.quota.source}</p>
+                  <p>{getQuotaSourceLabel(selectedRow.quota.source)}</p>
                 </div>
                 <span
                   className={`${styles.badge} ${getQuotaStatusClass(selectedRow.quota.status)}`}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { AuthFileItem } from '@/types';
-import type { CodexInspectionResult } from '@/services/api/usageService';
+import type { AuthFileItem, CodexQuotaState } from '@/types';
+import type { CodexInspectionResult, UsageHeaderSnapshot } from '@/services/api/usageService';
 import {
   buildAccountMetrics,
   buildAccountRows,
@@ -50,6 +50,68 @@ describe('accountRows', () => {
     expect(rows[0].planType).toBe('plus');
   });
 
+  it('marks observed Codex usage header quota and searches header diagnostics', () => {
+    const rows = buildAccountRows(
+      [
+        {
+          name: 'codex-observed.json',
+          type: 'codex',
+          authIndex: '2',
+          account: 'observed@example.com',
+        },
+      ],
+      {
+        ...emptyStores(),
+        codexQuota: {
+          'codex-observed.json': {
+            status: 'success',
+            planType: 'plus',
+            windows: [
+              {
+                id: 'usage-header-observed',
+                label: 'Latest request',
+                usedPercent: 100,
+                resetLabel: '2026-06-25 10:00',
+              },
+            ],
+            observedFromUsageHeaders: true,
+            observedAtMs: 1000,
+            observedTraceId: 'trace-observed',
+            observedErrorKind: 'rate_limit',
+            observedErrorCode: 'usage_limit',
+            activeLimit: 'primary',
+            rateLimitReachedType: 'primary',
+          },
+        },
+      }
+    );
+
+    expect(rows[0].quota.source).toBe('observed-header');
+    expect(rows[0].quota.status).toBe('exhausted');
+    expect(rows[0].quota.observedTraceId).toBe('trace-observed');
+    expect(rows[0].quota.observedErrorCode).toBe('usage_limit');
+
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'all',
+        plan: 'all',
+        quotaBand: 'all',
+        search: 'trace-observed',
+      }).map((row) => row.fileName)
+    ).toEqual(['codex-observed.json']);
+
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'all',
+        plan: 'all',
+        quotaBand: 'all',
+        search: 'usage_limit',
+      }).map((row) => row.fileName)
+    ).toEqual(['codex-observed.json']);
+  });
+
   it('builds selection keys with auth indexes for shared auth rows', () => {
     const rows = buildAccountRows(
       [
@@ -61,6 +123,146 @@ describe('accountRows', () => {
 
     expect(rows[0].selectionKey).toBe('shared.codex.json\u00000');
     expect(rows[1].selectionKey).toBe('plain.codex.json\u0000-');
+  });
+
+  it('uses selection-key Codex quota overrides for shared auth rows', () => {
+    const rows = buildAccountRows(
+      [
+        { name: 'shared.codex.json', type: 'codex', authIndex: '0' },
+        { name: 'shared.codex.json', type: 'codex', authIndex: '1' },
+      ],
+      emptyStores(),
+      undefined,
+      {
+        codexQuotaBySelectionKey: new Map<string, CodexQuotaState>([
+          [
+            'shared.codex.json\u00000',
+            {
+              status: 'success',
+              windows: [{ id: 'a', label: 'A', usedPercent: 10, resetLabel: 'A reset' }],
+            },
+          ],
+          [
+            'shared.codex.json\u00001',
+            {
+              status: 'success',
+              windows: [{ id: 'b', label: 'B', usedPercent: 90, resetLabel: 'B reset' }],
+              observedFromUsageHeaders: true,
+              observedTraceId: 'trace-auth-index-1',
+            },
+          ],
+        ]),
+      }
+    );
+
+    expect(rows[0].quota.usedPercent).toBe(10);
+    expect(rows[0].quota.source).toBe('cache');
+    expect(rows[1].quota.usedPercent).toBe(90);
+    expect(rows[1].quota.source).toBe('observed-header');
+    expect(rows[1].quota.observedTraceId).toBe('trace-auth-index-1');
+  });
+
+  it('surfaces diagnostic-only Codex header snapshots without quota cache', () => {
+    const snapshot: UsageHeaderSnapshot = {
+      event_hash: 'diagnostic-only',
+      timestamp_ms: 1700000000000,
+      header_trace_id: 'trace-diagnostic-only',
+      header_error_kind: 'rate_limit',
+      header_error_code: 'usage_limit_reached',
+    };
+    const rows = buildAccountRows(
+      [
+        {
+          name: 'codex-diagnostic.json',
+          type: 'codex',
+          authIndex: '2',
+          account: 'diagnostic@example.com',
+        },
+      ],
+      emptyStores(),
+      undefined,
+      {
+        codexHeaderSnapshotBySelectionKey: new Map<string, UsageHeaderSnapshot>([
+          ['codex-diagnostic.json\u00002', snapshot],
+        ]),
+      }
+    );
+
+    expect(rows[0].quota.source).toBe('observed-header');
+    expect(rows[0].quota.status).toBe('unknown');
+    expect(rows[0].quota.usedPercent).toBeNull();
+    expect(rows[0].quota.observedAtMs).toBe(1700000000000);
+    expect(rows[0].quota.observedTraceId).toBe('trace-diagnostic-only');
+    expect(rows[0].quota.observedErrorKind).toBe('rate_limit');
+    expect(rows[0].quota.observedErrorCode).toBe('usage_limit_reached');
+
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'all',
+        plan: 'all',
+        quotaBand: 'all',
+        search: 'trace-diagnostic-only',
+      }).map((row) => row.fileName)
+    ).toEqual(['codex-diagnostic.json']);
+
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'all',
+        plan: 'all',
+        quotaBand: 'all',
+        search: 'usage_limit_reached',
+      }).map((row) => row.fileName)
+    ).toEqual(['codex-diagnostic.json']);
+  });
+
+  it('keeps cached Codex quota source while appending header diagnostics', () => {
+    const rows = buildAccountRows(
+      [
+        {
+          name: 'codex-cache.json',
+          type: 'codex',
+          authIndex: 'auth-cache',
+        },
+      ],
+      {
+        ...emptyStores(),
+        codexQuota: {
+          'codex-cache.json': {
+            status: 'success',
+            planType: 'plus',
+            windows: [
+              {
+                id: 'weekly',
+                label: 'Weekly',
+                usedPercent: 25,
+                resetLabel: 'Mon',
+              },
+            ],
+          },
+        },
+      },
+      undefined,
+      {
+        codexHeaderSnapshotBySelectionKey: new Map<string, UsageHeaderSnapshot>([
+          [
+            'codex-cache.json\u0000auth-cache',
+            {
+              event_hash: 'cache-diagnostic',
+              timestamp_ms: 1700000000100,
+              header_trace_id: 'trace-cache-diagnostic',
+              header_error_code: 'quota_warning',
+            },
+          ],
+        ]),
+      }
+    );
+
+    expect(rows[0].quota.source).toBe('cache');
+    expect(rows[0].quota.usedPercent).toBe(25);
+    expect(rows[0].quota.observedTraceId).toBe('trace-cache-diagnostic');
+    expect(rows[0].quota.observedErrorCode).toBe('quota_warning');
   });
 
   it('builds account metrics from quota, disabled state, usage, and inspection results', () => {
