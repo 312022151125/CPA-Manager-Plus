@@ -68,6 +68,7 @@ const buildCodexBaseline = (form: ProviderFormState) => ({
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
   websockets: Boolean(form.websockets),
+  disableCooling: Boolean(form.disableCooling),
   proxyUrl: String(form.proxyUrl ?? '').trim(),
   headers: normalizeHeaderEntries(form.headers),
   models: normalizeModelEntries(form.modelEntries),
@@ -176,6 +177,7 @@ export function CodexEditDrawer({
       baseline.prefix !== String(form.prefix ?? '').trim() ||
       baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
       baseline.websockets !== Boolean(form.websockets) ||
+      baseline.disableCooling !== Boolean(form.disableCooling) ||
       baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
       !areKeyValueEntriesEqual(baseline.headers, normalizeHeaderEntries(form.headers)) ||
       !areModelEntriesEqual(baseline.models, normalizeModelEntries(form.modelEntries)) ||
@@ -193,6 +195,31 @@ export function CodexEditDrawer({
       return name.includes(filter) || alias.includes(filter) || description.includes(filter);
     });
   }, [discoveredModels, modelDiscoverySearch]);
+
+  const configuredModelNames = useMemo(
+    () =>
+      new Set(
+        form.modelEntries
+          .map((entry) => entry.name.trim().toLowerCase())
+          .filter(Boolean)
+      ),
+    [form.modelEntries]
+  );
+
+  const visibleDiscoverableModelNames = useMemo(
+    () =>
+      discoveredModelsFiltered
+        .map((model) => String(model.name ?? '').trim())
+        .filter((name) => name && !configuredModelNames.has(name.toLowerCase())),
+    [configuredModelNames, discoveredModelsFiltered]
+  );
+
+  const allVisibleSelected = useMemo(
+    () =>
+      visibleDiscoverableModelNames.length > 0 &&
+      visibleDiscoverableModelNames.every((name) => modelDiscoverySelected.has(name)),
+    [modelDiscoverySelected, visibleDiscoverableModelNames]
+  );
 
   const mergeDiscoveredModels = useCallback(
     (selectedModels: ModelInfo[]) => {
@@ -337,6 +364,47 @@ export function CodexEditDrawer({
     void fetchModelDiscovery();
   }, [modelDiscoveryOpen, fetchModelDiscovery]);
 
+  useEffect(() => {
+    const availableNames = new Set(discoveredModels.map((model) => String(model.name ?? '').trim()));
+    setModelDiscoverySelected((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((name) => {
+        if (availableNames.has(name) && !configuredModelNames.has(name.toLowerCase())) {
+          next.add(name);
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [configuredModelNames, discoveredModels]);
+
+  const toggleModelDiscoverySelection = useCallback(
+    (name: string) => {
+      if (configuredModelNames.has(name.toLowerCase())) return;
+      setModelDiscoverySelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(name)) next.delete(name);
+        else next.add(name);
+        return next;
+      });
+    },
+    [configuredModelNames]
+  );
+
+  const handleSelectVisibleModels = useCallback(() => {
+    setModelDiscoverySelected((prev) => {
+      const next = new Set(prev);
+      visibleDiscoverableModelNames.forEach((name) => next.add(name));
+      return next;
+    });
+  }, [visibleDiscoverableModelNames]);
+
+  const handleClearModelDiscoverySelection = useCallback(() => {
+    setModelDiscoverySelected(new Set());
+  }, []);
+
   const canOpenModelDiscovery =
     !disabled && !saving && !loading && !invalidIndex && Boolean((form.baseUrl ?? '').trim());
   const canApplyModelDiscovery =
@@ -474,6 +542,17 @@ export function CodexEditDrawer({
             </div>
 
             <div className="form-group">
+              <label>{t('ai_providers.disable_cooling_label')}</label>
+              <ToggleSwitch
+                checked={Boolean(form.disableCooling)}
+                onChange={(value) => setForm((prev) => ({ ...prev, disableCooling: value }))}
+                disabled={disabled || saving}
+                ariaLabel={t('ai_providers.disable_cooling_label')}
+              />
+              <div className="hint">{t('ai_providers.disable_cooling_hint')}</div>
+            </div>
+
+            <div className="form-group">
               <label>{t('ai_providers.excluded_models_label')}</label>
               <textarea
                 className="input"
@@ -528,6 +607,44 @@ export function CodexEditDrawer({
                   onChange={(e) => setModelDiscoverySearch(e.target.value)}
                   disabled={modelDiscoveryFetching}
                 />
+                {discoveredModels.length > 0 && (
+                  <div className={styles.modelDiscoveryToolbar}>
+                    <div className={styles.modelDiscoveryToolbarActions}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={handleSelectVisibleModels}
+                        disabled={
+                          disabled ||
+                          saving ||
+                          modelDiscoveryFetching ||
+                          visibleDiscoverableModelNames.length === 0 ||
+                          allVisibleSelected
+                        }
+                      >
+                        {t('ai_providers.model_discovery_select_visible')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleClearModelDiscoverySelection}
+                        disabled={
+                          disabled ||
+                          saving ||
+                          modelDiscoveryFetching ||
+                          modelDiscoverySelected.size === 0
+                        }
+                      >
+                        {t('ai_providers.model_discovery_clear_selection')}
+                      </Button>
+                    </div>
+                    <div className={styles.modelDiscoverySelectionSummary}>
+                      {t('ai_providers.model_discovery_selected_count', {
+                        count: modelDiscoverySelected.size,
+                      })}
+                    </div>
+                  </div>
+                )}
                 {modelDiscoveryError && <div className="error-box">{modelDiscoveryError}</div>}
                 {modelDiscoveryFetching ? (
                   <div className={styles.sectionHint}>
@@ -541,19 +658,17 @@ export function CodexEditDrawer({
                   <div className={styles.modelDiscoveryList}>
                     {discoveredModelsFiltered.map((model) => {
                       const checked = modelDiscoverySelected.has(model.name);
+                      const alreadyConfigured = configuredModelNames.has(
+                        model.name.trim().toLowerCase()
+                      );
                       return (
                         <SelectionCheckbox
                           key={model.name}
                           checked={checked}
-                          onChange={() => {
-                            setModelDiscoverySelected((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(model.name)) next.delete(model.name);
-                              else next.add(model.name);
-                              return next;
-                            });
-                          }}
-                          disabled={disabled || saving || modelDiscoveryFetching}
+                          onChange={() => toggleModelDiscoverySelection(model.name)}
+                          disabled={
+                            disabled || saving || modelDiscoveryFetching || alreadyConfigured
+                          }
                           ariaLabel={model.name}
                           className={`${styles.modelDiscoveryRow} ${checked ? styles.modelDiscoveryRowSelected : ''}`}
                           labelClassName={styles.modelDiscoverySelectionLabel}
@@ -565,6 +680,11 @@ export function CodexEditDrawer({
                                   <span className={styles.modelDiscoveryAlias}>{model.alias}</span>
                                 )}
                               </div>
+                              {alreadyConfigured && (
+                                <div className={styles.modelDiscoveryDesc}>
+                                  {t('ai_providers.model_discovery_already_added')}
+                                </div>
+                              )}
                               {model.description && (
                                 <div className={styles.modelDiscoveryDesc}>{model.description}</div>
                               )}
