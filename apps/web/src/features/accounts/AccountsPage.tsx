@@ -23,6 +23,7 @@ import {
   IconEyeOff,
   IconFileText,
   IconFilter,
+  IconLayoutDashboard,
   IconMoreVertical,
   IconModelCluster,
   IconPlus,
@@ -106,6 +107,12 @@ import {
 } from '@/features/accounts/model/usageValueRows';
 import { buildOAuthRulePreviewRows } from '@/features/accounts/model/oauthRulePreview';
 import {
+  DEFAULT_ACCOUNTS_LIST_VIEW_MODE,
+  readAccountsPageUiState,
+  writeAccountsPageUiState,
+  type AccountsListViewMode,
+} from '@/features/accounts/uiState';
+import {
   monitoringAnalyticsApi,
   usageServiceApi,
   type CodexInspectionRun,
@@ -139,6 +146,14 @@ import styles from './AccountsPage.module.scss';
 
 type AccountsView = 'accounts' | 'quota' | 'inspection' | 'oauth' | 'value';
 type DetailTab = 'overview' | 'quota' | 'auth' | 'strategy' | 'value' | 'events';
+type AccountSortControlValue =
+  | 'default'
+  | 'reset-asc'
+  | 'reset-desc'
+  | 'priority-desc'
+  | 'priority-asc'
+  | 'recent-desc'
+  | 'recent-asc';
 type AccountColumn =
   | 'provider'
   | 'plan'
@@ -185,14 +200,64 @@ const ACCOUNT_COLUMNS: AccountColumn[] = [
   'recent',
 ];
 
-const ACCOUNT_SORT_DEFAULT_DIRECTIONS: Record<
-  SortableAccountColumn,
-  AccountRowSortDirection
-> = {
+const ACCOUNT_SORT_DEFAULT_DIRECTIONS: Record<SortableAccountColumn, AccountRowSortDirection> = {
   reset: 'asc',
   priority: 'desc',
   recent: 'desc',
 };
+
+const ACCOUNT_SORT_CONTROL_OPTIONS: Array<{
+  value: AccountSortControlValue;
+  labelKey: string;
+  sort: AccountRowSort;
+}> = [
+  {
+    value: 'default',
+    labelKey: 'accounts.sort_default',
+    sort: { key: 'default', direction: 'desc' },
+  },
+  {
+    value: 'reset-asc',
+    labelKey: 'accounts.sort_reset_asc',
+    sort: { key: 'reset', direction: 'asc' },
+  },
+  {
+    value: 'reset-desc',
+    labelKey: 'accounts.sort_reset_desc',
+    sort: { key: 'reset', direction: 'desc' },
+  },
+  {
+    value: 'priority-desc',
+    labelKey: 'accounts.sort_priority_desc',
+    sort: { key: 'priority', direction: 'desc' },
+  },
+  {
+    value: 'priority-asc',
+    labelKey: 'accounts.sort_priority_asc',
+    sort: { key: 'priority', direction: 'asc' },
+  },
+  {
+    value: 'recent-desc',
+    labelKey: 'accounts.sort_recent_desc',
+    sort: { key: 'recent', direction: 'desc' },
+  },
+  {
+    value: 'recent-asc',
+    labelKey: 'accounts.sort_recent_asc',
+    sort: { key: 'recent', direction: 'asc' },
+  },
+];
+
+const getAccountSortControlValue = (sort: AccountRowSort): AccountSortControlValue => {
+  if (sort.key === 'default') return 'default';
+  return `${sort.key}-${sort.direction}` as AccountSortControlValue;
+};
+
+const getAccountSortFromControlValue = (value: string): AccountRowSort =>
+  ACCOUNT_SORT_CONTROL_OPTIONS.find((option) => option.value === value)?.sort ?? {
+    key: 'default',
+    direction: 'desc',
+  };
 
 const getProviderLabel = (provider: string, t: TFunction) => {
   const key = `auth_files.filter_${provider}`;
@@ -376,6 +441,7 @@ async function refreshQuotaWithConfig<TState, TData>({
 export function AccountsPage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const initialUiState = useRef(readAccountsPageUiState());
   const showNotification = useNotificationStore((state) => state.showNotification);
   const showConfirmation = useNotificationStore((state) => state.showConfirmation);
   const managementKey = useAuthStore((state) => state.managementKey);
@@ -479,6 +545,9 @@ export function AccountsPage() {
     key: 'default',
     direction: 'desc',
   });
+  const [accountListViewMode, setAccountListViewMode] = useState<AccountsListViewMode>(
+    () => initialUiState.current.listViewMode ?? DEFAULT_ACCOUNTS_LIST_VIEW_MODE
+  );
   const [priorityDraft, setPriorityDraft] = useState('0');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -660,6 +729,10 @@ export function AccountsPage() {
   useEffect(() => {
     void handleRefresh();
   }, [handleRefresh]);
+
+  useEffect(() => {
+    writeAccountsPageUiState({ listViewMode: accountListViewMode });
+  }, [accountListViewMode]);
 
   const handleSavePastedAuthJson = useCallback(
     async (type: AuthJsonInputType, fileName: string, jsonText: string) => {
@@ -1355,6 +1428,16 @@ export function AccountsPage() {
     setPage(1);
   };
 
+  const handleAccountSortControlChange = (value: string) => {
+    setAccountSort(getAccountSortFromControlValue(value));
+    setPage(1);
+  };
+
+  const handleAccountListViewModeChange = (mode: AccountsListViewMode) => {
+    setAccountListViewMode(mode);
+    if (mode === 'cards') setShowAdvancedFilters(false);
+  };
+
   const renderSortableHeader = (key: SortableAccountColumn, labelKey: string) => {
     const isActive = accountSort.key === key;
     const SortIcon = isActive
@@ -1438,6 +1521,45 @@ export function AccountsPage() {
     );
   };
 
+  const renderListViewControls = () => (
+    <div
+      className={styles.listViewControls}
+      role="group"
+      aria-label={t('accounts.view_mode_label')}
+    >
+      <Button
+        variant="secondary"
+        size="sm"
+        className={[
+          styles.listViewButton,
+          accountListViewMode === 'cards' ? styles.listViewButtonActive : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        onClick={() => handleAccountListViewModeChange('cards')}
+        aria-pressed={accountListViewMode === 'cards'}
+      >
+        <IconLayoutDashboard size={15} />
+        {t('accounts.view_mode_cards')}
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        className={[
+          styles.listViewButton,
+          accountListViewMode === 'table' ? styles.listViewButtonActive : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        onClick={() => handleAccountListViewModeChange('table')}
+        aria-pressed={accountListViewMode === 'table'}
+      >
+        <IconSlidersHorizontal size={15} />
+        {t('accounts.view_mode_table')}
+      </Button>
+    </div>
+  );
+
   const renderToolbar = () => (
     <section className={styles.toolbar}>
       <div className={styles.searchField}>
@@ -1508,16 +1630,33 @@ export function AccountsPage() {
           ariaLabel={t('accounts.quota_filter')}
         />
       </div>
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={() => setShowAdvancedFilters((value) => !value)}
-        aria-expanded={showAdvancedFilters}
-      >
-        <IconFilter size={15} />
-        {t('accounts.more_filters')}
-      </Button>
-      {showAdvancedFilters ? (
+      <div className={styles.filterField}>
+        <span>{t('accounts.sort_label')}</span>
+        <Select
+          value={getAccountSortControlValue(accountSort)}
+          options={ACCOUNT_SORT_CONTROL_OPTIONS.map((option) => ({
+            value: option.value,
+            label: t(option.labelKey),
+          }))}
+          onChange={handleAccountSortControlChange}
+          ariaLabel={t('accounts.sort_label')}
+        />
+      </div>
+      <div className={styles.toolbarActions}>
+        {renderListViewControls()}
+        {accountListViewMode === 'table' ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setShowAdvancedFilters((value) => !value)}
+            aria-expanded={showAdvancedFilters}
+          >
+            <IconFilter size={15} />
+            {t('accounts.more_filters')}
+          </Button>
+        ) : null}
+      </div>
+      {showAdvancedFilters && accountListViewMode === 'table' ? (
         <div className={styles.advancedPanel}>
           <div className={styles.columnSettings}>
             <strong>{t('accounts.column_settings')}</strong>
@@ -1971,6 +2110,169 @@ export function AccountsPage() {
     </footer>
   );
 
+  const renderAccountEmptyState = () => (
+    <EmptyState
+      title={t('accounts.empty_title')}
+      description={t('accounts.empty_desc')}
+      action={
+        <Button variant="secondary" onClick={() => void loadFiles()}>
+          {t('common.refresh')}
+        </Button>
+      }
+    />
+  );
+
+  const renderAccountCards = (rowsToRender = pageRows, paged = true) => (
+    <section className={styles.tablePanel}>
+      {paged ? renderBatchBar() : null}
+      {rowsToRender.length > 0 ? (
+        <div className={styles.accountCardList}>
+          {rowsToRender.map((row) => {
+            const remaining = row.quota.remainingPercent;
+            const recentTotal = row.usage.success + row.usage.failure;
+            const readableStatusMessage = getReadableStatusMessage(row.statusMessage, t);
+            const quotaSubtext = getQuotaSubtext(row);
+            const quotaWidth = Math.max(0, Math.min(100, remaining ?? 0));
+            return (
+              <article
+                key={row.selectionKey}
+                data-account-card={row.selectionKey}
+                className={[
+                  styles.accountCard,
+                  selectedRowKey === row.selectionKey ? styles.accountCardSelected : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onClick={() => setSelectedRowKey(row.selectionKey)}
+              >
+                {paged ? (
+                  <div
+                    className={styles.accountCardSelect}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <SelectionCheckbox
+                      checked={selectedFiles.has(row.selectionKey)}
+                      onChange={() => toggleSelect(row.selectionKey)}
+                      disabled={row.runtimeOnly}
+                      ariaLabel={t('accounts.select_account', { name: row.fileName })}
+                    />
+                  </div>
+                ) : null}
+
+                <div className={styles.accountCardIdentity}>
+                  <div className={styles.accountCardTitleRow}>
+                    <strong title={row.accountLabel}>{getDisplayAccount(row)}</strong>
+                    <span className={styles.providerPill}>{getProviderLabel(row.provider, t)}</span>
+                    {row.planType ? (
+                      <span className={styles.accountMetaPill}>{row.planType}</span>
+                    ) : null}
+                  </div>
+                  <span className={styles.accountCardFile} title={row.fileName}>
+                    {getDisplayFileName(row.fileName)}
+                  </span>
+                  <div className={styles.accountCardMetaRow}>
+                    <span
+                      className={
+                        row.priority !== null && row.priority < 0
+                          ? styles.priorityBad
+                          : styles.priority
+                      }
+                    >
+                      {t('accounts.col_priority')}: {row.priority ?? 0}
+                    </span>
+                  </div>
+                </div>
+
+                <div className={styles.accountCardStatus}>
+                  <div className={styles.statusStack}>
+                    <span
+                      className={`${styles.badge} ${row.disabled ? styles.badgeMuted : styles.badgeGood}`}
+                    >
+                      {row.disabled
+                        ? t('accounts.status_disabled')
+                        : t('accounts.status_available')}
+                    </span>
+                    {readableStatusMessage ? (
+                      <small title={row.statusMessage}>{readableStatusMessage}</small>
+                    ) : null}
+                    {row.inspection && row.inspection.action !== 'keep' ? (
+                      <small className={styles.inspectionHint}>
+                        {t('accounts.inspection_action', {
+                          action: t(`accounts.action_${row.inspection.action}`, {
+                            defaultValue: row.inspection.action,
+                          }),
+                        })}
+                      </small>
+                    ) : null}
+                    {renderRowGovernanceBadges(row)}
+                  </div>
+                </div>
+
+                <div className={styles.accountCardQuota}>
+                  <div className={styles.quotaCell}>
+                    <div className={styles.quotaCellHeader}>
+                      <span className={`${styles.badge} ${getQuotaStatusClass(row.quota.status)}`}>
+                        {t(quotaStatusLabelKey(row.quota.status))}
+                      </span>
+                      <strong>{formatPercent(remaining)}</strong>
+                    </div>
+                    {quotaSubtext ? (
+                      <small className={styles.quotaSubtext} title={quotaSubtext}>
+                        {quotaSubtext}
+                      </small>
+                    ) : null}
+                    {remaining !== null ? (
+                      <div className={styles.quotaTrack} aria-hidden="true">
+                        <span
+                          className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
+                          style={{ width: `${quotaWidth}%` }}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className={styles.accountCardQuotaMeta}>
+                    <span title={row.quota.resetLabel}>
+                      {t('accounts.col_reset')}: {row.quota.resetLabel}
+                    </span>
+                    <span>{getQuotaSourceLabel(row.quota.source)}</span>
+                  </div>
+                </div>
+
+                <div className={styles.accountCardUsage}>
+                  <div>
+                    <span>{t('accounts.col_recent')}</span>
+                    <strong>
+                      {recentTotal > 0
+                        ? t('accounts.recent_requests', {
+                            count: recentTotal,
+                            rate: formatPercent(row.usage.successRate),
+                          })
+                        : '-'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>{t('accounts.col_value')}</span>
+                    <strong>{formatMoney(recentTotal * 0.018)}</strong>
+                  </div>
+                </div>
+
+                <div
+                  className={styles.accountCardActions}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  {renderRowActions(row)}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        renderAccountEmptyState()
+      )}
+      {paged ? renderPagination() : null}
+    </section>
+  );
+
   const renderAccountTable = (rowsToRender = pageRows, paged = true) => (
     <section className={styles.tablePanel}>
       {paged ? renderBatchBar() : null}
@@ -2153,17 +2455,7 @@ export function AccountsPage() {
           </tbody>
         </table>
       </div>
-      {rowsToRender.length === 0 ? (
-        <EmptyState
-          title={t('accounts.empty_title')}
-          description={t('accounts.empty_desc')}
-          action={
-            <Button variant="secondary" onClick={() => void loadFiles()}>
-              {t('common.refresh')}
-            </Button>
-          }
-        />
-      ) : null}
+      {rowsToRender.length === 0 ? renderAccountEmptyState() : null}
       {paged ? renderPagination() : null}
     </section>
   );
@@ -2673,6 +2965,8 @@ export function AccountsPage() {
         <div className={styles.loadingPanel}>
           <LoadingSpinner />
         </div>
+      ) : accountListViewMode === 'cards' ? (
+        renderAccountCards()
       ) : (
         renderAccountTable()
       )}

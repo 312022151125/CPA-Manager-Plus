@@ -2,6 +2,7 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { isValidElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '@/components/ui/Button';
+import { Select } from '@/components/ui/Select';
 import type { AuthFileItem } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import { AccountsPage } from './AccountsPage';
@@ -76,9 +77,7 @@ const makeAnalyticsEvent = (
   ...overrides,
 });
 
-const makeEventsResponse = (
-  event: Record<string, unknown>
-): AnalyticsResponseForTest => ({
+const makeEventsResponse = (event: Record<string, unknown>): AnalyticsResponseForTest => ({
   generated_at_ms: 1,
   granularity: 'day',
   events: {
@@ -149,12 +148,14 @@ const { mocks } = vi.hoisted(() => {
           timeline: [],
         })
       ),
-      getHeaderSnapshots: vi.fn(async (): Promise<HeaderSnapshotsResponseForTest> => ({
-        generated_at_ms: 1,
-        from_ms: 0,
-        to_ms: 1,
-        items: [],
-      })),
+      getHeaderSnapshots: vi.fn(
+        async (): Promise<HeaderSnapshotsResponseForTest> => ({
+          generated_at_ms: 1,
+          from_ms: 0,
+          to_ms: 1,
+          items: [],
+        })
+      ),
       panelFeatureAvailability: {
         checking: false,
         managerServiceBase: 'http://manager.local:18317',
@@ -333,11 +334,7 @@ vi.mock('@/features/authFiles/components/OAuthModelAliasCard', () => ({
 }));
 
 vi.mock('@/features/authFiles/components/OAuthEditorModals', () => ({
-  OAuthExcludedEditorModal: (props: {
-    open: boolean;
-    provider?: string;
-    onClose: () => void;
-  }) => {
+  OAuthExcludedEditorModal: (props: { open: boolean; provider?: string; onClose: () => void }) => {
     mocks.lastExcludedEditorProps = props;
     return props.open ? <div>oauth-excluded-editor-open</div> : null;
   },
@@ -437,6 +434,12 @@ const findInputByAriaLabel = (renderer: ReactTestRenderer, label: string) => {
   return input;
 };
 
+const findSelectByAriaLabel = (renderer: ReactTestRenderer, label: string) => {
+  const select = renderer.root.findAllByType(Select).find((node) => node.props.ariaLabel === label);
+  if (!select) throw new Error(`Select not found: ${label}`);
+  return select;
+};
+
 const renderAccountsPage = async () => {
   let renderer: ReactTestRenderer | null = null;
   await act(async () => {
@@ -460,6 +463,14 @@ const getAccountTableRowTexts = (renderer: ReactTestRenderer) => {
   return body.findAllByType('tr').map((row) => readText(row));
 };
 
+const getAccountListItemTexts = (renderer: ReactTestRenderer) => {
+  const cards = renderer.root.findAll(
+    (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+  );
+  if (cards.length > 0) return cards.map((row) => readText(row));
+  return getAccountTableRowTexts(renderer);
+};
+
 const treeText = (renderer: ReactTestRenderer) => readText(renderer.toJSON());
 
 const createDeferred = <T,>() => {
@@ -472,6 +483,7 @@ const createDeferred = <T,>() => {
 
 describe('AccountsPage replacement flows', () => {
   beforeEach(() => {
+    if (typeof window !== 'undefined') window.localStorage.clear();
     mocks.files = [makeCodexFile('codex.json', 'auth-1', 'codex@example.com')];
     mocks.selectedFiles = new Set<string>();
     mocks.selectionCount = 0;
@@ -578,8 +590,7 @@ describe('AccountsPage replacement flows', () => {
       const duplicateKeyWarning = errorSpy.mock.calls.some((call) =>
         call.some(
           (item) =>
-            typeof item === 'string' &&
-            item.includes('Encountered two children with the same key')
+            typeof item === 'string' && item.includes('Encountered two children with the same key')
         )
       );
       expect(duplicateKeyWarning).toBe(false);
@@ -588,7 +599,7 @@ describe('AccountsPage replacement flows', () => {
     }
   });
 
-  it('sorts account table rows from sortable headers', async () => {
+  it('sorts account cards from the toolbar sort control', async () => {
     mocks.files = [
       {
         ...makeCodexFile('low.json', 'auth-low', 'low@example.com'),
@@ -610,16 +621,44 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
 
     await act(async () => {
+      findSelectByAriaLabel(renderer, 'accounts.sort_label').props.onChange('priority-desc');
+    });
+
+    expect(getAccountListItemTexts(renderer)[0]).toContain('high.json');
+
+    await act(async () => {
+      findSelectByAriaLabel(renderer, 'accounts.sort_label').props.onChange('recent-desc');
+    });
+
+    expect(getAccountListItemTexts(renderer)[0]).toContain('middle.json');
+  });
+
+  it('can switch back to the table and sort from table headers', async () => {
+    mocks.files = [
+      {
+        ...makeCodexFile('low.json', 'auth-low', 'low@example.com'),
+        priority: -1,
+        recent_requests: [{ success: 1, failed: 0 }],
+      },
+      {
+        ...makeCodexFile('high.json', 'auth-high', 'high@example.com'),
+        priority: 10,
+        recent_requests: [{ success: 2, failed: 1 }],
+      },
+    ];
+
+    const renderer = await renderAccountsPage();
+
+    expect(renderer.root.findAllByType('table')).toHaveLength(0);
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.view_mode_table').props.onClick();
+    });
+    await act(async () => {
       findHostButtonByText(renderer, 'accounts.col_priority').props.onClick();
     });
 
     expect(getAccountTableRowTexts(renderer)[0]).toContain('high.json');
-
-    await act(async () => {
-      findHostButtonByText(renderer, 'accounts.col_recent').props.onClick();
-    });
-
-    expect(getAccountTableRowTexts(renderer)[0]).toContain('middle.json');
   });
 
   it('searches and renders diagnostic-only Codex usage header snapshots', async () => {
@@ -660,7 +699,7 @@ describe('AccountsPage replacement flows', () => {
       });
     });
 
-    const rowTexts = getAccountTableRowTexts(renderer);
+    const rowTexts = getAccountListItemTexts(renderer);
     expect(rowTexts).toHaveLength(1);
     expect(rowTexts[0]).toContain('codex-diagnostic.json');
 

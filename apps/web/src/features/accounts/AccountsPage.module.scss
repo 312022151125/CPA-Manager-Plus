@@ -120,7 +120,7 @@
 
 .toolbar {
   display: grid;
-  grid-template-columns: minmax(260px, 1.4fr) repeat(5, minmax(132px, 0.8fr));
+  grid-template-columns: minmax(260px, 1.4fr) repeat(5, minmax(132px, 0.8fr)) auto;
   gap: 10px;
   align-items: center;
   padding: 12px;
@@ -162,6 +162,39 @@
     font-weight: 800;
     line-height: 1;
   }
+}
+
+.toolbarActions {
+  display: flex;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.listViewControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 3px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+}
+
+.listViewButton:global(.btn.btn-sm) {
+  min-height: 30px;
+  gap: 6px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.listViewButtonActive:global(.btn.btn-sm) {
+  border-color: color-mix(in srgb, var(--primary-color) 34%, var(--border-color));
+  background: var(--bg-primary);
+  color: var(--primary-color);
 }
 
 .advancedPanel {
@@ -351,6 +384,177 @@
 
 .rowSelected {
   background: color-mix(in srgb, var(--primary-color) 8%, transparent);
+}
+
+.accountCardList {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.accountCard {
+  display: grid;
+  grid-template-columns:
+    auto minmax(210px, 1.25fr) minmax(150px, 0.82fr) minmax(210px, 1fr)
+    minmax(132px, 0.58fr) auto;
+  align-items: center;
+  gap: 10px 12px;
+  min-width: 0;
+  min-height: 86px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  cursor: pointer;
+  transition:
+    background-color 0.14s ease,
+    border-color 0.14s ease,
+    box-shadow 0.14s ease;
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--primary-color) 24%, var(--border-color));
+    background: color-mix(in srgb, var(--primary-color) 4%, var(--bg-primary));
+  }
+}
+
+.accountCardSelected {
+  border-color: color-mix(in srgb, var(--primary-color) 38%, var(--border-color));
+  background: color-mix(in srgb, var(--primary-color) 7%, var(--bg-primary));
+}
+
+.accountCardSelect {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.accountCardIdentity,
+.accountCardStatus,
+.accountCardQuota,
+.accountCardUsage {
+  min-width: 0;
+}
+
+.accountCardIdentity {
+  display: grid;
+  gap: 5px;
+}
+
+.accountCardTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.accountCardFile {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountCardMetaRow,
+.accountCardQuotaMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.accountMetaPill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  max-width: 96px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountCardStatus {
+  .statusStack small {
+    max-width: 100%;
+  }
+}
+
+.accountCardQuota {
+  display: grid;
+  gap: 6px;
+
+  .quotaTrack {
+    max-width: none;
+  }
+}
+
+.accountCardQuotaMeta {
+  span {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.accountCardUsage {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+
+  div {
+    min-width: 0;
+  }
+
+  span,
+  strong {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  span {
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  strong {
+    margin-top: 3px;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.accountCardActions {
+  justify-self: end;
 }
 
 .accountCell {
@@ -1199,7 +1403,7 @@
 }
 
 .toolbar {
-  grid-template-columns: minmax(260px, 1.5fr) repeat(4, minmax(128px, 0.8fr)) auto;
+  grid-template-columns: minmax(260px, 1.5fr) repeat(5, minmax(128px, 0.8fr)) auto;
   gap: 8px;
   padding: 0;
   border: 0;
@@ -1754,6 +1958,31 @@
 }
 
 @include tablet {
+  .toolbarActions {
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .listViewControls {
+    width: fit-content;
+  }
+
+  .accountCard {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  .accountCardStatus,
+  .accountCardQuota,
+  .accountCardUsage {
+    grid-column: 2 / -1;
+  }
+
+  .accountCardActions {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
   .batchBar {
     grid-template-columns: 1fr;
   }
@@ -1766,6 +1995,51 @@
 @include mobile {
   .accountTable {
     min-width: 980px;
+  }
+
+  .toolbarActions {
+    flex-direction: column;
+
+    :global(.btn),
+    .listViewControls {
+      width: 100%;
+    }
+  }
+
+  .listViewControls {
+    justify-content: stretch;
+  }
+
+  .listViewButton:global(.btn.btn-sm) {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  .accountCardList {
+    padding: 8px;
+  }
+
+  .accountCard {
+    grid-template-columns: auto minmax(0, 1fr);
+    min-height: 0;
+    padding: 10px;
+  }
+
+  .accountCardActions {
+    grid-column: 2;
+    grid-row: auto;
+    justify-self: start;
+  }
+
+  .accountCardStatus,
+  .accountCardQuota,
+  .accountCardUsage,
+  .accountCardActions {
+    grid-column: 1 / -1;
+  }
+
+  .accountCardUsage {
+    grid-template-columns: 1fr;
   }
 
   .batchActions {
