@@ -75,10 +75,9 @@ import {
   buildApiKeyOptionsFromRows,
   buildApiKeyOverviewColumns,
   buildAuthFilesByAuthIndex,
-  buildAccountQuotaErrorEntry,
+  buildAccountQuotaRefreshFailureEntry,
   buildObservedCodexAccountQuotaEntry,
   buildChannelOptionsFromValues,
-  buildHeaderValueOptionsFromValues,
   buildMonitoringInitialStateFromQuery,
   buildModelOptionsFromValues,
   buildPaginationState,
@@ -91,6 +90,7 @@ import {
   getCurrentInputValue,
   getTodayStartInputValue,
   isUsageImportFile,
+  mergeObservedAccountQuotaState,
   parseDateTimeLocalValue,
   requestAccountQuota,
   type FocusSnapshot,
@@ -202,15 +202,6 @@ export function MonitoringCenterPage() {
   );
   const [selectedApiKeyHash, setSelectedApiKeyHash] = useState(
     () => initialMonitoringCenterUiState.current.selectedApiKeyHash
-  );
-  const [selectedHeaderErrorKind, setSelectedHeaderErrorKind] = useState(
-    () => initialMonitoringCenterUiState.current.selectedHeaderErrorKind
-  );
-  const [selectedHeaderErrorCode, setSelectedHeaderErrorCode] = useState(
-    () => initialMonitoringCenterUiState.current.selectedHeaderErrorCode
-  );
-  const [selectedHeaderQuotaPlan, setSelectedHeaderQuotaPlan] = useState(
-    () => initialMonitoringCenterUiState.current.selectedHeaderQuotaPlan
   );
   const [selectedHeaderTraceId, setSelectedHeaderTraceId] = useState(
     () => initialMonitoringCenterUiState.current.selectedHeaderTraceId
@@ -350,9 +341,6 @@ export function MonitoringCenterPage() {
       model: selectedModel,
       channel: selectedChannel,
       apiKeyHash: selectedApiKeyHash,
-      headerErrorKind: selectedHeaderErrorKind,
-      headerErrorCode: selectedHeaderErrorCode,
-      headerQuotaPlan: selectedHeaderQuotaPlan,
       headerTraceId: selectedHeaderTraceId,
       status: selectedStatus,
     }),
@@ -365,9 +353,6 @@ export function MonitoringCenterPage() {
       selectedAccount,
       selectedApiKeyHash,
       selectedChannel,
-      selectedHeaderErrorCode,
-      selectedHeaderErrorKind,
-      selectedHeaderQuotaPlan,
       selectedHeaderTraceId,
       selectedModel,
       selectedProvider,
@@ -511,9 +496,6 @@ export function MonitoringCenterPage() {
       selectedModel,
       selectedChannel,
       selectedApiKeyHash,
-      selectedHeaderErrorKind,
-      selectedHeaderErrorCode,
-      selectedHeaderQuotaPlan,
       selectedHeaderTraceId,
       selectedStatus,
       apiKeyPageSize,
@@ -530,9 +512,6 @@ export function MonitoringCenterPage() {
     selectedAccount,
     selectedApiKeyHash,
     selectedChannel,
-    selectedHeaderErrorCode,
-    selectedHeaderErrorKind,
-    selectedHeaderQuotaPlan,
     selectedHeaderTraceId,
     selectedModel,
     selectedProvider,
@@ -569,42 +548,6 @@ export function MonitoringCenterPage() {
   const apiKeyOptions = useMemo(
     () => buildApiKeyOptionsFromRows(monitoringFilterOptions.apiKeyRows, selectedApiKeyHash, t),
     [monitoringFilterOptions.apiKeyRows, selectedApiKeyHash, t]
-  );
-
-  const headerErrorKindOptions = useMemo(
-    () =>
-      buildHeaderValueOptionsFromValues(
-        monitoringFilterOptions.headerErrorKinds,
-        selectedHeaderErrorKind,
-        t,
-        'monitoring.filter_all_header_error_kinds',
-        'monitoring.filter_all_header_error_kinds_short'
-      ),
-    [monitoringFilterOptions.headerErrorKinds, selectedHeaderErrorKind, t]
-  );
-
-  const headerErrorCodeOptions = useMemo(
-    () =>
-      buildHeaderValueOptionsFromValues(
-        monitoringFilterOptions.headerErrorCodes,
-        selectedHeaderErrorCode,
-        t,
-        'monitoring.filter_all_header_error_codes',
-        'monitoring.filter_all_header_error_codes_short'
-      ),
-    [monitoringFilterOptions.headerErrorCodes, selectedHeaderErrorCode, t]
-  );
-
-  const headerQuotaPlanOptions = useMemo(
-    () =>
-      buildHeaderValueOptionsFromValues(
-        monitoringFilterOptions.headerQuotaPlans,
-        selectedHeaderQuotaPlan,
-        t,
-        'monitoring.filter_all_header_quota_plans',
-        'monitoring.filter_all_header_quota_plans_short'
-      ),
-    [monitoringFilterOptions.headerQuotaPlans, selectedHeaderQuotaPlan, t]
   );
 
   const statusOptions = useMemo(() => buildStatusOptions(t), [t]);
@@ -688,9 +631,6 @@ export function MonitoringCenterPage() {
       selectedAccount,
       selectedApiKeyHash,
       selectedChannel,
-      selectedHeaderErrorCode,
-      selectedHeaderErrorKind,
-      selectedHeaderQuotaPlan,
       selectedHeaderTraceId,
       selectedModel,
       selectedProvider,
@@ -704,9 +644,6 @@ export function MonitoringCenterPage() {
       selectedAccount,
       selectedApiKeyHash,
       selectedChannel,
-      selectedHeaderErrorCode,
-      selectedHeaderErrorKind,
-      selectedHeaderQuotaPlan,
       selectedHeaderTraceId,
       selectedModel,
       selectedProvider,
@@ -757,6 +694,28 @@ export function MonitoringCenterPage() {
     [headerSnapshots]
   );
   const scopedFailureCount = scopedSummary.failureCalls;
+  const accountQuotaStatesWithObservedHeaders = useMemo(() => {
+    let changed = false;
+    const nextStates = Object.fromEntries(
+      Object.entries(accountQuotaStates).map(([account, state]) => {
+        const targets = accountQuotaTargetsByAccount.get(account) ?? [];
+        const observedEntries = targets
+          .map((target) =>
+            buildObservedCodexAccountQuotaEntry(
+              target,
+              getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, target.file),
+              t
+            )
+          )
+          .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+        const nextState =
+          mergeObservedAccountQuotaState(state, targets, observedEntries) ?? state;
+        changed = changed || nextState !== state;
+        return [account, nextState] as const;
+      })
+    );
+    return changed ? nextStates : accountQuotaStates;
+  }, [accountQuotaStates, accountQuotaTargetsByAccount, headerSnapshotLookup, t]);
 
   const hasSearchFilter = Boolean(deferredSearch.trim());
   const hasScopeFilter =
@@ -765,9 +724,6 @@ export function MonitoringCenterPage() {
     selectedModel !== 'all' ||
     selectedChannel !== 'all' ||
     selectedApiKeyHash !== 'all' ||
-    selectedHeaderErrorKind !== 'all' ||
-    selectedHeaderErrorCode !== 'all' ||
-    selectedHeaderQuotaPlan !== 'all' ||
     selectedHeaderTraceId !== 'all' ||
     selectedStatus !== 'all' ||
     Boolean(drilldownAuthFile) ||
@@ -878,9 +834,6 @@ export function MonitoringCenterPage() {
     setSelectedModel(snapshot.selectedModel);
     setSelectedChannel(snapshot.selectedChannel);
     setSelectedApiKeyHash(snapshot.selectedApiKeyHash);
-    setSelectedHeaderErrorKind(snapshot.selectedHeaderErrorKind);
-    setSelectedHeaderErrorCode(snapshot.selectedHeaderErrorCode);
-    setSelectedHeaderQuotaPlan(snapshot.selectedHeaderQuotaPlan);
     setSelectedHeaderTraceId(snapshot.selectedHeaderTraceId);
     setSelectedStatus(snapshot.selectedStatus);
   }, []);
@@ -894,9 +847,6 @@ export function MonitoringCenterPage() {
     setSelectedModel('all');
     setSelectedChannel('all');
     setSelectedApiKeyHash('all');
-    setSelectedHeaderErrorKind('all');
-    setSelectedHeaderErrorCode('all');
-    setSelectedHeaderQuotaPlan('all');
     setSelectedHeaderTraceId('all');
     setSelectedStatus('all');
     setDrilldownAuthFile('');
@@ -973,6 +923,10 @@ export function MonitoringCenterPage() {
       const currentState = accountQuotaStatesRef.current[account];
       const targets = accountQuotaTargetsByAccount.get(account) ?? [];
       const targetKey = targets.map((target) => target.key).join('|');
+      const previousEntriesByKey =
+        currentState?.targetKey === targetKey
+          ? new Map(currentState.entries.map((entry) => [entry.key, entry]))
+          : new Map();
       const observedEntries = targets
         .map((target) =>
           buildObservedCodexAccountQuotaEntry(
@@ -1026,6 +980,8 @@ export function MonitoringCenterPage() {
       );
       if (accountQuotaRequestIdsRef.current[account] !== requestId) return;
 
+      const hasFailure = settled.some((result) => result.status === 'rejected');
+      const completedAtMs = Date.now();
       const entries = settled.map((result, index) => {
         const fallback = targets[index];
         if (result.status === 'fulfilled') {
@@ -1036,24 +992,32 @@ export function MonitoringCenterPage() {
           result.reason instanceof Error
             ? result.reason.message
             : String(result.reason || t('common.unknown_error'));
-        return (
-          buildObservedCodexAccountQuotaEntry(
-            fallback,
-            getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, fallback.file),
-            t
-          ) ?? buildAccountQuotaErrorEntry(fallback, error, t)
+        const observedEntry = buildObservedCodexAccountQuotaEntry(
+          fallback,
+          getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, fallback.file),
+          t
+        );
+        return buildAccountQuotaRefreshFailureEntry(
+          fallback,
+          error,
+          t,
+          previousEntriesByKey.get(fallback.key),
+          observedEntry,
+          completedAtMs
         );
       });
 
       const hasSuccess = entries.some((entry) => !entry.error);
+      const firstError = entries.find((entry) => entry.error)?.error;
       setAccountQuotaStates((previous) => ({
         ...previous,
         [account]: {
-          status: hasSuccess ? 'success' : 'error',
+          status: hasFailure ? 'error' : hasSuccess ? 'success' : 'error',
           targetKey,
           entries,
-          error: hasSuccess ? '' : entries[0]?.error || t('common.unknown_error'),
-          lastRefreshedAt: Date.now(),
+          error: hasFailure ? firstError || t('common.unknown_error') : '',
+          failedAtMs: hasFailure ? completedAtMs : undefined,
+          lastRefreshedAt: hasFailure ? previous[account]?.lastRefreshedAt : completedAtMs,
         },
       }));
     },
@@ -1090,9 +1054,6 @@ export function MonitoringCenterPage() {
           selectedModel,
           selectedChannel,
           selectedApiKeyHash,
-          selectedHeaderErrorKind,
-          selectedHeaderErrorCode,
-          selectedHeaderQuotaPlan,
           selectedHeaderTraceId,
           selectedStatus,
         };
@@ -1108,9 +1069,6 @@ export function MonitoringCenterPage() {
       selectedAccount,
       selectedApiKeyHash,
       selectedChannel,
-      selectedHeaderErrorCode,
-      selectedHeaderErrorKind,
-      selectedHeaderQuotaPlan,
       selectedHeaderTraceId,
       selectedModel,
       selectedProvider,
@@ -1411,9 +1369,6 @@ export function MonitoringCenterPage() {
         selectedModel={selectedModel}
         selectedChannel={selectedChannel}
         selectedApiKeyHash={selectedApiKeyHash}
-        selectedHeaderErrorKind={selectedHeaderErrorKind}
-        selectedHeaderErrorCode={selectedHeaderErrorCode}
-        selectedHeaderQuotaPlan={selectedHeaderQuotaPlan}
         selectedStatus={selectedStatus}
         searchInput={searchInput}
         accountOptions={accountOptions}
@@ -1421,9 +1376,6 @@ export function MonitoringCenterPage() {
         modelOptions={modelOptions}
         channelOptions={channelOptions}
         apiKeyOptions={apiKeyOptions}
-        headerErrorKindOptions={headerErrorKindOptions}
-        headerErrorCodeOptions={headerErrorCodeOptions}
-        headerQuotaPlanOptions={headerQuotaPlanOptions}
         statusOptions={statusOptions}
         combinedError={combinedError}
         usageStatisticsEnabled={Boolean(config?.usageStatisticsEnabled)}
@@ -1437,9 +1389,6 @@ export function MonitoringCenterPage() {
         onModelChange={setSelectedModel}
         onChannelChange={setSelectedChannel}
         onApiKeyChange={setSelectedApiKeyHash}
-        onHeaderErrorKindChange={setSelectedHeaderErrorKind}
-        onHeaderErrorCodeChange={setSelectedHeaderErrorCode}
-        onHeaderQuotaPlanChange={setSelectedHeaderQuotaPlan}
         onStatusChange={(value) => setSelectedStatus(value as StatusFilter)}
         onSearchChange={setSearchInput}
         onClearFilters={clearFilters}
@@ -1474,7 +1423,7 @@ export function MonitoringCenterPage() {
                 accountAuthStateByRowId={accountAuthStateByRowId}
                 accountStatusDataByRowId={accountStatusDataByRowId}
                 emptyAccountStatusData={emptyAccountStatusData}
-                accountQuotaStates={accountQuotaStates}
+                accountQuotaStates={accountQuotaStatesWithObservedHeaders}
                 accountPageSize={accountPageSize}
                 accountPageSizeOptions={accountPageSizeOptions}
                 accountOverviewScopeText={accountOverviewScopeText}
