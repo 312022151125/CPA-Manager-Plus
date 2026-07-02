@@ -558,7 +558,7 @@ textarea {
   border: 1px solid var(--border-color);
   box-shadow: $shadow-lg;
   max-width: 100%;
-  max-height: 90vh;
+  max-height: calc(100vh - #{$spacing-lg * 2});
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -646,6 +646,7 @@ textarea {
 }
 
 .modal-header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   padding: $spacing-md $spacing-lg;
@@ -659,12 +660,14 @@ textarea {
 }
 
 .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: $spacing-lg;
   overflow: auto;
-  max-height: 65vh;
 }
 
 .modal-footer {
+  flex: 0 0 auto;
   padding: $spacing-md $spacing-lg;
   border-top: 1px solid var(--border-color);
   display: flex;
@@ -696,13 +699,6 @@ textarea {
 
   .modal-body {
     padding: $spacing-md;
-    max-height: min(60vh, calc(100vh - 180px));
-  }
-
-  @supports (height: 100dvh) {
-    .modal-body {
-      max-height: min(60dvh, calc(100dvh - 180px));
-    }
   }
 
   .modal-footer {
