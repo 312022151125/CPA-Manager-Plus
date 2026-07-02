@@ -1742,7 +1742,7 @@ export function AccountsPage() {
                 {t('accounts.enable')}
               </Button>
               <Button
-                variant="secondary"
+                variant="danger"
                 size="sm"
                 onClick={() => handleBatchStatus(false)}
                 disabled={disableControls || statusUpdating}
@@ -1797,7 +1797,7 @@ export function AccountsPage() {
               {t('accounts.enable')}
             </Button>
             <Button
-              variant="secondary"
+              variant="danger"
               size="sm"
               onClick={() => handleBatchStatus(false)}
               disabled={disableControls || statusUpdating}
@@ -2019,6 +2019,7 @@ export function AccountsPage() {
           } satisfies DropdownMenuItem,
         ]
       : []),
+    { key: 'status-divider', type: 'divider' },
     row.disabled
       ? {
           key: 'enable',
@@ -2042,6 +2043,7 @@ export function AccountsPage() {
       onClick: () => void handleDownload(row.fileName),
       disabled: row.runtimeOnly,
     },
+    { key: 'danger-divider', type: 'divider' },
     {
       key: 'delete',
       label: t('auth_files.delete_button'),
@@ -3234,9 +3236,21 @@ export function AccountsPage() {
                       </div>
                     </td>
                     <td>
-                      {item.disabled
-                        ? t('accounts.status_disabled')
-                        : t('accounts.status_available')}
+                      <div className={styles.statusStack}>
+                        <span
+                          className={`${styles.badge} ${item.disabled ? styles.badgeMuted : styles.badgeGood}`}
+                        >
+                          {item.disabled
+                            ? t('accounts.status_disabled')
+                            : t('accounts.status_available')}
+                        </span>
+                        <small>HTTP {item.statusCode ?? '-'}</small>
+                        {item.action !== 'keep' ? (
+                          <small className={styles.inspectionHint}>
+                            {t(`accounts.action_${item.action}`, { defaultValue: item.action })}
+                          </small>
+                        ) : null}
+                      </div>
                     </td>
                     <td>{item.statusCode ?? '-'}</td>
                     <td>{t(`accounts.action_${item.action}`, { defaultValue: item.action })}</td>
