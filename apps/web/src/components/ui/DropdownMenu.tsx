@@ -12,14 +12,22 @@ import {
 import { createPortal } from 'react-dom';
 import styles from './DropdownMenu.module.scss';
 
-export interface DropdownMenuItem {
-  key: string;
-  label: ReactNode;
-  icon?: ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  tone?: 'default' | 'danger';
-}
+export type DropdownMenuItem =
+  | {
+      key: string;
+      type: 'divider';
+    }
+  | {
+      key: string;
+      type?: 'item';
+      label: ReactNode;
+      icon?: ReactNode;
+      onClick: () => void;
+      disabled?: boolean;
+      tone?: 'default' | 'danger';
+    };
+
+type DropdownMenuActionItem = Extract<DropdownMenuItem, { type?: 'item' }>;
 
 interface DropdownMenuProps {
   items: DropdownMenuItem[];
@@ -53,7 +61,10 @@ export function DropdownMenu({
   const menuId = useId();
 
   const enabledIndices = useMemo(
-    () => items.map((item, index) => (item.disabled ? -1 : index)).filter((value) => value >= 0),
+    () =>
+      items
+        .map((item, index) => (item.type === 'divider' || item.disabled ? -1 : index))
+        .filter((value) => value >= 0),
     [items]
   );
 
@@ -187,7 +198,7 @@ export function DropdownMenu({
     }
   };
 
-  const handleItemClick = (item: DropdownMenuItem) => {
+  const handleItemClick = (item: DropdownMenuActionItem) => {
     if (item.disabled) return;
     close();
     item.onClick();
@@ -231,6 +242,9 @@ export function DropdownMenu({
               onKeyDown={handleMenuKeyDown}
             >
               {items.map((item, index) => {
+                if (item.type === 'divider') {
+                  return <div key={item.key} className={styles.divider} role="separator" />;
+                }
                 const itemClasses = [
                   styles.item,
                   item.tone === 'danger' ? styles.itemDanger : '',
