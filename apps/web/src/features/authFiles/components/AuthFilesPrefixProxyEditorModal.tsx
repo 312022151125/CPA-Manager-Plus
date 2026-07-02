@@ -12,6 +12,60 @@ import type {
 import { supportsAuthFileWebsockets } from '@/features/authFiles/constants';
 import styles from '@/features/authFiles/AuthFilesPage.module.scss';
 
+const REDACTED_VALUE = '[redacted]';
+const SENSITIVE_KEY_PARTS = [
+  'apikey',
+  'authorization',
+  'bearer',
+  'clientsecret',
+  'cookie',
+  'credential',
+  'managementkey',
+  'password',
+  'privatekey',
+  'secret',
+];
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const isSensitiveKey = (key: string) => {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return (
+    normalized === 'token' ||
+    normalized.endsWith('token') ||
+    SENSITIVE_KEY_PARTS.some((part) => normalized.includes(part))
+  );
+};
+
+const redactJsonValue = (value: unknown, key = ''): unknown => {
+  if (key && isSensitiveKey(key)) {
+    return REDACTED_VALUE;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactJsonValue(item));
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entryValue]) => [
+        entryKey,
+        redactJsonValue(entryValue, entryKey),
+      ])
+    );
+  }
+  return value;
+};
+
+const formatJsonText = (text: string, redactSensitive = false) => {
+  if (!text) return '';
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return JSON.stringify(redactSensitive ? redactJsonValue(parsed) : parsed, null, 2);
+  } catch {
+    return text;
+  }
+};
+
 export type AuthFilesPrefixProxyEditorModalProps = {
   disableControls: boolean;
   editor: PrefixProxyEditorState | null;
@@ -27,15 +81,8 @@ export function AuthFilesPrefixProxyEditorModal(props: AuthFilesPrefixProxyEdito
   const { t } = useTranslation();
   const { disableControls, editor, updatedText, dirty, onClose, onCopyText, onSave, onChange } =
     props;
-  const formatJsonText = (text: string) => {
-    if (!text) return '';
-    try {
-      return JSON.stringify(JSON.parse(text), null, 2);
-    } catch {
-      return text;
-    }
-  };
-  const previewText = formatJsonText(updatedText);
+  const previewText = formatJsonText(updatedText, true);
+  const fileInfoPreviewText = formatJsonText(editor?.fileInfoText ?? '', true);
   const invalidContentPreview = editor?.invalidContentPreview ?? '';
 
   return (
@@ -57,10 +104,11 @@ export function AuthFilesPrefixProxyEditorModal(props: AuthFilesPrefixProxyEdito
           <Button
             variant="secondary"
             onClick={() => {
-              if (!updatedText) return;
-              void onCopyText(updatedText);
+              if (!previewText) return;
+              void onCopyText(previewText);
             }}
-            disabled={editor?.saving === true || !updatedText}
+            disabled={editor?.saving === true || !previewText}
+            title={t('auth_files.prefix_proxy_copy_redacted_hint')}
           >
             {t('common.copy')}
           </Button>
@@ -98,7 +146,7 @@ export function AuthFilesPrefixProxyEditorModal(props: AuthFilesPrefixProxyEdito
                   className={styles.prefixProxyTextarea}
                   rows={8}
                   readOnly
-                  value={editor.fileInfoText}
+                  value={fileInfoPreviewText}
                 />
               </div>
               <div className={styles.prefixProxyJsonWrapper}>
@@ -120,6 +168,11 @@ export function AuthFilesPrefixProxyEditorModal(props: AuthFilesPrefixProxyEdito
                   </pre>
                 )}
               </div>
+              {editor.json && (
+                <div className={styles.prefixProxySecurityNote}>
+                  {t('auth_files.prefix_proxy_redacted_hint')}
+                </div>
+              )}
               {editor.json && (
                 <div className={styles.prefixProxyFields}>
                   <Input

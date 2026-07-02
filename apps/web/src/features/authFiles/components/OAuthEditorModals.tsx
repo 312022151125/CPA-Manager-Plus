@@ -20,6 +20,7 @@ import { generateId } from '@/utils/helpers';
 import styles from './OAuthEditorModals.module.scss';
 
 type OAuthModelMappingFormEntry = OAuthModelAliasEntry & { id: string };
+type ProviderModelsError = 'unsupported' | 'failed' | null;
 
 type OAuthEditorBaseProps = {
   open: boolean;
@@ -67,10 +68,39 @@ const normalizeMappingEntries = (
   }));
 };
 
-const findProviderEntries = <T,>(
-  record: Record<string, T>,
-  providerKey: string
-): T | undefined => {
+const normalizeModelAliasEntriesForSave = (
+  entries: Array<Pick<OAuthModelAliasEntry, 'name' | 'alias' | 'fork'>>
+): OAuthModelAliasEntry[] => {
+  const seen = new Set<string>();
+  return entries
+    .map((entry) => {
+      const name = String(entry.name ?? '').trim();
+      const alias = String(entry.alias ?? '').trim();
+      if (!name || !alias) return null;
+      const key = `${name.toLowerCase()}::${alias.toLowerCase()}::${entry.fork ? '1' : '0'}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      return entry.fork ? { name, alias, fork: true } : { name, alias };
+    })
+    .filter(Boolean) as OAuthModelAliasEntry[];
+};
+
+const buildModelAliasComparable = (entries: OAuthModelAliasEntry[]) =>
+  JSON.stringify(
+    entries
+      .map((entry) => ({
+        name: entry.name,
+        alias: entry.alias,
+        fork: Boolean(entry.fork),
+      }))
+      .sort((a, b) =>
+        `${a.name}\u0000${a.alias}\u0000${a.fork ? '1' : '0'}`.localeCompare(
+          `${b.name}\u0000${b.alias}\u0000${b.fork ? '1' : '0'}`
+        )
+      )
+  );
+
+const findProviderEntries = <T,>(record: Record<string, T>, providerKey: string): T | undefined => {
   const entry = Object.entries(record).find(
     ([provider]) => normalizeProviderKey(provider) === providerKey
   );
@@ -132,7 +162,7 @@ function useProviderModels({
   const showNotification = useNotificationStore((state) => state.showNotification);
   const [models, setModels] = useState<AuthFileModelItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<'unsupported' | null>(null);
+  const [error, setError] = useState<ProviderModelsError>(null);
   const active = open && Boolean(providerKey) && !unsupported && !disabled;
 
   useEffect(() => {
@@ -154,6 +184,8 @@ function useProviderModels({
           setError('unsupported');
           return;
         }
+        setModels([]);
+        setError('failed');
         const message = err instanceof Error ? err.message : '';
         showNotification(`${t('notification.load_failed')}: ${message}`, 'error');
       } finally {
@@ -230,6 +262,15 @@ export function OAuthExcludedEditorModal({
     });
   }, []);
 
+  const hasSelectionChanged = useMemo(() => {
+    const current = [...selectedModels].sort();
+    const existing = [...existingModels].sort();
+    return (
+      current.length !== existing.length ||
+      current.some((value, index) => value !== existing[index])
+    );
+  }, [existingModels, selectedModels]);
+
   const handleSave = useCallback(async () => {
     const providerKey = normalizeProviderKey(provider);
     if (!providerKey) {
@@ -256,7 +297,8 @@ export function OAuthExcludedEditorModal({
     }
   }, [onClose, onSaved, provider, selectedModels, showNotification, t]);
 
-  const canSave = !disabled && !saving && !unsupported;
+  const canSave =
+    !disabled && !saving && !unsupported && Boolean(resolvedProviderKey) && hasSelectionChanged;
   const title = isEditing
     ? t('oauth_excluded.edit_title', { provider: provider.trim() || resolvedProviderKey })
     : t('oauth_excluded.add_title');
@@ -341,8 +383,12 @@ export function OAuthExcludedEditorModal({
                       <LoadingSpinner size={14} />
                       <span>{t('oauth_excluded.models_loading')}</span>
                     </>
-                  ) : error === 'unsupported' ? (
-                    <span>{t('oauth_excluded.models_unsupported')}</span>
+                  ) : error ? (
+                    <span>
+                      {error === 'unsupported'
+                        ? t('oauth_excluded.models_unsupported')
+                        : t('oauth_excluded.models_failed')}
+                    </span>
                   ) : models.length > 0 ? (
                     <span>{t('oauth_excluded.models_loaded', { count: models.length })}</span>
                   ) : (
@@ -381,7 +427,9 @@ export function OAuthExcludedEditorModal({
               <div className={styles.emptyModels}>
                 {error === 'unsupported'
                   ? t('oauth_excluded.models_unsupported')
-                  : t('oauth_excluded.no_models_available')}
+                  : error === 'failed'
+                    ? t('oauth_excluded.models_failed')
+                    : t('oauth_excluded.no_models_available')}
               </div>
             ) : (
               <div className={styles.emptyModels}>{t('oauth_excluded.provider_required')}</div>
@@ -420,10 +468,7 @@ export function OAuthModelAliasEditorModal({
   const providerOptions = useProviderOptions({ files, excluded, modelAlias });
   const resolvedProviderKey = useMemo(() => normalizeProviderKey(provider), [provider]);
   const existingMappings = useMemo(
-    () =>
-      resolvedProviderKey
-        ? (findProviderEntries(modelAlias, resolvedProviderKey) ?? [])
-        : [],
+    () => (resolvedProviderKey ? (findProviderEntries(modelAlias, resolvedProviderKey) ?? []) : []),
     [modelAlias, resolvedProviderKey]
   );
   const { models, loading, error } = useProviderModels({
@@ -445,11 +490,25 @@ export function OAuthModelAliasEditorModal({
     if (loading) {
       return t('oauth_model_alias.model_source_loading');
     }
-    if (error === 'unsupported') {
-      return t('oauth_model_alias.model_source_unsupported');
+    if (error) {
+      return error === 'unsupported'
+        ? t('oauth_model_alias.model_source_unsupported')
+        : t('oauth_model_alias.model_source_failed');
     }
     return t('oauth_model_alias.model_source_loaded', { count: models.length });
   }, [error, loading, models.length, provider, t]);
+
+  const normalizedMappings = useMemo(() => normalizeModelAliasEntriesForSave(mappings), [mappings]);
+  const normalizedExistingMappings = useMemo(
+    () => normalizeModelAliasEntriesForSave(existingMappings),
+    [existingMappings]
+  );
+  const hasMappingsChanged = useMemo(
+    () =>
+      buildModelAliasComparable(normalizedMappings) !==
+      buildModelAliasComparable(normalizedExistingMappings),
+    [normalizedExistingMappings, normalizedMappings]
+  );
 
   const updateMappingEntry = useCallback(
     (index: number, field: keyof OAuthModelAliasEntry, value: string | boolean) => {
@@ -478,23 +537,10 @@ export function OAuthModelAliasEditorModal({
       return;
     }
 
-    const seen = new Set<string>();
-    const normalized = mappings
-      .map((entry) => {
-        const name = String(entry.name ?? '').trim();
-        const alias = String(entry.alias ?? '').trim();
-        if (!name || !alias) return null;
-        const key = `${name.toLowerCase()}::${alias.toLowerCase()}::${entry.fork ? '1' : '0'}`;
-        if (seen.has(key)) return null;
-        seen.add(key);
-        return entry.fork ? { name, alias, fork: true } : { name, alias };
-      })
-      .filter(Boolean) as OAuthModelAliasEntry[];
-
     setSaving(true);
     try {
-      if (normalized.length > 0) {
-        await authFilesApi.saveOauthModelAlias(providerKey, normalized);
+      if (normalizedMappings.length > 0) {
+        await authFilesApi.saveOauthModelAlias(providerKey, normalizedMappings);
       } else {
         await authFilesApi.deleteOauthModelAlias(providerKey);
       }
@@ -507,9 +553,10 @@ export function OAuthModelAliasEditorModal({
     } finally {
       setSaving(false);
     }
-  }, [mappings, onClose, onSaved, provider, showNotification, t]);
+  }, [normalizedMappings, onClose, onSaved, provider, showNotification, t]);
 
-  const canSave = !disabled && !saving && !unsupported;
+  const canSave =
+    !disabled && !saving && !unsupported && Boolean(resolvedProviderKey) && hasMappingsChanged;
 
   return (
     <Modal

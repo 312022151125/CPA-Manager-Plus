@@ -1629,6 +1629,16 @@
   font-size: 12px;
 }
 
+.prefixProxySecurityNote {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--warning-color, #f59e0b) 34%, var(--border-color));
+  border-radius: $radius-md;
+  background: color-mix(in srgb, var(--warning-color, #f59e0b) 10%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .prefixProxyJsonWrapper {
   display: flex;
   flex-direction: column;
@@ -1911,6 +1921,7 @@
   display: flex;
   flex-direction: column;
   gap: $spacing-sm;
+  min-width: 0;
 }
 
 .excludedItem {
@@ -1922,6 +1933,7 @@
   border-radius: $radius-md;
   border: 1px solid var(--border-subtle);
   gap: $spacing-md;
+  min-width: 0;
 
   @include mobile {
     flex-direction: column;
@@ -1938,14 +1950,22 @@
 }
 
 .excludedProvider {
+  min-width: 0;
+  overflow: hidden;
   font-weight: 600;
   color: var(--text-primary);
   font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .excludedModels {
+  min-width: 0;
+  overflow: hidden;
   font-size: 12px;
   color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .excludedActions {
@@ -2010,6 +2030,7 @@
 
 // OAuth 模型别名 - 映射概览
 .aliasChartSection {
+  min-width: 0;
   margin-bottom: $spacing-lg;
   padding-bottom: $spacing-lg;
   border-bottom: 1px solid var(--border-color);
@@ -2032,7 +2053,10 @@
 
 .aliasChart {
   width: 100%;
+  max-width: 100%;
   min-height: 120px;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .cardExtraButtons {
