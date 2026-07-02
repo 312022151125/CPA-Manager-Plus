@@ -164,82 +164,6 @@
   }
 }
 
-.toolbarActions {
-  display: flex;
-  align-items: end;
-  justify-content: flex-end;
-  grid-column: span 2;
-  gap: 8px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
-.listViewControls {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  padding: 3px;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: var(--surface-subtle);
-}
-
-.listViewButton:global(.btn.btn-sm) {
-  min-height: 30px;
-  gap: 6px;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-
-.listViewButtonActive:global(.btn.btn-sm) {
-  border-color: color-mix(in srgb, var(--primary-color) 34%, var(--border-color));
-  background: var(--bg-primary);
-  color: var(--primary-color);
-}
-
-.advancedPanel {
-  grid-column: 1 / -1;
-  min-width: 0;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border-color);
-}
-
-.columnSettings {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  min-width: 0;
-
-  strong {
-    flex: 0 0 auto;
-    color: var(--text-primary);
-    font-size: 13px;
-  }
-
-  > div {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  label {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 26px;
-    padding: 0 8px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--app-radius-sm);
-    background: var(--surface-subtle);
-    color: var(--text-secondary);
-    font-size: 12px;
-    cursor: pointer;
-  }
-}
-
 .errorBox {
   padding: 12px;
   border: 1px solid var(--danger-color);
@@ -337,55 +261,11 @@
   }
 }
 
-.accountTable {
-  width: 100%;
-  min-width: 1160px;
-  border-collapse: collapse;
-  table-layout: fixed;
-
-  th,
-  td {
-    padding: 9px 12px;
-    border-bottom: 1px solid var(--border-color);
-    color: var(--text-primary);
-    font-size: 13px;
-    text-align: left;
-    vertical-align: middle;
-  }
-
-  th {
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 800;
-    background: color-mix(in srgb, var(--surface-subtle) 72%, transparent);
-  }
-
-  tbody tr {
-    cursor: pointer;
-
-    &:hover {
-      background: color-mix(in srgb, var(--primary-color) 5%, transparent);
-    }
-  }
-
-  @include mobile {
-    min-width: 980px;
-  }
-}
-
-.selectCol {
-  width: 44px;
-}
-
 .rowActions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   white-space: nowrap;
-}
-
-.rowSelected {
-  background: color-mix(in srgb, var(--primary-color) 8%, transparent);
 }
 
 .accountCardList {
@@ -499,6 +379,14 @@
   .statusStack small {
     max-width: 100%;
   }
+}
+
+.accountCardSectionTitle {
+  display: none;
+}
+
+.accountCardAlerts {
+  min-width: 0;
 }
 
 .accountCardQuota {
@@ -1348,7 +1236,7 @@
 .controlsPanel {
   display: grid;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   border-radius: 18px;
 }
 
@@ -1405,7 +1293,7 @@
 }
 
 .toolbar {
-  grid-template-columns: minmax(240px, 2fr) repeat(3, minmax(128px, 1fr));
+  grid-template-columns: minmax(220px, 1.5fr) repeat(4, minmax(132px, 1fr)) minmax(118px, auto);
   gap: 8px;
   padding: 0;
   border: 0;
@@ -1419,19 +1307,309 @@
   }
 }
 
-.advancedPanel {
-  padding-top: 12px;
-  border-top: 1px dashed color-mix(in srgb, var(--accounts-border) 76%, transparent);
+.toolbarSearchInput {
+  height: 36px;
+  min-height: 36px;
+  border-radius: 12px;
+  font-size: 13px;
 }
 
-.columnSettings {
-  align-items: center;
+.toolbarSelectTrigger {
+  height: 36px !important;
+  min-height: 36px !important;
+  border-radius: 12px !important;
+  font-size: 13px;
+}
 
-  label {
-    min-height: 28px;
-    border-radius: 8px;
-    background: var(--accounts-surface);
+.mobileToolbarActions {
+  display: none;
+}
+
+.mobileFilterButton:global(.btn.btn-sm) {
+  gap: 7px;
+  justify-content: center;
+  min-height: 36px;
+  border-radius: 12px;
+}
+
+.mobileFilterCount {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accounts-primary);
+  color: var(--bg-primary);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.mobileFilterSummary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accounts-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountSortControls {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: var(--accounts-muted-surface);
+  overflow: visible;
+  transition:
+    border-color 0.16s ease,
+    background-color 0.16s ease;
+
+  &:hover,
+  &:focus-within {
+    border-color: color-mix(in srgb, var(--accounts-primary) 42%, var(--accounts-border));
+    background: color-mix(in srgb, var(--accounts-primary) 6%, var(--accounts-muted-surface));
+  }
+}
+
+.accountSortTrigger {
+  border: 0;
+  font: inherit;
+  justify-content: flex-start;
+  flex: 1 1 auto;
+  min-width: 78px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 4px 0 12px;
+  border: 0;
+  border-radius: 11px 0 0 11px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--accounts-text);
+  cursor: pointer;
+  transform: none;
+
+  &:hover,
+  &:focus-visible {
+    outline: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--accounts-text);
+    transform: none;
+  }
+}
+
+.accountSortLabel {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountSortDirectionButton {
+  border: 0;
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 0 11px 11px 0;
+  background: transparent;
+  color: var(--accounts-muted);
+  cursor: pointer;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
+
+  &:hover:not(:disabled),
+  &:focus-visible:not(:disabled) {
+    outline: 0;
+    background: color-mix(in srgb, var(--accounts-primary) 10%, transparent);
+    color: var(--accounts-primary);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}
+
+.accountSortDropdownList {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--accounts-strong-border);
+  border-radius: 12px;
+  background: var(--accounts-surface);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+}
+
+.accountSortDropdownItem.accountSortDropdownItem {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--accounts-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    outline: 0;
+    background: color-mix(in srgb, var(--accounts-primary) 7%, var(--accounts-muted-surface));
+    color: var(--accounts-text);
+  }
+}
+
+.accountSortDropdownItemSelected {
+  color: var(--accounts-primary);
+  font-weight: 700;
+}
+
+.accountSortDropdownItemHighlighted {
+  background: color-mix(in srgb, var(--accounts-primary) 7%, var(--accounts-muted-surface));
+  color: var(--accounts-text);
+}
+
+.accountSortDropdownItemSelected.accountSortDropdownItemHighlighted {
+  color: var(--accounts-primary);
+}
+
+.accountSortDirectionIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+}
+
+.mobileFilterLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+}
+
+.mobileFilterBackdrop {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: rgba(15, 23, 42, 0.36);
+  cursor: pointer;
+}
+
+.mobileFilterPanel {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(82vh, 640px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accounts-border) 82%, transparent);
+  border-bottom: 0;
+  border-radius: 20px 20px 0 0;
+  background: var(--accounts-surface);
+  box-shadow: 0 -20px 42px rgba(15, 23, 42, 0.2);
+}
+
+.mobileFilterHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
+
+  h2 {
+    margin: 0;
+    color: var(--accounts-text);
+    font-size: 16px;
+    line-height: 1.25;
+  }
+
+  span {
+    display: block;
+    max-width: 260px;
+    margin-top: 3px;
+    overflow: hidden;
+    color: var(--accounts-muted);
+    font-size: 12px;
     font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.mobileFilterBody {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  padding: 12px 16px;
+  overflow-y: auto;
+}
+
+.mobileFilterDisplayMode {
+  display: grid;
+  min-width: 0;
+}
+
+.mobileFilterDisplayMode :global(.btn) {
+  width: 100%;
+}
+
+.mobileSortField {
+  min-width: 0;
+
+  .accountSortControls {
+    width: 100%;
+  }
+
+  .accountSortDropdownList {
+    top: auto;
+    bottom: calc(100% + 4px);
+  }
+}
+
+.mobileFilterFooter {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
+
+  :global(.btn) {
+    width: 100%;
   }
 }
 
@@ -1588,7 +1766,6 @@
   box-shadow: -16px 0 18px -18px rgba(15, 23, 42, 0.5);
 }
 
-.accountTable,
 .compactTable {
   th,
   td {
@@ -1626,8 +1803,7 @@
     background: color-mix(in srgb, var(--accounts-muted-surface) 90%, var(--accounts-surface));
   }
 
-  tbody tr:hover td:last-child,
-  .rowSelected td:last-child {
+  tbody tr:hover td:last-child {
     background: color-mix(in srgb, var(--accounts-primary) 5%, var(--accounts-surface));
   }
 }
@@ -1662,10 +1838,6 @@
 .quotaTrack {
   height: 8px;
   background: color-mix(in srgb, var(--accounts-border) 62%, transparent);
-}
-
-.rowSelected {
-  background: color-mix(in srgb, var(--accounts-primary) 8%, var(--accounts-surface));
 }
 
 .rowActions {
@@ -1793,7 +1965,33 @@
   }
 
   .tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
+    overflow: visible;
+    padding-bottom: 4px;
+  }
+
+  .tabs :global([role='tab']) {
+    min-width: 0;
+    padding-inline: 8px;
+    white-space: normal;
+  }
+
+  .tabs :global([role='tab']:last-child:nth-child(odd)) {
+    grid-column: 1 / -1;
+  }
+
+  .tabLabel {
+    gap: 4px;
+    width: 100%;
+
+    > span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   }
 
   .controlsTabsRow > .headerActions {
@@ -1801,13 +1999,51 @@
   }
 
   .toolbar,
-  .metricsGrid,
   .drawerSummary {
     grid-template-columns: 1fr;
   }
 
+  .toolbar > .filterField,
+  .toolbar > .accountSortControls {
+    display: none;
+  }
+
+  .mobileToolbarActions {
+    display: grid;
+    grid-template-columns: minmax(118px, auto) minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .metricsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
   .metricCard {
-    min-height: 96px;
+    min-height: 84px;
+    gap: 8px;
+    padding: 10px;
+    border-radius: 12px;
+  }
+
+  .metricCard:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .metricIcon {
+    width: 32px;
+    height: 32px;
+    flex-basis: 32px;
+  }
+
+  .metricBody strong {
+    font-size: 18px;
+  }
+
+  .metricBody small {
+    font-size: 11px;
   }
 
   .batchBar,
@@ -1818,6 +2054,23 @@
 
   .drawer {
     width: 100vw;
+  }
+
+  .pagination {
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .paginationControls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(34px, auto) auto;
+    width: 100%;
+
+    > span {
+      min-width: 34px;
+      text-align: center;
+      white-space: nowrap;
+    }
   }
 }
 
@@ -1838,59 +2091,6 @@
   justify-content: flex-end;
   gap: 8px;
   min-width: 0;
-}
-
-.accountTable {
-  min-width: 1060px;
-
-  th,
-  td {
-    padding: 9px 12px;
-  }
-}
-
-.colSelect {
-  width: 44px;
-}
-
-.colAccount {
-  width: 22%;
-}
-
-.colProvider {
-  width: 86px;
-}
-
-.colPlan {
-  width: 86px;
-}
-
-.colStatus {
-  width: 152px;
-}
-
-.colQuota {
-  width: 150px;
-}
-
-.colReset {
-  width: 104px;
-}
-
-.colPriority {
-  width: 82px;
-}
-
-.colValue {
-  width: 108px;
-}
-
-.colRecent {
-  width: 126px;
-}
-
-.colActions {
-  width: 82px;
 }
 
 .statusStack {
@@ -1947,52 +2147,6 @@
   transform: none;
 }
 
-.sortableHeaderButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 5px;
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  letter-spacing: inherit;
-  text-align: left;
-  cursor: pointer;
-
-  &:hover {
-    color: var(--accounts-text);
-    transform: none;
-  }
-
-  &:focus {
-    outline: none;
-    box-shadow: none;
-  }
-
-  &:focus-visible {
-    color: var(--accounts-primary);
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-}
-
-.sortableHeaderButtonActive {
-  color: var(--accounts-primary);
-}
-
-.sortIndicator {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  min-width: 14px;
-  color: currentColor;
-}
-
 .metricCard {
   min-height: 104px;
 }
@@ -2002,15 +2156,6 @@
 }
 
 @include tablet {
-  .toolbarActions {
-    align-items: stretch;
-    justify-content: flex-start;
-  }
-
-  .listViewControls {
-    width: fit-content;
-  }
-
   .accountCard {
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: start;
@@ -2037,31 +2182,21 @@
 }
 
 @include mobile {
-  .searchField,
-  .toolbarActions {
+  .searchField {
     grid-column: 1;
   }
 
-  .accountTable {
-    min-width: 980px;
+  .metricCard {
+    min-height: 84px;
   }
 
-  .toolbarActions {
-    flex-direction: column;
-
-    :global(.btn),
-    .listViewControls {
-      width: 100%;
-    }
+  .batchBarIdle {
+    display: none;
   }
 
-  .listViewControls {
-    justify-content: stretch;
-  }
-
-  .listViewButton:global(.btn.btn-sm) {
-    flex: 1 1 0;
-    justify-content: center;
+  .batchBar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .accountCardList {
@@ -2070,35 +2205,157 @@
 
   .accountCard {
     grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px 10px;
     min-height: 0;
     padding: 10px;
+    border-color: color-mix(in srgb, var(--accounts-border) 90%, transparent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--accounts-surface) 94%, var(--accounts-muted-surface));
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  }
+
+  .accountCardIdentity {
+    grid-column: 2 / -1;
+    gap: 4px;
+    padding: 0 2px 8px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--accounts-border) 76%, transparent);
+  }
+
+  .accountCardTitleRow {
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+
+    strong {
+      flex: 1 1 100%;
+      font-size: 13px;
+      line-height: 1.25;
+      white-space: normal;
+      word-break: break-word;
+    }
+  }
+
+  .accountCardFile {
+    font-size: 11px;
+  }
+
+  .accountCardMetaRow {
+    gap: 4px;
+  }
+
+  .providerPill,
+  .accountMetaPill,
+  .priority,
+  .priorityBad {
+    min-height: 20px;
+    padding-inline: 7px;
+    font-size: 11px;
   }
 
   .accountCardActions {
-    grid-column: 2;
+    grid-column: 1 / -1;
     grid-row: auto;
     justify-self: start;
   }
 
   .accountCardStatus,
   .accountCardQuota,
-  .accountCardUsage,
-  .accountCardActions {
+  .accountCardUsage {
     grid-column: 1 / -1;
   }
 
+  .statusStack {
+    align-items: flex-start;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+
+    small {
+      width: auto;
+      max-width: 100%;
+    }
+  }
+
+  .accountCardStatus {
+    display: grid;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
+    border-radius: 10px;
+    background: var(--accounts-surface);
+  }
+
+  .accountCardSectionTitle {
+    display: block;
+    color: var(--accounts-muted);
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .accountCardAlerts {
+    display: grid;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--accounts-border) 64%, transparent);
+  }
+
+  .accountCardQuota,
   .accountCardUsage {
-    grid-template-columns: 1fr;
+    display: grid;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--accounts-muted-surface) 48%, var(--accounts-surface));
+  }
+
+  .quotaTrack {
+    max-width: none;
+  }
+
+  .accountCardQuotaMeta {
+    gap: 4px;
+
+    span {
+      white-space: normal;
+    }
+  }
+
+  .accountCardUsage {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0;
+
+    > div {
+      padding-inline: 4px;
+    }
+
+    > div + div {
+      border-left: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
+      padding-left: 12px;
+    }
+  }
+
+  .rowActions {
+    justify-content: flex-start;
+    width: 100%;
+    padding-top: 2px;
+    border-top: 1px solid color-mix(in srgb, var(--accounts-border) 62%, transparent);
   }
 
   .batchActions {
     align-items: stretch;
     flex-direction: column;
+    width: 100%;
 
     :global(.btn),
     :global(.select-trigger) {
       width: 100%;
     }
+  }
+
+  .batchDisplayToggle {
+    display: none;
   }
 
   .prioritySelect {

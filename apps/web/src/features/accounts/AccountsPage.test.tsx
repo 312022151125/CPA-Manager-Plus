@@ -2,7 +2,6 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { isValidElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '@/components/ui/Button';
-import { Select } from '@/components/ui/Select';
 import type { AuthFileItem } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import { AccountsPage } from './AccountsPage';
@@ -426,18 +425,20 @@ const findHostButtonByText = (renderer: ReactTestRenderer, text: string) => {
   return button;
 };
 
+const findHostButtonByAriaLabel = (renderer: ReactTestRenderer, label: string) => {
+  const button = renderer.root
+    .findAll((node) => node.type === 'button')
+    .find((node) => node.props['aria-label'] === label);
+  if (!button) throw new Error(`Host button not found: ${label}`);
+  return button;
+};
+
 const findInputByAriaLabel = (renderer: ReactTestRenderer, label: string) => {
   const input = renderer.root
     .findAll((node) => node.type === 'input')
     .find((node) => node.props['aria-label'] === label);
   if (!input) throw new Error(`Input not found: ${label}`);
   return input;
-};
-
-const findSelectByAriaLabel = (renderer: ReactTestRenderer, label: string) => {
-  const select = renderer.root.findAllByType(Select).find((node) => node.props.ariaLabel === label);
-  if (!select) throw new Error(`Select not found: ${label}`);
-  return select;
 };
 
 const renderAccountsPage = async () => {
@@ -621,19 +622,31 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
 
     await act(async () => {
-      findSelectByAriaLabel(renderer, 'accounts.sort_label').props.onChange('priority-desc');
+      findHostButtonByAriaLabel(
+        renderer,
+        'accounts.sort_label: accounts.sort_default'
+      ).props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.col_priority').props.onClick();
     });
 
     expect(getAccountListItemTexts(renderer)[0]).toContain('high.json');
 
     await act(async () => {
-      findSelectByAriaLabel(renderer, 'accounts.sort_label').props.onChange('recent-desc');
+      findHostButtonByAriaLabel(
+        renderer,
+        'accounts.sort_label: accounts.col_priority'
+      ).props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.col_recent').props.onClick();
     });
 
     expect(getAccountListItemTexts(renderer)[0]).toContain('middle.json');
   });
 
-  it('can switch back to the table and sort from table headers', async () => {
+  it('keeps the accounts view in card mode without table controls', async () => {
     mocks.files = [
       {
         ...makeCodexFile('low.json', 'auth-low', 'low@example.com'),
@@ -650,15 +663,24 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
 
     expect(renderer.root.findAllByType('table')).toHaveLength(0);
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+    ).toHaveLength(2);
+    expect(getAccountListItemTexts(renderer).join('\n')).toContain('high.json');
+    expect(() => findHostButtonByText(renderer, 'accounts.view_mode_table')).toThrow();
+  });
+
+  it('renders the mobile filters entrypoint in the accounts toolbar', async () => {
+    const renderer = await renderAccountsPage();
+
+    expect(treeText(renderer)).toContain('accounts.mobile_filters_button');
+    expect(treeText(renderer)).toContain('accounts.mobile_filters_default');
 
     await act(async () => {
-      findHostButtonByText(renderer, 'accounts.view_mode_table').props.onClick();
+      findButtonByText(renderer, 'accounts.mobile_filters_button').props.onClick();
     });
-    await act(async () => {
-      findHostButtonByText(renderer, 'accounts.col_priority').props.onClick();
-    });
-
-    expect(getAccountTableRowTexts(renderer)[0]).toContain('high.json');
   });
 
   it('searches and renders diagnostic-only Codex usage header snapshots', async () => {

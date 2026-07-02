@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { TFunction } from 'i18next';
 import { useNavigate } from 'react-router-dom';
@@ -14,16 +14,14 @@ import { Select } from '@/components/ui/Select';
 import { SegmentedTabs, type SegmentedTabItem } from '@/components/ui/SegmentedTabs';
 import {
   IconCheck,
-  IconChevronDown,
+  IconArrowDownWideNarrow,
+  IconArrowUpNarrowWide,
   IconChevronRight,
-  IconChevronUp,
   IconDollarSign,
   IconDownload,
   IconEye,
   IconEyeOff,
   IconFileText,
-  IconFilter,
-  IconLayoutDashboard,
   IconMoreVertical,
   IconModelCluster,
   IconPlus,
@@ -107,12 +105,6 @@ import {
 } from '@/features/accounts/model/usageValueRows';
 import { buildOAuthRulePreviewRows } from '@/features/accounts/model/oauthRulePreview';
 import {
-  DEFAULT_ACCOUNTS_LIST_VIEW_MODE,
-  readAccountsPageUiState,
-  writeAccountsPageUiState,
-  type AccountsListViewMode,
-} from '@/features/accounts/uiState';
-import {
   monitoringAnalyticsApi,
   usageServiceApi,
   type CodexInspectionRun,
@@ -146,24 +138,8 @@ import styles from './AccountsPage.module.scss';
 
 type AccountsView = 'accounts' | 'quota' | 'inspection' | 'oauth' | 'value';
 type DetailTab = 'overview' | 'quota' | 'auth' | 'strategy' | 'value' | 'events';
-type AccountSortControlValue =
-  | 'default'
-  | 'reset-asc'
-  | 'reset-desc'
-  | 'priority-desc'
-  | 'priority-asc'
-  | 'recent-desc'
-  | 'recent-asc';
-type AccountColumn =
-  | 'provider'
-  | 'plan'
-  | 'status'
-  | 'quota'
-  | 'reset'
-  | 'priority'
-  | 'value'
-  | 'recent';
 type SortableAccountColumn = Extract<AccountRowSortKey, 'reset' | 'priority' | 'recent'>;
+type AccountSortFieldValue = 'default' | SortableAccountColumn;
 type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
 
@@ -189,75 +165,39 @@ const VALUE_RANGE_OPTIONS: Array<{ value: UsageValueRange; labelKey: string; hou
 const DETAIL_EVENTS_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DETAIL_EVENTS_LIMIT = 20;
 
-const ACCOUNT_COLUMNS: AccountColumn[] = [
-  'provider',
-  'plan',
-  'status',
-  'quota',
-  'reset',
-  'priority',
-  'value',
-  'recent',
-];
-
 const ACCOUNT_SORT_DEFAULT_DIRECTIONS: Record<SortableAccountColumn, AccountRowSortDirection> = {
   reset: 'asc',
   priority: 'desc',
   recent: 'desc',
 };
 
-const ACCOUNT_SORT_CONTROL_OPTIONS: Array<{
-  value: AccountSortControlValue;
+const DEFAULT_ACCOUNT_SORT_FIELD_OPTION = {
+  value: 'default',
+  labelKey: 'accounts.sort_default',
+} as const;
+
+const ACCOUNT_SORT_FIELD_OPTIONS: Array<{
+  value: AccountSortFieldValue;
   labelKey: string;
-  sort: AccountRowSort;
 }> = [
+  DEFAULT_ACCOUNT_SORT_FIELD_OPTION,
   {
-    value: 'default',
-    labelKey: 'accounts.sort_default',
-    sort: { key: 'default', direction: 'desc' },
+    value: 'reset',
+    labelKey: 'accounts.col_reset',
   },
   {
-    value: 'reset-asc',
-    labelKey: 'accounts.sort_reset_asc',
-    sort: { key: 'reset', direction: 'asc' },
+    value: 'priority',
+    labelKey: 'accounts.col_priority',
   },
   {
-    value: 'reset-desc',
-    labelKey: 'accounts.sort_reset_desc',
-    sort: { key: 'reset', direction: 'desc' },
-  },
-  {
-    value: 'priority-desc',
-    labelKey: 'accounts.sort_priority_desc',
-    sort: { key: 'priority', direction: 'desc' },
-  },
-  {
-    value: 'priority-asc',
-    labelKey: 'accounts.sort_priority_asc',
-    sort: { key: 'priority', direction: 'asc' },
-  },
-  {
-    value: 'recent-desc',
-    labelKey: 'accounts.sort_recent_desc',
-    sort: { key: 'recent', direction: 'desc' },
-  },
-  {
-    value: 'recent-asc',
-    labelKey: 'accounts.sort_recent_asc',
-    sort: { key: 'recent', direction: 'asc' },
+    value: 'recent',
+    labelKey: 'accounts.col_recent',
   },
 ];
 
-const getAccountSortControlValue = (sort: AccountRowSort): AccountSortControlValue => {
-  if (sort.key === 'default') return 'default';
-  return `${sort.key}-${sort.direction}` as AccountSortControlValue;
-};
-
-const getAccountSortFromControlValue = (value: string): AccountRowSort =>
-  ACCOUNT_SORT_CONTROL_OPTIONS.find((option) => option.value === value)?.sort ?? {
-    key: 'default',
-    direction: 'desc',
-  };
+const getAccountSortFieldOption = (value: AccountSortFieldValue) =>
+  ACCOUNT_SORT_FIELD_OPTIONS.find((option) => option.value === value) ??
+  DEFAULT_ACCOUNT_SORT_FIELD_OPTION;
 
 const getProviderLabel = (provider: string, t: TFunction) => {
   const key = `auth_files.filter_${provider}`;
@@ -364,29 +304,6 @@ const getRecommendationActionLabelKey = (action: AccountRecommendationAction) =>
   }
 };
 
-const getColumnLabelKey = (column: AccountColumn) => {
-  switch (column) {
-    case 'provider':
-      return 'accounts.col_provider';
-    case 'plan':
-      return 'accounts.col_plan';
-    case 'status':
-      return 'accounts.col_status';
-    case 'quota':
-      return 'accounts.col_quota';
-    case 'reset':
-      return 'accounts.col_reset';
-    case 'priority':
-      return 'accounts.col_priority';
-    case 'value':
-      return 'accounts.col_value';
-    case 'recent':
-      return 'accounts.col_recent';
-    default:
-      return column;
-  }
-};
-
 const getReadableStatusMessage = (message: string, t: TFunction) => {
   const normalized = message.trim().toLowerCase();
   if (!normalized) return '';
@@ -441,7 +358,6 @@ async function refreshQuotaWithConfig<TState, TData>({
 export function AccountsPage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const initialUiState = useRef(readAccountsPageUiState());
   const showNotification = useNotificationStore((state) => state.showNotification);
   const showConfirmation = useNotificationStore((state) => state.showConfirmation);
   const managementKey = useAuthStore((state) => state.managementKey);
@@ -466,7 +382,6 @@ export function AccountsPage() {
     handleDelete,
     handleDownload,
     toggleSelect,
-    selectAllVisible,
     deselectAll,
     batchDownload,
     batchSetStatus,
@@ -537,17 +452,13 @@ export function AccountsPage() {
   const [planFilter, setPlanFilter] = useState('all');
   const [quotaBandFilter, setQuotaBandFilter] = useState<AccountQuotaBand>('all');
   const [search, setSearch] = useState('');
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
-  const [hiddenColumns, setHiddenColumns] = useState<Set<AccountColumn>>(
-    () => new Set(['provider', 'plan', 'value'])
-  );
   const [accountSort, setAccountSort] = useState<AccountRowSort>({
     key: 'default',
     direction: 'desc',
   });
-  const [accountListViewMode, setAccountListViewMode] = useState<AccountsListViewMode>(
-    () => initialUiState.current.listViewMode ?? DEFAULT_ACCOUNTS_LIST_VIEW_MODE
-  );
+  const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
+  const [isAccountSortDropdownOpen, setIsAccountSortDropdownOpen] = useState(false);
+  const [highlightedAccountSortIndex, setHighlightedAccountSortIndex] = useState(-1);
   const [priorityDraft, setPriorityDraft] = useState('0');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -582,6 +493,11 @@ export function AccountsPage() {
   );
   const detailEventsRequestIdRef = useRef(0);
   const headerSnapshotReqIdRef = useRef(0);
+  const accountSortDropdownRef = useRef<HTMLDivElement | null>(null);
+  const accountSortTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const accountSortOptionRefs = useRef<Map<AccountSortFieldValue, HTMLButtonElement | null>>(
+    new Map()
+  );
   const headerSnapshotContextRef = useRef({
     managerServiceBase: featureAvailability.managerServiceBase,
     managementKey,
@@ -731,8 +647,25 @@ export function AccountsPage() {
   }, [handleRefresh]);
 
   useEffect(() => {
-    writeAccountsPageUiState({ listViewMode: accountListViewMode });
-  }, [accountListViewMode]);
+    if (!isAccountSortDropdownOpen || typeof document === 'undefined') return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!accountSortDropdownRef.current?.contains(target)) {
+        setIsAccountSortDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isAccountSortDropdownOpen]);
+
+  useEffect(() => {
+    if (!isAccountSortDropdownOpen || highlightedAccountSortIndex < 0) return;
+    const highlightedOption = ACCOUNT_SORT_FIELD_OPTIONS[highlightedAccountSortIndex];
+    if (!highlightedOption) return;
+    accountSortOptionRefs.current.get(highlightedOption.value)?.focus();
+  }, [highlightedAccountSortIndex, isAccountSortDropdownOpen]);
 
   const handleSavePastedAuthJson = useCallback(
     async (type: AuthJsonInputType, fileName: string, jsonText: string) => {
@@ -853,10 +786,6 @@ export function AccountsPage() {
     () => rows.find((row) => row.selectionKey === selectedRowKey) ?? null,
     [rows, selectedRowKey]
   );
-  const selectablePageRows = pageRows.filter((row) => !row.runtimeOnly);
-  const allPageSelected =
-    selectablePageRows.length > 0 &&
-    selectablePageRows.every((row) => selectedFiles.has(row.selectionKey));
   const disableControls = connectionStatus !== 'connected';
   const valueSummary = useMemo(
     () => buildUsageValueSummary(usageRows, usageSource),
@@ -1396,79 +1325,169 @@ export function AccountsPage() {
     await Promise.all([loadOauthExcluded(), loadOauthModelAlias()]);
   }, [loadOauthExcluded, loadOauthModelAlias]);
 
-  const toggleColumn = (column: AccountColumn, visible: boolean) => {
-    setHiddenColumns((prev) => {
-      const next = new Set(prev);
-      if (visible) {
-        next.delete(column);
-      } else {
-        next.add(column);
-      }
-      return next;
-    });
-  };
-
-  const isColumnVisible = (column: AccountColumn) => !hiddenColumns.has(column);
-
   const estimatedWeeklyValue = valueSummary.weeklyValue;
 
-  const handleAccountSort = (key: SortableAccountColumn) => {
+  const selectedAccountSortIndex = ACCOUNT_SORT_FIELD_OPTIONS.findIndex(
+    (option) => option.value === accountSort.key
+  );
+  const selectedAccountSortOption = getAccountSortFieldOption(accountSort.key);
+  const selectedAccountSortLabel = t(selectedAccountSortOption.labelKey);
+  const selectedStatusFilterLabel =
+    statusFilter === 'all'
+      ? t('accounts.status_all')
+      : t(`accounts.status_${statusFilter}`);
+  const selectedPlanFilterLabel =
+    planFilter === 'all' ? t('accounts.plan_all') : planFilter;
+  const selectedQuotaFilterLabel =
+    quotaBandFilter === 'all' ? t('accounts.quota_all') : t(`accounts.quota_${quotaBandFilter}`);
+  const selectedProviderFilterLabel =
+    providerFilter === 'all' ? t('accounts.provider_all') : getProviderLabel(providerFilter, t);
+  const activeMobileFilterCount = [
+    providerFilter !== 'all',
+    statusFilter !== 'all',
+    planFilter !== 'all',
+    quotaBandFilter !== 'all',
+    accountSort.key !== 'default',
+  ].filter(Boolean).length;
+  const mobileFilterSummary =
+    activeMobileFilterCount === 0
+      ? t('accounts.mobile_filters_default')
+      : [
+          providerFilter !== 'all' ? selectedProviderFilterLabel : null,
+          statusFilter !== 'all' ? selectedStatusFilterLabel : null,
+          planFilter !== 'all' ? selectedPlanFilterLabel : null,
+          quotaBandFilter !== 'all' ? selectedQuotaFilterLabel : null,
+          accountSort.key !== 'default' ? selectedAccountSortLabel : null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+
+  const openAccountSortDropdown = () => {
+    setHighlightedAccountSortIndex(selectedAccountSortIndex >= 0 ? selectedAccountSortIndex : 0);
+    setIsAccountSortDropdownOpen(true);
+  };
+
+  const toggleAccountSortDropdown = () => {
+    if (isAccountSortDropdownOpen) {
+      setIsAccountSortDropdownOpen(false);
+      return;
+    }
+    openAccountSortDropdown();
+  };
+
+  const closeAccountSortDropdown = () => {
+    setIsAccountSortDropdownOpen(false);
+    accountSortTriggerRef.current?.focus();
+  };
+
+  const closeMobileFilters = () => {
+    setIsMobileFiltersOpen(false);
+    setIsAccountSortDropdownOpen(false);
+  };
+
+  const resetAccountFilters = () => {
+    setProviderFilter('all');
+    setStatusFilter('all');
+    setPlanFilter('all');
+    setQuotaBandFilter('all');
+    setAccountSort({ key: 'default', direction: 'desc' });
+    setPage(1);
+    setIsAccountSortDropdownOpen(false);
+  };
+
+  const moveAccountSortHighlight = (nextIndex: number) => {
+    const normalizedIndex =
+      (nextIndex + ACCOUNT_SORT_FIELD_OPTIONS.length) % ACCOUNT_SORT_FIELD_OPTIONS.length;
+    setHighlightedAccountSortIndex(normalizedIndex);
+  };
+
+  const commitAccountSortField = (value: AccountSortFieldValue) => {
     setAccountSort((prev) => {
-      if (prev.key === key) {
-        return {
-          key,
-          direction: prev.direction === 'asc' ? 'desc' : 'asc',
-        };
+      if (value === 'default') {
+        return { key: 'default', direction: 'desc' };
       }
       return {
-        key,
-        direction: ACCOUNT_SORT_DEFAULT_DIRECTIONS[key],
+        key: value,
+        direction: prev.key === value ? prev.direction : ACCOUNT_SORT_DEFAULT_DIRECTIONS[value],
+      };
+    });
+    setPage(1);
+    setIsAccountSortDropdownOpen(false);
+    accountSortTriggerRef.current?.focus();
+  };
+
+  const handleAccountSortDirectionToggle = () => {
+    setAccountSort((prev) => {
+      if (prev.key === 'default') return prev;
+      return {
+        key: prev.key,
+        direction: prev.direction === 'asc' ? 'desc' : 'asc',
       };
     });
     setPage(1);
   };
 
-  const handleAccountSortControlChange = (value: string) => {
-    setAccountSort(getAccountSortFromControlValue(value));
-    setPage(1);
-  };
-
-  const handleAccountListViewModeChange = (mode: AccountsListViewMode) => {
-    setAccountListViewMode(mode);
-    if (mode === 'cards') setShowAdvancedFilters(false);
-  };
-
-  const renderSortableHeader = (key: SortableAccountColumn, labelKey: string) => {
-    const isActive = accountSort.key === key;
-    const SortIcon = isActive
-      ? accountSort.direction === 'desc'
-        ? IconChevronDown
-        : IconChevronUp
-      : null;
-
-    return (
-      <th
-        aria-sort={
-          isActive ? (accountSort.direction === 'desc' ? 'descending' : 'ascending') : 'none'
+  const handleAccountSortTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    switch (event.key) {
+      case 'Enter':
+      case ' ':
+        event.preventDefault();
+        toggleAccountSortDropdown();
+        return;
+      case 'ArrowDown':
+        event.preventDefault();
+        if (!isAccountSortDropdownOpen) {
+          openAccountSortDropdown();
+          return;
         }
-      >
-        <button
-          type="button"
-          className={[
-            styles.sortableHeaderButton,
-            isActive ? styles.sortableHeaderButtonActive : '',
-          ]
-            .filter(Boolean)
-            .join(' ')}
-          onClick={() => handleAccountSort(key)}
-        >
-          <span>{t(labelKey)}</span>
-          <span className={styles.sortIndicator} aria-hidden="true">
-            {SortIcon ? <SortIcon size={14} /> : null}
-          </span>
-        </button>
-      </th>
-    );
+        moveAccountSortHighlight(highlightedAccountSortIndex + 1);
+        return;
+      case 'ArrowUp':
+        event.preventDefault();
+        if (!isAccountSortDropdownOpen) {
+          openAccountSortDropdown();
+          return;
+        }
+        moveAccountSortHighlight(highlightedAccountSortIndex - 1);
+        return;
+      case 'Escape':
+        if (!isAccountSortDropdownOpen) return;
+        event.preventDefault();
+        closeAccountSortDropdown();
+        return;
+      default:
+        return;
+    }
+  };
+
+  const handleAccountSortOptionKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    optionIndex: number
+  ) => {
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        moveAccountSortHighlight(optionIndex + 1);
+        return;
+      case 'ArrowUp':
+        event.preventDefault();
+        moveAccountSortHighlight(optionIndex - 1);
+        return;
+      case 'Home':
+        event.preventDefault();
+        moveAccountSortHighlight(0);
+        return;
+      case 'End':
+        event.preventDefault();
+        moveAccountSortHighlight(ACCOUNT_SORT_FIELD_OPTIONS.length - 1);
+        return;
+      case 'Escape':
+        event.preventDefault();
+        closeAccountSortDropdown();
+        return;
+      default:
+        return;
+    }
   };
 
   const renderMetricCard = (
@@ -1521,62 +1540,87 @@ export function AccountsPage() {
     );
   };
 
-  const renderListViewControls = () => (
-    <div
-      className={styles.listViewControls}
-      role="group"
-      aria-label={t('accounts.view_mode_label')}
-    >
-      <Button
-        variant="secondary"
-        size="sm"
-        className={[
-          styles.listViewButton,
-          accountListViewMode === 'cards' ? styles.listViewButtonActive : '',
-        ]
-          .filter(Boolean)
-          .join(' ')}
-        onClick={() => handleAccountListViewModeChange('cards')}
-        aria-pressed={accountListViewMode === 'cards'}
-      >
-        <IconLayoutDashboard size={15} />
-        {t('accounts.view_mode_cards')}
-      </Button>
-      <Button
-        variant="secondary"
-        size="sm"
-        className={[
-          styles.listViewButton,
-          accountListViewMode === 'table' ? styles.listViewButtonActive : '',
-        ]
-          .filter(Boolean)
-          .join(' ')}
-        onClick={() => handleAccountListViewModeChange('table')}
-        aria-pressed={accountListViewMode === 'table'}
-      >
-        <IconSlidersHorizontal size={15} />
-        {t('accounts.view_mode_table')}
-      </Button>
-    </div>
-  );
+  const renderAccountSortControls = () => {
+    const selectedField: AccountSortFieldValue = accountSort.key;
+    const directionLabel =
+      accountSort.direction === 'asc'
+        ? t('accounts.sort_ascending')
+        : t('accounts.sort_descending');
 
-  const renderToolbar = () => (
-    <section className={styles.toolbar}>
-      <div className={styles.searchField}>
-        <Input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder={t('accounts.search_placeholder')}
-          rightElement={<IconSearch size={16} />}
-          aria-label={t('accounts.search_label')}
-        />
+    return (
+      <div className={styles.accountSortControls} ref={accountSortDropdownRef}>
+        <button
+          ref={accountSortTriggerRef}
+          type="button"
+          className={styles.accountSortTrigger}
+          onClick={toggleAccountSortDropdown}
+          onKeyDown={handleAccountSortTriggerKeyDown}
+          title={`${t('accounts.sort_label')}: ${selectedAccountSortLabel}`}
+          aria-label={`${t('accounts.sort_label')}: ${selectedAccountSortLabel}`}
+          aria-haspopup="listbox"
+          aria-expanded={isAccountSortDropdownOpen}
+        >
+          <span className={styles.accountSortLabel}>{selectedAccountSortLabel}</span>
+        </button>
+        <button
+          type="button"
+          className={styles.accountSortDirectionButton}
+          onClick={handleAccountSortDirectionToggle}
+          disabled={accountSort.key === 'default'}
+          title={directionLabel}
+          aria-label={directionLabel}
+        >
+          <span className={styles.accountSortDirectionIcon} aria-hidden="true">
+            {accountSort.direction === 'asc' ? (
+              <IconArrowUpNarrowWide size={14} />
+            ) : (
+              <IconArrowDownWideNarrow size={14} />
+            )}
+          </span>
+        </button>
+        {isAccountSortDropdownOpen ? (
+          <div className={styles.accountSortDropdownList} role="listbox">
+            {ACCOUNT_SORT_FIELD_OPTIONS.map((option, optionIndex) => {
+              const isSelected = option.value === selectedField;
+              const isHighlighted = optionIndex === highlightedAccountSortIndex;
+              const optionClassName = [
+                styles.accountSortDropdownItem,
+                isSelected ? styles.accountSortDropdownItemSelected : '',
+                isHighlighted ? styles.accountSortDropdownItemHighlighted : '',
+              ]
+                .filter(Boolean)
+                .join(' ');
+              return (
+                <button
+                  key={option.value}
+                  ref={(node) => {
+                    accountSortOptionRefs.current.set(option.value, node);
+                  }}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  className={optionClassName}
+                  onClick={() => commitAccountSortField(option.value)}
+                  onKeyDown={(event) => handleAccountSortOptionKeyDown(event, optionIndex)}
+                  onMouseEnter={() => setHighlightedAccountSortIndex(optionIndex)}
+                >
+                  {t(option.labelKey)}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
+    );
+  };
+
+  const renderAccountFilterFields = () => (
+    <>
       <div className={styles.filterField}>
-        <span>{t('accounts.col_provider')}</span>
         <Select
           value={providerFilter}
           options={[
-            { value: 'all', label: t('accounts.filter_all') },
+            { value: 'all', label: t('accounts.provider_all') },
             ...providerOptions.map((provider) => ({
               value: provider,
               label: getProviderLabel(provider, t),
@@ -1584,10 +1628,10 @@ export function AccountsPage() {
           ]}
           onChange={setProviderFilter}
           ariaLabel={t('accounts.provider_filter')}
+          triggerClassName={styles.toolbarSelectTrigger}
         />
       </div>
       <div className={styles.filterField}>
-        <span>{t('accounts.col_status')}</span>
         <Select
           value={statusFilter}
           options={[
@@ -1601,10 +1645,10 @@ export function AccountsPage() {
           ]}
           onChange={(value) => setStatusFilter(value as AccountStatusFilter)}
           ariaLabel={t('accounts.status_filter')}
+          triggerClassName={styles.toolbarSelectTrigger}
         />
       </div>
       <div className={styles.filterField}>
-        <span>{t('accounts.col_plan')}</span>
         <Select
           value={planFilter}
           options={[
@@ -1613,10 +1657,10 @@ export function AccountsPage() {
           ]}
           onChange={setPlanFilter}
           ariaLabel={t('accounts.plan_filter')}
+          triggerClassName={styles.toolbarSelectTrigger}
         />
       </div>
       <div className={styles.filterField}>
-        <span>{t('accounts.col_quota')}</span>
         <Select
           value={quotaBandFilter}
           options={[
@@ -1628,54 +1672,47 @@ export function AccountsPage() {
           ]}
           onChange={(value) => setQuotaBandFilter(value as AccountQuotaBand)}
           ariaLabel={t('accounts.quota_filter')}
+          triggerClassName={styles.toolbarSelectTrigger}
         />
       </div>
-      <div className={styles.filterField}>
-        <span>{t('accounts.sort_label')}</span>
-        <Select
-          value={getAccountSortControlValue(accountSort)}
-          options={ACCOUNT_SORT_CONTROL_OPTIONS.map((option) => ({
-            value: option.value,
-            label: t(option.labelKey),
-          }))}
-          onChange={handleAccountSortControlChange}
-          ariaLabel={t('accounts.sort_label')}
+    </>
+  );
+
+  const renderToolbar = () => (
+    <section className={styles.toolbar}>
+      <div className={styles.searchField}>
+        <Input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder={t('accounts.search_placeholder')}
+          rightElement={<IconSearch size={16} />}
+          aria-label={t('accounts.search_label')}
+          className={styles.toolbarSearchInput}
         />
       </div>
-      <div className={styles.toolbarActions}>
-        {renderListViewControls()}
-        {accountListViewMode === 'table' ? (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setShowAdvancedFilters((value) => !value)}
-            aria-expanded={showAdvancedFilters}
-          >
-            <IconFilter size={15} />
-            {t('accounts.more_filters')}
-          </Button>
-        ) : null}
+      <div className={styles.mobileToolbarActions}>
+        <Button
+          variant="secondary"
+          size="sm"
+          className={styles.mobileFilterButton}
+          onClick={() => {
+            setIsMobileFiltersOpen(true);
+            setIsAccountSortDropdownOpen(false);
+          }}
+          aria-label={t('accounts.mobile_filters_button')}
+        >
+          <IconSlidersHorizontal size={15} />
+          {t('accounts.mobile_filters_button')}
+          {activeMobileFilterCount > 0 ? (
+            <span className={styles.mobileFilterCount}>{activeMobileFilterCount}</span>
+          ) : null}
+        </Button>
+        <span className={styles.mobileFilterSummary} title={mobileFilterSummary}>
+          {mobileFilterSummary}
+        </span>
       </div>
-      {showAdvancedFilters && accountListViewMode === 'table' ? (
-        <div className={styles.advancedPanel}>
-          <div className={styles.columnSettings}>
-            <strong>{t('accounts.column_settings')}</strong>
-            <div>
-              {ACCOUNT_COLUMNS.map((column) => (
-                <label key={column}>
-                  <input
-                    type="checkbox"
-                    checked={isColumnVisible(column)}
-                    onChange={(event) => toggleColumn(column, event.target.checked)}
-                    aria-label={t(getColumnLabelKey(column))}
-                  />
-                  <span>{t(getColumnLabelKey(column))}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {renderAccountFilterFields()}
+      {renderAccountSortControls()}
     </section>
   );
 
@@ -1702,12 +1739,70 @@ export function AccountsPage() {
     </Button>
   );
 
+  const renderMobileFilterPanel = () => {
+    if (!isMobileFiltersOpen || typeof document === 'undefined') return null;
+
+    return createPortal(
+      <div className={styles.mobileFilterLayer}>
+        <button
+          type="button"
+          className={styles.mobileFilterBackdrop}
+          aria-label={t('common.close')}
+          onClick={closeMobileFilters}
+        />
+        <section
+          className={styles.mobileFilterPanel}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="accounts-mobile-filter-title"
+        >
+          <header className={styles.mobileFilterHeader}>
+            <div>
+              <h2 id="accounts-mobile-filter-title">{t('accounts.mobile_filters_title')}</h2>
+              <span>{mobileFilterSummary}</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              iconOnly
+              onClick={closeMobileFilters}
+              aria-label={t('common.close')}
+            >
+              <IconX size={17} />
+            </Button>
+          </header>
+          <div className={styles.mobileFilterBody}>
+            <div className={styles.mobileFilterDisplayMode}>{renderAccountDisplayToggle()}</div>
+            {renderAccountFilterFields()}
+            <div className={styles.mobileSortField}>{renderAccountSortControls()}</div>
+          </div>
+          <footer className={styles.mobileFilterFooter}>
+            <Button variant="secondary" size="sm" onClick={resetAccountFilters}>
+              {t('common.reset')}
+            </Button>
+            <Button variant="primary" size="sm" onClick={closeMobileFilters}>
+              {t('common.confirm')}
+            </Button>
+          </footer>
+        </section>
+      </div>,
+      document.body
+    );
+  };
+
   const renderBatchBar = () => {
     const hasSelection = selectionCount > 0;
     const refreshTargets = hasSelection ? selectedRows : rows;
 
     return (
-      <section className={styles.batchBar}>
+      <section
+        className={[
+          styles.batchBar,
+          hasSelection ? styles.batchBarActive : styles.batchBarIdle,
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
         <div className={styles.batchSummary}>
           <span>
             {t('accounts.selected_count', {
@@ -1717,7 +1812,7 @@ export function AccountsPage() {
           {!hasSelection ? <small>{t('accounts.batch_hint')}</small> : null}
         </div>
         <div className={styles.batchActions}>
-          {renderAccountDisplayToggle()}
+          <div className={styles.batchDisplayToggle}>{renderAccountDisplayToggle()}</div>
           <Button
             variant="secondary"
             size="sm"
@@ -2135,6 +2230,7 @@ export function AccountsPage() {
             const readableStatusMessage = getReadableStatusMessage(row.statusMessage, t);
             const quotaSubtext = getQuotaSubtext(row);
             const quotaWidth = Math.max(0, Math.min(100, remaining ?? 0));
+            const governanceBadges = renderRowGovernanceBadges(row);
             return (
               <article
                 key={row.selectionKey}
@@ -2186,6 +2282,7 @@ export function AccountsPage() {
                 </div>
 
                 <div className={styles.accountCardStatus}>
+                  <span className={styles.accountCardSectionTitle}>{t('accounts.col_status')}</span>
                   <div className={styles.statusStack}>
                     <span
                       className={`${styles.badge} ${row.disabled ? styles.badgeMuted : styles.badgeGood}`}
@@ -2206,11 +2303,19 @@ export function AccountsPage() {
                         })}
                       </small>
                     ) : null}
-                    {renderRowGovernanceBadges(row)}
                   </div>
+                  {governanceBadges ? (
+                    <div className={styles.accountCardAlerts}>
+                      <span className={styles.accountCardSectionTitle}>
+                        {t('accounts.tab_inspection')}
+                      </span>
+                      {governanceBadges}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className={styles.accountCardQuota}>
+                  <span className={styles.accountCardSectionTitle}>{t('accounts.col_quota')}</span>
                   <div className={styles.quotaCell}>
                     <div className={styles.quotaCellHeader}>
                       <span className={`${styles.badge} ${getQuotaStatusClass(row.quota.status)}`}>
@@ -2271,193 +2376,6 @@ export function AccountsPage() {
       ) : (
         renderAccountEmptyState()
       )}
-      {paged ? renderPagination() : null}
-    </section>
-  );
-
-  const renderAccountTable = (rowsToRender = pageRows, paged = true) => (
-    <section className={styles.tablePanel}>
-      {paged ? renderBatchBar() : null}
-      <div className={styles.tableScroller}>
-        <table className={styles.accountTable}>
-          <colgroup>
-            {paged ? <col className={styles.colSelect} /> : null}
-            <col className={styles.colAccount} />
-            {isColumnVisible('provider') ? <col className={styles.colProvider} /> : null}
-            {isColumnVisible('plan') ? <col className={styles.colPlan} /> : null}
-            {isColumnVisible('status') ? <col className={styles.colStatus} /> : null}
-            {isColumnVisible('quota') ? <col className={styles.colQuota} /> : null}
-            {isColumnVisible('reset') ? <col className={styles.colReset} /> : null}
-            {isColumnVisible('priority') ? <col className={styles.colPriority} /> : null}
-            {isColumnVisible('value') ? <col className={styles.colValue} /> : null}
-            {isColumnVisible('recent') ? <col className={styles.colRecent} /> : null}
-            <col className={styles.colActions} />
-          </colgroup>
-          <thead>
-            <tr>
-              {paged ? (
-                <th className={styles.selectCol}>
-                  <SelectionCheckbox
-                    checked={allPageSelected}
-                    onChange={(checked) => {
-                      if (checked) {
-                        selectAllVisible(selectablePageRows.map((row) => row.raw));
-                        return;
-                      }
-                      selectablePageRows.forEach((row) => {
-                        if (selectedFiles.has(row.selectionKey)) {
-                          toggleSelect(row.selectionKey);
-                        }
-                      });
-                    }}
-                    ariaLabel={t('accounts.select_page')}
-                  />
-                </th>
-              ) : null}
-              <th>{t('accounts.col_account')}</th>
-              {isColumnVisible('provider') ? <th>{t('accounts.col_provider')}</th> : null}
-              {isColumnVisible('plan') ? <th>{t('accounts.col_plan')}</th> : null}
-              {isColumnVisible('status') ? <th>{t('accounts.col_status')}</th> : null}
-              {isColumnVisible('quota') ? <th>{t('accounts.col_quota')}</th> : null}
-              {isColumnVisible('reset')
-                ? renderSortableHeader('reset', 'accounts.col_reset')
-                : null}
-              {isColumnVisible('priority')
-                ? renderSortableHeader('priority', 'accounts.col_priority')
-                : null}
-              {isColumnVisible('value') ? <th>{t('accounts.col_value')}</th> : null}
-              {isColumnVisible('recent')
-                ? renderSortableHeader('recent', 'accounts.col_recent')
-                : null}
-              <th>{t('accounts.col_actions')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rowsToRender.map((row) => {
-              const remaining = row.quota.remainingPercent;
-              const recentTotal = row.usage.success + row.usage.failure;
-              const readableStatusMessage = getReadableStatusMessage(row.statusMessage, t);
-              const quotaSubtext = getQuotaSubtext(row);
-              return (
-                <tr
-                  key={row.selectionKey}
-                  className={selectedRowKey === row.selectionKey ? styles.rowSelected : ''}
-                  onClick={() => setSelectedRowKey(row.selectionKey)}
-                >
-                  {paged ? (
-                    <td className={styles.selectCol} onClick={(event) => event.stopPropagation()}>
-                      <SelectionCheckbox
-                        checked={selectedFiles.has(row.selectionKey)}
-                        onChange={() => toggleSelect(row.selectionKey)}
-                        disabled={row.runtimeOnly}
-                        ariaLabel={t('accounts.select_account', { name: row.fileName })}
-                      />
-                    </td>
-                  ) : null}
-                  <td>
-                    <div className={styles.accountCell}>
-                      <strong title={row.accountLabel}>{getDisplayAccount(row)}</strong>
-                      <span title={row.fileName}>{getDisplayFileName(row.fileName)}</span>
-                    </div>
-                  </td>
-                  {isColumnVisible('provider') ? (
-                    <td>
-                      <span className={styles.providerPill}>
-                        {getProviderLabel(row.provider, t)}
-                      </span>
-                    </td>
-                  ) : null}
-                  {isColumnVisible('plan') ? <td>{row.planType ?? '-'}</td> : null}
-                  {isColumnVisible('status') ? (
-                    <td>
-                      <div className={styles.statusStack}>
-                        <span
-                          className={`${styles.badge} ${row.disabled ? styles.badgeMuted : styles.badgeGood}`}
-                        >
-                          {row.disabled
-                            ? t('accounts.status_disabled')
-                            : t('accounts.status_available')}
-                        </span>
-                        {readableStatusMessage ? (
-                          <small title={row.statusMessage}>{readableStatusMessage}</small>
-                        ) : null}
-                        {row.inspection && row.inspection.action !== 'keep' ? (
-                          <small className={styles.inspectionHint}>
-                            {t('accounts.inspection_action', {
-                              action: t(`accounts.action_${row.inspection.action}`, {
-                                defaultValue: row.inspection.action,
-                              }),
-                            })}
-                          </small>
-                        ) : null}
-                        {renderRowGovernanceBadges(row)}
-                      </div>
-                    </td>
-                  ) : null}
-                  {isColumnVisible('quota') ? (
-                    <td>
-                      <div className={styles.quotaCell}>
-                        <div className={styles.quotaCellHeader}>
-                          <span
-                            className={`${styles.badge} ${getQuotaStatusClass(row.quota.status)}`}
-                          >
-                            {t(quotaStatusLabelKey(row.quota.status))}
-                          </span>
-                          <strong>{formatPercent(remaining)}</strong>
-                        </div>
-                        {quotaSubtext ? (
-                          <small className={styles.quotaSubtext} title={quotaSubtext}>
-                            {quotaSubtext}
-                          </small>
-                        ) : null}
-                        {remaining !== null ? (
-                          <div className={styles.quotaTrack} aria-hidden="true">
-                            <span
-                              className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
-                              style={{ width: `${remaining}%` }}
-                            />
-                          </div>
-                        ) : null}
-                      </div>
-                    </td>
-                  ) : null}
-                  {isColumnVisible('reset') ? <td>{row.quota.resetLabel}</td> : null}
-                  {isColumnVisible('priority') ? (
-                    <td>
-                      <span
-                        className={
-                          row.priority !== null && row.priority < 0
-                            ? styles.priorityBad
-                            : styles.priority
-                        }
-                      >
-                        {row.priority ?? 0}
-                      </span>
-                    </td>
-                  ) : null}
-                  {isColumnVisible('value') ? <td>{formatMoney(recentTotal * 0.018)}</td> : null}
-                  {isColumnVisible('recent') ? (
-                    <td>
-                      {recentTotal > 0 ? (
-                        <span>
-                          {t('accounts.recent_requests', {
-                            count: recentTotal,
-                            rate: formatPercent(row.usage.successRate),
-                          })}
-                        </span>
-                      ) : (
-                        '-'
-                      )}
-                    </td>
-                  ) : null}
-                  <td onClick={(event) => event.stopPropagation()}>{renderRowActions(row)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      {rowsToRender.length === 0 ? renderAccountEmptyState() : null}
       {paged ? renderPagination() : null}
     </section>
   );
@@ -2967,10 +2885,8 @@ export function AccountsPage() {
         <div className={styles.loadingPanel}>
           <LoadingSpinner />
         </div>
-      ) : accountListViewMode === 'cards' ? (
-        renderAccountCards()
       ) : (
-        renderAccountTable()
+        renderAccountCards()
       )}
       {renderDetailDrawer()}
     </>
@@ -3567,6 +3483,7 @@ export function AccountsPage() {
         ) : null}
       </section>
       {renderActiveView()}
+      {renderMobileFilterPanel()}
       {renderFloatingBatchActions()}
       <AuthJsonPasteModal
         open={authJsonPasteOpen}
