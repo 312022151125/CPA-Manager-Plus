@@ -278,8 +278,8 @@
 .accountCard {
   display: grid;
   grid-template-columns:
-    auto minmax(210px, 1.25fr) minmax(150px, 0.82fr) minmax(210px, 1fr)
-    minmax(132px, 0.58fr) auto;
+    auto minmax(220px, 1.28fr) minmax(150px, 0.76fr) minmax(210px, 1fr)
+    minmax(150px, 0.68fr) minmax(170px, 0.78fr) auto;
   align-items: center;
   gap: 10px 12px;
   min-width: 0;
@@ -314,7 +314,8 @@
 .accountCardIdentity,
 .accountCardStatus,
 .accountCardQuota,
-.accountCardUsage {
+.accountCardUsage,
+.accountCardRecommendation {
   min-width: 0;
 }
 
@@ -375,18 +376,21 @@
   white-space: nowrap;
 }
 
-.accountCardStatus {
-  .statusStack small {
-    max-width: 100%;
-  }
-}
-
 .accountCardSectionTitle {
   display: none;
 }
 
 .accountCardAlerts {
   min-width: 0;
+}
+
+.accountCardStatus {
+  display: grid;
+  gap: 6px;
+
+  .statusStack small {
+    max-width: 100%;
+  }
 }
 
 .accountCardQuota {
@@ -440,6 +444,35 @@
     color: var(--text-primary);
     font-size: 12px;
     font-variant-numeric: tabular-nums;
+  }
+}
+
+.accountCardRecommendation {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+
+  :global(.btn) {
+    justify-self: start;
+    max-width: 100%;
+  }
+
+  :global(.btn > span) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  small {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 
@@ -2163,7 +2196,8 @@
 
   .accountCardStatus,
   .accountCardQuota,
-  .accountCardUsage {
+  .accountCardUsage,
+  .accountCardRecommendation {
     grid-column: 2 / -1;
   }
 
@@ -2260,7 +2294,8 @@
 
   .accountCardStatus,
   .accountCardQuota,
-  .accountCardUsage {
+  .accountCardUsage,
+  .accountCardRecommendation {
     grid-column: 1 / -1;
   }
 
@@ -2301,7 +2336,8 @@
   }
 
   .accountCardQuota,
-  .accountCardUsage {
+  .accountCardUsage,
+  .accountCardRecommendation {
     display: grid;
     gap: 8px;
     padding: 10px;
@@ -2333,6 +2369,14 @@
     > div + div {
       border-left: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
       padding-left: 12px;
+    }
+  }
+
+  .accountCardRecommendation {
+    align-content: start;
+
+    small {
+      white-space: normal;
     }
   }
 

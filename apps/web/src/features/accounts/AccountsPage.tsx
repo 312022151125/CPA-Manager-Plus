@@ -83,9 +83,14 @@ import {
   buildAccountRecommendations,
   getRecommendationRank,
   type AccountRecommendation,
-  type AccountRecommendationAction,
   type AccountRecommendationPriority,
 } from '@/features/accounts/model/quotaRecommendations';
+import {
+  buildAccountListItem,
+  buildRecommendationBySelectionKey,
+  getRecommendationActionLabelKey,
+  type AccountListHealthStatusKey,
+} from '@/features/accounts/model/accountListPresentation';
 import {
   buildAuthFileCodexInspectionMap,
   getAuthFilePatchTarget,
@@ -273,6 +278,26 @@ const getQuotaStatusClass = (status: AccountRow['quota']['status']) => {
   }
 };
 
+const getHealthStatusClass = (status: AccountListHealthStatusKey) => {
+  switch (status) {
+    case 'available':
+      return styles.badgeGood;
+    case 'low':
+    case 'cooldown':
+      return styles.badgeWarn;
+    case 'exhausted':
+    case 'problem':
+    case 'reauth':
+      return styles.badgeBad;
+    case 'disabled':
+      return styles.badgeMuted;
+    case 'loading':
+      return styles.badgeInfo;
+    default:
+      return styles.badgeNeutral;
+  }
+};
+
 const getRemainingBarClass = (row: AccountRow) => {
   if (row.quota.status === 'exhausted' || row.quota.status === 'error') return styles.quotaBarBad;
   if (row.quota.status === 'low') return styles.quotaBarWarn;
@@ -285,23 +310,6 @@ const getRecommendationPriorityClass = (priority: AccountRecommendationPriority)
   if (priority === 'high') return styles.badgeWarn;
   if (priority === 'medium') return styles.badgeInfo;
   return styles.badgeNeutral;
-};
-
-const getRecommendationActionLabelKey = (action: AccountRecommendationAction) => {
-  switch (action) {
-    case 'refresh':
-      return 'accounts.recommend_action_refresh';
-    case 'disable':
-      return 'accounts.recommend_action_disable';
-    case 'enable':
-      return 'accounts.recommend_action_enable';
-    case 'restore-default':
-      return 'accounts.recommend_action_restore';
-    case 'reauth':
-      return 'accounts.recommend_action_reauth';
-    default:
-      return 'accounts.recommend_action_review';
-  }
 };
 
 const getReadableStatusMessage = (message: string, t: TFunction) => {
@@ -745,6 +753,10 @@ export function AccountsPage() {
   const providerOptions = useMemo(() => getProviderOptions(rows), [rows]);
   const planOptions = useMemo(() => getPlanOptions(rows), [rows]);
   const recommendations = useMemo(() => buildAccountRecommendations(rows), [rows]);
+  const recommendationBySelectionKey = useMemo(
+    () => buildRecommendationBySelectionKey(recommendations),
+    [recommendations]
+  );
   const filteredRows = useMemo(
     () =>
       sortAccountRows(
@@ -1333,11 +1345,8 @@ export function AccountsPage() {
   const selectedAccountSortOption = getAccountSortFieldOption(accountSort.key);
   const selectedAccountSortLabel = t(selectedAccountSortOption.labelKey);
   const selectedStatusFilterLabel =
-    statusFilter === 'all'
-      ? t('accounts.status_all')
-      : t(`accounts.status_${statusFilter}`);
-  const selectedPlanFilterLabel =
-    planFilter === 'all' ? t('accounts.plan_all') : planFilter;
+    statusFilter === 'all' ? t('accounts.status_all') : t(`accounts.status_${statusFilter}`);
+  const selectedPlanFilterLabel = planFilter === 'all' ? t('accounts.plan_all') : planFilter;
   const selectedQuotaFilterLabel =
     quotaBandFilter === 'all' ? t('accounts.quota_all') : t(`accounts.quota_${quotaBandFilter}`);
   const selectedProviderFilterLabel =
@@ -1796,10 +1805,7 @@ export function AccountsPage() {
 
     return (
       <section
-        className={[
-          styles.batchBar,
-          hasSelection ? styles.batchBarActive : styles.batchBarIdle,
-        ]
+        className={[styles.batchBar, hasSelection ? styles.batchBarActive : styles.batchBarIdle]
           .filter(Boolean)
           .join(' ')}
       >
@@ -2225,12 +2231,33 @@ export function AccountsPage() {
       {rowsToRender.length > 0 ? (
         <div className={styles.accountCardList}>
           {rowsToRender.map((row) => {
-            const remaining = row.quota.remainingPercent;
-            const recentTotal = row.usage.success + row.usage.failure;
+            const recommendation = recommendationBySelectionKey.get(row.selectionKey) ?? null;
+            const item = buildAccountListItem(row, {
+              recommendation,
+              quotaCooldown: quotaCooldowns.get(row.fileName) ?? null,
+            });
+            const remaining = item.quota.remainingPercent;
             const readableStatusMessage = getReadableStatusMessage(row.statusMessage, t);
             const quotaSubtext = getQuotaSubtext(row);
             const quotaWidth = Math.max(0, Math.min(100, remaining ?? 0));
             const governanceBadges = renderRowGovernanceBadges(row);
+            const inspectionHint =
+              row.inspection && row.inspection.action !== 'keep'
+                ? t('accounts.inspection_action', {
+                    action: t(`accounts.action_${row.inspection.action}`, {
+                      defaultValue: row.inspection.action,
+                    }),
+                  })
+                : '';
+            const healthDetail =
+              item.health.status === 'cooldown' && item.health.cooldown
+                ? t('accounts.health_detail_cooldown', {
+                    recoverAt: formatTimestamp(item.health.cooldown.recoverAtMs, i18n.language),
+                  })
+                : readableStatusMessage ||
+                  inspectionHint ||
+                  (row.runtimeOnly ? t('accounts.health_detail_runtime') : '') ||
+                  (item.health.status === 'unknown' ? t('accounts.health_detail_unknown') : '');
             return (
               <article
                 key={row.selectionKey}
@@ -2258,50 +2285,45 @@ export function AccountsPage() {
                 ) : null}
 
                 <div className={styles.accountCardIdentity}>
+                  <span className={styles.accountCardSectionTitle}>
+                    {t('accounts.list_section_identity')}
+                  </span>
                   <div className={styles.accountCardTitleRow}>
-                    <strong title={row.accountLabel}>{getDisplayAccount(row)}</strong>
-                    <span className={styles.providerPill}>{getProviderLabel(row.provider, t)}</span>
-                    {row.planType ? (
-                      <span className={styles.accountMetaPill}>{row.planType}</span>
+                    <strong title={item.identity.title}>{getDisplayAccount(row)}</strong>
+                    <span className={styles.providerPill}>
+                      {getProviderLabel(item.identity.provider, t)}
+                    </span>
+                    {item.identity.planType ? (
+                      <span className={styles.accountMetaPill}>{item.identity.planType}</span>
                     ) : null}
                   </div>
-                  <span className={styles.accountCardFile} title={row.fileName}>
-                    {getDisplayFileName(row.fileName)}
+                  <span className={styles.accountCardFile} title={item.identity.subtitle}>
+                    {getDisplayFileName(item.identity.subtitle)}
                   </span>
                   <div className={styles.accountCardMetaRow}>
                     <span
                       className={
-                        row.priority !== null && row.priority < 0
-                          ? styles.priorityBad
-                          : styles.priority
+                        item.identity.priorityIsNegative ? styles.priorityBad : styles.priority
                       }
                     >
-                      {t('accounts.col_priority')}: {row.priority ?? 0}
+                      {t('accounts.col_priority')}: {item.identity.priority}
                     </span>
                   </div>
                 </div>
 
                 <div className={styles.accountCardStatus}>
-                  <span className={styles.accountCardSectionTitle}>{t('accounts.col_status')}</span>
+                  <span className={styles.accountCardSectionTitle}>
+                    {t('accounts.list_section_status')}
+                  </span>
                   <div className={styles.statusStack}>
-                    <span
-                      className={`${styles.badge} ${row.disabled ? styles.badgeMuted : styles.badgeGood}`}
-                    >
-                      {row.disabled
-                        ? t('accounts.status_disabled')
-                        : t('accounts.status_available')}
+                    <span className={`${styles.badge} ${getHealthStatusClass(item.health.status)}`}>
+                      {t(item.health.labelKey)}
                     </span>
-                    {readableStatusMessage ? (
-                      <small title={row.statusMessage}>{readableStatusMessage}</small>
+                    {healthDetail ? (
+                      <small title={row.statusMessage || healthDetail}>{healthDetail}</small>
                     ) : null}
-                    {row.inspection && row.inspection.action !== 'keep' ? (
-                      <small className={styles.inspectionHint}>
-                        {t('accounts.inspection_action', {
-                          action: t(`accounts.action_${row.inspection.action}`, {
-                            defaultValue: row.inspection.action,
-                          }),
-                        })}
-                      </small>
+                    {inspectionHint && inspectionHint !== healthDetail ? (
+                      <small className={styles.inspectionHint}>{inspectionHint}</small>
                     ) : null}
                   </div>
                   {governanceBadges ? (
@@ -2315,13 +2337,21 @@ export function AccountsPage() {
                 </div>
 
                 <div className={styles.accountCardQuota}>
-                  <span className={styles.accountCardSectionTitle}>{t('accounts.col_quota')}</span>
+                  <span className={styles.accountCardSectionTitle}>
+                    {t('accounts.list_section_quota')}
+                  </span>
                   <div className={styles.quotaCell}>
                     <div className={styles.quotaCellHeader}>
                       <span className={`${styles.badge} ${getQuotaStatusClass(row.quota.status)}`}>
-                        {t(quotaStatusLabelKey(row.quota.status))}
+                        {t(item.quota.statusLabelKey)}
                       </span>
-                      <strong>{formatPercent(remaining)}</strong>
+                      <strong>
+                        {remaining !== null
+                          ? t('accounts.quota_brief_remaining', {
+                              percent: formatPercent(remaining),
+                            })
+                          : t('accounts.quota_brief_unknown')}
+                      </strong>
                     </div>
                     {quotaSubtext ? (
                       <small className={styles.quotaSubtext} title={quotaSubtext}>
@@ -2338,29 +2368,61 @@ export function AccountsPage() {
                     ) : null}
                   </div>
                   <div className={styles.accountCardQuotaMeta}>
-                    <span title={row.quota.resetLabel}>
-                      {t('accounts.col_reset')}: {row.quota.resetLabel}
+                    <span title={item.quota.resetLabel}>
+                      {t('accounts.col_reset')}: {item.quota.resetLabel}
                     </span>
-                    <span>{getQuotaSourceLabel(row.quota.source)}</span>
+                    <span title={getQuotaSourceLabel(row.quota.source)}>
+                      {t(item.quota.sourceShortLabelKey)}
+                    </span>
                   </div>
                 </div>
 
                 <div className={styles.accountCardUsage}>
                   <div>
-                    <span>{t('accounts.col_recent')}</span>
+                    <span>{t('accounts.list_section_activity')}</span>
                     <strong>
-                      {recentTotal > 0
-                        ? t('accounts.recent_requests', {
-                            count: recentTotal,
-                            rate: formatPercent(row.usage.successRate),
+                      {item.activity.recentTotal > 0
+                        ? t('accounts.activity_brief', {
+                            count: item.activity.recentTotal,
+                            rate: formatPercent(item.activity.successRate),
                           })
-                        : '-'}
+                        : t('accounts.activity_empty')}
                     </strong>
                   </div>
                   <div>
                     <span>{t('accounts.col_value')}</span>
-                    <strong>{formatMoney(recentTotal * 0.018)}</strong>
+                    <strong>
+                      {t('accounts.activity_value_brief', {
+                        value: formatMoney(item.activity.estimatedValue),
+                      })}
+                    </strong>
                   </div>
+                </div>
+
+                <div
+                  className={styles.accountCardRecommendation}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <span className={styles.accountCardSectionTitle}>
+                    {t('accounts.list_section_recommendation')}
+                  </span>
+                  {recommendation ? (
+                    <Button
+                      variant={recommendation.priority === 'critical' ? 'danger' : 'secondary'}
+                      size="xs"
+                      onClick={() => void executeRecommendation(recommendation)}
+                      disabled={disableControls && recommendation.action !== 'review'}
+                    >
+                      {t(item.recommendation.actionLabelKey)}
+                    </Button>
+                  ) : (
+                    <span className={`${styles.badge} ${styles.badgeNeutral}`}>
+                      {t(item.recommendation.actionLabelKey)}
+                    </span>
+                  )}
+                  <small title={t(item.recommendation.reasonKey)}>
+                    {t(item.recommendation.reasonKey)}
+                  </small>
                 </div>
 
                 <div
@@ -2475,11 +2537,11 @@ export function AccountsPage() {
             <h3>{t('accounts.detail_auth_file')}</h3>
             <dl>
               <div>
-                <dt>auth_index</dt>
+                <dt>{t('accounts.detail_auth_index')}</dt>
                 <dd>{selectedRow.authIndex || '-'}</dd>
               </div>
               <div>
-                <dt>project_id</dt>
+                <dt>{t('accounts.detail_project_id')}</dt>
                 <dd>{selectedRow.projectId || '-'}</dd>
               </div>
               <div>
@@ -2502,10 +2564,14 @@ export function AccountsPage() {
               <dl>
                 <div>
                   <dt>{t('common.action')}</dt>
-                  <dd>{selectedRow.inspection.action}</dd>
+                  <dd>
+                    {t(`accounts.action_${selectedRow.inspection.action}`, {
+                      defaultValue: selectedRow.inspection.action,
+                    })}
+                  </dd>
                 </div>
                 <div>
-                  <dt>HTTP</dt>
+                  <dt>{t('accounts.detail_http_status')}</dt>
                   <dd>{selectedRow.inspection.statusCode ?? '-'}</dd>
                 </div>
                 <div>
@@ -2713,7 +2779,7 @@ export function AccountsPage() {
               <strong>{formatPercent(selectedRow.quota.remainingPercent)}</strong>
             </div>
             <div>
-              <span>{t('common.priority')}</span>
+              <span>{t('accounts.col_priority')}</span>
               <strong>{selectedRow.priority ?? 0}</strong>
             </div>
             <div>
@@ -2740,7 +2806,7 @@ export function AccountsPage() {
             <div>
               <strong title={selectedRow.accountLabel}>{getDisplayAccount(selectedRow)}</strong>
               <span>
-                {selectedRow.provider} · {selectedRow.planType ?? '-'} ·{' '}
+                {getProviderLabel(selectedRow.provider, t)} · {selectedRow.planType ?? '-'} ·{' '}
                 {getDisplayFileName(selectedRow.fileName)}
               </span>
             </div>
