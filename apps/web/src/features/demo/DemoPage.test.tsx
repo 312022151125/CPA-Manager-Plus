@@ -2,13 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAppRoutes } from '@/app/appRoutes';
 import {
   getDemoAuthFiles,
+  getDemoCodexInspectionRun,
   getDemoDashboardSummary,
   getDemoErrorLogsResponse,
   getDemoLatestVersion,
   getDemoManagerLatestRelease,
   getDemoManagerConfig,
+  getDemoHeaderSnapshots,
   getDemoMonitoringAnalytics,
   getDemoPluginStore,
+  getDemoQuotaCooldowns,
+  getDemoQuotaStoreState,
   getDemoRawConfig,
 } from './demoFixtures';
 import {
@@ -111,6 +115,82 @@ describe('DemoPage', () => {
     const historicalAnalysisLabel = ['cc', 'switch'].join('-');
 
     expect(visibleData.toLowerCase()).not.toContain(historicalAnalysisLabel);
+  });
+
+  it('fills accounts with UI evaluation scenarios across statuses and quota providers', () => {
+    const authFiles = getDemoAuthFiles();
+    const fileNames = new Set(authFiles.files.map((file) => file.name));
+    const providers = new Set(authFiles.files.map((file) => String(file.provider ?? file.type)));
+    const quota = getDemoQuotaStoreState();
+    const cooldownKeys = new Set(
+      getDemoQuotaCooldowns().map((item) => `${item.authFileName}:${item.authIndex ?? '-'}`)
+    );
+    const headerFiles = new Set(
+      getDemoHeaderSnapshots().items.map((item) => item.auth_file_snapshot).filter(Boolean)
+    );
+    const inspectionFiles = new Set(
+      getDemoCodexInspectionRun().results.map((item) => item.fileName)
+    );
+
+    expect(authFiles.total).toBe(authFiles.files.length);
+    expect(authFiles.files.length).toBeGreaterThanOrEqual(28);
+    expect(Array.from(providers)).toEqual(
+      expect.arrayContaining(['codex', 'claude', 'antigravity', 'kimi', 'xai', 'gemini'])
+    );
+    expect(Array.from(fileNames)).toEqual(
+      expect.arrayContaining([
+        'ui-codex-available-5h-weekly.json',
+        'ui-codex-reauth-401.json',
+        'ui-codex-5h-exhausted.json',
+        'ui-codex-weekly-exhausted.json',
+        'ui-codex-monthly-exhausted.json',
+        'ui-codex-5h-cooldown.json',
+        'ui-codex-weekly-cooldown.json',
+        'ui-codex-monthly-cooldown.json',
+        'ui-codex-header-observed.json',
+        'ui-codex-refresh-error-500.json',
+        'ui-codex-disabled-recovered.json',
+        'ui-codex-negative-priority.json',
+        'ui-codex-runtime-review.json',
+        'ui-claude-low-multi-window.json',
+        'ui-antigravity-three-buckets.json',
+        'ui-kimi-daily-exhausted.json',
+        'ui-xai-billing-low.json',
+        'ui-raw-no-quota.json',
+      ])
+    );
+
+    expect(Object.keys(quota.codexQuota)).toEqual(
+      expect.arrayContaining([
+        'ui-codex-available-5h-weekly.json',
+        'ui-codex-reauth-401.json',
+        'ui-codex-5h-exhausted.json',
+        'ui-codex-weekly-exhausted.json',
+        'ui-codex-monthly-exhausted.json',
+        'ui-codex-refresh-error-500.json',
+      ])
+    );
+    expect(quota.claudeQuota['ui-claude-low-multi-window.json']?.windows).toHaveLength(2);
+    expect(
+      quota.antigravityQuota['ui-antigravity-three-buckets.json']?.groups[0]?.buckets
+    ).toHaveLength(3);
+    expect(quota.kimiQuota['ui-kimi-daily-exhausted.json']?.rows[0]?.used).toBe(100);
+    expect(quota.xaiQuota['ui-xai-billing-low.json']?.billing?.usedPercent).toBe(86);
+
+    expect(Array.from(cooldownKeys)).toEqual(
+      expect.arrayContaining([
+        'ui-codex-5h-cooldown.json:ui-codex-5h-cooldown',
+        'ui-codex-weekly-cooldown.json:ui-codex-weekly-cooldown',
+        'ui-codex-monthly-cooldown.json:ui-codex-monthly-cooldown',
+      ])
+    );
+    expect(headerFiles).toContain('ui-codex-header-observed.json');
+    expect(Array.from(inspectionFiles)).toEqual(
+      expect.arrayContaining([
+        'ui-codex-reauth-401.json',
+        'ui-codex-disabled-recovered.json',
+      ])
+    );
   });
 
   it('fills the dashboard request health timeline with real dashboard granularity', () => {

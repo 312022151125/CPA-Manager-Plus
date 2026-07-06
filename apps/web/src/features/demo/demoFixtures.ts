@@ -14,8 +14,15 @@ import type {
   UsageServiceInfo,
   UsageServiceStatus,
 } from '@/services/api/usageService';
-import type { AuthFilesResponse } from '@/types/authFile';
+import type { AuthFileItem, AuthFilesResponse } from '@/types/authFile';
 import type { PluginListResponse, PluginStoreResponse } from '@/types/plugin';
+import type {
+  AntigravityQuotaState,
+  ClaudeQuotaState,
+  CodexQuotaState,
+  KimiQuotaState,
+  XaiQuotaState,
+} from '@/types';
 import type { ModelInfo } from '@/utils/models';
 import {
   DEMO_API_BASE,
@@ -30,6 +37,14 @@ type DemoApiCallPayload = {
   authIndex?: string;
 };
 
+export type DemoQuotaStoreState = {
+  antigravityQuota: Record<string, AntigravityQuotaState>;
+  claudeQuota: Record<string, ClaudeQuotaState>;
+  codexQuota: Record<string, CodexQuotaState>;
+  kimiQuota: Record<string, KimiQuotaState>;
+  xaiQuota: Record<string, XaiQuotaState>;
+};
+
 const clone = <T>(value: T): T => {
   if (typeof structuredClone === 'function') {
     return structuredClone(value);
@@ -41,6 +56,28 @@ const now = () => Date.now();
 const minute = 60 * 1000;
 const hour = 60 * minute;
 const day = 24 * hour;
+
+const demoResetIso = (offsetMs: number) => new Date(now() + offsetMs).toISOString();
+
+const demoUiAuthFile = (
+  name: string,
+  provider: string,
+  label: string,
+  overrides: Partial<AuthFileItem> = {}
+): AuthFileItem => ({
+  name,
+  type: provider,
+  provider,
+  authIndex: name.replace(/\.json$/i, ''),
+  disabled: false,
+  size: 3600,
+  modified: now() - hour,
+  email: label,
+  account_snapshot: label,
+  success: 0,
+  failed: 0,
+  ...overrides,
+});
 
 const startOfLocalDayIso = (input = now()) => {
   const date = new Date(input);
@@ -260,7 +297,6 @@ const demoAuthFiles: AuthFilesResponse = {
       authIndex: 'codex-team-01',
       disabled: false,
       status: 'healthy',
-      statusMessage: 'Ready',
       size: 4820,
       modified: now() - 2 * hour,
       account_snapshot: 'Platform Team',
@@ -416,6 +452,146 @@ const demoAuthFiles: AuthFilesResponse = {
     },
   ],
 };
+
+const demoAccountsUiAuthFiles: AuthFileItem[] = [
+  demoUiAuthFile('ui-codex-available-5h-weekly.json', 'codex', 'ui.available@demo.local', {
+    authIndex: 'ui-codex-available',
+    priority: 1000,
+    id_token: { plan_type: 'pro' },
+    success: 38,
+    failed: 1,
+  }),
+  demoUiAuthFile('ui-codex-reauth-401.json', 'codex', 'ui.reauth401@demo.local', {
+    authIndex: 'ui-codex-reauth',
+    priority: 900,
+    id_token: { plan_type: 'free' },
+    success: 4,
+    failed: 8,
+  }),
+  demoUiAuthFile('ui-codex-5h-exhausted.json', 'codex', 'ui.5h-spent@demo.local', {
+    authIndex: 'ui-codex-5h-exhausted',
+    priority: 800,
+    id_token: { plan_type: 'team' },
+    success: 16,
+    failed: 3,
+  }),
+  demoUiAuthFile('ui-codex-weekly-exhausted.json', 'codex', 'ui.weekly-spent@demo.local', {
+    authIndex: 'ui-codex-weekly-exhausted',
+    priority: 700,
+    id_token: { plan_type: 'team' },
+    success: 24,
+    failed: 2,
+  }),
+  demoUiAuthFile('ui-codex-monthly-exhausted.json', 'codex', 'ui.monthly-spent@demo.local', {
+    authIndex: 'ui-codex-monthly-exhausted',
+    priority: 600,
+    id_token: { plan_type: 'enterprise' },
+    success: 12,
+    failed: 1,
+  }),
+  demoUiAuthFile('ui-codex-5h-cooldown.json', 'codex', 'ui.5h-cooldown@demo.local', {
+    authIndex: 'ui-codex-5h-cooldown',
+    priority: 500,
+    id_token: { plan_type: 'team' },
+    success: 18,
+    failed: 6,
+  }),
+  demoUiAuthFile('ui-codex-weekly-cooldown.json', 'codex', 'ui.weekly-cooldown@demo.local', {
+    authIndex: 'ui-codex-weekly-cooldown',
+    priority: 400,
+    id_token: { plan_type: 'team' },
+    success: 8,
+    failed: 4,
+  }),
+  demoUiAuthFile('ui-codex-monthly-cooldown.json', 'codex', 'ui.monthly-cooldown@demo.local', {
+    authIndex: 'ui-codex-monthly-cooldown',
+    priority: 300,
+    id_token: { plan_type: 'enterprise' },
+    success: 6,
+    failed: 2,
+  }),
+  demoUiAuthFile('ui-codex-header-observed.json', 'codex', 'ui.header-observed@demo.local', {
+    authIndex: 'ui-codex-header-observed',
+    priority: 200,
+    id_token: { plan_type: 'team' },
+    success: 21,
+    failed: 5,
+  }),
+  demoUiAuthFile('ui-codex-refresh-error-500.json', 'codex', 'ui.refresh-error@demo.local', {
+    authIndex: 'ui-codex-refresh-error',
+    priority: 100,
+    id_token: { plan_type: 'pro' },
+    success: 3,
+    failed: 7,
+  }),
+  demoUiAuthFile('ui-codex-disabled-recovered.json', 'codex', 'ui.disabled-recovered@demo.local', {
+    authIndex: 'ui-codex-disabled-recovered',
+    disabled: true,
+    priority: 90,
+    id_token: { plan_type: 'pro' },
+    success: 0,
+    failed: 0,
+  }),
+  demoUiAuthFile('ui-codex-negative-priority.json', 'codex', 'ui.negative-priority@demo.local', {
+    authIndex: 'ui-codex-negative-priority',
+    priority: -10,
+    id_token: { plan_type: 'free' },
+    success: 11,
+    failed: 0,
+  }),
+  demoUiAuthFile('ui-codex-runtime-review.json', 'codex', 'ui.runtime-only@demo.local', {
+    authIndex: 'ui-codex-runtime-review',
+    runtimeOnly: true,
+    priority: 10,
+    id_token: { plan_type: 'free' },
+    success: 0,
+    failed: 0,
+  }),
+  demoUiAuthFile('ui-claude-low-multi-window.json', 'claude', 'ui.claude-low@demo.local', {
+    authIndex: 'ui-claude-low',
+    priority: 80,
+    plan_type: 'pro',
+    success: 29,
+    failed: 1,
+  }),
+  demoUiAuthFile(
+    'ui-antigravity-three-buckets.json',
+    'antigravity',
+    'ui.antigravity@demo.local',
+    {
+      authIndex: 'ui-antigravity-three-buckets',
+      priority: 70,
+      project_id: 'demo-ui-antigravity',
+      success: 14,
+      failed: 1,
+    }
+  ),
+  demoUiAuthFile('ui-kimi-daily-exhausted.json', 'kimi', 'ui.kimi-spent@demo.local', {
+    authIndex: 'ui-kimi-daily-exhausted',
+    priority: 60,
+    success: 7,
+    failed: 3,
+  }),
+  demoUiAuthFile('ui-xai-billing-low.json', 'xai', 'ui.xai-low@demo.local', {
+    authIndex: 'ui-xai-billing-low',
+    priority: 50,
+    plan_type: 'pro',
+    success: 19,
+    failed: 1,
+  }),
+  demoUiAuthFile('ui-raw-no-quota.json', 'gemini', 'ui.raw-no-quota@demo.local', {
+    authIndex: 'ui-raw-no-quota',
+    priority: 0,
+    project_id: 'demo-ui-raw',
+    success: 0,
+    failed: 0,
+  }),
+];
+
+const getDemoAuthFileItems = (): AuthFileItem[] => [
+  ...demoAuthFiles.files,
+  ...demoAccountsUiAuthFiles,
+];
 
 const demoPlugins: PluginListResponse = {
   pluginsEnabled: true,
@@ -1267,6 +1443,70 @@ const buildMonitoringAnalytics = (
       last_seen_ms: analyticsNow - 44 * minute,
       models: [buildNestedModelRow('deepseek-chat', 740, 20, 610_000, 6.8, analyticsNow - 44 * minute)],
     },
+    {
+      id: 'acct_ui_available',
+      account_snapshot: 'ui.available@demo.local',
+      auth_label_snapshot: 'UI Available',
+      auth_provider_snapshot: 'codex',
+      auth_indices: ['ui-codex-available'],
+      sources: ['ui-demo'],
+      source_hashes: ['src_ui_available'],
+      calls: 31,
+      failure_calls: 1,
+      total_tokens: 182_000,
+      cost: 0.42,
+      average_latency_ms: 920,
+      last_seen_ms: analyticsNow - 9 * minute,
+      models: [buildNestedModelRow('gpt-5-codex', 31, 1, 182_000, 0.42, analyticsNow - 9 * minute)],
+    },
+    {
+      id: 'acct_ui_reauth',
+      account_snapshot: 'ui.reauth401@demo.local',
+      auth_label_snapshot: 'UI Reauth 401',
+      auth_provider_snapshot: 'codex',
+      auth_indices: ['ui-codex-reauth'],
+      sources: ['ui-demo'],
+      source_hashes: ['src_ui_reauth'],
+      calls: 12,
+      failure_calls: 6,
+      total_tokens: 48_000,
+      cost: 0.08,
+      average_latency_ms: 1840,
+      last_seen_ms: analyticsNow - 7 * minute,
+      models: [buildNestedModelRow('gpt-5-codex', 12, 6, 48_000, 0.08, analyticsNow - 7 * minute)],
+    },
+    {
+      id: 'acct_ui_header_observed',
+      account_snapshot: 'ui.header-observed@demo.local',
+      auth_label_snapshot: 'UI Header Observed',
+      auth_provider_snapshot: 'codex',
+      auth_indices: ['ui-codex-header-observed'],
+      sources: ['ui-demo'],
+      source_hashes: ['src_ui_header_observed'],
+      calls: 26,
+      failure_calls: 5,
+      total_tokens: 126_000,
+      cost: 0.22,
+      average_latency_ms: 1320,
+      last_seen_ms: analyticsNow - 6 * minute,
+      models: [buildNestedModelRow('gpt-5-codex', 26, 5, 126_000, 0.22, analyticsNow - 6 * minute)],
+    },
+    {
+      id: 'acct_ui_kimi_spent',
+      account_snapshot: 'ui.kimi-spent@demo.local',
+      auth_label_snapshot: 'UI Kimi Spent',
+      auth_provider_snapshot: 'kimi',
+      auth_indices: ['ui-kimi-daily-exhausted'],
+      sources: ['ui-demo'],
+      source_hashes: ['src_ui_kimi_spent'],
+      calls: 10,
+      failure_calls: 3,
+      total_tokens: 42_000,
+      cost: 0.05,
+      average_latency_ms: 1580,
+      last_seen_ms: analyticsNow - 32 * minute,
+      models: [buildNestedModelRow('kimi-k2', 10, 3, 42_000, 0.05, analyticsNow - 32 * minute)],
+    },
   ].map((row) => {
     const tokenSplit = splitTokens(row.total_tokens);
     const successCalls = row.calls - row.failure_calls;
@@ -1918,6 +2158,58 @@ const buildMonitoringAnalytics = (
       endpoint: '/v1/chat/completions',
       executor: 'ops',
     },
+    {
+      model: 'gpt-5-codex',
+      apiKeyHash: 'hash_ui_available',
+      authIndex: 'ui-codex-available',
+      authFile: 'ui-codex-available-5h-weekly.json',
+      account: 'ui.available@demo.local',
+      label: 'UI Available',
+      provider: 'codex',
+      source: 'ui-demo',
+      sourceHash: 'src_ui_available',
+      endpoint: '/v1/responses',
+      executor: 'ui-demo',
+    },
+    {
+      model: 'gpt-5-codex',
+      apiKeyHash: 'hash_ui_reauth',
+      authIndex: 'ui-codex-reauth',
+      authFile: 'ui-codex-reauth-401.json',
+      account: 'ui.reauth401@demo.local',
+      label: 'UI Reauth 401',
+      provider: 'codex',
+      source: 'ui-demo',
+      sourceHash: 'src_ui_reauth',
+      endpoint: '/v1/responses',
+      executor: 'ui-demo',
+    },
+    {
+      model: 'gpt-5-codex',
+      apiKeyHash: 'hash_ui_header_observed',
+      authIndex: 'ui-codex-header-observed',
+      authFile: 'ui-codex-header-observed.json',
+      account: 'ui.header-observed@demo.local',
+      label: 'UI Header Observed',
+      provider: 'codex',
+      source: 'ui-demo',
+      sourceHash: 'src_ui_header_observed',
+      endpoint: '/v1/responses',
+      executor: 'ui-demo',
+    },
+    {
+      model: 'kimi-k2',
+      apiKeyHash: 'hash_ui_kimi_spent',
+      authIndex: 'ui-kimi-daily-exhausted',
+      authFile: 'ui-kimi-daily-exhausted.json',
+      account: 'ui.kimi-spent@demo.local',
+      label: 'UI Kimi Spent',
+      provider: 'kimi',
+      source: 'ui-demo',
+      sourceHash: 'src_ui_kimi_spent',
+      endpoint: '/v1/chat/completions',
+      executor: 'ui-demo',
+    },
   ];
 
   const events: DemoMonitoringEventRow[] = Array.from({ length: 72 }, (_, index) => {
@@ -2322,7 +2614,7 @@ const buildMonitoringAnalytics = (
         'xai',
         'deepseek',
       ],
-      auth_files: demoAuthFiles.files.map((file) => file.name),
+      auth_files: getDemoAuthFileItems().map((file) => file.name),
       project_ids: ['demo-gemini-prod', 'demo-vertex-regional', 'demo-gemini-batch'],
       request_types: ['chat', 'responses', 'models'],
       header_error_kinds: ['quota', 'upstream'],
@@ -2390,15 +2682,15 @@ const demoInspectionRunDetail = (baseNow = now()): CodexInspectionRunDetail => (
     status: 'completed',
     startedAtMs: baseNow - 42 * 60 * 1000,
     finishedAtMs: baseNow - 39 * 60 * 1000,
-    totalFiles: 24,
-    probeSetCount: 24,
-    sampledCount: 18,
+    totalFiles: getDemoAuthFileItems().length,
+    probeSetCount: getDemoAuthFileItems().length,
+    sampledCount: Math.min(28, getDemoAuthFileItems().length),
     disabledCount: 2,
-    enabledCount: 16,
+    enabledCount: 18,
     deleteCount: 0,
-    disableCount: 2,
-    enableCount: 1,
-    reauthCount: 1,
+    disableCount: 3,
+    enableCount: 2,
+    reauthCount: 2,
     keepCount: 14,
     createdAtMs: baseNow - 42 * 60 * 1000,
     updatedAtMs: baseNow - 39 * 60 * 1000,
@@ -2457,13 +2749,55 @@ const demoInspectionRunDetail = (baseNow = now()): CodexInspectionRunDetail => (
       errorDetail: 'Primary quota window reached',
       createdAtMs: baseNow - 40 * 60 * 1000,
     },
+    {
+      id: 503,
+      runId: 1001,
+      accountKey: 'ui-codex-reauth',
+      fileName: 'ui-codex-reauth-401.json',
+      displayAccount: 'ui.reauth401@demo.local',
+      authIndex: 'ui-codex-reauth',
+      accountId: 'acct_ui_reauth',
+      provider: 'codex',
+      disabled: false,
+      status: 'auth_error',
+      state: 'active',
+      action: 'reauth',
+      actionReason: 'HTTP 401 from quota refresh',
+      actionStatus: 'pending',
+      statusCode: 401,
+      isQuota: false,
+      planType: 'free',
+      errorKind: 'auth',
+      errorDetail: 'Token invalidated',
+      createdAtMs: baseNow - 38 * 60 * 1000,
+    },
+    {
+      id: 504,
+      runId: 1001,
+      accountKey: 'ui-codex-disabled-recovered',
+      fileName: 'ui-codex-disabled-recovered.json',
+      displayAccount: 'ui.disabled-recovered@demo.local',
+      authIndex: 'ui-codex-disabled-recovered',
+      accountId: 'acct_ui_disabled_recovered',
+      provider: 'codex',
+      disabled: true,
+      status: 'ok',
+      state: 'disabled',
+      action: 'enable',
+      actionReason: 'Quota recovered after cooldown',
+      actionStatus: 'pending',
+      usedPercent: 16,
+      isQuota: true,
+      planType: 'pro',
+      createdAtMs: baseNow - 37 * 60 * 1000,
+    },
   ],
   logs: [
     {
       id: 9001,
       runId: 1001,
       level: 'info',
-      message: 'Inspection completed for 24 auth files',
+      message: `Inspection completed for ${getDemoAuthFileItems().length} auth files`,
       createdAtMs: baseNow - 39 * 60 * 1000,
     },
   ],
@@ -2507,7 +2841,10 @@ const demoAccountCandidates: AccountActionCandidate[] = [
 
 export const getDemoRawConfig = () => clone(initialRawConfig);
 export const getDemoProviderModels = () => clone(demoProviderModels);
-export const getDemoAuthFiles = () => clone(demoAuthFiles);
+export const getDemoAuthFiles = (): AuthFilesResponse => {
+  const files = getDemoAuthFileItems();
+  return clone({ total: files.length, files });
+};
 export const getDemoPlugins = () => clone(demoPlugins);
 export const getDemoPluginStore = () => clone(demoPluginStore);
 export const getDemoManagerConfig = () => clone(demoManagerConfig);
@@ -2583,6 +2920,375 @@ export const getDemoUsageServiceStatus = (): UsageServiceStatus => ({
   },
 });
 
+export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
+  codexQuota: {
+    'codex-team-01.json': {
+      status: 'success',
+      planType: 'team',
+      authFileKey: 'codex-team-01.json::codex-team-01',
+      authFileName: 'codex-team-01.json',
+      authIndex: 'codex-team-01',
+      fetchedAtMs: now() - 8 * minute,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5 小时限额',
+          usedPercent: 36,
+          resetLabel: '2h 18m',
+          limitWindowSeconds: 18_000,
+        },
+        {
+          id: 'weekly',
+          label: '周限额',
+          usedPercent: 41,
+          resetLabel: '3d 08h',
+          limitWindowSeconds: 604_800,
+        },
+      ],
+    },
+    'codex-fallback-02.json': {
+      status: 'success',
+      planType: 'team',
+      authFileKey: 'codex-fallback-02.json::codex-fallback-02',
+      authFileName: 'codex-fallback-02.json',
+      authIndex: 'codex-fallback-02',
+      fetchedAtMs: now() - 18 * minute,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5 小时限额',
+          usedPercent: 100,
+          resetLabel: '68m',
+          limitWindowSeconds: 18_000,
+        },
+        {
+          id: 'weekly',
+          label: '周限额',
+          usedPercent: 72,
+          resetLabel: '2d 04h',
+          limitWindowSeconds: 604_800,
+        },
+      ],
+    },
+    'ui-codex-available-5h-weekly.json': {
+      status: 'success',
+      planType: 'pro',
+      authFileKey: 'ui-codex-available-5h-weekly.json::ui-codex-available',
+      authFileName: 'ui-codex-available-5h-weekly.json',
+      authIndex: 'ui-codex-available',
+      fetchedAtMs: now() - 5 * minute,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5 小时限额',
+          usedPercent: 28,
+          resetLabel: '03:12',
+          limitWindowSeconds: 18_000,
+        },
+        {
+          id: 'weekly',
+          label: '周限额',
+          usedPercent: 41,
+          resetLabel: 'Fri 09:30',
+          limitWindowSeconds: 604_800,
+        },
+      ],
+    },
+    'ui-codex-reauth-401.json': {
+      status: 'error',
+      planType: 'free',
+      authFileKey: 'ui-codex-reauth-401.json::ui-codex-reauth',
+      authFileName: 'ui-codex-reauth-401.json',
+      authIndex: 'ui-codex-reauth',
+      failedAtMs: now() - 3 * minute,
+      errorStatus: 401,
+      error:
+        '额度获取失败：401 Your authentication token has been invalidated. Please try signing in again.',
+      windows: [],
+    },
+    'ui-codex-5h-exhausted.json': {
+      status: 'success',
+      planType: 'team',
+      authFileKey: 'ui-codex-5h-exhausted.json::ui-codex-5h-exhausted',
+      authFileName: 'ui-codex-5h-exhausted.json',
+      authIndex: 'ui-codex-5h-exhausted',
+      fetchedAtMs: now() - 7 * minute,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5 小时限额',
+          usedPercent: 100,
+          resetLabel: '41m',
+          limitWindowSeconds: 18_000,
+        },
+        {
+          id: 'weekly',
+          label: '周限额',
+          usedPercent: 32,
+          resetLabel: 'Mon 08:00',
+          limitWindowSeconds: 604_800,
+        },
+      ],
+    },
+    'ui-codex-weekly-exhausted.json': {
+      status: 'success',
+      planType: 'team',
+      authFileKey: 'ui-codex-weekly-exhausted.json::ui-codex-weekly-exhausted',
+      authFileName: 'ui-codex-weekly-exhausted.json',
+      authIndex: 'ui-codex-weekly-exhausted',
+      fetchedAtMs: now() - 9 * minute,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5 小时限额',
+          usedPercent: 18,
+          resetLabel: '02:04',
+          limitWindowSeconds: 18_000,
+        },
+        {
+          id: 'weekly',
+          label: '周限额',
+          usedPercent: 100,
+          resetLabel: 'Mon 09:20',
+          limitWindowSeconds: 604_800,
+        },
+      ],
+    },
+    'ui-codex-monthly-exhausted.json': {
+      status: 'success',
+      planType: 'enterprise',
+      authFileKey: 'ui-codex-monthly-exhausted.json::ui-codex-monthly-exhausted',
+      authFileName: 'ui-codex-monthly-exhausted.json',
+      authIndex: 'ui-codex-monthly-exhausted',
+      fetchedAtMs: now() - 11 * minute,
+      windows: [
+        {
+          id: 'monthly',
+          label: '月限额',
+          usedPercent: 100,
+          resetLabel: '08/01 00:00',
+          limitWindowSeconds: 2_592_000,
+        },
+      ],
+    },
+    'ui-codex-5h-cooldown.json': {
+      status: 'success',
+      planType: 'team',
+      authFileKey: 'ui-codex-5h-cooldown.json::ui-codex-5h-cooldown',
+      authFileName: 'ui-codex-5h-cooldown.json',
+      authIndex: 'ui-codex-5h-cooldown',
+      fetchedAtMs: now() - 12 * minute,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5 小时限额',
+          usedPercent: 100,
+          resetLabel: '55m',
+          limitWindowSeconds: 18_000,
+        },
+        {
+          id: 'weekly',
+          label: '周限额',
+          usedPercent: 44,
+          resetLabel: 'Wed 10:00',
+          limitWindowSeconds: 604_800,
+        },
+      ],
+    },
+    'ui-codex-weekly-cooldown.json': {
+      status: 'success',
+      planType: 'team',
+      authFileKey: 'ui-codex-weekly-cooldown.json::ui-codex-weekly-cooldown',
+      authFileName: 'ui-codex-weekly-cooldown.json',
+      authIndex: 'ui-codex-weekly-cooldown',
+      fetchedAtMs: now() - 13 * minute,
+      windows: [
+        {
+          id: 'weekly',
+          label: '周限额',
+          usedPercent: 100,
+          resetLabel: 'Mon 09:20',
+          limitWindowSeconds: 604_800,
+        },
+      ],
+    },
+    'ui-codex-monthly-cooldown.json': {
+      status: 'success',
+      planType: 'enterprise',
+      authFileKey: 'ui-codex-monthly-cooldown.json::ui-codex-monthly-cooldown',
+      authFileName: 'ui-codex-monthly-cooldown.json',
+      authIndex: 'ui-codex-monthly-cooldown',
+      fetchedAtMs: now() - 14 * minute,
+      windows: [
+        {
+          id: 'monthly',
+          label: '月限额',
+          usedPercent: 100,
+          resetLabel: '08/01 00:00',
+          limitWindowSeconds: 2_592_000,
+        },
+      ],
+    },
+    'ui-codex-refresh-error-500.json': {
+      status: 'error',
+      planType: 'pro',
+      authFileKey: 'ui-codex-refresh-error-500.json::ui-codex-refresh-error',
+      authFileName: 'ui-codex-refresh-error-500.json',
+      authIndex: 'ui-codex-refresh-error',
+      failedAtMs: now() - 4 * minute,
+      errorStatus: 503,
+      error: '额度获取失败：503 upstream timeout while reading usage window.',
+      windows: [],
+    },
+    'ui-codex-disabled-recovered.json': {
+      status: 'success',
+      planType: 'pro',
+      authFileKey: 'ui-codex-disabled-recovered.json::ui-codex-disabled-recovered',
+      authFileName: 'ui-codex-disabled-recovered.json',
+      authIndex: 'ui-codex-disabled-recovered',
+      fetchedAtMs: now() - 10 * minute,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5 小时限额',
+          usedPercent: 16,
+          resetLabel: '03:44',
+          limitWindowSeconds: 18_000,
+        },
+      ],
+    },
+    'ui-codex-negative-priority.json': {
+      status: 'success',
+      planType: 'free',
+      authFileKey: 'ui-codex-negative-priority.json::ui-codex-negative-priority',
+      authFileName: 'ui-codex-negative-priority.json',
+      authIndex: 'ui-codex-negative-priority',
+      fetchedAtMs: now() - 6 * minute,
+      windows: [
+        {
+          id: 'weekly',
+          label: '周限额',
+          usedPercent: 35,
+          resetLabel: 'Thu 11:00',
+          limitWindowSeconds: 604_800,
+        },
+      ],
+    },
+  },
+  claudeQuota: {
+    'claude-team-01.json': {
+      status: 'success',
+      planType: 'pro',
+      windows: [
+        { id: 'five-hour', label: '5 小时限额', usedPercent: 44, resetLabel: '2h' },
+        { id: 'weekly', label: '周限额', usedPercent: 31, resetLabel: '3d' },
+      ],
+    },
+    'ui-claude-low-multi-window.json': {
+      status: 'success',
+      planType: 'pro',
+      windows: [
+        { id: 'five-hour', label: '5 小时限额', usedPercent: 88, resetLabel: '1h 12m' },
+        { id: 'weekly', label: '周限额', usedPercent: 48, resetLabel: '3d 04h' },
+      ],
+    },
+  },
+  antigravityQuota: {
+    'antigravity-builder.json': {
+      status: 'success',
+      subscription: { plan: 'pro', tierName: 'Pro', tierId: 'g1-pro' },
+      groups: [
+        {
+          id: 'builder',
+          label: 'Builder',
+          buckets: [
+            {
+              id: 'builder-five-hour',
+              label: '5 小时限额',
+              window: '5h',
+              remainingFraction: 0.72,
+              resetTime: demoResetIso(5 * hour),
+            },
+          ],
+        },
+      ],
+    },
+    'ui-antigravity-three-buckets.json': {
+      status: 'success',
+      subscription: { plan: 'pro', tierName: 'Pro', tierId: 'g1-pro' },
+      groups: [
+        {
+          id: 'agent',
+          label: 'Agent',
+          buckets: [
+            {
+              id: 'agent-five-hour',
+              label: '5 小时限额',
+              window: '5h',
+              remainingFraction: 0.64,
+              resetTime: demoResetIso(4 * hour),
+            },
+            {
+              id: 'agent-weekly',
+              label: '周限额',
+              window: 'weekly',
+              remainingFraction: 0.38,
+              resetTime: demoResetIso(2 * day),
+            },
+            {
+              id: 'agent-monthly',
+              label: '月限额',
+              window: 'monthly',
+              remainingFraction: 0.21,
+              resetTime: demoResetIso(18 * day),
+            },
+          ],
+        },
+      ],
+    },
+  },
+  kimiQuota: {
+    'kimi-coding.json': {
+      status: 'success',
+      rows: [{ id: 'daily', label: '日限额', used: 62, limit: 100, resetHint: 'tomorrow' }],
+    },
+    'ui-kimi-daily-exhausted.json': {
+      status: 'success',
+      rows: [{ id: 'daily', label: '日限额', used: 100, limit: 100, resetHint: '00:00' }],
+    },
+  },
+  xaiQuota: {
+    'xai-ops.json': {
+      status: 'success',
+      billing: {
+        monthlyLimitCents: 100_000,
+        usedCents: 32_000,
+        includedUsedCents: 32_000,
+        onDemandCapCents: 50_000,
+        onDemandUsedCents: 0,
+        onDemandUsedPercent: 0,
+        billingPeriodStart: demoResetIso(-15 * day),
+        billingPeriodEnd: demoResetIso(15 * day),
+        usedPercent: 32,
+      },
+    },
+    'ui-xai-billing-low.json': {
+      status: 'success',
+      billing: {
+        monthlyLimitCents: 100_000,
+        usedCents: 86_000,
+        includedUsedCents: 86_000,
+        onDemandCapCents: 50_000,
+        onDemandUsedCents: 12_000,
+        onDemandUsedPercent: 24,
+        billingPeriodStart: demoResetIso(-15 * day),
+        billingPeriodEnd: demoResetIso(15 * day),
+        usedPercent: 86,
+      },
+    },
+  },
+});
+
 export const getDemoAccountProcessingPolicy = (): AccountProcessingPolicy => ({
   source: 'db',
   updatedAtMs: now() - hour,
@@ -2622,6 +3328,33 @@ export const getDemoQuotaCooldowns = (): QuotaCooldownInfo[] => [
     disabledAtMs: now() - 18 * 60 * 1000,
     createdAtMs: now() - 18 * 60 * 1000,
   },
+  {
+    authFileName: 'ui-codex-5h-cooldown.json',
+    authIndex: 'ui-codex-5h-cooldown',
+    provider: 'codex',
+    owner: 'ui.5h-cooldown@demo.local',
+    recoverAtMs: now() + 55 * minute,
+    disabledAtMs: now() - 16 * minute,
+    createdAtMs: now() - 16 * minute,
+  },
+  {
+    authFileName: 'ui-codex-weekly-cooldown.json',
+    authIndex: 'ui-codex-weekly-cooldown',
+    provider: 'codex',
+    owner: 'ui.weekly-cooldown@demo.local',
+    recoverAtMs: now() + 2 * day,
+    disabledAtMs: now() - 2 * hour,
+    createdAtMs: now() - 2 * hour,
+  },
+  {
+    authFileName: 'ui-codex-monthly-cooldown.json',
+    authIndex: 'ui-codex-monthly-cooldown',
+    provider: 'codex',
+    owner: 'ui.monthly-cooldown@demo.local',
+    recoverAtMs: now() + 18 * day,
+    disabledAtMs: now() - 5 * hour,
+    createdAtMs: now() - 5 * hour,
+  },
 ];
 
 export const getDemoHeaderSnapshots = (): UsageHeaderSnapshotsResponse => ({
@@ -2657,6 +3390,46 @@ export const getDemoHeaderSnapshots = (): UsageHeaderSnapshotsResponse => ({
         },
         trace: {
           request_id: 'demo-trace-429',
+        },
+      },
+    },
+    {
+      event_hash: 'demo-ui-header-observed',
+      timestamp_ms: now() - 6 * minute,
+      auth_file_snapshot: 'ui-codex-header-observed.json',
+      auth_index: 'ui-codex-header-observed',
+      account_snapshot: 'ui.header-observed@demo.local',
+      auth_label_snapshot: 'Header Observed',
+      auth_provider_snapshot: 'codex',
+      source: 'ui-demo',
+      source_hash: 'src_ui_header_observed',
+      header_quota_recover_at_ms: now() + 90 * minute,
+      header_quota_used_percent: 97,
+      header_quota_plan_type: 'team',
+      header_error_kind: 'quota',
+      header_error_code: 'rate_limit',
+      header_trace_id: 'demo-ui-trace-header-observed',
+      response_metadata: {
+        quota: {
+          plan_type: 'team',
+          active_limit: 'primary',
+          rate_limit_reached_type: 'primary',
+          recover_at_ms: now() + 90 * minute,
+          used_percent: 97,
+          primary: {
+            used_percent: 97,
+            reset_after_seconds: 5400,
+            window_minutes: 300,
+          },
+        },
+        errors: {
+          kind: 'quota',
+          code: 'rate_limit',
+          retry_after_seconds: 5400,
+        },
+        trace: {
+          request_id: 'demo-ui-trace-header-observed',
+          openai_request_id: 'req_demo_ui_header_observed',
         },
       },
     },

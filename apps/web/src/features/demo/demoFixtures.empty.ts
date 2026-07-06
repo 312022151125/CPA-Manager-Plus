@@ -14,6 +14,7 @@ export const getDemoUsagePayload = () => emptyObject;
 export const getDemoUsageServiceInfo = () => emptyObject;
 export const getDemoUsageServiceStatus = () => emptyObject;
 export const getDemoAccountProcessingPolicy = () => emptyObject;
+export const getDemoQuotaStoreState = () => emptyObject;
 export const getDemoQuotaCooldowns = () => emptyArray;
 export const getDemoHeaderSnapshots = () => emptyObject;
 export const getDemoCodexInspectionRuns = () => ({ items: [] });
