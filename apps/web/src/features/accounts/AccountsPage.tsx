@@ -90,7 +90,6 @@ import {
   buildAccountListItem,
   buildRecommendationBySelectionKey,
   getRecommendationActionLabelKey,
-  type AccountListHealthReasonTone,
   type AccountListHealthStatusKey,
 } from '@/features/accounts/model/accountListPresentation';
 import {
@@ -311,12 +310,6 @@ const getHealthStatusClass = (status: AccountListHealthStatusKey) => {
     default:
       return styles.badgeNeutral;
   }
-};
-
-const getHealthReasonToneClass = (tone: AccountListHealthReasonTone) => {
-  if (tone === 'danger') return styles.accountReasonLineDanger;
-  if (tone === 'warning') return styles.accountReasonLineWarning;
-  return styles.accountReasonLineMuted;
 };
 
 const getRemainingBarClass = (row: AccountRow) => {
@@ -2050,6 +2043,28 @@ export function AccountsPage() {
     if (selectionCount === 0) return null;
     const moreItems: DropdownMenuItem[] = [
       {
+        key: 'download',
+        label: t('auth_files.batch_download'),
+        icon: <IconDownload size={15} />,
+        onClick: () => void batchDownload(selectedFileNames),
+        disabled: disableControls || selectedFileNames.length === 0,
+      },
+      {
+        key: 'websockets-enable',
+        label: t('auth_files.batch_websockets_enable'),
+        icon: <IconSettings size={15} />,
+        onClick: () => void patchWebsocketsRows(selectedRows, true),
+        disabled: disableControls || selectedCodexRows.length === 0 || batchFieldsUpdating,
+      },
+      {
+        key: 'websockets-disable',
+        label: t('auth_files.batch_websockets_disable'),
+        icon: <IconSettings size={15} />,
+        onClick: () => void patchWebsocketsRows(selectedRows, false),
+        disabled: disableControls || selectedCodexRows.length === 0 || batchFieldsUpdating,
+      },
+      { key: 'batch-more-divider', type: 'divider' },
+      {
         key: 'restore-default',
         label: t('accounts.restore_default_priority'),
         icon: <IconRefreshCw size={15} />,
@@ -2114,35 +2129,6 @@ export function AccountsPage() {
             >
               <IconX size={15} />
               {t('accounts.disable')}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => void batchDownload(selectedFileNames)}
-              disabled={disableControls || selectedFileNames.length === 0}
-              title={t('auth_files.batch_download')}
-            >
-              <IconDownload size={15} />
-              {t('auth_files.batch_download')}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => void patchWebsocketsRows(selectedRows, true)}
-              disabled={disableControls || selectedCodexRows.length === 0 || batchFieldsUpdating}
-              loading={batchFieldsUpdating}
-              title={t('auth_files.batch_websockets_enable')}
-            >
-              {t('auth_files.batch_websockets_enable')}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => void patchWebsocketsRows(selectedRows, false)}
-              disabled={disableControls || selectedCodexRows.length === 0 || batchFieldsUpdating}
-              title={t('auth_files.batch_websockets_disable')}
-            >
-              {t('auth_files.batch_websockets_disable')}
             </Button>
             <Button
               variant="secondary"
@@ -2236,17 +2222,17 @@ export function AccountsPage() {
       <Button
         variant="ghost"
         size="xs"
+        iconOnly
+        className={styles.rowDetailButton}
         onClick={() => setSelectedRowKey(row.selectionKey)}
         title={t('accounts.open_detail', { name: row.fileName })}
         aria-label={t('accounts.open_detail', { name: row.fileName })}
       >
         <IconChevronRight size={16} />
-        {t('accounts.open_detail_short')}
       </Button>
       <DropdownMenu
         items={buildRowMenuItems(row)}
         ariaLabel={t('accounts.col_actions')}
-        triggerLabel={t('accounts.col_actions')}
         triggerIcon={<IconMoreVertical size={16} />}
         triggerClassName={styles.rowActionMenu}
       />
@@ -2337,20 +2323,22 @@ export function AccountsPage() {
                       resetLabel: item.quota.resetLabel,
                     },
                   ];
+            const hiddenQuotaWindowCount = Math.max(0, quotaWindows.length - 2);
             const quotaWindowTitle =
               quotaWindows
                 .map((window) => `${window.label}: ${formatPercent(window.remainingPercent)}`)
                 .join('\n') || t('accounts.quota_brief_unknown');
-            const evidenceRateLabel = item.activity.hasHealthData
+            const hasEvidenceData = item.activity.hasHealthData;
+            const evidenceRateLabel = hasEvidenceData
               ? formatPercent(item.activity.successRate)
-              : '-';
-            const evidenceSummary = item.activity.hasHealthData
+              : '';
+            const evidenceSummary = hasEvidenceData
               ? t('accounts.activity_success_failure', {
                   success: formatCompactNumber(item.activity.successCount),
                   failure: formatCompactNumber(item.activity.failureCount),
                 })
               : t('accounts.activity_no_health');
-            const evidenceTitle = item.activity.hasHealthData
+            const evidenceTitle = hasEvidenceData
               ? t('accounts.activity_health_title', {
                   success: formatCompactNumber(item.activity.successCount),
                   failure: formatCompactNumber(item.activity.failureCount),
@@ -2363,7 +2351,6 @@ export function AccountsPage() {
                 : 0;
             const quotaSourceShortLabel = t(item.quota.sourceShortLabelKey);
             const healthTitle = t(item.health.tooltipKey, item.health.tooltipParams);
-            const healthReasonLine = t(item.health.reasonKey, item.health.reasonParams);
             return (
               <article
                 key={row.selectionKey}
@@ -2404,46 +2391,69 @@ export function AccountsPage() {
                     >
                       {t(item.health.labelKey)}
                     </span>
+                  </div>
+                  <div className={styles.accountHealthMetaRow}>
                     <span
                       className={
-                        item.identity.priorityIsNegative ? styles.priorityBad : styles.priority
+                        item.identity.priorityIsNegative
+                          ? styles.accountPriorityMetaDanger
+                          : styles.accountPriorityMeta
                       }
                       title={t('accounts.col_priority')}
                     >
-                      {t('accounts.col_priority')}: {item.identity.priority}
+                      {t('accounts.col_priority')} {item.identity.priority}
                     </span>
                   </div>
-                  <span
-                    className={`${styles.accountReasonLine} ${getHealthReasonToneClass(
-                      item.health.reasonTone
-                    )}`}
-                    title={healthTitle}
-                  >
-                    {healthReasonLine}
-                  </span>
                 </div>
 
-                <div className={styles.accountCardEvidence} title={evidenceTitle}>
-                  <div className={styles.evidenceSummaryRow}>
+                <div
+                  className={[
+                    styles.accountCardEvidence,
+                    hasEvidenceData ? '' : styles.accountCardEvidenceEmpty,
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  title={evidenceTitle}
+                >
+                  <div
+                    className={[
+                      styles.evidenceSummaryRow,
+                      hasEvidenceData ? '' : styles.evidenceSummaryMuted,
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                  >
                     <span>{evidenceSummary}</span>
-                    <strong>{evidenceRateLabel}</strong>
+                    {hasEvidenceData ? <strong>{evidenceRateLabel}</strong> : null}
                   </div>
-                  <div className={styles.evidenceTrack} aria-hidden="true">
-                    <span
-                      className={`${styles.evidenceBar} ${getEvidenceBarClass(
-                        item.activity.successRate,
-                        item.activity.hasHealthData
-                      )}`}
-                      style={{ width: `${evidenceWidth}%` }}
-                    />
-                  </div>
+                  {hasEvidenceData ? (
+                    <div className={styles.evidenceTrack} aria-hidden="true">
+                      <span
+                        className={`${styles.evidenceBar} ${getEvidenceBarClass(
+                          item.activity.successRate,
+                          hasEvidenceData
+                        )}`}
+                        style={{ width: `${evidenceWidth}%` }}
+                      />
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className={styles.accountCardBusiness}>
-                  <div className={styles.quotaWindowGrid} title={quotaWindowTitle}>
+                  <div
+                    className={[
+                      styles.quotaWindowGrid,
+                      hiddenQuotaWindowCount > 0 ? styles.quotaWindowGridHasMore : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                    title={quotaWindowTitle}
+                  >
                     {displayQuotaWindows.map((window) => {
                       const windowRemaining = window.remainingPercent;
                       const windowWidth = Math.max(0, Math.min(100, windowRemaining ?? 0));
+                      const resetLabel =
+                        window.resetLabel && window.resetLabel !== '-' ? window.resetLabel : '';
                       return (
                         <div key={window.key} className={styles.quotaWindowCard}>
                           <div className={styles.quotaCellHeader}>
@@ -2456,23 +2466,44 @@ export function AccountsPage() {
                                 : t('accounts.quota_brief_unknown')}
                             </strong>
                           </div>
-                          <div className={styles.quotaTrack} aria-hidden="true">
-                            <span
-                              className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
-                              style={{ width: `${windowWidth}%` }}
-                            />
-                          </div>
+                          {windowRemaining !== null ? (
+                            <div className={styles.quotaTrack} aria-hidden="true">
+                              <span
+                                className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
+                                style={{ width: `${windowWidth}%` }}
+                              />
+                            </div>
+                          ) : null}
                           <div className={styles.accountCardQuotaMeta}>
                             <span title={getQuotaSourceLabel(row.quota.source)}>
                               {quotaSourceShortLabel}
                             </span>
-                            <span title={window.resetLabel}>
-                              {t('accounts.col_reset')}: {window.resetLabel || '-'}
-                            </span>
+                            {resetLabel ? (
+                              <span title={resetLabel}>
+                                {t('accounts.col_reset')}: {resetLabel}
+                              </span>
+                            ) : null}
                           </div>
                         </div>
                       );
                     })}
+                    {hiddenQuotaWindowCount > 0 ? (
+                      <button
+                        type="button"
+                        className={styles.quotaMoreButton}
+                        title={t('accounts.quota_more_windows_title', {
+                          count: hiddenQuotaWindowCount,
+                        })}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedRowKey(row.selectionKey);
+                        }}
+                      >
+                        {t('accounts.quota_more_windows', {
+                          count: hiddenQuotaWindowCount,
+                        })}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
 

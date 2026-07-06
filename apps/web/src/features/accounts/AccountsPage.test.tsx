@@ -432,6 +432,15 @@ const findHostButtonByAriaLabel = (renderer: ReactTestRenderer, label: string) =
   return button;
 };
 
+const findBatchMoreItem = (renderer: ReactTestRenderer, key: string) => {
+  const batchMoreMenu = renderer.root
+    .findAllByType(DropdownMenu)
+    .find((node) => node.props.ariaLabel === 'accounts.batch_more');
+  const item = batchMoreMenu?.props.items.find((entry: { key?: string }) => entry.key === key);
+  if (!item || item.type === 'divider') throw new Error(`Batch menu item not found: ${key}`);
+  return item;
+};
+
 const findInputByAriaLabel = (renderer: ReactTestRenderer, label: string) => {
   const input = renderer.root
     .findAll((node) => node.type === 'input')
@@ -553,7 +562,7 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
 
     await act(async () => {
-      await findButtonByText(renderer, 'auth_files.batch_websockets_enable').props.onClick();
+      await findBatchMoreItem(renderer, 'websockets-enable').onClick();
     });
 
     expect(mocks.batchPatchFields).toHaveBeenCalledWith(
