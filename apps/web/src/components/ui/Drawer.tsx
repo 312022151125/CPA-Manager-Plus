@@ -68,7 +68,7 @@ export function Drawer({
     (notifyParent: boolean) => {
       if (closeTimerRef.current !== null) return;
       setIsClosing(true);
-      closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = globalThis.setTimeout(() => {
         setIsVisible(false);
         setIsClosing(false);
         closeTimerRef.current = null;
@@ -85,7 +85,7 @@ export function Drawer({
 
     if (open) {
       if (closeTimerRef.current !== null) {
-        window.clearTimeout(closeTimerRef.current);
+        globalThis.clearTimeout(closeTimerRef.current);
         closeTimerRef.current = null;
       }
       queueMicrotask(() => {
@@ -108,7 +108,7 @@ export function Drawer({
   useEffect(() => {
     return () => {
       if (closeTimerRef.current !== null) {
-        window.clearTimeout(closeTimerRef.current);
+        globalThis.clearTimeout(closeTimerRef.current);
       }
     };
   }, []);
@@ -126,26 +126,26 @@ export function Drawer({
   }, [shouldLockScroll]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || typeof document === 'undefined' || typeof window === 'undefined') return;
 
     previouslyFocusedRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
-    const focusTimer = window.setTimeout(() => {
+    const focusTimer = globalThis.setTimeout(() => {
       panelRef.current?.focus();
     }, 0);
 
-    return () => window.clearTimeout(focusTimer);
+    return () => globalThis.clearTimeout(focusTimer);
   }, [open]);
 
   useEffect(() => {
-    if (open || isVisible) return;
+    if (open || isVisible || typeof document === 'undefined') return;
     previouslyFocusedRef.current?.focus();
     previouslyFocusedRef.current = null;
   }, [isVisible, open]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || typeof document === 'undefined') return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
