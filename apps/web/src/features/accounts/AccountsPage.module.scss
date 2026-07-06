@@ -120,7 +120,7 @@
 
 .toolbar {
   display: grid;
-  grid-template-columns: minmax(240px, 2fr) repeat(3, minmax(128px, 1fr));
+  grid-template-columns: minmax(240px, 2fr) repeat(4, minmax(128px, 1fr)) minmax(118px, auto);
   gap: 10px;
   align-items: center;
   padding: 12px;
@@ -147,6 +147,20 @@
 }
 
 .searchField {
+  min-width: 0;
+}
+
+.selectionModeButton:global(.btn.btn-sm) {
+  justify-content: center;
+  min-height: 36px;
+  border-radius: 12px;
+}
+
+.selectionControls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -284,7 +298,7 @@
 
 .accountCard {
   display: grid;
-  grid-template-columns: auto minmax(190px, 0.88fr) minmax(180px, 0.88fr) minmax(
+  grid-template-columns: minmax(190px, 0.88fr) minmax(180px, 0.88fr) minmax(
       150px,
       0.64fr
     ) minmax(
@@ -316,10 +330,17 @@
   background: color-mix(in srgb, var(--primary-color) 7%, var(--bg-primary));
 }
 
-.accountCardSelect {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.accountCardBulkSelected {
+  border-color: color-mix(in srgb, var(--primary-color) 56%, var(--border-color));
+  background: color-mix(in srgb, var(--primary-color) 9%, var(--bg-primary));
+  box-shadow: inset 3px 0 0 var(--primary-color);
+}
+
+.accountCardSelectionMode {
+  &:hover {
+    border-color: color-mix(in srgb, var(--primary-color) 42%, var(--border-color));
+    background: color-mix(in srgb, var(--primary-color) 7%, var(--bg-primary));
+  }
 }
 
 .accountCardIdentity,
@@ -814,11 +835,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.prioritySelect {
-  width: 92px;
-  flex: 0 0 92px;
 }
 
 .compactTable {
@@ -2234,6 +2250,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
 }
@@ -2301,7 +2318,7 @@
 
 @include tablet {
   .accountCard {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     align-items: start;
   }
 
@@ -2309,7 +2326,7 @@
   .accountCardEvidence,
   .accountCardBusiness,
   .accountCardRecommendation {
-    grid-column: 2 / -1;
+    grid-column: 1 / -1;
   }
 
   .batchBar {
@@ -2344,7 +2361,7 @@
   }
 
   .accountCard {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 8px 10px;
     min-height: 0;
     padding: 10px;
@@ -2355,7 +2372,7 @@
   }
 
   .accountCardIdentity {
-    grid-column: 2 / -1;
+    grid-column: 1 / -1;
     gap: 4px;
     padding: 0 2px 8px 0;
     border-bottom: 1px solid color-mix(in srgb, var(--accounts-border) 76%, transparent);
@@ -2461,37 +2478,30 @@
     display: none;
   }
 
-  .prioritySelect {
-    width: 100%;
-    flex: 1 1 auto;
-  }
 }
 
 .floatingBatchActionContainer {
   position: fixed;
   left: var(--content-center-x, 50%);
   bottom: calc(16px + env(safe-area-inset-bottom));
-  z-index: 50;
-  width: min(1080px, calc(100vw - 24px));
+  z-index: 1600;
+  width: min(1120px, calc(100vw - 24px));
   max-width: calc(100vw - 24px);
   box-sizing: border-box;
   transform: translateX(-50%);
 }
 
 .floatingBatchActionBar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(112px, auto) minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
+  min-height: 56px;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--accounts-primary) 22%, var(--accounts-border));
+  border: 1px solid var(--accounts-border);
   border-radius: 14px;
-  background: color-mix(in srgb, var(--accounts-surface) 92%, transparent);
-  box-shadow:
-    0 12px 30px -20px color-mix(in srgb, var(--accounts-primary) 70%, transparent),
-    var(--shadow-lg);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: var(--bg-primary);
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.22);
 }
 
 .floatingBatchActionLeft,
@@ -2500,7 +2510,6 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  flex-wrap: wrap;
 }
 
 .floatingBatchActionLeft {
@@ -2509,6 +2518,21 @@
 
 .floatingBatchActionRight {
   justify-content: flex-end;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+
+  > :global(.btn),
+  > :global(.select-trigger),
+  > :global(.dropdown-trigger) {
+    flex: 0 0 auto;
+    height: 36px;
+    min-height: 36px;
+  }
 }
 
 .batchSelectionText {
@@ -2516,6 +2540,24 @@
   font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.floatingBatchMore {
+  flex: 0 0 auto;
+  height: 36px;
+  min-height: 36px;
+  border-radius: 12px;
+}
+
+.batchPriorityModal {
+  display: grid;
+  gap: 12px;
+}
+
+.batchPriorityFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 @include mobile {
@@ -2526,20 +2568,12 @@
   }
 
   .floatingBatchActionBar {
-    align-items: stretch;
-    flex-direction: column;
+    grid-template-columns: minmax(84px, auto) minmax(0, 1fr);
   }
 
   .floatingBatchActionLeft,
   .floatingBatchActionRight {
     justify-content: flex-start;
-  }
-
-  .floatingBatchActionRight {
-    :global(.btn),
-    :global(.select-trigger) {
-      width: 100%;
-    }
   }
 }
 

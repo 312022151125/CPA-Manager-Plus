@@ -9,7 +9,7 @@ import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/DropdownMen
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
-import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
+import { Modal } from '@/components/ui/Modal';
 import { Select } from '@/components/ui/Select';
 import { SegmentedTabs, type SegmentedTabItem } from '@/components/ui/SegmentedTabs';
 import {
@@ -161,14 +161,6 @@ const PAGE_SIZE_OPTIONS = [
   { value: '50', label: '50' },
 ];
 
-const PRIORITY_OPTIONS = [
-  { value: '-10', label: '-10' },
-  { value: '-5', label: '-5' },
-  { value: '0', label: '0' },
-  { value: '5', label: '5' },
-  { value: '10', label: '10' },
-];
-
 const VALUE_RANGE_OPTIONS: Array<{ value: UsageValueRange; labelKey: string; hours: number }> = [
   { value: '24h', labelKey: 'accounts.range_24h', hours: 24 },
   { value: '7d', labelKey: 'accounts.range_7d', hours: 24 * 7 },
@@ -236,6 +228,13 @@ const clampDisplayPercent = (value: number) => Math.max(0, Math.min(100, value))
 
 const remainingPercentFromUsed = (value: number | null | undefined) =>
   typeof value === 'number' && Number.isFinite(value) ? clampDisplayPercent(100 - value) : null;
+
+const parsePriorityValue = (value: string) => {
+  const trimmed = value.trim();
+  if (!/^-?\d+$/.test(trimmed)) return null;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+};
 
 const formatTimestamp = (value: number | null, locale: string) => {
   if (!value) return '-';
@@ -422,6 +421,8 @@ export function AccountsPage() {
     handleDelete,
     handleDownload,
     toggleSelect,
+    selectAllVisible,
+    invertVisibleSelection,
     deselectAll,
     batchDownload,
     batchSetStatus,
@@ -482,6 +483,7 @@ export function AccountsPage() {
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [detailTab, setDetailTab] = useState<DetailTab>('overview');
   const [providerFilter, setProviderFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<AccountStatusFilter>('all');
@@ -495,7 +497,8 @@ export function AccountsPage() {
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   const [isAccountSortDropdownOpen, setIsAccountSortDropdownOpen] = useState(false);
   const [highlightedAccountSortIndex, setHighlightedAccountSortIndex] = useState(-1);
-  const [priorityDraft, setPriorityDraft] = useState('0');
+  const [batchPriorityOpen, setBatchPriorityOpen] = useState(false);
+  const [batchPriorityValue, setBatchPriorityValue] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [valueRange, setValueRange] = useState<UsageValueRange>('7d');
@@ -799,6 +802,13 @@ export function AccountsPage() {
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageRows = filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const pageAuthFiles = useMemo(() => pageRows.map((row) => row.raw), [pageRows]);
+  const filteredAuthFiles = useMemo(() => filteredRows.map((row) => row.raw), [filteredRows]);
+  const selectablePageRows = useMemo(() => pageRows.filter((row) => !row.runtimeOnly), [pageRows]);
+  const selectableFilteredRows = useMemo(
+    () => filteredRows.filter((row) => !row.runtimeOnly),
+    [filteredRows]
+  );
   const selectedRows = useMemo(
     () => rows.filter((row) => selectedFiles.has(row.selectionKey)),
     [rows, selectedFiles]
@@ -822,6 +832,22 @@ export function AccountsPage() {
     () => rows.find((row) => row.selectionKey === selectedRowKey) ?? null,
     [rows, selectedRowKey]
   );
+  const handleAccountCardClick = useCallback(
+    (row: AccountRow) => {
+      if (isSelectionMode) {
+        if (!row.runtimeOnly) {
+          toggleSelect(row.selectionKey);
+        }
+        return;
+      }
+      setSelectedRowKey(row.selectionKey);
+    },
+    [isSelectionMode, toggleSelect]
+  );
+  const cancelSelectionMode = useCallback(() => {
+    deselectAll();
+    setIsSelectionMode(false);
+  }, [deselectAll]);
   const disableControls = connectionStatus !== 'connected';
   const valueSummary = useMemo(
     () => buildUsageValueSummary(usageRows, usageSource),
@@ -1325,6 +1351,18 @@ export function AccountsPage() {
     [batchPatchFields]
   );
 
+  const handleBatchPrioritySave = useCallback(async () => {
+    const priority = parsePriorityValue(batchPriorityValue);
+    if (priority === null) {
+      showNotification(t('accounts.priority_invalid'), 'error');
+      return;
+    }
+    await patchPriorityRows(selectedRows, priority);
+    setBatchPriorityOpen(false);
+    setBatchPriorityValue('');
+    setIsSelectionMode(false);
+  }, [batchPriorityValue, patchPriorityRows, selectedRows, showNotification, t]);
+
   const patchWebsocketsRows = useCallback(
     async (targets: AccountRow[], websockets: boolean) => {
       const patchTargets = targets
@@ -1794,6 +1832,44 @@ export function AccountsPage() {
     </>
   );
 
+  const renderSelectionControls = () => (
+    <div className={styles.selectionControls}>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => selectAllVisible(pageAuthFiles)}
+        disabled={selectablePageRows.length === 0}
+      >
+        {t('auth_files.batch_select_page')}
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => selectAllVisible(filteredAuthFiles)}
+        disabled={selectableFilteredRows.length === 0}
+      >
+        {t('auth_files.batch_select_filtered')}
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => invertVisibleSelection(pageAuthFiles)}
+        disabled={selectablePageRows.length === 0}
+      >
+        {t('auth_files.batch_invert_page')}
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={cancelSelectionMode}
+        disabled={!isSelectionMode && selectionCount === 0}
+      >
+        <IconX size={15} />
+        {t('auth_files.batch_deselect')}
+      </Button>
+    </div>
+  );
+
   const renderToolbar = () => (
     <section className={styles.toolbar}>
       <div className={styles.searchField}>
@@ -1909,10 +1985,14 @@ export function AccountsPage() {
   const renderBatchBar = () => {
     const hasSelection = selectionCount > 0;
     const refreshTargets = hasSelection ? selectedRows : rows;
+    const showSelectionControls = isSelectionMode || hasSelection;
 
     return (
       <section
-        className={[styles.batchBar, hasSelection ? styles.batchBarActive : styles.batchBarIdle]
+        className={[
+          styles.batchBar,
+          hasSelection || isSelectionMode ? styles.batchBarActive : styles.batchBarIdle,
+        ]
           .filter(Boolean)
           .join(' ')}
       >
@@ -1922,44 +2002,39 @@ export function AccountsPage() {
               count: selectionCount,
             })}
           </span>
-          {!hasSelection ? <small>{t('accounts.batch_hint')}</small> : null}
+          <small>
+            {isSelectionMode || hasSelection
+              ? t('accounts.selection_mode_hint')
+              : t('accounts.batch_hint')}
+          </small>
         </div>
         <div className={styles.batchActions}>
+          {!isSelectionMode && !hasSelection ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              className={styles.selectionModeButton}
+              onClick={() => setIsSelectionMode(true)}
+              aria-pressed={isSelectionMode}
+            >
+              <IconCheck size={15} />
+              {t('accounts.selection_mode_enter')}
+            </Button>
+          ) : null}
+          {showSelectionControls ? renderSelectionControls() : null}
           <div className={styles.batchDisplayToggle}>{renderAccountDisplayToggle()}</div>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => refreshQuotaRows(refreshTargets)}
-            disabled={quotaRefreshing || refreshTargets.length === 0}
-            loading={quotaRefreshing}
-            title={t('accounts.refresh_quota')}
-          >
-            <IconRefreshCw size={15} />
-            {t('accounts.refresh_quota')}
-          </Button>
-          {hasSelection ? (
-            <>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => handleBatchStatus(true)}
-                disabled={disableControls || statusUpdating}
-                title={t('accounts.enable')}
-              >
-                <IconCheck size={15} />
-                {t('accounts.enable')}
-              </Button>
-              <Button
-                variant="danger"
-                size="sm"
-                onClick={() => handleBatchStatus(false)}
-                disabled={disableControls || statusUpdating}
-                title={t('accounts.disable')}
-              >
-                <IconX size={15} />
-                {t('accounts.disable')}
-              </Button>
-            </>
+          {!hasSelection && !isSelectionMode ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => refreshQuotaRows(refreshTargets)}
+              disabled={quotaRefreshing || refreshTargets.length === 0}
+              loading={quotaRefreshing}
+              title={t('accounts.refresh_quota')}
+            >
+              {!quotaRefreshing ? <IconRefreshCw size={15} /> : null}
+              {t('accounts.refresh_quota')}
+            </Button>
           ) : null}
         </div>
       </section>
@@ -1968,6 +2043,30 @@ export function AccountsPage() {
 
   const renderFloatingBatchActions = () => {
     if (selectionCount === 0) return null;
+    const moreItems: DropdownMenuItem[] = [
+      {
+        key: 'restore-default',
+        label: t('accounts.restore_default_priority'),
+        icon: <IconRefreshCw size={15} />,
+        onClick: () => {
+          void patchPriorityRows(selectedRows, 0).then(() => setIsSelectionMode(false));
+        },
+        disabled: disableControls || batchFieldsUpdating,
+      },
+      { key: 'danger-divider', type: 'divider' },
+      {
+        key: 'delete',
+        label: t('common.delete'),
+        icon: <IconTrash2 size={15} />,
+        onClick: () => {
+          if (selectedHasPartialSharedAuthFile) return;
+          batchDelete(selectedFileNames);
+        },
+        disabled:
+          disableControls || selectedFileNames.length === 0 || selectedHasPartialSharedAuthFile,
+        tone: 'danger',
+      },
+    ];
 
     const content = (
       <div className={styles.floatingBatchActionContainer}>
@@ -1978,9 +2077,6 @@ export function AccountsPage() {
                 count: selectionCount,
               })}
             </span>
-            <Button variant="ghost" size="sm" onClick={deselectAll}>
-              {t('auth_files.batch_deselect')}
-            </Button>
           </div>
           <div className={styles.floatingBatchActionRight}>
             <Button
@@ -1991,7 +2087,7 @@ export function AccountsPage() {
               loading={quotaRefreshing}
               title={t('accounts.refresh_quota')}
             >
-              <IconRefreshCw size={15} />
+              {!quotaRefreshing ? <IconRefreshCw size={15} /> : null}
               {t('accounts.refresh_quota')}
             </Button>
             <Button
@@ -2043,49 +2139,25 @@ export function AccountsPage() {
             >
               {t('auth_files.batch_websockets_disable')}
             </Button>
-            <Select
-              value={priorityDraft}
-              options={PRIORITY_OPTIONS}
-              onChange={setPriorityDraft}
-              ariaLabel={t('accounts.priority_select')}
-              className={styles.prioritySelect}
-            />
             <Button
               variant="secondary"
               size="sm"
-              disabled={disableControls || batchFieldsUpdating}
-              loading={batchFieldsUpdating}
-              onClick={() => patchPriorityRows(selectedRows, Number(priorityDraft))}
+              disabled={disableControls || selectedRows.length === 0 || batchFieldsUpdating}
+              onClick={() => {
+                setBatchPriorityValue('');
+                setBatchPriorityOpen(true);
+              }}
               title={t('accounts.set_priority')}
             >
               {t('accounts.set_priority')}
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={disableControls || batchFieldsUpdating}
-              onClick={() => patchPriorityRows(selectedRows, 0)}
-              title={t('accounts.restore_default')}
-            >
-              {t('accounts.restore_default')}
-            </Button>
-            <Button
-              variant="danger"
-              size="sm"
-              disabled={
-                disableControls ||
-                selectedFileNames.length === 0 ||
-                selectedHasPartialSharedAuthFile
-              }
-              onClick={() => {
-                if (selectedHasPartialSharedAuthFile) return;
-                batchDelete(selectedFileNames);
-              }}
-              title={t('common.delete')}
-            >
-              <IconTrash2 size={15} />
-              {t('common.delete')}
-            </Button>
+            <DropdownMenu
+              items={moreItems}
+              ariaLabel={t('accounts.batch_more')}
+              triggerLabel={t('accounts.batch_more')}
+              triggerIcon={<IconMoreVertical size={16} />}
+              triggerClassName={styles.floatingBatchMore}
+            />
           </div>
         </div>
       </div>
@@ -2308,28 +2380,17 @@ export function AccountsPage() {
               <article
                 key={row.selectionKey}
                 data-account-card={row.selectionKey}
+                aria-selected={selectedFiles.has(row.selectionKey)}
                 className={[
                   styles.accountCard,
                   selectedRowKey === row.selectionKey ? styles.accountCardSelected : '',
+                  selectedFiles.has(row.selectionKey) ? styles.accountCardBulkSelected : '',
+                  isSelectionMode ? styles.accountCardSelectionMode : '',
                 ]
                   .filter(Boolean)
                   .join(' ')}
-                onClick={() => setSelectedRowKey(row.selectionKey)}
+                onClick={() => handleAccountCardClick(row)}
               >
-                {paged ? (
-                  <div
-                    className={styles.accountCardSelect}
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <SelectionCheckbox
-                      checked={selectedFiles.has(row.selectionKey)}
-                      onChange={() => toggleSelect(row.selectionKey)}
-                      disabled={row.runtimeOnly}
-                      ariaLabel={t('accounts.select_account', { name: row.fileName })}
-                    />
-                  </div>
-                ) : null}
-
                 <div className={styles.accountCardIdentity}>
                   <div className={styles.accountIdentityBadgeRow}>
                     <span className={styles.providerPill}>
@@ -2717,7 +2778,7 @@ export function AccountsPage() {
                 disabled={eventsUnavailable || detailEventsLoading}
                 loading={detailEventsLoading}
               >
-                <IconRefreshCw size={14} />
+                {!detailEventsLoading ? <IconRefreshCw size={14} /> : null}
                 {t('common.refresh')}
               </Button>
             </div>
@@ -2857,7 +2918,7 @@ export function AccountsPage() {
               onClick={() => refreshQuotaRows([selectedRow])}
               loading={quotaRefreshing}
             >
-              <IconRefreshCw size={16} />
+              {!quotaRefreshing ? <IconRefreshCw size={16} /> : null}
               {t('accounts.refresh_quota')}
             </Button>
             <Button
@@ -2903,7 +2964,7 @@ export function AccountsPage() {
               disabled={disableControls || selectedRow.runtimeOnly}
               loading={deleting === selectedRow.fileName}
             >
-              <IconTrash2 size={16} />
+              {deleting !== selectedRow.fileName ? <IconTrash2 size={16} /> : null}
               {t('auth_files.delete_button')}
             </Button>
           </footer>
@@ -3037,7 +3098,7 @@ export function AccountsPage() {
                   onClick={() => refreshQuotaRows(rows)}
                   loading={quotaRefreshing}
                 >
-                  <IconRefreshCw size={15} />
+                  {!quotaRefreshing ? <IconRefreshCw size={15} /> : null}
                   {t('accounts.refresh_quota')}
                 </Button>
                 <Button
@@ -3521,7 +3582,7 @@ export function AccountsPage() {
         disabled={disableControls || authJsonPasteSaving}
         loading={authJsonPasteSaving}
       >
-        <IconFileText size={15} />
+        {!authJsonPasteSaving ? <IconFileText size={15} /> : null}
         {t('auth_files.paste_button')}
       </Button>
       <Button
@@ -3531,7 +3592,7 @@ export function AccountsPage() {
         disabled={disableControls || uploading}
         loading={uploading}
       >
-        <IconPlus size={15} />
+        {!uploading ? <IconPlus size={15} /> : null}
         {t('auth_files.upload_button')}
       </Button>
       <input
@@ -3619,6 +3680,52 @@ export function AccountsPage() {
         onClose={() => setOauthModelAliasEditorProvider(null)}
         onSaved={reloadOauthRules}
       />
+      <Modal
+        open={batchPriorityOpen}
+        onClose={() => {
+          if (!batchFieldsUpdating) setBatchPriorityOpen(false);
+        }}
+        closeDisabled={batchFieldsUpdating}
+        title={t('accounts.batch_priority_title')}
+        width={420}
+        footer={
+          <div className={styles.batchPriorityFooter}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setBatchPriorityOpen(false)}
+              disabled={batchFieldsUpdating}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void handleBatchPrioritySave()}
+              disabled={disableControls || selectedRows.length === 0 || batchFieldsUpdating}
+              loading={batchFieldsUpdating}
+            >
+              {t('common.confirm')}
+            </Button>
+          </div>
+        }
+      >
+        <div className={styles.batchPriorityModal}>
+          <Input
+            label={t('accounts.priority_label')}
+            placeholder={t('accounts.priority_placeholder')}
+            hint={t('accounts.priority_hint')}
+            value={batchPriorityValue}
+            onChange={(event) => setBatchPriorityValue(event.target.value)}
+            disabled={disableControls || batchFieldsUpdating}
+            inputMode="numeric"
+            autoFocus
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' || disableControls || batchFieldsUpdating) return;
+              void handleBatchPrioritySave();
+            }}
+          />
+        </div>
+      </Modal>
       <CodexReauthDialog
         open={Boolean(codexReauthTarget)}
         target={codexReauthTarget}

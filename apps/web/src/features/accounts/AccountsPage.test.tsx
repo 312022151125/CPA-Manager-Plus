@@ -2,6 +2,7 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { isValidElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '@/components/ui/Button';
+import { DropdownMenu } from '@/components/ui/DropdownMenu';
 import type { AuthFileItem } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import { AccountsPage } from './AccountsPage';
@@ -130,6 +131,10 @@ const { mocks } = vi.hoisted(() => {
       showNotification: vi.fn(),
       showConfirmation: vi.fn(),
       loadFiles: vi.fn(async () => undefined),
+      toggleSelect: vi.fn(),
+      selectAllVisible: vi.fn(),
+      invertVisibleSelection: vi.fn(),
+      deselectAll: vi.fn(),
       batchPatchFields: vi.fn(async () => ({ success: 1, failed: 0, failedNames: [] })),
       batchSetStatus: vi.fn(async () => undefined),
       batchDownload: vi.fn(async () => undefined),
@@ -229,9 +234,10 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
     savePastedAuthJson: vi.fn(async () => 'saved.json'),
     handleDelete: vi.fn(),
     handleDownload: vi.fn(async () => undefined),
-    toggleSelect: vi.fn(),
-    selectAllVisible: vi.fn(),
-    deselectAll: vi.fn(),
+    toggleSelect: mocks.toggleSelect,
+    selectAllVisible: mocks.selectAllVisible,
+    invertVisibleSelection: mocks.invertVisibleSelection,
+    deselectAll: mocks.deselectAll,
     batchDownload: mocks.batchDownload,
     batchSetStatus: mocks.batchSetStatus,
     batchPatchFields: mocks.batchPatchFields,
@@ -490,6 +496,10 @@ describe('AccountsPage replacement flows', () => {
     };
     mocks.navigate.mockClear();
     mocks.showNotification.mockClear();
+    mocks.toggleSelect.mockClear();
+    mocks.selectAllVisible.mockClear();
+    mocks.invertVisibleSelection.mockClear();
+    mocks.deselectAll.mockClear();
     mocks.batchPatchFields.mockClear();
     mocks.batchDelete.mockClear();
     mocks.getAnalytics.mockReset();
@@ -561,12 +571,17 @@ describe('AccountsPage replacement flows', () => {
     mocks.selectionCount = 1;
 
     const renderer = await renderAccountsPage();
-    const deleteButton = findButtonByText(renderer, 'common.delete');
+    const batchMoreMenu = renderer.root
+      .findAllByType(DropdownMenu)
+      .find((node) => node.props.ariaLabel === 'accounts.batch_more');
+    const deleteItem = batchMoreMenu?.props.items.find(
+      (item: { key?: string }) => item.key === 'delete'
+    );
 
-    expect(deleteButton.props.disabled).toBe(true);
+    expect(deleteItem?.disabled).toBe(true);
 
     await act(async () => {
-      deleteButton.props.onClick?.();
+      deleteItem?.onClick?.();
     });
 
     expect(mocks.batchDelete).not.toHaveBeenCalled();
@@ -661,8 +676,64 @@ describe('AccountsPage replacement flows', () => {
         (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
       )
     ).toHaveLength(2);
+    expect(
+      renderer.root.findAll(
+        (node) =>
+          typeof node.props['aria-label'] === 'string' &&
+          node.props['aria-label'].startsWith('accounts.select_account:')
+      )
+    ).toHaveLength(0);
     expect(getAccountListItemTexts(renderer).join('\n')).toContain('high.json');
     expect(() => findHostButtonByText(renderer, 'accounts.view_mode_table')).toThrow();
+  });
+
+  it('selects account cards by row click while selection mode is active', async () => {
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.selection_mode_enter').props.onClick();
+    });
+
+    const card = renderer.root.findByProps({ 'data-account-card': 'codex.json\u0000auth-1' });
+    await act(async () => {
+      card.props.onClick();
+    });
+
+    expect(mocks.toggleSelect).toHaveBeenCalledWith('codex.json\u0000auth-1');
+  });
+
+  it('keeps auth-file selection helpers in accounts selection mode', async () => {
+    mocks.files = [
+      makeCodexFile('codex-page.json', 'auth-1', 'page@example.com'),
+      makeCodexFile('codex-filtered.json', 'auth-2', 'filtered@example.com'),
+    ];
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.selection_mode_enter').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'auth_files.batch_select_page').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'auth_files.batch_select_filtered').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'auth_files.batch_invert_page').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'auth_files.batch_deselect').props.onClick();
+    });
+
+    expect(mocks.selectAllVisible).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.selectAllVisible.mock.calls[0][0].map((item: AuthFileItem) => item.name).sort()
+    ).toEqual(['codex-filtered.json', 'codex-page.json']);
+    expect(
+      mocks.selectAllVisible.mock.calls[1][0].map((item: AuthFileItem) => item.name).sort()
+    ).toEqual(['codex-filtered.json', 'codex-page.json']);
+    expect(mocks.invertVisibleSelection).toHaveBeenCalledTimes(1);
+    expect(mocks.deselectAll).toHaveBeenCalledTimes(1);
   });
 
   it('renders health evidence as an independent account card section', async () => {
