@@ -30,7 +30,7 @@ interface QuotaStoreState {
   clearQuotaCache: () => void;
 }
 
-const resolveUpdater = <T,>(updater: QuotaUpdater<T>, prev: T): T => {
+const resolveUpdater = <T>(updater: QuotaUpdater<T>, prev: T): T => {
   if (typeof updater === 'function') {
     return (updater as (value: T) => T)(prev);
   }
@@ -45,6 +45,24 @@ const emptyQuotaState = {
   xaiQuota: {},
 };
 
+type PersistableQuotaState = {
+  status?: string;
+  observedFromUsageHeaders?: boolean;
+};
+
+const isPersistableQuotaState = (item: PersistableQuotaState | undefined): boolean =>
+  item?.status === 'success' || item?.status === 'error';
+
+const filterPersistableQuotaStates = <TState extends PersistableQuotaState>(
+  quota: Record<string, TState> | undefined
+): Record<string, TState> => {
+  if (!quota) return {};
+
+  return Object.fromEntries(
+    Object.entries(quota).filter(([, item]) => isPersistableQuotaState(item))
+  );
+};
+
 const filterPersistableCodexQuota = (
   quota: Record<string, CodexQuotaState> | undefined
 ): Record<string, CodexQuotaState> => {
@@ -52,7 +70,8 @@ const filterPersistableCodexQuota = (
 
   return Object.fromEntries(
     Object.entries(quota).filter(([, item]) => {
-      return item?.status === 'success' && item.observedFromUsageHeaders !== true;
+      if (!isPersistableQuotaState(item)) return false;
+      return item.status !== 'success' || item.observedFromUsageHeaders !== true;
     })
   );
 };
@@ -101,13 +120,21 @@ export const useQuotaStore = create<QuotaStoreState>()(
         },
       })),
       partialize: (state) => ({
+        antigravityQuota: filterPersistableQuotaStates(state.antigravityQuota),
+        claudeQuota: filterPersistableQuotaStates(state.claudeQuota),
         codexQuota: filterPersistableCodexQuota(state.codexQuota),
+        kimiQuota: filterPersistableQuotaStates(state.kimiQuota),
+        xaiQuota: filterPersistableQuotaStates(state.xaiQuota),
       }),
       merge: (persistedState, currentState) => {
         const persisted = persistedState as Partial<QuotaStoreState> | undefined;
         return {
           ...currentState,
+          antigravityQuota: filterPersistableQuotaStates(persisted?.antigravityQuota),
+          claudeQuota: filterPersistableQuotaStates(persisted?.claudeQuota),
           codexQuota: filterPersistableCodexQuota(persisted?.codexQuota),
+          kimiQuota: filterPersistableQuotaStates(persisted?.kimiQuota),
+          xaiQuota: filterPersistableQuotaStates(persisted?.xaiQuota),
         };
       },
     }

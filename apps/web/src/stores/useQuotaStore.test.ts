@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CodexQuotaState } from '@/types';
+import type {
+  AntigravityQuotaState,
+  ClaudeQuotaState,
+  CodexQuotaState,
+  KimiQuotaState,
+  XaiQuotaState,
+} from '@/types';
 
 type StorageLike = {
   getItem: (key: string) => string | null;
@@ -24,13 +30,19 @@ const createMemoryStorage = (): StorageLike => {
   };
 };
 
-const readPersistedCodexQuota = async () => {
+const readPersistedQuotaState = async () => {
   const { STORAGE_KEY_QUOTA_CACHE } = await import('@/utils/constants');
   const { obfuscatedStorage } = await import('@/services/storage/secureStorage');
   const persisted = obfuscatedStorage.getItem<{
-    state?: { codexQuota?: Record<string, CodexQuotaState> };
+    state?: {
+      antigravityQuota?: Record<string, AntigravityQuotaState>;
+      claudeQuota?: Record<string, ClaudeQuotaState>;
+      codexQuota?: Record<string, CodexQuotaState>;
+      kimiQuota?: Record<string, KimiQuotaState>;
+      xaiQuota?: Record<string, XaiQuotaState>;
+    };
   }>(STORAGE_KEY_QUOTA_CACHE);
-  return persisted?.state?.codexQuota ?? {};
+  return persisted?.state ?? {};
 };
 
 describe('useQuotaStore persistence', () => {
@@ -46,7 +58,7 @@ describe('useQuotaStore persistence', () => {
     vi.unstubAllGlobals();
   });
 
-  it('persists only manually fetched Codex success states', async () => {
+  it('persists manually fetched Codex success and error states', async () => {
     const { useQuotaStore } = await import('./useQuotaStore');
 
     useQuotaStore.getState().setCodexQuota({
@@ -65,10 +77,83 @@ describe('useQuotaStore persistence', () => {
         status: 'error',
         windows: [],
         error: 'failed',
+        errorStatus: 401,
+      },
+      loading: {
+        status: 'loading',
+        windows: [],
       },
     });
 
-    expect(Object.keys(await readPersistedCodexQuota())).toEqual(['manual']);
+    const persisted = await readPersistedQuotaState();
+    expect(Object.keys(persisted.codexQuota ?? {})).toEqual(['manual', 'failed']);
+    expect(persisted.codexQuota?.failed).toMatchObject({
+      status: 'error',
+      error: 'failed',
+      errorStatus: 401,
+    });
+  });
+
+  it('persists success and error states for every quota provider', async () => {
+    const { useQuotaStore } = await import('./useQuotaStore');
+
+    useQuotaStore.getState().setClaudeQuota({
+      claudeSuccess: { status: 'success', windows: [] },
+      claudeError: { status: 'error', windows: [], error: 'claude failed', errorStatus: 500 },
+      claudeLoading: { status: 'loading', windows: [] },
+    });
+    useQuotaStore.getState().setAntigravityQuota({
+      antigravitySuccess: { status: 'success', groups: [] },
+      antigravityError: { status: 'error', groups: [], error: 'antigravity failed' },
+      antigravityLoading: { status: 'loading', groups: [] },
+    });
+    useQuotaStore.getState().setKimiQuota({
+      kimiSuccess: { status: 'success', rows: [] },
+      kimiError: { status: 'error', rows: [], error: 'kimi failed' },
+      kimiLoading: { status: 'loading', rows: [] },
+    });
+    useQuotaStore.getState().setXaiQuota({
+      xaiSuccess: { status: 'success', billing: null },
+      xaiError: { status: 'error', billing: null, error: 'xai failed' },
+      xaiLoading: { status: 'loading', billing: null },
+    });
+
+    const persisted = await readPersistedQuotaState();
+
+    expect(Object.keys(persisted.claudeQuota ?? {})).toEqual(['claudeSuccess', 'claudeError']);
+    expect(Object.keys(persisted.antigravityQuota ?? {})).toEqual([
+      'antigravitySuccess',
+      'antigravityError',
+    ]);
+    expect(Object.keys(persisted.kimiQuota ?? {})).toEqual(['kimiSuccess', 'kimiError']);
+    expect(Object.keys(persisted.xaiQuota ?? {})).toEqual(['xaiSuccess', 'xaiError']);
+  });
+
+  it('hydrates persisted quota success and error states', async () => {
+    const { useQuotaStore } = await import('./useQuotaStore');
+
+    useQuotaStore.getState().setCodexQuota({
+      failed: {
+        status: 'error',
+        windows: [],
+        error: 'failed',
+        errorStatus: 401,
+      },
+    });
+    useQuotaStore.getState().setClaudeQuota({
+      claudeSuccess: { status: 'success', windows: [] },
+    });
+
+    vi.resetModules();
+    const { useQuotaStore: hydratedQuotaStore } = await import('./useQuotaStore');
+
+    expect(hydratedQuotaStore.getState().codexQuota.failed).toMatchObject({
+      status: 'error',
+      errorStatus: 401,
+    });
+    expect(hydratedQuotaStore.getState().claudeQuota.claudeSuccess).toMatchObject({
+      status: 'success',
+    });
   });
 
   it('clears quota state and persisted quota cache together', async () => {
@@ -85,6 +170,12 @@ describe('useQuotaStore persistence', () => {
     useQuotaStore.getState().clearQuotaCache();
 
     expect(useQuotaStore.getState().codexQuota).toEqual({});
-    expect(await readPersistedCodexQuota()).toEqual({});
+    expect(await readPersistedQuotaState()).toMatchObject({
+      antigravityQuota: {},
+      claudeQuota: {},
+      codexQuota: {},
+      kimiQuota: {},
+      xaiQuota: {},
+    });
   });
 });
