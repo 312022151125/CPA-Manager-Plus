@@ -1,7 +1,27 @@
 @use '../../styles/variables' as *;
 @use '../../styles/mixins' as *;
 
+@mixin accounts-theme-vars {
+  --accounts-surface: var(--bg-primary);
+  --accounts-strong-surface: var(--app-surface-strong, var(--bg-primary));
+  --accounts-muted-surface: var(--surface-subtle);
+  --accounts-border: var(--border-color);
+  --accounts-strong-border: var(--border-primary);
+  --accounts-text: var(--text-primary);
+  --accounts-muted: var(--text-secondary);
+  --accounts-brand: var(--primary-color);
+  --accounts-brand-active: var(--primary-active, var(--primary-color));
+  --accounts-primary: var(--accounts-brand);
+  --accounts-success: var(--success-color);
+  --accounts-warning: var(--warning-color);
+  --accounts-danger: var(--danger-color);
+  --accounts-info: var(--accounts-brand);
+  --accounts-neutral: var(--accounts-muted);
+  --accounts-overlay: color-mix(in srgb, var(--accounts-brand-active) 30%, transparent);
+}
+
 .container {
+  @include accounts-theme-vars;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -74,23 +94,23 @@
 }
 
 .metricIcongreen {
-  background: color-mix(in srgb, #16a34a 14%, transparent);
-  color: #15803d;
+  background: color-mix(in srgb, var(--accounts-success) 14%, transparent);
+  color: var(--accounts-success);
 }
 
 .metricIconamber {
-  background: color-mix(in srgb, #f59e0b 15%, transparent);
-  color: #b45309;
+  background: color-mix(in srgb, var(--accounts-warning) 15%, transparent);
+  color: var(--accounts-warning);
 }
 
 .metricIconred {
-  background: color-mix(in srgb, #ef4444 13%, transparent);
-  color: #dc2626;
+  background: color-mix(in srgb, var(--accounts-danger) 13%, transparent);
+  color: var(--accounts-danger);
 }
 
 .metricIconviolet {
-  background: color-mix(in srgb, #7c3aed 13%, transparent);
-  color: #6d28d9;
+  background: color-mix(in srgb, var(--accounts-brand-active) 13%, transparent);
+  color: var(--accounts-brand-active);
 }
 
 .metricBody {
@@ -481,15 +501,15 @@
 }
 
 .evidenceBarGood {
-  background: #059669;
+  background: var(--accounts-success);
 }
 
 .evidenceBarWarn {
-  background: #f97316;
+  background: var(--accounts-warning);
 }
 
 .evidenceBarBad {
-  background: #ef4444;
+  background: var(--accounts-danger);
 }
 
 .evidenceBarNeutral {
@@ -511,11 +531,11 @@
 }
 
 .accountReasonLineWarning {
-  color: #b45309;
+  color: var(--accounts-warning);
 }
 
 .accountReasonLineDanger {
-  color: #dc2626;
+  color: var(--accounts-danger);
 }
 
 .accountHealthMetaRow {
@@ -654,18 +674,18 @@
 }
 
 .badgeGood {
-  background: color-mix(in srgb, #16a34a 13%, transparent);
-  color: #15803d;
+  background: color-mix(in srgb, var(--accounts-success) 13%, transparent);
+  color: var(--accounts-success);
 }
 
 .badgeWarn {
-  background: color-mix(in srgb, #f59e0b 15%, transparent);
-  color: #b45309;
+  background: color-mix(in srgb, var(--accounts-warning) 15%, transparent);
+  color: var(--accounts-warning);
 }
 
 .badgeBad {
-  background: color-mix(in srgb, #ef4444 13%, transparent);
-  color: #dc2626;
+  background: color-mix(in srgb, var(--accounts-danger) 13%, transparent);
+  color: var(--accounts-danger);
 }
 
 .badgeMuted {
@@ -696,7 +716,7 @@
 }
 
 .inspectionHint {
-  color: #b45309 !important;
+  color: var(--accounts-warning) !important;
 }
 
 .statusBadgeRow {
@@ -734,13 +754,13 @@
 }
 
 .statusBadgedanger {
-  background: color-mix(in srgb, #ef4444 12%, transparent);
-  color: #dc2626;
+  background: color-mix(in srgb, var(--accounts-danger) 12%, transparent);
+  color: var(--accounts-danger);
 }
 
 .statusBadgewarning {
-  background: color-mix(in srgb, #f59e0b 14%, transparent);
-  color: #b45309;
+  background: color-mix(in srgb, var(--accounts-warning) 14%, transparent);
+  color: var(--accounts-warning);
 }
 
 .statusBadgeinfo {
@@ -791,15 +811,15 @@
 }
 
 .quotaBarGood {
-  background: #059669;
+  background: var(--accounts-success);
 }
 
 .quotaBarWarn {
-  background: #f97316;
+  background: var(--accounts-warning);
 }
 
 .quotaBarBad {
-  background: #ef4444;
+  background: var(--accounts-danger);
 }
 
 .quotaBarNeutral {
@@ -812,8 +832,8 @@
 }
 
 .priorityBad {
-  background: color-mix(in srgb, #ef4444 12%, transparent);
-  color: #dc2626;
+  background: color-mix(in srgb, var(--accounts-danger) 12%, transparent);
+  color: var(--accounts-danger);
 }
 
 .accountsPagination {
@@ -863,13 +883,8 @@
 }
 
 .accountDetailDrawer {
-  --accounts-surface: var(--app-surface-strong, var(--bg-primary));
-  --accounts-muted-surface: var(--surface-subtle);
-  --accounts-border: var(--border-color);
-  --accounts-strong-border: var(--border-primary);
-  --accounts-text: var(--text-primary);
-  --accounts-muted: var(--text-secondary);
-  --accounts-primary: var(--primary-color);
+  @include accounts-theme-vars;
+  --accounts-surface: var(--accounts-strong-surface);
   background: var(--accounts-surface);
   color: var(--accounts-text);
 }
@@ -1085,13 +1100,13 @@
 }
 
 .eventStatusSuccess {
-  background: color-mix(in srgb, #16a34a 13%, transparent);
-  color: #15803d;
+  background: color-mix(in srgb, var(--accounts-success) 13%, transparent);
+  color: var(--accounts-success);
 }
 
 .eventStatusFailed {
-  background: color-mix(in srgb, #ef4444 13%, transparent);
-  color: #dc2626;
+  background: color-mix(in srgb, var(--accounts-danger) 13%, transparent);
+  color: var(--accounts-danger);
 }
 
 .drawerActions {
@@ -1351,13 +1366,7 @@
 
 /* Refreshed workspace layout, aligned with Usage Analytics. */
 .container {
-  --accounts-surface: var(--bg-primary);
-  --accounts-muted-surface: var(--surface-subtle);
-  --accounts-border: var(--border-color);
-  --accounts-strong-border: var(--border-primary);
-  --accounts-text: var(--text-primary);
-  --accounts-muted: var(--text-secondary);
-  --accounts-primary: var(--primary-color);
+  @include accounts-theme-vars;
   display: grid;
   gap: 16px;
   min-width: 0;
@@ -1604,7 +1613,7 @@
   border: 1px solid var(--accounts-strong-border);
   border-radius: 12px;
   background: var(--accounts-surface);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+  box-shadow: var(--shadow-lg);
 }
 
 .accountSortDropdownItem.accountSortDropdownItem {
@@ -1655,6 +1664,7 @@
 }
 
 .mobileFilterLayer {
+  @include accounts-theme-vars;
   position: fixed;
   inset: 0;
   z-index: 2000;
@@ -1665,7 +1675,7 @@
   inset: 0;
   padding: 0;
   border: 0;
-  background: rgba(15, 23, 42, 0.36);
+  background: var(--accounts-overlay);
   cursor: pointer;
 }
 
@@ -1682,7 +1692,7 @@
   border-bottom: 0;
   border-radius: 20px 20px 0 0;
   background: var(--accounts-surface);
-  box-shadow: 0 -20px 42px rgba(15, 23, 42, 0.2);
+  box-shadow: var(--shadow-lg);
 }
 
 .mobileFilterHeader {
@@ -1785,23 +1795,23 @@
 }
 
 .metricCardblue {
-  --metric-accent: #3b82f6;
+  --metric-accent: var(--accounts-brand);
 }
 
 .metricCardgreen {
-  --metric-accent: #10b981;
+  --metric-accent: var(--accounts-success);
 }
 
 .metricCardamber {
-  --metric-accent: #f59e0b;
+  --metric-accent: var(--accounts-warning);
 }
 
 .metricCardred {
-  --metric-accent: #ef4444;
+  --metric-accent: var(--accounts-danger);
 }
 
 .metricCardviolet {
-  --metric-accent: #7c3aed;
+  --metric-accent: var(--accounts-brand-active);
 }
 
 .metricIcon {
@@ -1905,7 +1915,7 @@
   height: 0;
   pointer-events: none;
   content: '';
-  box-shadow: -16px 0 18px -18px rgba(15, 23, 42, 0.5);
+  box-shadow: -16px 0 18px -18px var(--accounts-border);
 }
 
 .compactTable {
@@ -1937,7 +1947,7 @@
     right: 0;
     z-index: 2;
     background: var(--accounts-surface);
-    box-shadow: -10px 0 14px -14px rgba(15, 23, 42, 0.45);
+    box-shadow: -1px 0 0 var(--accounts-border);
   }
 
   th:last-child {
@@ -2310,7 +2320,7 @@
     border-color: color-mix(in srgb, var(--accounts-border) 90%, transparent);
     border-radius: 12px;
     background: color-mix(in srgb, var(--accounts-surface) 94%, var(--accounts-muted-surface));
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    box-shadow: var(--shadow-sm);
   }
 
   .accountCardIdentity {
@@ -2423,6 +2433,7 @@
 }
 
 .floatingBatchActionContainer {
+  @include accounts-theme-vars;
   position: fixed;
   left: var(--content-center-x, 50%);
   bottom: calc(16px + env(safe-area-inset-bottom));
@@ -2442,8 +2453,8 @@
   padding: 10px 12px;
   border: 1px solid var(--accounts-border);
   border-radius: 14px;
-  background: var(--bg-primary);
-  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.22);
+  background: var(--accounts-strong-surface);
+  box-shadow: var(--shadow-lg);
 }
 
 .floatingBatchActionLeft,
