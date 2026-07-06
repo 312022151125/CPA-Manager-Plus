@@ -262,10 +262,17 @@
 }
 
 .rowActions {
-  display: inline-flex;
+  display: grid;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   white-space: nowrap;
+
+  :global(.btn) {
+    justify-content: flex-start;
+    width: 100%;
+    min-height: 28px;
+    border-radius: 8px;
+  }
 }
 
 .accountCardList {
@@ -277,13 +284,17 @@
 
 .accountCard {
   display: grid;
-  grid-template-columns:
-    auto minmax(220px, 1.28fr) minmax(150px, 0.76fr) minmax(210px, 1fr)
-    minmax(150px, 0.68fr) minmax(170px, 0.78fr) auto;
+  grid-template-columns: auto minmax(190px, 0.88fr) minmax(180px, 0.88fr) minmax(
+      150px,
+      0.64fr
+    ) minmax(
+      280px,
+      1.36fr
+    ) minmax(136px, 0.58fr);
   align-items: center;
-  gap: 10px 12px;
+  gap: 12px 16px;
   min-width: 0;
-  min-height: 86px;
+  min-height: 116px;
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
   border-radius: 8px;
@@ -312,33 +323,44 @@
 }
 
 .accountCardIdentity,
-.accountCardStatus,
-.accountCardQuota,
-.accountCardUsage,
+.accountCardHealth,
+.accountCardEvidence,
+.accountCardBusiness,
 .accountCardRecommendation {
   min-width: 0;
 }
 
 .accountCardIdentity {
   display: grid;
-  gap: 5px;
+  align-content: center;
+  gap: 6px;
 }
 
-.accountCardTitleRow {
+.accountIdentityBadgeRow,
+.accountCardLine,
+.accountHealthMetaRow {
   display: flex;
   align-items: center;
-  gap: 6px;
   min-width: 0;
+}
 
-  strong {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--text-primary);
-    font-size: 13px;
-    font-weight: 800;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+.accountIdentityBadgeRow {
+  gap: 6px;
+}
+
+.accountCardLine {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.accountIdentityTitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .accountCardFile {
@@ -351,10 +373,10 @@
   white-space: nowrap;
 }
 
-.accountCardMetaRow,
 .accountCardQuotaMeta {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.95fr);
+  align-items: center;
   gap: 5px;
   min-width: 0;
 }
@@ -384,18 +406,115 @@
   min-width: 0;
 }
 
-.accountCardStatus {
+.accountCardHealth {
   display: grid;
-  gap: 6px;
+  gap: 7px;
 
-  .statusStack small {
+  small {
     max-width: 100%;
   }
 }
 
-.accountCardQuota {
+.accountCardEvidence {
   display: grid;
+  align-content: center;
+  gap: 8px;
+}
+
+.evidenceSummaryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 900;
+  }
+}
+
+.evidenceTrack {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border-color) 58%, transparent);
+}
+
+.evidenceBar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.evidenceBarGood {
+  background: #059669;
+}
+
+.evidenceBarWarn {
+  background: #f97316;
+}
+
+.evidenceBarBad {
+  background: #ef4444;
+}
+
+.evidenceBarNeutral {
+  background: var(--text-secondary);
+}
+
+.accountReasonLine {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountReasonLineMuted {
+  color: var(--text-secondary);
+}
+
+.accountReasonLineWarning {
+  color: #b45309;
+}
+
+.accountReasonLineDanger {
+  color: #dc2626;
+}
+
+.accountHealthMetaRow {
+  flex-wrap: wrap;
   gap: 6px;
+
+  small {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.accountCardBusiness {
+  display: grid;
+  gap: 7px;
 
   .quotaTrack {
     max-width: none;
@@ -415,62 +534,19 @@
   }
 }
 
-.accountCardUsage {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-
-  div {
-    min-width: 0;
-  }
-
-  span,
-  strong {
-    display: block;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  span {
-    color: var(--text-secondary);
-    font-size: 11px;
-    font-weight: 800;
-  }
-
-  strong {
-    margin-top: 3px;
-    color: var(--text-primary);
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-  }
-}
-
 .accountCardRecommendation {
   display: grid;
   align-content: center;
-  gap: 6px;
+  justify-items: stretch;
+  gap: 7px;
 
   :global(.btn) {
-    justify-self: start;
     max-width: 100%;
   }
 
   :global(.btn > span) {
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  small {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--text-secondary);
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 1.25;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -498,6 +574,42 @@
     color: var(--text-secondary);
     font-size: 12px;
   }
+}
+
+.quotaWindowGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+}
+
+.quotaWindowCard {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding-inline: 10px;
+
+  &:first-child {
+    padding-left: 0;
+  }
+
+  &:only-child {
+    grid-column: 1 / -1;
+    padding-right: 0;
+  }
+
+  & + & {
+    border-left: 1px solid color-mix(in srgb, var(--border-color) 68%, transparent);
+  }
+}
+
+.quotaWindowSummary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .providerPill,
@@ -2154,24 +2266,23 @@
 }
 
 .quotaTrack {
-  max-width: 138px;
+  max-width: none;
 }
 
 .rowActions {
-  justify-content: flex-end;
-  gap: 2px;
+  justify-content: stretch;
+  gap: 6px;
 }
 
 .rowActionMenu {
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  min-height: 30px;
-  padding: 0;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: var(--accounts-muted);
+  justify-content: flex-start;
 }
 
 .rowActionMenu:hover {
@@ -2190,20 +2301,15 @@
 
 @include tablet {
   .accountCard {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: start;
   }
 
-  .accountCardStatus,
-  .accountCardQuota,
-  .accountCardUsage,
+  .accountCardHealth,
+  .accountCardEvidence,
+  .accountCardBusiness,
   .accountCardRecommendation {
     grid-column: 2 / -1;
-  }
-
-  .accountCardActions {
-    grid-column: 3;
-    grid-row: 1;
   }
 
   .batchBar {
@@ -2255,26 +2361,20 @@
     border-bottom: 1px solid color-mix(in srgb, var(--accounts-border) 76%, transparent);
   }
 
-  .accountCardTitleRow {
-    align-items: center;
+  .accountIdentityBadgeRow {
     flex-wrap: wrap;
     gap: 4px 6px;
+  }
 
-    strong {
-      flex: 1 1 100%;
-      font-size: 13px;
-      line-height: 1.25;
-      white-space: normal;
-      word-break: break-word;
-    }
+  .accountIdentityTitle {
+    font-size: 13px;
+    line-height: 1.25;
+    white-space: normal;
+    word-break: break-word;
   }
 
   .accountCardFile {
     font-size: 11px;
-  }
-
-  .accountCardMetaRow {
-    gap: 4px;
   }
 
   .providerPill,
@@ -2286,71 +2386,48 @@
     font-size: 11px;
   }
 
-  .accountCardActions {
-    grid-column: 1 / -1;
-    grid-row: auto;
-    justify-self: start;
-  }
-
-  .accountCardStatus,
-  .accountCardQuota,
-  .accountCardUsage,
+  .accountCardHealth,
+  .accountCardEvidence,
+  .accountCardBusiness,
   .accountCardRecommendation {
     grid-column: 1 / -1;
   }
 
-  .statusStack {
-    align-items: flex-start;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 6px;
-
-    small {
-      width: auto;
-      max-width: 100%;
-    }
-  }
-
-  .accountCardStatus {
-    display: grid;
-    gap: 8px;
-    padding: 8px 10px;
-    border: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
-    border-radius: 10px;
-    background: var(--accounts-surface);
-  }
-
-  .accountCardSectionTitle {
-    display: block;
-    color: var(--accounts-muted);
-    font-size: 11px;
-    font-weight: 800;
-    line-height: 1.2;
-  }
-
-  .accountCardAlerts {
-    display: grid;
-    gap: 6px;
+  .accountCardHealth,
+  .accountCardEvidence,
+  .accountCardBusiness,
+  .accountCardRecommendation {
     padding-top: 8px;
     border-top: 1px solid color-mix(in srgb, var(--accounts-border) 64%, transparent);
   }
 
-  .accountCardQuota,
-  .accountCardUsage,
-  .accountCardRecommendation {
-    display: grid;
-    gap: 8px;
-    padding: 10px;
-    border: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--accounts-muted-surface) 48%, var(--accounts-surface));
+  .accountCardLine,
+  .quotaCellHeader {
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 
   .quotaTrack {
     max-width: none;
   }
 
+  .quotaWindowGrid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .quotaWindowCard {
+    padding: 0;
+
+    & + & {
+      padding-top: 8px;
+      border-top: 1px solid color-mix(in srgb, var(--accounts-border) 64%, transparent);
+      border-left: 0;
+    }
+  }
+
   .accountCardQuotaMeta {
+    grid-template-columns: 1fr;
     gap: 4px;
 
     span {
@@ -2358,26 +2435,8 @@
     }
   }
 
-  .accountCardUsage {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0;
-
-    > div {
-      padding-inline: 4px;
-    }
-
-    > div + div {
-      border-left: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
-      padding-left: 12px;
-    }
-  }
-
   .accountCardRecommendation {
     align-content: start;
-
-    small {
-      white-space: normal;
-    }
   }
 
   .rowActions {

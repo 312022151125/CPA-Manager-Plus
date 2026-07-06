@@ -259,13 +259,6 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesOauth', () => ({
   }),
 }));
 
-vi.mock('@/features/authFiles/hooks/useAntigravitySubscriptions', () => ({
-  useAntigravitySubscriptions: () => ({
-    subscriptions: {},
-    refreshSubscription: vi.fn(async () => undefined),
-  }),
-}));
-
 vi.mock('@/features/authFiles/hooks/useAuthFilesModels', () => ({
   useAuthFilesModels: () => ({
     modelsModalOpen: false,
@@ -670,6 +663,22 @@ describe('AccountsPage replacement flows', () => {
     ).toHaveLength(2);
     expect(getAccountListItemTexts(renderer).join('\n')).toContain('high.json');
     expect(() => findHostButtonByText(renderer, 'accounts.view_mode_table')).toThrow();
+  });
+
+  it('renders health evidence as an independent account card section', async () => {
+    mocks.files = [
+      {
+        ...makeCodexFile('healthy.json', 'auth-1', 'healthy@example.com'),
+        recent_requests: [{ success: 128, failed: 0 }],
+      },
+    ];
+
+    const renderer = await renderAccountsPage();
+    const cardText = getAccountListItemTexts(renderer).join('\n');
+
+    expect(cardText).toContain('accounts.activity_success_failure');
+    expect(cardText).toContain('100%');
+    expect(cardText).not.toContain('accounts.activity_brief');
   });
 
   it('renders the mobile filters entrypoint in the accounts toolbar', async () => {

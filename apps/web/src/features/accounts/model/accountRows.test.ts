@@ -162,6 +162,36 @@ describe('accountRows', () => {
     expect(rows[1].quota.observedTraceId).toBe('trace-auth-index-1');
   });
 
+  it('matches Codex inspection results by auth index for shared auth rows', () => {
+    const inspection: CodexInspectionResult = {
+      id: 10,
+      runId: 1,
+      accountKey: 'second',
+      fileName: 'shared.codex.json',
+      displayAccount: 'second@example.com',
+      authIndex: '1',
+      provider: 'codex',
+      disabled: false,
+      action: 'reauth',
+      actionReason: 'expired',
+      statusCode: 401,
+      isQuota: false,
+      createdAtMs: 1000,
+    };
+    const rows = buildAccountRows(
+      [
+        { name: 'shared.codex.json', type: 'codex', authIndex: '0' },
+        { name: 'shared.codex.json', type: 'codex', authIndex: '1' },
+      ],
+      emptyStores(),
+      [inspection]
+    );
+
+    expect(rows[0].inspection).toBeNull();
+    expect(rows[1].inspection?.action).toBe('reauth');
+    expect(rows[1].inspection?.statusCode).toBe(401);
+  });
+
   it('surfaces diagnostic-only Codex header snapshots without quota cache', () => {
     const snapshot: UsageHeaderSnapshot = {
       event_hash: 'diagnostic-only',
@@ -215,6 +245,44 @@ describe('accountRows', () => {
         search: 'usage_limit_reached',
       }).map((row) => row.fileName)
     ).toEqual(['codex-diagnostic.json']);
+  });
+
+  it('uses Antigravity quota buckets and subscription plan in account rows', () => {
+    const rows = buildAccountRows(
+      [{ name: 'antigravity.json', type: 'antigravity' }],
+      {
+        ...emptyStores(),
+        antigravityQuota: {
+          'antigravity.json': {
+            status: 'success',
+            subscription: {
+              plan: 'pro',
+              tierName: 'Pro',
+              tierId: 'pro',
+            },
+            groups: [
+              {
+                id: 'primary',
+                label: 'Primary',
+                buckets: [
+                  {
+                    id: 'weekly',
+                    label: 'Weekly',
+                    remainingFraction: 0.42,
+                    resetTime: '07-11 12:00',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      }
+    );
+
+    expect(rows[0].planType).toBe('pro');
+    expect(rows[0].quota.remainingPercent).toBe(42);
+    expect(rows[0].quota.usedPercent).toBe(58);
+    expect(rows[0].quota.resetLabel).toBe('07-11 12:00');
   });
 
   it('keeps cached Codex quota source while appending header diagnostics', () => {

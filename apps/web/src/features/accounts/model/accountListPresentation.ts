@@ -1,17 +1,35 @@
 import type { QuotaCooldownInfo } from '@/services/api';
+import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/authFilesPageModel';
 import type { AccountRow } from './accountRows';
 import type { AccountRecommendation } from './quotaRecommendations';
+import type { UsageValueSource } from './usageValueRows';
 
 export type AccountListHealthStatusKey =
   | 'reauth'
-  | 'cooldown'
-  | 'exhausted'
-  | 'low'
-  | 'problem'
+  | 'five_hour_cooldown'
+  | 'weekly_cooldown'
+  | 'monthly_cooldown'
+  | 'five_hour_exhausted'
+  | 'weekly_exhausted'
+  | 'monthly_exhausted'
+  | 'limited'
   | 'disabled'
-  | 'loading'
+  | 'exception'
   | 'available'
-  | 'unknown';
+  | 'raw';
+export type AccountListHealthReasonTone = 'muted' | 'warning' | 'danger';
+
+type AccountListQuotaWindowKind = 'five_hour' | 'weekly' | 'monthly';
+type AccountListQuotaLimitKind = AccountListQuotaWindowKind | 'unknown';
+type HealthTooltipParams = Record<string, string | number>;
+
+export interface AccountListQuotaWindowPresentation {
+  key: string;
+  label: string;
+  remainingPercent: number | null;
+  usedPercent: number | null;
+  resetLabel: string;
+}
 
 export interface AccountListPresentationItem {
   identity: {
@@ -26,6 +44,11 @@ export interface AccountListPresentationItem {
   health: {
     status: AccountListHealthStatusKey;
     labelKey: string;
+    tooltipKey: string;
+    tooltipParams: HealthTooltipParams;
+    reasonKey: string;
+    reasonParams: HealthTooltipParams;
+    reasonTone: AccountListHealthReasonTone;
     cooldown: QuotaCooldownInfo | null;
   };
   quota: {
@@ -37,8 +60,14 @@ export interface AccountListPresentationItem {
   };
   activity: {
     recentTotal: number;
+    successCount: number;
+    failureCount: number;
     successRate: number | null;
     estimatedValue: number;
+    totalTokens: number;
+    lastSeenMs: number | null;
+    source: UsageValueSource;
+    hasHealthData: boolean;
   };
   recommendation: {
     item: AccountRecommendation | null;
@@ -53,6 +82,17 @@ export interface AccountListPresentationOptions {
   recommendation?: AccountRecommendation | null;
   quotaCooldown?: QuotaCooldownInfo | null;
   estimatedValuePerRequest?: number;
+  activity?: {
+    requests: number;
+    successRate: number | null;
+    inputTokens: number;
+    outputTokens: number;
+    estimatedCost: number;
+    lastSeenMs: number | null;
+    source: UsageValueSource;
+  } | null;
+  codexStatus?: AuthFileCodexStatusSummary | null;
+  quotaWindows?: AccountListQuotaWindowPresentation[];
 }
 
 const DEFAULT_ESTIMATED_VALUE_PER_REQUEST = 0.018;
@@ -106,34 +146,414 @@ export const getRecommendationActionLabelKey = (action: AccountRecommendation['a
   }
 };
 
+const extractHttpStatusCode = (value: string | null | undefined): string => {
+  const text = value?.trim() ?? '';
+  const match = text.match(/\b([1-5][0-9]{2})\b/);
+  return match?.[1] ?? '';
+};
+
 const isAuthProblem = (row: AccountRow, recommendation?: AccountRecommendation | null) => {
   if (recommendation?.action === 'reauth') return true;
   if (row.inspection?.action === 'reauth' || row.inspection?.statusCode === 401) return true;
+  if (extractHttpStatusCode(row.quota.error) === '401') return true;
   const statusMessage = row.statusMessage.trim().toLowerCase();
   return ['unauthorized', 'unauthenticated', 'expired', 'token_expired'].includes(statusMessage);
+};
+
+const getCooldownRecoverAtLabel = (quotaCooldown: QuotaCooldownInfo): string => {
+  const date = new Date(quotaCooldown.recoverAtMs);
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
+};
+
+const getFirstDetail = (...values: Array<string | number | null | undefined>): string => {
+  for (const value of values) {
+    const text = value === null || value === undefined ? '' : String(value).trim();
+    if (text) return text;
+  }
+  return '-';
+};
+
+const getHttpStatusDetail = (statusCode: number | null | undefined): string =>
+  statusCode ? `HTTP ${statusCode}` : '';
+
+const getReauthReasonDetail = (row: AccountRow): string =>
+  getFirstDetail(
+    getHttpStatusDetail(row.inspection?.statusCode),
+    extractHttpStatusCode(row.quota.error),
+    row.inspection?.actionReason,
+    row.statusMessage,
+    row.quota.observedErrorCode,
+    row.quota.observedErrorKind
+  );
+
+const getExceptionDetail = (row: AccountRow): string =>
+  getFirstDetail(
+    row.statusMessage,
+    row.quota.error,
+    row.inspection?.actionReason,
+    [row.quota.observedErrorKind, row.quota.observedErrorCode].filter(Boolean).join(' / '),
+    row.quota.observedTraceId
+  );
+
+const getExceptionReasonDetail = (row: AccountRow): string =>
+  getFirstDetail(
+    getHttpStatusDetail(row.inspection?.statusCode),
+    row.quota.observedErrorCode,
+    row.quota.observedErrorKind,
+    row.quota.error,
+    row.inspection?.actionReason,
+    row.statusMessage
+  );
+
+const getExceptionReasonKey = (row: AccountRow): string => {
+  if (row.quota.status === 'error' || row.quota.error) {
+    return 'accounts.health_reason_exception_quota';
+  }
+  if (row.quota.observedErrorKind || row.quota.observedErrorCode) {
+    return 'accounts.health_reason_exception_header';
+  }
+  if (row.inspection && row.inspection.action !== 'keep') {
+    return 'accounts.health_reason_exception_inspection';
+  }
+  return 'accounts.health_reason_exception_request';
+};
+
+const getLimitedReasonKey = (row: AccountRow): string =>
+  row.quota.source === 'observed-header' ||
+  row.quota.observedErrorKind ||
+  row.quota.observedErrorCode ||
+  row.quota.rateLimitReachedType
+    ? 'accounts.health_reason_limited_header'
+    : 'accounts.health_reason_limited_quota';
+
+const inferQuotaWindowKind = (
+  window: AccountListQuotaWindowPresentation
+): AccountListQuotaWindowKind | null => {
+  const text = `${window.key} ${window.label}`.toLowerCase();
+  if (/(month|monthly|30d|31d|月)/.test(text)) return 'monthly';
+  if (/(week|weekly|7d|7 day|seven|周|週)/.test(text)) return 'weekly';
+  if (/(five|5h|5 h|5-hour|5_hour|five-hour|5小时|5 小时)/.test(text)) {
+    return 'five_hour';
+  }
+  return null;
+};
+
+const windowKindRank: Record<AccountListQuotaWindowKind, number> = {
+  five_hour: 1,
+  weekly: 2,
+  monthly: 3,
+};
+
+const getHighestWindowKind = (
+  left: AccountListQuotaWindowKind | null,
+  right: AccountListQuotaWindowKind
+): AccountListQuotaWindowKind =>
+  left === null || windowKindRank[right] > windowKindRank[left] ? right : left;
+
+const resolveQuotaWindowLimitKind = (
+  quotaWindows: AccountListQuotaWindowPresentation[] = []
+): AccountListQuotaLimitKind | null => {
+  let selected: AccountListQuotaWindowKind | null = null;
+  let hasUnknownLimitedWindow = false;
+
+  quotaWindows.forEach((window) => {
+    if (window.remainingPercent === null || window.remainingPercent > 0) return;
+    const windowKind = inferQuotaWindowKind(window);
+    if (!windowKind) {
+      hasUnknownLimitedWindow = true;
+      return;
+    }
+    selected = getHighestWindowKind(selected, windowKind);
+  });
+
+  if (selected) return selected;
+  return hasUnknownLimitedWindow ? 'unknown' : null;
+};
+
+const resolveCodexLimitKind = (
+  codexStatus?: AuthFileCodexStatusSummary | null
+): AccountListQuotaLimitKind | null => {
+  if (!codexStatus?.isCodex) return null;
+  if (codexStatus.isMonthlyLimited) return 'monthly';
+  if (codexStatus.isWeeklyLimited) return 'weekly';
+  if (codexStatus.isFiveHourLimited) return 'five_hour';
+  if (codexStatus.isUnknownQuotaLimited) return 'unknown';
+  return null;
+};
+
+const getCooldownStatusForWindow = (
+  windowKind: AccountListQuotaWindowKind
+): AccountListHealthStatusKey => {
+  if (windowKind === 'monthly') return 'monthly_cooldown';
+  if (windowKind === 'weekly') return 'weekly_cooldown';
+  return 'five_hour_cooldown';
+};
+
+const getExhaustedStatusForWindow = (
+  windowKind: AccountListQuotaWindowKind
+): AccountListHealthStatusKey => {
+  if (windowKind === 'monthly') return 'monthly_exhausted';
+  if (windowKind === 'weekly') return 'weekly_exhausted';
+  return 'five_hour_exhausted';
+};
+
+const getResetLabelForLimitKind = (
+  kind: AccountListQuotaLimitKind | null,
+  codexStatus?: AuthFileCodexStatusSummary | null,
+  quotaWindows: AccountListQuotaWindowPresentation[] = [],
+  fallbackResetLabel = '-'
+): string => {
+  if (kind === 'monthly') return codexStatus?.monthlyResetLabel ?? fallbackResetLabel;
+  if (kind === 'weekly') return codexStatus?.weeklyResetLabel ?? fallbackResetLabel;
+  if (kind === 'five_hour') return codexStatus?.fiveHourResetLabel ?? fallbackResetLabel;
+  const matchedWindow = quotaWindows.find(
+    (window) => window.remainingPercent !== null && window.remainingPercent <= 0
+  );
+  return matchedWindow?.resetLabel || fallbackResetLabel;
+};
+
+const hasKnownAvailableQuota = (
+  row: AccountRow,
+  quotaWindows: AccountListQuotaWindowPresentation[]
+): boolean => {
+  const knownWindowRemaining = quotaWindows
+    .map((window) => window.remainingPercent)
+    .filter((value): value is number => value !== null && Number.isFinite(value));
+
+  if (knownWindowRemaining.length > 0) {
+    return knownWindowRemaining.every((value) => value > 0);
+  }
+
+  return row.quota.status === 'ok' || row.quota.status === 'low';
+};
+
+type HealthStatusResolution = {
+  status: AccountListHealthStatusKey;
+  tooltipKey: string;
+  tooltipParams?: HealthTooltipParams;
+  reasonKey: string;
+  reasonParams?: HealthTooltipParams;
+  reasonTone: AccountListHealthReasonTone;
 };
 
 const resolveHealthStatus = (
   row: AccountRow,
   recommendation?: AccountRecommendation | null,
-  quotaCooldown?: QuotaCooldownInfo | null
-): AccountListHealthStatusKey => {
-  if (isAuthProblem(row, recommendation)) return 'reauth';
-  if (quotaCooldown) return 'cooldown';
-  if (row.quota.status === 'exhausted') return 'exhausted';
-  if (row.quota.status === 'low') return 'low';
-  if (row.quota.status === 'error' || row.statusMessage) return 'problem';
-  if (row.inspection && row.inspection.action !== 'keep') return 'problem';
-  if (row.disabled || row.quota.status === 'disabled') return 'disabled';
-  if (row.quota.status === 'loading') return 'loading';
-  if (row.quota.status === 'ok') return 'available';
-  return 'unknown';
+  quotaCooldown?: QuotaCooldownInfo | null,
+  codexStatus?: AuthFileCodexStatusSummary | null,
+  quotaWindows: AccountListQuotaWindowPresentation[] = []
+): HealthStatusResolution => {
+  if (codexStatus?.needsReauth || isAuthProblem(row, recommendation)) {
+    const quotaRefreshStatusCode = extractHttpStatusCode(row.quota.error);
+    return {
+      status: 'reauth',
+      tooltipKey: 'accounts.health_tip_reauth',
+      tooltipParams: {
+        detail: getFirstDetail(
+          row.inspection?.actionReason,
+          row.statusMessage,
+          row.quota.error,
+          row.quota.observedErrorCode
+        ),
+      },
+      reasonKey: quotaRefreshStatusCode
+        ? 'accounts.health_reason_reauth_quota_refresh'
+        : row.inspection?.action === 'reauth' || row.inspection?.statusCode === 401
+          ? 'accounts.health_reason_reauth_inspection'
+          : 'accounts.health_reason_reauth_auth',
+      reasonParams: quotaRefreshStatusCode
+        ? { code: quotaRefreshStatusCode }
+        : { detail: getReauthReasonDetail(row) },
+      reasonTone: 'danger',
+    };
+  }
+
+  if (quotaCooldown) {
+    const windowKind =
+      resolveCodexLimitKind(codexStatus) ?? resolveQuotaWindowLimitKind(quotaWindows);
+    if (windowKind && windowKind !== 'unknown') {
+      return {
+        status: getCooldownStatusForWindow(windowKind),
+        tooltipKey: `accounts.health_tip_${getCooldownStatusForWindow(windowKind)}`,
+        tooltipParams: {
+          recoverAt: getCooldownRecoverAtLabel(quotaCooldown),
+          resetAt: getResetLabelForLimitKind(
+            windowKind,
+            codexStatus,
+            quotaWindows,
+            row.quota.resetLabel
+          ),
+        },
+        reasonKey: 'accounts.health_reason_cooldown',
+        reasonTone: 'warning',
+      };
+    }
+    return {
+      status: 'limited',
+      tooltipKey: 'accounts.health_tip_limited_cooldown',
+      tooltipParams: {
+        recoverAt: getCooldownRecoverAtLabel(quotaCooldown),
+      },
+      reasonKey: 'accounts.health_reason_limited_cooldown',
+      reasonTone: 'warning',
+    };
+  }
+
+  const codexLimitKind = resolveCodexLimitKind(codexStatus);
+  if (codexLimitKind) {
+    if (codexLimitKind !== 'unknown') {
+      return {
+        status: getExhaustedStatusForWindow(codexLimitKind),
+        tooltipKey: `accounts.health_tip_${getExhaustedStatusForWindow(codexLimitKind)}`,
+        tooltipParams: {
+          resetAt: getResetLabelForLimitKind(
+            codexLimitKind,
+            codexStatus,
+            quotaWindows,
+            row.quota.resetLabel
+          ),
+        },
+        reasonKey: `accounts.health_reason_${getExhaustedStatusForWindow(codexLimitKind)}`,
+        reasonTone: 'warning',
+      };
+    }
+    return {
+      status: 'limited',
+      tooltipKey: 'accounts.health_tip_limited',
+      tooltipParams: { detail: getFirstDetail(row.quota.rateLimitReachedType, row.quota.error) },
+      reasonKey: getLimitedReasonKey(row),
+      reasonTone: 'warning',
+    };
+  }
+
+  const quotaWindowLimitKind = resolveQuotaWindowLimitKind(quotaWindows);
+  if (quotaWindowLimitKind) {
+    if (quotaWindowLimitKind !== 'unknown') {
+      return {
+        status: getExhaustedStatusForWindow(quotaWindowLimitKind),
+        tooltipKey: `accounts.health_tip_${getExhaustedStatusForWindow(quotaWindowLimitKind)}`,
+        tooltipParams: {
+          resetAt: getResetLabelForLimitKind(
+            quotaWindowLimitKind,
+            null,
+            quotaWindows,
+            row.quota.resetLabel
+          ),
+        },
+        reasonKey: `accounts.health_reason_${getExhaustedStatusForWindow(quotaWindowLimitKind)}`,
+        reasonTone: 'warning',
+      };
+    }
+    return {
+      status: 'limited',
+      tooltipKey: 'accounts.health_tip_limited',
+      tooltipParams: { detail: getFirstDetail(row.quota.rateLimitReachedType, row.quota.error) },
+      reasonKey: getLimitedReasonKey(row),
+      reasonTone: 'warning',
+    };
+  }
+
+  if (row.quota.status === 'exhausted' || row.quota.remainingPercent === 0) {
+    return {
+      status: 'limited',
+      tooltipKey: 'accounts.health_tip_limited',
+      tooltipParams: {
+        detail: getFirstDetail(row.quota.rateLimitReachedType, row.quota.resetLabel),
+      },
+      reasonKey: getLimitedReasonKey(row),
+      reasonTone: 'warning',
+    };
+  }
+
+  if (row.disabled || row.quota.status === 'disabled') {
+    return {
+      status: 'disabled',
+      tooltipKey: 'accounts.health_tip_disabled',
+      tooltipParams: { detail: getFirstDetail(row.statusMessage, row.inspection?.actionReason) },
+      reasonKey: 'accounts.health_reason_disabled',
+      reasonTone: 'muted',
+    };
+  }
+
+  if (
+    row.quota.status === 'error' ||
+    row.statusMessage ||
+    row.quota.error ||
+    row.quota.observedErrorKind ||
+    row.quota.observedErrorCode ||
+    (row.inspection && row.inspection.action !== 'keep')
+  ) {
+    return {
+      status: 'exception',
+      tooltipKey: 'accounts.health_tip_exception',
+      tooltipParams: { detail: getExceptionDetail(row) },
+      reasonKey: getExceptionReasonKey(row),
+      reasonParams: { detail: getExceptionReasonDetail(row) },
+      reasonTone: 'danger',
+    };
+  }
+
+  if (hasKnownAvailableQuota(row, quotaWindows)) {
+    return {
+      status: 'available',
+      tooltipKey: 'accounts.health_tip_available',
+      tooltipParams: { detail: getFirstDetail(row.quota.source, row.quota.resetLabel) },
+      reasonKey: 'accounts.health_reason_available',
+      reasonTone: 'muted',
+    };
+  }
+
+  return {
+    status: 'raw',
+    tooltipKey: 'accounts.health_tip_raw',
+    tooltipParams: { detail: getFirstDetail(row.quota.status, row.statusMessage) },
+    reasonKey: 'accounts.health_reason_raw',
+    reasonTone: 'muted',
+  };
 };
 
 const buildIdentitySubtitle = (row: AccountRow) =>
   [row.fileName, row.authIndex ? `#${row.authIndex}` : '', row.projectId || '']
     .filter(Boolean)
     .join(' · ');
+
+const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
+
+const deriveActivityHealthCounts = (
+  row: AccountRow,
+  activity: AccountListPresentationOptions['activity']
+) => {
+  const fallbackSuccessCount = Math.max(0, row.usage.success);
+  const fallbackFailureCount = Math.max(0, row.usage.failure);
+
+  if (activity && activity.requests > 0 && activity.successRate !== null) {
+    const clampedRate = clampPercent(activity.successRate);
+    const successCount = Math.round((activity.requests * clampedRate) / 100);
+    return {
+      successCount,
+      failureCount: Math.max(0, activity.requests - successCount),
+    };
+  }
+
+  return {
+    successCount: fallbackSuccessCount,
+    failureCount: fallbackFailureCount,
+  };
+};
+
+const resolveActivitySuccessRate = (
+  row: AccountRow,
+  activity: AccountListPresentationOptions['activity'],
+  successCount: number,
+  failureCount: number
+): number | null => {
+  if (activity?.successRate !== null && activity?.successRate !== undefined) {
+    return clampPercent(activity.successRate);
+  }
+  if (row.usage.successRate !== null) return clampPercent(row.usage.successRate);
+  const total = successCount + failureCount;
+  return total > 0 ? (successCount / total) * 100 : null;
+};
 
 export const buildRecommendationBySelectionKey = (recommendations: AccountRecommendation[]) => {
   const map = new Map<string, AccountRecommendation>();
@@ -149,10 +569,23 @@ export const buildAccountListItem = (
 ): AccountListPresentationItem => {
   const recommendation = options.recommendation ?? null;
   const quotaCooldown = options.quotaCooldown ?? null;
-  const recentTotal = row.usage.success + row.usage.failure;
+  const fallbackRecentTotal = row.usage.success + row.usage.failure;
+  const activity = options.activity ?? null;
+  const recentTotal = activity?.requests ?? fallbackRecentTotal;
+  const activityCounts = deriveActivityHealthCounts(row, activity);
+  const successCount = activityCounts.successCount;
+  const failureCount = activityCounts.failureCount;
+  const successRate = resolveActivitySuccessRate(row, activity, successCount, failureCount);
   const estimatedValue =
-    recentTotal * (options.estimatedValuePerRequest ?? DEFAULT_ESTIMATED_VALUE_PER_REQUEST);
-  const healthStatus = resolveHealthStatus(row, recommendation, quotaCooldown);
+    activity?.estimatedCost ??
+    fallbackRecentTotal * (options.estimatedValuePerRequest ?? DEFAULT_ESTIMATED_VALUE_PER_REQUEST);
+  const health = resolveHealthStatus(
+    row,
+    recommendation,
+    quotaCooldown,
+    options.codexStatus ?? null,
+    options.quotaWindows ?? []
+  );
 
   return {
     identity: {
@@ -165,8 +598,13 @@ export const buildAccountListItem = (
       priorityIsNegative: row.priority !== null && row.priority < 0,
     },
     health: {
-      status: healthStatus,
-      labelKey: `accounts.health_${healthStatus}`,
+      status: health.status,
+      labelKey: `accounts.health_${health.status}`,
+      tooltipKey: health.tooltipKey,
+      tooltipParams: health.tooltipParams ?? {},
+      reasonKey: health.reasonKey,
+      reasonParams: health.reasonParams ?? {},
+      reasonTone: health.reasonTone,
       cooldown: quotaCooldown,
     },
     quota: {
@@ -178,8 +616,14 @@ export const buildAccountListItem = (
     },
     activity: {
       recentTotal,
-      successRate: row.usage.successRate,
+      successCount,
+      failureCount,
+      successRate,
       estimatedValue,
+      totalTokens: activity ? activity.inputTokens + activity.outputTokens : 0,
+      lastSeenMs: activity?.lastSeenMs ?? null,
+      source: activity?.source ?? 'recent',
+      hasHealthData: successCount + failureCount > 0,
     },
     recommendation: {
       item: recommendation,

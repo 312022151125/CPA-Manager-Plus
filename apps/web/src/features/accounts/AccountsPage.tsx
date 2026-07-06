@@ -47,7 +47,6 @@ import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { useAuthFilesData } from '@/features/authFiles/hooks/useAuthFilesData';
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
-import { useAntigravitySubscriptions } from '@/features/authFiles/hooks/useAntigravitySubscriptions';
 import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
 import { AuthJsonPasteModal } from '@/features/authFiles/components/AuthJsonPasteModal';
@@ -89,15 +88,16 @@ import {
   buildAccountListItem,
   buildRecommendationBySelectionKey,
   getRecommendationActionLabelKey,
+  type AccountListHealthReasonTone,
   type AccountListHealthStatusKey,
 } from '@/features/accounts/model/accountListPresentation';
 import {
-  buildAuthFileCodexInspectionMap,
-  getAuthFilePatchTarget,
-  getAuthFileCodexInspectionKeyForFile,
+  getAuthFileCodexInspectionKey,
   getAuthFileCodexStatus,
+  getAuthFilePatchTarget,
   getAuthFileSelectionKey,
   hasPartialSharedAuthFileSelection,
+  type AuthFileCodexInspectionSnapshot,
 } from '@/features/authFiles/model/authFilesPageModel';
 import {
   buildUsageValueRowsFromMonitoring,
@@ -147,6 +147,13 @@ type SortableAccountColumn = Extract<AccountRowSortKey, 'reset' | 'priority' | '
 type AccountSortFieldValue = 'default' | SortableAccountColumn;
 type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
+type AccountQuotaDisplayWindow = {
+  key: string;
+  label: string;
+  remainingPercent: number | null;
+  usedPercent: number | null;
+  resetLabel: string;
+};
 
 const PAGE_SIZE_OPTIONS = [
   { value: '10', label: '10' },
@@ -225,6 +232,11 @@ const formatCompactNumber = (value: number) => {
   return String(value);
 };
 
+const clampDisplayPercent = (value: number) => Math.max(0, Math.min(100, value));
+
+const remainingPercentFromUsed = (value: number | null | undefined) =>
+  typeof value === 'number' && Number.isFinite(value) ? clampDisplayPercent(100 - value) : null;
+
 const formatTimestamp = (value: number | null, locale: string) => {
   if (!value) return '-';
   return new Intl.DateTimeFormat(locale, {
@@ -282,20 +294,28 @@ const getHealthStatusClass = (status: AccountListHealthStatusKey) => {
   switch (status) {
     case 'available':
       return styles.badgeGood;
-    case 'low':
-    case 'cooldown':
+    case 'five_hour_cooldown':
+    case 'weekly_cooldown':
+    case 'monthly_cooldown':
+    case 'limited':
       return styles.badgeWarn;
-    case 'exhausted':
-    case 'problem':
+    case 'five_hour_exhausted':
+    case 'weekly_exhausted':
+    case 'monthly_exhausted':
+    case 'exception':
     case 'reauth':
       return styles.badgeBad;
     case 'disabled':
       return styles.badgeMuted;
-    case 'loading':
-      return styles.badgeInfo;
     default:
       return styles.badgeNeutral;
   }
+};
+
+const getHealthReasonToneClass = (tone: AccountListHealthReasonTone) => {
+  if (tone === 'danger') return styles.accountReasonLineDanger;
+  if (tone === 'warning') return styles.accountReasonLineWarning;
+  return styles.accountReasonLineMuted;
 };
 
 const getRemainingBarClass = (row: AccountRow) => {
@@ -305,6 +325,13 @@ const getRemainingBarClass = (row: AccountRow) => {
   return styles.quotaBarNeutral;
 };
 
+const getEvidenceBarClass = (successRate: number | null, hasHealthData: boolean) => {
+  if (!hasHealthData || successRate === null) return styles.evidenceBarNeutral;
+  if (successRate >= 95) return styles.evidenceBarGood;
+  if (successRate >= 80) return styles.evidenceBarWarn;
+  return styles.evidenceBarBad;
+};
+
 const getRecommendationPriorityClass = (priority: AccountRecommendationPriority) => {
   if (priority === 'critical') return styles.badgeBad;
   if (priority === 'high') return styles.badgeWarn;
@@ -312,16 +339,21 @@ const getRecommendationPriorityClass = (priority: AccountRecommendationPriority)
   return styles.badgeNeutral;
 };
 
-const getReadableStatusMessage = (message: string, t: TFunction) => {
-  const normalized = message.trim().toLowerCase();
-  if (!normalized) return '';
-  if (normalized === 'unauthorized' || normalized === 'unauthenticated') {
-    return t('accounts.status_message_unauthorized');
-  }
-  if (normalized === 'expired' || normalized === 'token_expired') {
-    return t('accounts.status_message_expired');
-  }
-  return message;
+const toAuthFileCodexInspectionSnapshot = (
+  row: AccountRow
+): AuthFileCodexInspectionSnapshot | undefined => {
+  if (!row.inspection) return undefined;
+  return {
+    fileName: row.fileName,
+    authIndex: row.authIndex || null,
+    statusCode: row.inspection.statusCode,
+    action: row.inspection.action,
+    usedPercent: row.inspection.usedPercent,
+    isQuota:
+      row.inspection.isQuota ??
+      (row.inspection.usedPercent !== null || row.inspection.action === 'disable' ? true : null),
+    inspectionAtMs: row.inspection.createdAtMs,
+  };
 };
 
 const getValueRangeMs = (range: UsageValueRange) =>
@@ -399,10 +431,6 @@ export function AccountsPage() {
 
   const [oauthViewMode, setOauthViewMode] = useState<'diagram' | 'list'>('list');
   const oauthState = useAuthFilesOauth({ viewMode: oauthViewMode, files });
-  const {
-    subscriptions: antigravitySubscriptions,
-    refreshSubscription: refreshAntigravitySubscription,
-  } = useAntigravitySubscriptions();
   const {
     modelsModalOpen,
     modelsLoading,
@@ -568,9 +596,10 @@ export function AccountsPage() {
       const next = new Map<string, QuotaCooldownInfo>();
       for (const item of items) {
         if (!item.authFileName) continue;
-        const existing = next.get(item.authFileName);
+        const key = getAuthFileCodexInspectionKey(item.authFileName, item.authIndex ?? null);
+        const existing = next.get(key);
         if (!existing || (item.recoverAtMs ?? 0) > (existing.recoverAtMs ?? 0)) {
-          next.set(item.authFileName, item);
+          next.set(key, item);
         }
       }
       setQuotaCooldowns(next);
@@ -735,20 +764,6 @@ export function AccountsPage() {
     () => buildAccountRows(files, baseQuotaStores, inspectionResults, accountQuotaOverrides),
     [accountQuotaOverrides, baseQuotaStores, files, inspectionResults]
   );
-  const codexInspectionMap = useMemo(
-    () =>
-      buildAuthFileCodexInspectionMap(
-        inspectionResults.map((item) => ({
-          fileName: item.fileName,
-          authIndex: item.authIndex ?? null,
-          statusCode: item.statusCode ?? null,
-          action: item.action ?? null,
-          usedPercent: item.usedPercent ?? null,
-          isQuota: item.isQuota ?? null,
-        }))
-      ),
-    [inspectionResults]
-  );
   const metrics = useMemo(() => buildAccountMetrics(rows), [rows]);
   const providerOptions = useMemo(() => getProviderOptions(rows), [rows]);
   const planOptions = useMemo(() => getPlanOptions(rows), [rows]);
@@ -757,6 +772,15 @@ export function AccountsPage() {
     () => buildRecommendationBySelectionKey(recommendations),
     [recommendations]
   );
+  const usageRowBySelectionKey = useMemo(() => {
+    const map = new Map<string, UsageValueRow>();
+    usageRows.forEach((usageRow) => {
+      if (usageRow.row) {
+        map.set(usageRow.row.selectionKey, usageRow);
+      }
+    });
+    return map;
+  }, [usageRows]);
   const filteredRows = useMemo(
     () =>
       sortAccountRows(
@@ -824,32 +848,6 @@ export function AccountsPage() {
     (fileName: string) => getDisplayText(fileName),
     [getDisplayText]
   );
-  const getQuotaSubtext = useCallback(
-    (row: AccountRow) => {
-      if (row.disabled) return t('accounts.quota_subtext_account_disabled');
-      if (row.quota.status === 'unknown') {
-        if (row.quota.source === 'observed-header') {
-          return t('accounts.quota_subtext_observed_pending');
-        }
-        return row.quota.source === 'none'
-          ? t('accounts.quota_subtext_no_cache')
-          : t('accounts.quota_subtext_pending');
-      }
-      if (row.quota.status === 'loading') return t('accounts.quota_subtext_loading');
-      if (row.quota.status === 'error') {
-        return row.quota.error
-          ? t('accounts.quota_subtext_error', { message: row.quota.error })
-          : t('accounts.quota_subtext_error_unknown');
-      }
-      if (row.quota.usedPercent !== null) {
-        return t('accounts.quota_subtext_used', {
-          percent: formatPercent(row.quota.usedPercent),
-        });
-      }
-      return '';
-    },
-    [t]
-  );
   const getQuotaSourceLabel = useCallback(
     (source: AccountRow['quota']['source']) => {
       switch (source) {
@@ -864,27 +862,136 @@ export function AccountsPage() {
     },
     [t]
   );
+  const translateQuotaWindowLabel = useCallback(
+    (
+      label: string | undefined,
+      labelKey?: string,
+      labelParams?: Record<string, string | number>
+    ) => {
+      if (!labelKey) return label || t('accounts.col_quota');
+      return t(labelKey, {
+        defaultValue: label || labelKey,
+        ...labelParams,
+      });
+    },
+    [t]
+  );
+  const buildQuotaDisplayWindows = useCallback(
+    (row: AccountRow): AccountQuotaDisplayWindow[] => {
+      if (row.provider === CODEX_CONFIG.type) {
+        const quota = getDisplayCodexQuota(row.raw);
+        if (quota?.windows?.length) {
+          return quota.windows.map((window) => ({
+            key: window.id,
+            label: translateQuotaWindowLabel(window.label, window.labelKey, window.labelParams),
+            remainingPercent: remainingPercentFromUsed(window.usedPercent),
+            usedPercent: window.usedPercent,
+            resetLabel: window.resetLabel || '-',
+          }));
+        }
+      }
+
+      if (row.provider === CLAUDE_CONFIG.type) {
+        const quota = claudeQuota[row.fileName];
+        if (quota?.windows?.length) {
+          return quota.windows.map((window) => ({
+            key: window.id,
+            label: translateQuotaWindowLabel(window.label, window.labelKey),
+            remainingPercent: remainingPercentFromUsed(window.usedPercent),
+            usedPercent: window.usedPercent,
+            resetLabel: window.resetLabel || '-',
+          }));
+        }
+      }
+
+      if (row.provider === ANTIGRAVITY_CONFIG.type) {
+        const quota = antigravityQuota[row.fileName];
+        const buckets = quota?.groups?.flatMap((group) => group.buckets) ?? [];
+        if (buckets.length) {
+          return buckets.map((bucket) => {
+            const remainingPercent = clampDisplayPercent(bucket.remainingFraction * 100);
+            return {
+              key: bucket.id,
+              label: bucket.label || bucket.id,
+              remainingPercent,
+              usedPercent: clampDisplayPercent(100 - remainingPercent),
+              resetLabel: bucket.resetTime || '-',
+            };
+          });
+        }
+      }
+
+      if (row.provider === KIMI_CONFIG.type) {
+        const quota = kimiQuota[row.fileName];
+        if (quota?.rows?.length) {
+          return quota.rows.map((quotaRow) => {
+            const remainingPercent =
+              quotaRow.limit > 0
+                ? clampDisplayPercent(((quotaRow.limit - quotaRow.used) / quotaRow.limit) * 100)
+                : null;
+            return {
+              key: quotaRow.id,
+              label: translateQuotaWindowLabel(
+                quotaRow.label,
+                quotaRow.labelKey,
+                quotaRow.labelParams
+              ),
+              remainingPercent,
+              usedPercent:
+                remainingPercent === null ? null : clampDisplayPercent(100 - remainingPercent),
+              resetLabel: quotaRow.resetHint || '-',
+            };
+          });
+        }
+      }
+
+      if (row.provider === XAI_CONFIG.type) {
+        const quota = xaiQuota[row.fileName];
+        const usedPercent = quota?.billing?.usedPercent;
+        if (typeof usedPercent === 'number' && Number.isFinite(usedPercent)) {
+          const remainingPercent = clampDisplayPercent(100 - usedPercent);
+          return [
+            {
+              key: 'billing',
+              label: t('accounts.quota_window_billing'),
+              remainingPercent,
+              usedPercent: clampDisplayPercent(usedPercent),
+              resetLabel: quota?.billing?.billingPeriodEnd || '-',
+            },
+          ];
+        }
+      }
+
+      if (row.quota.remainingPercent !== null || row.quota.usedPercent !== null) {
+        return [
+          {
+            key: 'summary',
+            label: t('accounts.col_quota'),
+            remainingPercent: row.quota.remainingPercent,
+            usedPercent: row.quota.usedPercent,
+            resetLabel: row.quota.resetLabel,
+          },
+        ];
+      }
+
+      return [];
+    },
+    [
+      antigravityQuota,
+      claudeQuota,
+      getDisplayCodexQuota,
+      kimiQuota,
+      t,
+      translateQuotaWindowLabel,
+      xaiQuota,
+    ]
+  );
   const accountDisplayHint = t(
     accountDisplayMode === 'masked'
       ? 'quota_management.show_full_credentials_hint'
       : 'quota_management.show_masked_credentials_hint'
   );
   const AccountDisplayIcon = accountDisplayMode === 'masked' ? IconEyeOff : IconEye;
-  const getCodexStatusForRow = useCallback(
-    (row: AccountRow) => {
-      const headerSnapshot = getHighConfidenceUsageHeaderSnapshotForAuthFile(
-        headerSnapshotLookup,
-        row.raw
-      );
-      return getAuthFileCodexStatus(
-        row.raw,
-        getDisplayCodexQuota(row.raw),
-        codexInspectionMap.get(getAuthFileCodexInspectionKeyForFile(row.raw)),
-        headerSnapshot
-      );
-    },
-    [codexInspectionMap, getDisplayCodexQuota, headerSnapshotLookup]
-  );
   const oauthPreviewRows = useMemo(
     () =>
       buildOAuthRulePreviewRows({
@@ -1987,114 +2094,6 @@ export function AccountsPage() {
     return typeof document === 'undefined' ? content : createPortal(content, document.body);
   };
 
-  const getAntigravityPlanLabel = (plan: string | null | undefined, fallback?: string | null) => {
-    if (plan === 'free') return t('antigravity_subscription.plan_free');
-    if (plan === 'pro') return t('antigravity_subscription.plan_pro');
-    if (plan === 'ultra') return t('antigravity_subscription.plan_ultra');
-    if (plan === 'ultra-lite') return t('antigravity_subscription.plan_ultra_lite');
-    return fallback || plan || t('antigravity_subscription.plan_unknown');
-  };
-
-  const renderRowGovernanceBadges = (row: AccountRow) => {
-    const codexStatus = getCodexStatusForRow(row);
-    const quotaCooldown = quotaCooldowns.get(row.fileName);
-    const antigravitySubscription = antigravitySubscriptions[row.fileName];
-    const badges: ReactNode[] = [];
-
-    codexStatus.badges.forEach((badge) => {
-      const label = t(badge.labelKey, {
-        defaultValue: badge.defaultLabel,
-        ...badge.labelParams,
-      });
-      const title = badge.titleKey
-        ? t(badge.titleKey, {
-            defaultValue: badge.defaultTitle ?? badge.defaultLabel,
-            ...badge.labelParams,
-          })
-        : (badge.defaultTitle ?? label);
-      badges.push(
-        <span
-          key={`codex-${badge.kind}`}
-          className={`${styles.statusBadge} ${styles[`statusBadge${badge.tone}`]}`}
-          title={title}
-        >
-          {label}
-        </span>
-      );
-    });
-
-    if (quotaCooldown) {
-      badges.push(
-        <span
-          key="quota-cooldown"
-          className={`${styles.statusBadge} ${styles.statusBadgeinfo}`}
-          title={t('auth_files.quota_cooldown_badge_title', {
-            recoverAt: formatTimestamp(quotaCooldown.recoverAtMs, i18n.language),
-            owner: quotaCooldown.owner || 'cpamp_usage_429',
-          })}
-        >
-          {t('auth_files.quota_cooldown_badge', {
-            recoverAt: formatTimestamp(quotaCooldown.recoverAtMs, i18n.language),
-          })}
-        </span>
-      );
-    }
-
-    if (row.provider === ANTIGRAVITY_CONFIG.type && !row.runtimeOnly) {
-      if (!antigravitySubscription) {
-        badges.push(
-          <button
-            key="antigravity-refresh"
-            type="button"
-            className={styles.statusBadgeButton}
-            onClick={(event) => {
-              event.stopPropagation();
-              void refreshAntigravitySubscription(row.raw);
-            }}
-            disabled={disableControls}
-          >
-            {t('antigravity_subscription.refresh_short')}
-          </button>
-        );
-      } else if (antigravitySubscription.status === 'loading') {
-        badges.push(
-          <span
-            key="antigravity-loading"
-            className={`${styles.statusBadge} ${styles.statusBadgeinfo}`}
-          >
-            {t('antigravity_subscription.loading_short')}
-          </span>
-        );
-      } else if (antigravitySubscription.status === 'error') {
-        badges.push(
-          <span
-            key="antigravity-error"
-            className={`${styles.statusBadge} ${styles.statusBadgedanger}`}
-            title={antigravitySubscription.error || t('common.unknown_error')}
-          >
-            {t('antigravity_subscription.error_badge')}
-          </span>
-        );
-      } else if (antigravitySubscription.data) {
-        const planLabel = getAntigravityPlanLabel(
-          antigravitySubscription.data.plan,
-          antigravitySubscription.data.tierName || antigravitySubscription.data.tierId
-        );
-        badges.push(
-          <span
-            key="antigravity-plan"
-            className={`${styles.statusBadge} ${styles.statusBadgeinfo}`}
-            title={antigravitySubscription.data.tierName || planLabel}
-          >
-            {t('antigravity_subscription.plan_badge', { plan: planLabel })}
-          </span>
-        );
-      }
-    }
-
-    return badges.length > 0 ? <div className={styles.statusBadgeRow}>{badges}</div> : null;
-  };
-
   const buildRowMenuItems = (row: AccountRow): DropdownMenuItem[] => [
     {
       key: 'models',
@@ -2159,17 +2158,18 @@ export function AccountsPage() {
     <div className={styles.rowActions}>
       <Button
         variant="ghost"
-        size="sm"
-        iconOnly
+        size="xs"
         onClick={() => setSelectedRowKey(row.selectionKey)}
         title={t('accounts.open_detail', { name: row.fileName })}
         aria-label={t('accounts.open_detail', { name: row.fileName })}
       >
         <IconChevronRight size={16} />
+        {t('accounts.open_detail_short')}
       </Button>
       <DropdownMenu
         items={buildRowMenuItems(row)}
         ariaLabel={t('accounts.col_actions')}
+        triggerLabel={t('accounts.col_actions')}
         triggerIcon={<IconMoreVertical size={16} />}
         triggerClassName={styles.rowActionMenu}
       />
@@ -2232,32 +2232,78 @@ export function AccountsPage() {
         <div className={styles.accountCardList}>
           {rowsToRender.map((row) => {
             const recommendation = recommendationBySelectionKey.get(row.selectionKey) ?? null;
+            const usageRow = usageRowBySelectionKey.get(row.selectionKey) ?? null;
+            const quotaWindows = buildQuotaDisplayWindows(row);
+            const quotaCooldown =
+              quotaCooldowns.get(
+                getAuthFileCodexInspectionKey(row.fileName, row.authIndex || null)
+              ) ?? null;
+            const codexStatus =
+              row.provider === CODEX_CONFIG.type
+                ? getAuthFileCodexStatus(
+                    row.raw,
+                    getDisplayCodexQuota(row.raw),
+                    toAuthFileCodexInspectionSnapshot(row),
+                    getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, row.raw)
+                  )
+                : null;
             const item = buildAccountListItem(row, {
               recommendation,
-              quotaCooldown: quotaCooldowns.get(row.fileName) ?? null,
+              quotaCooldown,
+              codexStatus,
+              quotaWindows,
+              activity: usageRow
+                ? {
+                    requests: usageRow.requests,
+                    successRate: usageRow.successRate,
+                    inputTokens: usageRow.inputTokens,
+                    outputTokens: usageRow.outputTokens,
+                    estimatedCost: usageRow.estimatedCost,
+                    lastSeenMs: usageRow.lastSeenMs,
+                    source: usageRow.source,
+                  }
+                : null,
             });
             const remaining = item.quota.remainingPercent;
-            const readableStatusMessage = getReadableStatusMessage(row.statusMessage, t);
-            const quotaSubtext = getQuotaSubtext(row);
-            const quotaWidth = Math.max(0, Math.min(100, remaining ?? 0));
-            const governanceBadges = renderRowGovernanceBadges(row);
-            const inspectionHint =
-              row.inspection && row.inspection.action !== 'keep'
-                ? t('accounts.inspection_action', {
-                    action: t(`accounts.action_${row.inspection.action}`, {
-                      defaultValue: row.inspection.action,
-                    }),
-                  })
-                : '';
-            const healthDetail =
-              item.health.status === 'cooldown' && item.health.cooldown
-                ? t('accounts.health_detail_cooldown', {
-                    recoverAt: formatTimestamp(item.health.cooldown.recoverAtMs, i18n.language),
-                  })
-                : readableStatusMessage ||
-                  inspectionHint ||
-                  (row.runtimeOnly ? t('accounts.health_detail_runtime') : '') ||
-                  (item.health.status === 'unknown' ? t('accounts.health_detail_unknown') : '');
+            const displayQuotaWindows =
+              quotaWindows.length > 0
+                ? quotaWindows.slice(0, 2)
+                : [
+                    {
+                      key: 'unknown',
+                      label: t('accounts.col_quota'),
+                      remainingPercent: remaining,
+                      usedPercent: item.quota.usedPercent,
+                      resetLabel: item.quota.resetLabel,
+                    },
+                  ];
+            const quotaWindowTitle =
+              quotaWindows
+                .map((window) => `${window.label}: ${formatPercent(window.remainingPercent)}`)
+                .join('\n') || t('accounts.quota_brief_unknown');
+            const evidenceRateLabel = item.activity.hasHealthData
+              ? formatPercent(item.activity.successRate)
+              : '-';
+            const evidenceSummary = item.activity.hasHealthData
+              ? t('accounts.activity_success_failure', {
+                  success: formatCompactNumber(item.activity.successCount),
+                  failure: formatCompactNumber(item.activity.failureCount),
+                })
+              : t('accounts.activity_no_health');
+            const evidenceTitle = item.activity.hasHealthData
+              ? t('accounts.activity_health_title', {
+                  success: formatCompactNumber(item.activity.successCount),
+                  failure: formatCompactNumber(item.activity.failureCount),
+                  rate: evidenceRateLabel,
+                })
+              : t('accounts.activity_no_health');
+            const evidenceWidth =
+              item.activity.hasHealthData && item.activity.successRate !== null
+                ? clampDisplayPercent(item.activity.successRate)
+                : 0;
+            const quotaSourceShortLabel = t(item.quota.sourceShortLabelKey);
+            const healthTitle = t(item.health.tooltipKey, item.health.tooltipParams);
+            const healthReasonLine = t(item.health.reasonKey, item.health.reasonParams);
             return (
               <article
                 key={row.selectionKey}
@@ -2285,11 +2331,7 @@ export function AccountsPage() {
                 ) : null}
 
                 <div className={styles.accountCardIdentity}>
-                  <span className={styles.accountCardSectionTitle}>
-                    {t('accounts.list_section_identity')}
-                  </span>
-                  <div className={styles.accountCardTitleRow}>
-                    <strong title={item.identity.title}>{getDisplayAccount(row)}</strong>
+                  <div className={styles.accountIdentityBadgeRow}>
                     <span className={styles.providerPill}>
                       {getProviderLabel(item.identity.provider, t)}
                     </span>
@@ -2297,105 +2339,91 @@ export function AccountsPage() {
                       <span className={styles.accountMetaPill}>{item.identity.planType}</span>
                     ) : null}
                   </div>
-                  <span className={styles.accountCardFile} title={item.identity.subtitle}>
-                    {getDisplayFileName(item.identity.subtitle)}
+                  <strong className={styles.accountIdentityTitle} title={item.identity.title}>
+                    {getDisplayAccount(row)}
+                  </strong>
+                  <span className={styles.accountCardFile} title={row.fileName}>
+                    {getDisplayFileName(row.fileName)}
                   </span>
-                  <div className={styles.accountCardMetaRow}>
+                </div>
+
+                <div className={styles.accountCardHealth}>
+                  <div className={styles.accountCardLine}>
+                    <span
+                      className={`${styles.badge} ${getHealthStatusClass(item.health.status)}`}
+                      title={healthTitle}
+                    >
+                      {t(item.health.labelKey)}
+                    </span>
                     <span
                       className={
                         item.identity.priorityIsNegative ? styles.priorityBad : styles.priority
                       }
+                      title={t('accounts.col_priority')}
                     >
                       {t('accounts.col_priority')}: {item.identity.priority}
                     </span>
                   </div>
-                </div>
-
-                <div className={styles.accountCardStatus}>
-                  <span className={styles.accountCardSectionTitle}>
-                    {t('accounts.list_section_status')}
+                  <span
+                    className={`${styles.accountReasonLine} ${getHealthReasonToneClass(
+                      item.health.reasonTone
+                    )}`}
+                    title={healthTitle}
+                  >
+                    {healthReasonLine}
                   </span>
-                  <div className={styles.statusStack}>
-                    <span className={`${styles.badge} ${getHealthStatusClass(item.health.status)}`}>
-                      {t(item.health.labelKey)}
-                    </span>
-                    {healthDetail ? (
-                      <small title={row.statusMessage || healthDetail}>{healthDetail}</small>
-                    ) : null}
-                    {inspectionHint && inspectionHint !== healthDetail ? (
-                      <small className={styles.inspectionHint}>{inspectionHint}</small>
-                    ) : null}
-                  </div>
-                  {governanceBadges ? (
-                    <div className={styles.accountCardAlerts}>
-                      <span className={styles.accountCardSectionTitle}>
-                        {t('accounts.tab_inspection')}
-                      </span>
-                      {governanceBadges}
-                    </div>
-                  ) : null}
                 </div>
 
-                <div className={styles.accountCardQuota}>
-                  <span className={styles.accountCardSectionTitle}>
-                    {t('accounts.list_section_quota')}
-                  </span>
-                  <div className={styles.quotaCell}>
-                    <div className={styles.quotaCellHeader}>
-                      <span className={`${styles.badge} ${getQuotaStatusClass(row.quota.status)}`}>
-                        {t(item.quota.statusLabelKey)}
-                      </span>
-                      <strong>
-                        {remaining !== null
-                          ? t('accounts.quota_brief_remaining', {
-                              percent: formatPercent(remaining),
-                            })
-                          : t('accounts.quota_brief_unknown')}
-                      </strong>
-                    </div>
-                    {quotaSubtext ? (
-                      <small className={styles.quotaSubtext} title={quotaSubtext}>
-                        {quotaSubtext}
-                      </small>
-                    ) : null}
-                    {remaining !== null ? (
-                      <div className={styles.quotaTrack} aria-hidden="true">
-                        <span
-                          className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
-                          style={{ width: `${quotaWidth}%` }}
-                        />
-                      </div>
-                    ) : null}
+                <div className={styles.accountCardEvidence} title={evidenceTitle}>
+                  <div className={styles.evidenceSummaryRow}>
+                    <span>{evidenceSummary}</span>
+                    <strong>{evidenceRateLabel}</strong>
                   </div>
-                  <div className={styles.accountCardQuotaMeta}>
-                    <span title={item.quota.resetLabel}>
-                      {t('accounts.col_reset')}: {item.quota.resetLabel}
-                    </span>
-                    <span title={getQuotaSourceLabel(row.quota.source)}>
-                      {t(item.quota.sourceShortLabelKey)}
-                    </span>
+                  <div className={styles.evidenceTrack} aria-hidden="true">
+                    <span
+                      className={`${styles.evidenceBar} ${getEvidenceBarClass(
+                        item.activity.successRate,
+                        item.activity.hasHealthData
+                      )}`}
+                      style={{ width: `${evidenceWidth}%` }}
+                    />
                   </div>
                 </div>
 
-                <div className={styles.accountCardUsage}>
-                  <div>
-                    <span>{t('accounts.list_section_activity')}</span>
-                    <strong>
-                      {item.activity.recentTotal > 0
-                        ? t('accounts.activity_brief', {
-                            count: item.activity.recentTotal,
-                            rate: formatPercent(item.activity.successRate),
-                          })
-                        : t('accounts.activity_empty')}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>{t('accounts.col_value')}</span>
-                    <strong>
-                      {t('accounts.activity_value_brief', {
-                        value: formatMoney(item.activity.estimatedValue),
-                      })}
-                    </strong>
+                <div className={styles.accountCardBusiness}>
+                  <div className={styles.quotaWindowGrid} title={quotaWindowTitle}>
+                    {displayQuotaWindows.map((window) => {
+                      const windowRemaining = window.remainingPercent;
+                      const windowWidth = Math.max(0, Math.min(100, windowRemaining ?? 0));
+                      return (
+                        <div key={window.key} className={styles.quotaWindowCard}>
+                          <div className={styles.quotaCellHeader}>
+                            <span className={styles.quotaWindowSummary}>{window.label}</span>
+                            <strong>
+                              {windowRemaining !== null
+                                ? t('accounts.quota_brief_remaining', {
+                                    percent: formatPercent(windowRemaining),
+                                  })
+                                : t('accounts.quota_brief_unknown')}
+                            </strong>
+                          </div>
+                          <div className={styles.quotaTrack} aria-hidden="true">
+                            <span
+                              className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
+                              style={{ width: `${windowWidth}%` }}
+                            />
+                          </div>
+                          <div className={styles.accountCardQuotaMeta}>
+                            <span title={getQuotaSourceLabel(row.quota.source)}>
+                              {quotaSourceShortLabel}
+                            </span>
+                            <span title={window.resetLabel}>
+                              {t('accounts.col_reset')}: {window.resetLabel || '-'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -2403,9 +2431,6 @@ export function AccountsPage() {
                   className={styles.accountCardRecommendation}
                   onClick={(event) => event.stopPropagation()}
                 >
-                  <span className={styles.accountCardSectionTitle}>
-                    {t('accounts.list_section_recommendation')}
-                  </span>
                   {recommendation ? (
                     <Button
                       variant={recommendation.priority === 'critical' ? 'danger' : 'secondary'}
@@ -2420,15 +2445,6 @@ export function AccountsPage() {
                       {t(item.recommendation.actionLabelKey)}
                     </span>
                   )}
-                  <small title={t(item.recommendation.reasonKey)}>
-                    {t(item.recommendation.reasonKey)}
-                  </small>
-                </div>
-
-                <div
-                  className={styles.accountCardActions}
-                  onClick={(event) => event.stopPropagation()}
-                >
                   {renderRowActions(row)}
                 </div>
               </article>

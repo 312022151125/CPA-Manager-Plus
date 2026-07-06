@@ -12,7 +12,10 @@ import {
   sumRecentRequests,
   type RecentRequestBucket,
 } from '@/utils/recentRequests';
-import { getAuthFileSelectionKey } from '@/features/authFiles/model/authFilesPageModel';
+import {
+  getAuthFileCodexInspectionKey,
+  getAuthFileSelectionKey,
+} from '@/features/authFiles/model/authFilesPageModel';
 import {
   buildObservedCodexQuotaFromHeaderSnapshot,
   getHeaderSnapshotErrorCode,
@@ -73,6 +76,7 @@ export interface AccountInspectionSummary {
   actionStatus: string;
   statusCode: number | null;
   usedPercent: number | null;
+  isQuota?: boolean | null;
   runId: number;
   resultId: number;
   createdAtMs: number;
@@ -181,7 +185,9 @@ const readAuthIndex = (file: AuthFileItem): string =>
   readString(file.authIndex ?? file['auth_index']);
 
 const readProjectId = (file: AuthFileItem): string =>
-  readString(file.projectId ?? file.project_id ?? file.geminiVirtualProject ?? file.gemini_virtual_project);
+  readString(
+    file.projectId ?? file.project_id ?? file.geminiVirtualProject ?? file.gemini_virtual_project
+  );
 
 const readPlanType = (file: AuthFileItem): string | null => {
   const idToken = file.id_token;
@@ -190,8 +196,7 @@ const readPlanType = (file: AuthFileItem): string | null => {
       ? readString((idToken as Record<string, unknown>).plan_type)
       : '';
   const raw =
-    idTokenPlan ||
-    readString(file.planType ?? file.plan_type ?? file.tier ?? file.subscription);
+    idTokenPlan || readString(file.planType ?? file.plan_type ?? file.tier ?? file.subscription);
   return raw ? raw.toLowerCase() : null;
 };
 
@@ -247,9 +252,7 @@ const quotaFromUsedWindows = (
   };
 };
 
-const quotaObservationFields = (
-  quota: CodexQuotaState
-): AccountQuotaObservationFields => {
+const quotaObservationFields = (quota: CodexQuotaState): AccountQuotaObservationFields => {
   if (!quota.observedFromUsageHeaders) return { source: 'cache' };
   return {
     source: 'observed-header',
@@ -278,8 +281,7 @@ const quotaObservationFieldsFromSnapshot = (
     activeLimit: observedQuota?.activeLimit ?? undefined,
     creditsBalance: observedQuota?.creditsBalance ?? undefined,
     rateLimitReachedType: observedQuota?.rateLimitReachedType ?? undefined,
-    primaryOverSecondaryLimitPercent:
-      observedQuota?.primaryOverSecondaryLimitPercent ?? undefined,
+    primaryOverSecondaryLimitPercent: observedQuota?.primaryOverSecondaryLimitPercent ?? undefined,
   };
 };
 
@@ -343,7 +345,10 @@ const quotaFromRemainingFractions = (
   };
 };
 
-const quotaFromError = (error: string | undefined, planType: string | null): AccountQuotaSummary => ({
+const quotaFromError = (
+  error: string | undefined,
+  planType: string | null
+): AccountQuotaSummary => ({
   status: 'error',
   remainingPercent: null,
   usedPercent: null,
@@ -408,20 +413,26 @@ export const resolveAccountQuota = (
     const quota = stores.claudeQuota[file.name];
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(quota.planType ?? filePlanType);
-    if (quota.status === 'error') return quotaFromError(quota.error, quota.planType ?? filePlanType);
+    if (quota.status === 'error')
+      return quotaFromError(quota.error, quota.planType ?? filePlanType);
     return quotaFromUsedWindows(quota.windows, quota.planType ?? filePlanType);
   }
 
   if (provider === 'antigravity') {
     const quota = stores.antigravityQuota[file.name];
     if (!quota) return emptyQuota(filePlanType);
-    if (quota.status === 'loading') return loadingQuota(filePlanType);
-    if (quota.status === 'error') return quotaFromError(quota.error, filePlanType);
+    const subscriptionPlan =
+      readString(quota.subscription?.plan) ||
+      readString(quota.subscription?.tierName) ||
+      readString(quota.subscription?.tierId);
+    const planType = filePlanType ?? (subscriptionPlan ? subscriptionPlan.toLowerCase() : null);
+    if (quota.status === 'loading') return loadingQuota(planType);
+    if (quota.status === 'error') return quotaFromError(quota.error, planType);
     const buckets = quota.groups.flatMap((group) => group.buckets);
     return quotaFromRemainingFractions(
       buckets.map((bucket) => bucket.remainingFraction),
       buckets.find((bucket) => readString(bucket.resetTime))?.resetTime ?? '-',
-      filePlanType
+      planType
     );
   }
 
@@ -488,8 +499,9 @@ const buildInspectionMap = (
   if (!results) return map;
 
   results.forEach((result) => {
-    const key = result.fileName.trim();
-    if (!key) return;
+    const fileName = result.fileName.trim();
+    if (!fileName) return;
+    const key = getAuthFileCodexInspectionKey(fileName, result.authIndex);
     const current = map.get(key);
     if (current && current.createdAtMs >= result.createdAtMs) return;
     map.set(key, {
@@ -498,6 +510,7 @@ const buildInspectionMap = (
       actionStatus: result.actionStatus || 'none',
       statusCode: result.statusCode ?? null,
       usedPercent: result.usedPercent ?? null,
+      isQuota: result.isQuota ?? null,
       runId: result.runId,
       resultId: result.id,
       createdAtMs: result.createdAtMs,
@@ -538,14 +551,15 @@ export const buildAccountRows = (
       provider,
       planType: quota.planType ?? readPlanType(file),
       disabled: file.disabled === true,
-      runtimeOnly: file.runtimeOnly === true || file.runtimeOnly === 'true' || file.runtime_only === true,
+      runtimeOnly:
+        file.runtimeOnly === true || file.runtimeOnly === 'true' || file.runtime_only === true,
       statusMessage: resolveStatusMessage(file),
       authIndex,
       projectId: readProjectId(file),
       priority: readNumber(file.priority),
       quota,
       usage: buildUsageSummary(file),
-      inspection: inspectionByFile.get(file.name) ?? null,
+      inspection: inspectionByFile.get(getAuthFileCodexInspectionKey(file.name, authIndex)) ?? null,
       raw: file,
     };
   });
@@ -568,16 +582,15 @@ export const buildAccountMetrics = (rows: AccountRow[]): AccountMetrics => {
     exhausted: rows.filter((row) => row.quota.status === 'exhausted').length,
     disabled: rows.filter((row) => row.disabled).length,
     needsInspectionAction: rows.filter((row) =>
-      row.inspection ? ['delete', 'disable', 'enable', 'reauth'].includes(row.inspection.action) : false
+      row.inspection
+        ? ['delete', 'disable', 'enable', 'reauth'].includes(row.inspection.action)
+        : false
     ).length,
     successRate: totalRequests > 0 ? (totals.success / totalRequests) * 100 : null,
   };
 };
 
-export const filterAccountRows = (
-  rows: AccountRow[],
-  filters: AccountRowFilters
-): AccountRow[] => {
+export const filterAccountRows = (rows: AccountRow[], filters: AccountRowFilters): AccountRow[] => {
   const search = filters.search.trim().toLowerCase();
   return rows.filter((row) => {
     if (filters.provider !== 'all' && row.provider !== filters.provider) return false;
@@ -621,7 +634,9 @@ export const getProviderOptions = (rows: AccountRow[]) =>
   Array.from(new Set(rows.map((row) => row.provider))).sort();
 
 export const getPlanOptions = (rows: AccountRow[]) =>
-  Array.from(new Set(rows.map((row) => row.planType).filter((value): value is string => Boolean(value)))).sort();
+  Array.from(
+    new Set(rows.map((row) => row.planType).filter((value): value is string => Boolean(value)))
+  ).sort();
 
 const matchesStatusFilter = (row: AccountRow, status: AccountStatusFilter) => {
   if (status === 'all') return true;
@@ -638,7 +653,8 @@ const matchesQuotaBand = (row: AccountRow, band: AccountQuotaBand) => {
   if (band === 'all') return true;
   const remaining = row.quota.remainingPercent;
   if (band === 'spent') return remaining !== null && remaining <= 0;
-  if (band === 'lt20') return remaining !== null && remaining > 0 && remaining < QUOTA_LOW_THRESHOLD;
+  if (band === 'lt20')
+    return remaining !== null && remaining > 0 && remaining < QUOTA_LOW_THRESHOLD;
   if (band === 'between20and50') {
     return remaining !== null && remaining >= QUOTA_LOW_THRESHOLD && remaining < QUOTA_OK_THRESHOLD;
   }
@@ -667,11 +683,7 @@ const compareDefaultAccountRows = (left: AccountRow, right: AccountRow) => {
   });
 };
 
-const compareAccountRowsBySort = (
-  left: AccountRow,
-  right: AccountRow,
-  sort: AccountRowSort
-) => {
+const compareAccountRowsBySort = (left: AccountRow, right: AccountRow, sort: AccountRowSort) => {
   if (sort.key === 'priority') {
     return compareNumbers(left.priority ?? 0, right.priority ?? 0, sort.direction);
   }
@@ -686,11 +698,7 @@ const compareAccountRowsBySort = (
   return 0;
 };
 
-const compareNumbers = (
-  left: number,
-  right: number,
-  direction: AccountRowSortDirection
-) => {
+const compareNumbers = (left: number, right: number, direction: AccountRowSortDirection) => {
   const result = left - right;
   return direction === 'asc' ? result : -result;
 };

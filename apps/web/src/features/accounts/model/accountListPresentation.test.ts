@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AuthFileItem } from '@/types';
 import type { QuotaCooldownInfo } from '@/services/api';
+import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/authFilesPageModel';
 import type { AccountRow } from './accountRows';
 import { buildAccountListItem, buildRecommendationBySelectionKey } from './accountListPresentation';
 import type { AccountRecommendation } from './quotaRecommendations';
@@ -55,6 +56,29 @@ const makeRecommendation = (
   ...overrides,
 });
 
+const makeCodexStatus = (
+  overrides: Partial<AuthFileCodexStatusSummary> = {}
+): AuthFileCodexStatusSummary => ({
+  isCodex: true,
+  isHttp401: false,
+  needsReauth: false,
+  isQuotaLimited: false,
+  isUnknownQuotaLimited: false,
+  isFiveHourLimited: false,
+  isWeeklyLimited: false,
+  isMonthlyLimited: false,
+  hasDisabledRecoveryReset: false,
+  fiveHourResetLabel: null,
+  weeklyResetLabel: null,
+  monthlyResetLabel: null,
+  recoveryResetLabel: null,
+  fiveHourUsedPercent: null,
+  weeklyUsedPercent: null,
+  monthlyUsedPercent: null,
+  badges: [],
+  ...overrides,
+});
+
 describe('accountListPresentation', () => {
   it('prioritizes re-authentication over quota state', () => {
     const row = makeRow({
@@ -87,10 +111,37 @@ describe('accountListPresentation', () => {
 
     expect(item.health.status).toBe('reauth');
     expect(item.health.labelKey).toBe('accounts.health_reauth');
+    expect(item.health.reasonKey).toBe('accounts.health_reason_reauth_inspection');
+    expect(item.health.reasonParams).toEqual({ detail: 'HTTP 401' });
+    expect(item.health.reasonTone).toBe('danger');
     expect(item.recommendation.actionLabelKey).toBe('accounts.recommend_action_reauth');
   });
 
-  it('shows cooldown ahead of exhausted and disabled states', () => {
+  it('summarizes quota refresh 401 as a quota refresh reauth reason', () => {
+    const item = buildAccountListItem(
+      makeRow({
+        quota: {
+          status: 'error',
+          remainingPercent: null,
+          usedPercent: null,
+          resetLabel: '-',
+          planType: null,
+          source: 'cache',
+          error:
+            '额度获取失败：401 Your authentication token has been invalidated. Please try signing in again.',
+        },
+      })
+    );
+
+    expect(item.health.status).toBe('reauth');
+    expect(item.health.reasonKey).toBe('accounts.health_reason_reauth_quota_refresh');
+    expect(item.health.reasonParams).toEqual({ code: '401' });
+    expect(item.health.tooltipParams.detail).toBe(
+      '额度获取失败：401 Your authentication token has been invalidated. Please try signing in again.'
+    );
+  });
+
+  it('shows window cooldown ahead of exhausted and disabled states', () => {
     const row = makeRow({
       disabled: true,
       quota: {
@@ -107,13 +158,89 @@ describe('accountListPresentation', () => {
       recoverAtMs: 1700000000000,
     };
 
-    const item = buildAccountListItem(row, { quotaCooldown });
+    const item = buildAccountListItem(row, {
+      quotaCooldown,
+      codexStatus: makeCodexStatus({
+        isQuotaLimited: true,
+        isFiveHourLimited: true,
+        fiveHourResetLabel: 'later',
+      }),
+    });
 
-    expect(item.health.status).toBe('cooldown');
+    expect(item.health.status).toBe('five_hour_cooldown');
+    expect(item.health.reasonKey).toBe('accounts.health_reason_cooldown');
+    expect(item.health.reasonTone).toBe('warning');
     expect(item.health.cooldown).toBe(quotaCooldown);
   });
 
   it('classifies quota and account fallback states', () => {
+    const weeklyExhaustedItem = buildAccountListItem(
+      makeRow({
+        quota: {
+          status: 'exhausted',
+          remainingPercent: 0,
+          usedPercent: 100,
+          resetLabel: '-',
+          planType: null,
+          source: 'cache',
+        },
+      }),
+      {
+        quotaWindows: [
+          {
+            key: 'weekly',
+            label: 'Weekly quota',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: '-',
+          },
+        ],
+      }
+    );
+    expect(weeklyExhaustedItem.health.status).toBe('weekly_exhausted');
+    expect(weeklyExhaustedItem.health.reasonKey).toBe('accounts.health_reason_weekly_exhausted');
+    expect(weeklyExhaustedItem.health.reasonTone).toBe('warning');
+
+    const lowQuotaItem = buildAccountListItem(
+      makeRow({
+        quota: {
+          status: 'low',
+          remainingPercent: 12,
+          usedPercent: 88,
+          resetLabel: '-',
+          planType: null,
+          source: 'cache',
+        },
+      })
+    );
+    expect(lowQuotaItem.health.status).toBe('available');
+    expect(lowQuotaItem.health.reasonKey).toBe('accounts.health_reason_available');
+    expect(lowQuotaItem.health.reasonTone).toBe('muted');
+
+    const exceptionItem = buildAccountListItem(makeRow({ statusMessage: 'custom problem' }));
+    expect(exceptionItem.health.status).toBe('exception');
+    expect(exceptionItem.health.reasonKey).toBe('accounts.health_reason_exception_request');
+    expect(exceptionItem.health.reasonParams).toEqual({ detail: 'custom problem' });
+    expect(exceptionItem.health.reasonTone).toBe('danger');
+
+    const disabledItem = buildAccountListItem(
+      makeRow({
+        disabled: true,
+        quota: {
+          status: 'disabled',
+          remainingPercent: null,
+          usedPercent: null,
+          resetLabel: '-',
+          planType: null,
+          source: 'none',
+        },
+      })
+    );
+    expect(disabledItem.health.status).toBe('disabled');
+    expect(disabledItem.health.reasonKey).toBe('accounts.health_reason_disabled');
+    expect(disabledItem.health.reasonTone).toBe('muted');
+
+    expect(buildAccountListItem(makeRow()).health.status).toBe('available');
     expect(
       buildAccountListItem(
         makeRow({
@@ -127,54 +254,22 @@ describe('accountListPresentation', () => {
           },
         })
       ).health.status
-    ).toBe('exhausted');
-    expect(
-      buildAccountListItem(
-        makeRow({
-          quota: {
-            status: 'low',
-            remainingPercent: 12,
-            usedPercent: 88,
-            resetLabel: '-',
-            planType: null,
-            source: 'cache',
-          },
-        })
-      ).health.status
-    ).toBe('low');
-    expect(buildAccountListItem(makeRow({ statusMessage: 'custom problem' })).health.status).toBe(
-      'problem'
+    ).toBe('limited');
+    const rawItem = buildAccountListItem(
+      makeRow({
+        quota: {
+          status: 'unknown',
+          remainingPercent: null,
+          usedPercent: null,
+          resetLabel: '-',
+          planType: null,
+          source: 'none',
+        },
+      })
     );
-    expect(
-      buildAccountListItem(
-        makeRow({
-          disabled: true,
-          quota: {
-            status: 'disabled',
-            remainingPercent: null,
-            usedPercent: null,
-            resetLabel: '-',
-            planType: null,
-            source: 'none',
-          },
-        })
-      ).health.status
-    ).toBe('disabled');
-    expect(buildAccountListItem(makeRow()).health.status).toBe('available');
-    expect(
-      buildAccountListItem(
-        makeRow({
-          quota: {
-            status: 'unknown',
-            remainingPercent: null,
-            usedPercent: null,
-            resetLabel: '-',
-            planType: null,
-            source: 'none',
-          },
-        })
-      ).health.status
-    ).toBe('unknown');
+    expect(rawItem.health.status).toBe('raw');
+    expect(rawItem.health.reasonKey).toBe('accounts.health_reason_raw');
+    expect(rawItem.health.reasonTone).toBe('muted');
   });
 
   it('builds identity and activity summaries for list rendering', () => {
@@ -197,7 +292,44 @@ describe('accountListPresentation', () => {
     expect(item.identity.priority).toBe(-5);
     expect(item.identity.priorityIsNegative).toBe(true);
     expect(item.activity.recentTotal).toBe(4);
+    expect(item.activity.successCount).toBe(3);
+    expect(item.activity.failureCount).toBe(1);
+    expect(item.activity.successRate).toBe(75);
+    expect(item.activity.hasHealthData).toBe(true);
     expect(item.activity.estimatedValue).toBeCloseTo(0.072);
+  });
+
+  it('uses monitoring activity when provided for list summaries', () => {
+    const item = buildAccountListItem(
+      makeRow({
+        usage: {
+          success: 1,
+          failure: 0,
+          successRate: 100,
+          recentRequests: [],
+        },
+      }),
+      {
+        activity: {
+          requests: 31,
+          successRate: 96.8,
+          inputTokens: 1200,
+          outputTokens: 300,
+          estimatedCost: 0.42,
+          lastSeenMs: 1700000000000,
+          source: 'monitoring',
+        },
+      }
+    );
+
+    expect(item.activity.recentTotal).toBe(31);
+    expect(item.activity.successCount).toBe(30);
+    expect(item.activity.failureCount).toBe(1);
+    expect(item.activity.successRate).toBe(96.8);
+    expect(item.activity.totalTokens).toBe(1500);
+    expect(item.activity.estimatedValue).toBe(0.42);
+    expect(item.activity.source).toBe('monitoring');
+    expect(item.activity.hasHealthData).toBe(true);
   });
 
   it('maps recommendations by auth-file selection key', () => {
