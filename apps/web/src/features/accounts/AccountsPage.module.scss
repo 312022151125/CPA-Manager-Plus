@@ -869,49 +869,40 @@
   }
 }
 
-.drawerBackdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 1900;
-  display: flex;
-  justify-content: flex-end;
-  background: rgba(15, 23, 42, 0.24);
+.accountDetailDrawer {
+  --accounts-surface: var(--app-surface-strong, var(--bg-primary));
+  --accounts-muted-surface: var(--surface-subtle);
+  --accounts-border: var(--border-color);
+  --accounts-strong-border: var(--border-primary);
+  --accounts-text: var(--text-primary);
+  --accounts-muted: var(--text-secondary);
+  --accounts-primary: var(--primary-color);
+  background: var(--accounts-surface);
+  color: var(--accounts-text);
 }
 
-.drawer {
-  width: min(520px, 100vw);
-  height: 100%;
+.drawerTitleStack {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px;
-  overflow-y: auto;
-  background: var(--bg-primary);
-  border-left: 1px solid var(--border-color);
-  box-shadow: -20px 0 40px rgba(15, 23, 42, 0.14);
+  gap: 2px;
+  min-width: 0;
 }
 
-.drawerHeader {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+.drawerTitlePrimary {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  line-height: 1.3;
+  @include text-ellipsis;
+}
 
-  div {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  strong {
-    color: var(--text-primary);
-    font-size: 17px;
-  }
-
-  span {
-    color: var(--text-secondary);
-    font-size: 12px;
-  }
+.drawerTitleMeta {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  @include text-ellipsis;
 }
 
 .drawerTabs {
@@ -1111,10 +1102,7 @@
 }
 
 .drawerActions {
-  position: sticky;
-  bottom: 0;
-  padding-top: 8px;
-  background: var(--bg-primary);
+  justify-content: flex-end;
 }
 
 .rulesGrid {
@@ -2042,24 +2030,6 @@
   }
 }
 
-.drawerBackdrop {
-  background: rgba(15, 23, 42, 0.42);
-  backdrop-filter: blur(3px);
-}
-
-.drawer {
-  gap: 12px;
-  width: min(560px, 100vw);
-  padding: 18px;
-  background: var(--accounts-surface);
-  box-shadow: -28px 0 56px rgba(15, 23, 42, 0.24);
-}
-
-.drawerHeader {
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--accounts-border);
-}
-
 .drawerTabs {
   gap: 2px;
   padding: 3px;
@@ -2211,10 +2181,6 @@
   .panelHeader {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .drawer {
-    width: 100vw;
   }
 
   .pagination {

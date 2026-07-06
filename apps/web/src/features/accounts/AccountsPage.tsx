@@ -5,6 +5,7 @@ import type { TFunction } from 'i18next';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
+import { Drawer } from '@/components/ui/Drawer';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/DropdownMenu';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
@@ -2520,7 +2521,16 @@ export function AccountsPage() {
   );
 
   const renderDetailDrawer = () => {
-    if (!selectedRow) return null;
+    if (!selectedRow) {
+      return (
+        <Drawer
+          open={false}
+          onClose={() => setSelectedRowKey(null)}
+          width={560}
+          className={styles.accountDetailDrawer}
+        />
+      );
+    }
     const detailTabs: Array<{ id: DetailTab; label: string }> = [
       { id: 'overview', label: t('accounts.detail_tab_overview') },
       { id: 'quota', label: t('accounts.detail_tab_quota') },
@@ -2877,42 +2887,24 @@ export function AccountsPage() {
     };
 
     return (
-      <div className={styles.drawerBackdrop} onClick={() => setSelectedRowKey(null)}>
-        <aside className={styles.drawer} onClick={(event) => event.stopPropagation()}>
-          <header className={styles.drawerHeader}>
-            <div>
-              <strong title={selectedRow.accountLabel}>{getDisplayAccount(selectedRow)}</strong>
-              <span>
-                {getProviderLabel(selectedRow.provider, t)} · {selectedRow.planType ?? '-'} ·{' '}
-                {getDisplayFileName(selectedRow.fileName)}
-              </span>
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              iconOnly
-              onClick={() => setSelectedRowKey(null)}
-              aria-label={t('common.close')}
-            >
-              <IconX size={18} />
-            </Button>
-          </header>
-          <div className={styles.drawerTabs} role="tablist">
-            {detailTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={detailTab === tab.id}
-                className={detailTab === tab.id ? styles.drawerTabActive : ''}
-                onClick={() => setDetailTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
+      <Drawer
+        open
+        onClose={() => setSelectedRowKey(null)}
+        width={560}
+        className={styles.accountDetailDrawer}
+        title={
+          <div className={styles.drawerTitleStack}>
+            <strong className={styles.drawerTitlePrimary} title={selectedRow.accountLabel}>
+              {getDisplayAccount(selectedRow)}
+            </strong>
+            <span className={styles.drawerTitleMeta}>
+              {getProviderLabel(selectedRow.provider, t)} · {selectedRow.planType ?? '-'} ·{' '}
+              {getDisplayFileName(selectedRow.fileName)}
+            </span>
           </div>
-          {renderActiveDetail()}
-          <footer className={styles.drawerActions}>
+        }
+        footer={
+          <div className={styles.drawerActions}>
             <Button
               variant="secondary"
               onClick={() => refreshQuotaRows([selectedRow])}
@@ -2967,9 +2959,25 @@ export function AccountsPage() {
               {deleting !== selectedRow.fileName ? <IconTrash2 size={16} /> : null}
               {t('auth_files.delete_button')}
             </Button>
-          </footer>
-        </aside>
-      </div>
+          </div>
+        }
+      >
+        <div className={styles.drawerTabs} role="tablist">
+          {detailTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={detailTab === tab.id}
+              className={detailTab === tab.id ? styles.drawerTabActive : ''}
+              onClick={() => setDetailTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        {renderActiveDetail()}
+      </Drawer>
     );
   };
 
