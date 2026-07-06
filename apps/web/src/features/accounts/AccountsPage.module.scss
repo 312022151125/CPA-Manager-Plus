@@ -816,25 +816,18 @@
   color: #dc2626;
 }
 
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px;
-  color: var(--text-secondary);
-  font-size: 13px;
-
-  @include mobile {
-    align-items: stretch;
-    flex-direction: column;
-  }
-}
-
-.paginationControls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.accountsPagination {
+  --monitor-surface: var(--accounts-surface);
+  --monitor-surface-elevated: color-mix(
+    in srgb,
+    var(--accounts-surface) 82%,
+    var(--accounts-muted-surface)
+  );
+  --monitor-muted: var(--accounts-muted);
+  --monitor-line: var(--accounts-border);
+  --monitor-ink: var(--accounts-text);
+  padding: 12px 16px;
+  background: color-mix(in srgb, var(--accounts-muted-surface) 28%, var(--accounts-surface));
 }
 
 .compactTable {
@@ -1993,11 +1986,6 @@
   min-width: max-content;
 }
 
-.pagination {
-  padding: 12px 16px;
-  background: color-mix(in srgb, var(--accounts-muted-surface) 28%, var(--accounts-surface));
-}
-
 .splitGrid,
 .oauthGrid {
   grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
@@ -2183,21 +2171,9 @@
     flex-direction: column;
   }
 
-  .pagination {
+  .accountsPagination {
     gap: 10px;
     padding: 10px 12px;
-  }
-
-  .paginationControls {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(34px, auto) auto;
-    width: 100%;
-
-    > span {
-      min-width: 34px;
-      text-align: center;
-      white-space: nowrap;
-    }
   }
 }
 

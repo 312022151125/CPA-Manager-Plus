@@ -50,6 +50,7 @@ import { useAuthFilesData } from '@/features/authFiles/hooks/useAuthFilesData';
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
 import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
+import { PaginationControls } from '@/features/monitoring/components/MonitoringShared';
 import { AuthJsonPasteModal } from '@/features/authFiles/components/AuthJsonPasteModal';
 import { AuthFileModelsModal } from '@/features/authFiles/components/AuthFileModelsModal';
 import { AuthFilesPrefixProxyEditorModal } from '@/features/authFiles/components/AuthFilesPrefixProxyEditorModal';
@@ -803,6 +804,9 @@ export function AccountsPage() {
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageRows = filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const paginationStartItem =
+    filteredRows.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const paginationEndItem = Math.min(filteredRows.length, currentPage * pageSize);
   const pageAuthFiles = useMemo(() => pageRows.map((row) => row.raw), [pageRows]);
   const filteredAuthFiles = useMemo(() => filteredRows.map((row) => row.raw), [filteredRows]);
   const selectablePageRows = useMemo(() => pageRows.filter((row) => !row.runtimeOnly), [pageRows]);
@@ -2250,40 +2254,23 @@ export function AccountsPage() {
   );
 
   const renderPagination = () => (
-    <footer className={styles.pagination}>
-      <span>
-        {t('accounts.total_rows', {
-          total: filteredRows.length,
-        })}
-      </span>
-      <div className={styles.paginationControls}>
-        <Select
-          value={String(pageSize)}
-          options={PAGE_SIZE_OPTIONS}
-          onChange={(value) => setPageSize(Number(value))}
-          ariaLabel={t('accounts.page_size')}
-        />
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-          disabled={currentPage <= 1}
-        >
-          {t('common.previous')}
-        </Button>
-        <span>
-          {currentPage} / {totalPages}
-        </span>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
-          disabled={currentPage >= totalPages}
-        >
-          {t('common.next')}
-        </Button>
-      </div>
-    </footer>
+    <div className={styles.accountsPagination}>
+      <PaginationControls
+        count={filteredRows.length}
+        currentPage={currentPage}
+        totalPages={totalPages}
+        startItem={paginationStartItem}
+        endItem={paginationEndItem}
+        pageSize={pageSize}
+        pageSizeOptions={PAGE_SIZE_OPTIONS.map((option) => Number(option.value))}
+        onPageChange={setPage}
+        onPageSizeChange={(nextPageSize) => {
+          setPageSize(nextPageSize);
+          setPage(1);
+        }}
+        t={t}
+      />
+    </div>
   );
 
   const renderAccountEmptyState = () => (
