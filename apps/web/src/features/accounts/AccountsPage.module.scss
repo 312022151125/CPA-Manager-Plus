@@ -322,13 +322,14 @@
 .accountCard {
   display: grid;
   grid-template-columns:
-    minmax(220px, 1.15fr)
-    minmax(92px, 0.45fr)
+    minmax(240px, 320px)
+    minmax(96px, 112px)
     minmax(150px, 0.66fr)
-    minmax(248px, 1.24fr)
+    minmax(300px, 1.24fr)
     minmax(82px, 96px);
-  align-items: center;
-  gap: 12px;
+  align-items: stretch;
+  column-gap: 0;
+  row-gap: 10px;
   min-width: 0;
   min-height: 116px;
   padding: 12px;
@@ -370,7 +371,24 @@
 .accountCardEvidence,
 .accountCardBusiness,
 .accountCardRecommendation {
+  box-sizing: border-box;
+  align-self: stretch;
   min-width: 0;
+}
+
+.accountCardIdentity,
+.accountCardHealth,
+.accountCardEvidence,
+.accountCardBusiness {
+  padding-right: 12px;
+}
+
+.accountCardHealth,
+.accountCardEvidence,
+.accountCardBusiness,
+.accountCardRecommendation {
+  padding-left: 12px;
+  border-left: 1px solid color-mix(in srgb, var(--border-color) 38%, transparent);
 }
 
 .accountCardIdentity {
@@ -397,6 +415,7 @@
 }
 
 .accountIdentityTitle {
+  max-width: 100%;
   min-width: 0;
   overflow: hidden;
   color: var(--text-primary);
@@ -452,7 +471,21 @@
 .accountCardHealth {
   display: grid;
   align-content: center;
-  gap: 5px;
+  justify-items: center;
+  gap: 9px;
+  text-align: center;
+
+  .accountCardLine,
+  .accountHealthMetaRow {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .badge {
+    min-height: 24px;
+    padding-inline: 10px;
+    font-size: 13px;
+  }
 
   small {
     max-width: 100%;
@@ -462,74 +495,207 @@
 .accountCardEvidence {
   display: grid;
   align-content: center;
-  gap: 8px;
+  gap: 7px;
 }
 
-.accountCardEvidenceEmpty {
-  gap: 0;
-}
-
-.evidenceSummaryRow {
+.accountHealthHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.accountHealthTitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountHealthCounts {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
   gap: 8px;
   min-width: 0;
+  color: var(--accounts-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
 
   span {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--text-primary);
-    font-size: 12px;
-    font-weight: 800;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
-
-  strong {
-    flex: 0 0 auto;
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 900;
-  }
 }
 
-.evidenceSummaryMuted {
-  justify-content: flex-start;
-
-  span {
-    color: var(--accounts-muted);
-    font-weight: 700;
-  }
+.accountHealthFailure {
+  color: var(--accounts-danger);
 }
 
-.evidenceTrack {
+.statusBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  padding: 0;
+}
+
+.statusBlocks {
+  position: relative;
+  display: flex;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+}
+
+.statusBlockWrapper {
+  position: relative;
+  flex: 1;
+  min-width: 5px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.statusBlock {
+  width: 100%;
   height: 6px;
-  overflow: hidden;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--border-color) 58%, transparent);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+
+  .statusBlockWrapper:hover &,
+  .statusBlockWrapper.statusBlockActive & {
+    opacity: 0.9;
+    transform: scaleY(1.6);
+  }
 }
 
-.evidenceBar {
+.statusBlockIdle {
+  background-color: color-mix(in srgb, var(--accounts-border) 64%, transparent);
+}
+
+.statusTooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: $z-dropdown;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle, var(--accounts-border));
+  border-radius: 10px;
+  background: var(--accounts-surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+  color: var(--accounts-text);
+  font-size: 11px;
+  line-height: 1.5;
+  pointer-events: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    border: 5px solid transparent;
+    border-top-color: var(--accounts-surface);
+    transform: translateX(-50%);
+  }
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    border: 6px solid transparent;
+    border-top-color: var(--border-subtle, var(--accounts-border));
+    transform: translateX(-50%);
+  }
+}
+
+.statusTooltipLeft {
+  left: 0;
+  transform: translateX(0);
+
+  &::after,
+  &::before {
+    left: 8px;
+    transform: none;
+  }
+}
+
+.statusTooltipRight {
+  right: 0;
+  left: auto;
+  transform: translateX(0);
+
+  &::after,
+  &::before {
+    right: 8px;
+    left: auto;
+    transform: none;
+  }
+}
+
+.tooltipTime {
   display: block;
-  height: 100%;
-  border-radius: inherit;
+  margin-bottom: 2px;
+  color: var(--text-secondary);
 }
 
-.evidenceBarGood {
-  background: var(--accounts-success);
+.tooltipStats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.evidenceBarWarn {
-  background: var(--accounts-warning);
+.tooltipSuccess {
+  color: var(--data-green-base);
 }
 
-.evidenceBarBad {
-  background: var(--accounts-danger);
+.tooltipFailure {
+  color: var(--data-red-base);
 }
 
-.evidenceBarNeutral {
-  background: var(--text-secondary);
+.tooltipRate {
+  margin-left: 2px;
+  color: var(--text-secondary);
+}
+
+.statusRate {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.statusRateHigh {
+  background: var(--data-badge-success-bg);
+  color: var(--data-badge-success-text);
+}
+
+.statusRateMedium {
+  background: var(--data-badge-warning-bg);
+  color: var(--data-badge-warning-text);
+}
+
+.statusRateLow {
+  background: var(--data-badge-danger-bg);
+  color: var(--data-badge-danger-text);
 }
 
 .accountHealthMetaRow {
@@ -551,8 +717,9 @@
 .accountPriorityMetaDanger {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   max-width: 100%;
-  min-height: 18px;
+  min-height: 16px;
   padding: 0;
   overflow: hidden;
   font-size: 11px;
@@ -572,6 +739,7 @@
 
 .accountCardBusiness {
   display: grid;
+  align-content: center;
   gap: 7px;
 
   .quotaTrack {
@@ -681,7 +849,7 @@
   }
 
   & + & {
-    border-left: 1px solid color-mix(in srgb, var(--border-color) 68%, transparent);
+    border-left: 1px solid color-mix(in srgb, var(--border-color) 42%, transparent);
   }
 }
 
@@ -2335,6 +2503,15 @@
   .accountCard {
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
+  }
+
+  .accountCardIdentity,
+  .accountCardHealth,
+  .accountCardEvidence,
+  .accountCardBusiness,
+  .accountCardRecommendation {
+    padding-inline: 0;
+    border-left: 0;
   }
 
   .accountCardHealth,

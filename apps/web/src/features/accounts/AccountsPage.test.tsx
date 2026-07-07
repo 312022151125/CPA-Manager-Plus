@@ -745,20 +745,52 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.deselectAll).toHaveBeenCalledTimes(1);
   });
 
-  it('renders health evidence as an independent account card section', async () => {
+  it('renders account health from auth-file card health data instead of monitoring stats', async () => {
     mocks.files = [
       {
         ...makeCodexFile('healthy.json', 'auth-1', 'healthy@example.com'),
+        success: 87,
+        failed: 3,
         recent_requests: [{ success: 128, failed: 0 }],
       },
     ];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAnalytics.mockResolvedValue({
+      generated_at_ms: 1,
+      granularity: 'day',
+      account_stats: [
+        {
+          id: 'healthy-monitoring',
+          account_snapshot: 'healthy@example.com',
+          auth_label_snapshot: 'healthy@example.com',
+          auth_provider_snapshot: 'codex',
+          auth_indices: ['auth-1'],
+          sources: ['healthy.json'],
+          calls: 999,
+          success_rate: 0.01,
+          input_tokens: 0,
+          output_tokens: 0,
+          cost: 0,
+          last_seen_ms: 1,
+        },
+      ],
+      timeline: [],
+    });
 
     const renderer = await renderAccountsPage();
     const cardText = getAccountListItemTexts(renderer).join('\n');
 
-    expect(cardText).toContain('accounts.activity_success_failure');
+    expect(cardText).toContain('stats.success 87');
+    expect(cardText).toContain('stats.failure 3');
+    expect(cardText).toContain('auth_files.health_status_label');
     expect(cardText).toContain('100%');
-    expect(cardText).not.toContain('accounts.activity_brief');
+    expect(cardText).not.toContain('accounts.activity_success_failure');
+    expect(cardText).not.toContain('999');
   });
 
   it('renders the mobile filters entrypoint in the accounts toolbar', async () => {

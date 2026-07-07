@@ -51,6 +51,7 @@ import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth'
 import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
 import { PaginationControls } from '@/features/monitoring/components/MonitoringShared';
+import { ProviderStatusBar } from '@/components/providers/ProviderStatusBar';
 import { AuthJsonPasteModal } from '@/features/authFiles/components/AuthJsonPasteModal';
 import { AuthFileModelsModal } from '@/features/authFiles/components/AuthFileModelsModal';
 import { AuthFilesPrefixProxyEditorModal } from '@/features/authFiles/components/AuthFilesPrefixProxyEditorModal';
@@ -140,6 +141,7 @@ import {
   buildUsageHeaderSnapshotLookup,
   getHighConfidenceUsageHeaderSnapshotForAuthFile,
 } from '@/utils/usageHeaderSnapshots';
+import { normalizeUsageTotal, statusBarDataFromRecentRequests } from '@/utils/recentRequests';
 import styles from './AccountsPage.module.scss';
 
 type AccountsView = 'accounts' | 'quota' | 'inspection' | 'oauth' | 'value';
@@ -317,13 +319,6 @@ const getRemainingBarClass = (row: AccountRow) => {
   if (row.quota.status === 'low') return styles.quotaBarWarn;
   if (row.quota.status === 'ok') return styles.quotaBarGood;
   return styles.quotaBarNeutral;
-};
-
-const getEvidenceBarClass = (successRate: number | null, hasHealthData: boolean) => {
-  if (!hasHealthData || successRate === null) return styles.evidenceBarNeutral;
-  if (successRate >= 95) return styles.evidenceBarGood;
-  if (successRate >= 80) return styles.evidenceBarWarn;
-  return styles.evidenceBarBad;
 };
 
 const getRecommendationPriorityClass = (priority: AccountRecommendationPriority) => {
@@ -770,15 +765,6 @@ export function AccountsPage() {
     () => buildRecommendationBySelectionKey(recommendations),
     [recommendations]
   );
-  const usageRowBySelectionKey = useMemo(() => {
-    const map = new Map<string, UsageValueRow>();
-    usageRows.forEach((usageRow) => {
-      if (usageRow.row) {
-        map.set(usageRow.row.selectionKey, usageRow);
-      }
-    });
-    return map;
-  }, [usageRows]);
   const filteredRows = useMemo(
     () =>
       sortAccountRows(
@@ -2278,7 +2264,6 @@ export function AccountsPage() {
         <div className={styles.accountCardList}>
           {rowsToRender.map((row) => {
             const recommendation = recommendationBySelectionKey.get(row.selectionKey) ?? null;
-            const usageRow = usageRowBySelectionKey.get(row.selectionKey) ?? null;
             const quotaWindows = buildQuotaDisplayWindows(row);
             const quotaCooldown =
               quotaCooldowns.get(
@@ -2298,17 +2283,6 @@ export function AccountsPage() {
               quotaCooldown,
               codexStatus,
               quotaWindows,
-              activity: usageRow
-                ? {
-                    requests: usageRow.requests,
-                    successRate: usageRow.successRate,
-                    inputTokens: usageRow.inputTokens,
-                    outputTokens: usageRow.outputTokens,
-                    estimatedCost: usageRow.estimatedCost,
-                    lastSeenMs: usageRow.lastSeenMs,
-                    source: usageRow.source,
-                  }
-                : null,
             });
             const remaining = item.quota.remainingPercent;
             const displayQuotaWindows =
@@ -2328,27 +2302,20 @@ export function AccountsPage() {
               quotaWindows
                 .map((window) => `${window.label}: ${formatPercent(window.remainingPercent)}`)
                 .join('\n') || t('accounts.quota_brief_unknown');
-            const hasEvidenceData = item.activity.hasHealthData;
-            const evidenceRateLabel = hasEvidenceData
-              ? formatPercent(item.activity.successRate)
-              : '';
-            const evidenceSummary = hasEvidenceData
-              ? t('accounts.activity_success_failure', {
-                  success: formatCompactNumber(item.activity.successCount),
-                  failure: formatCompactNumber(item.activity.failureCount),
-                })
-              : t('accounts.activity_no_health');
-            const evidenceTitle = hasEvidenceData
+            const healthStats = {
+              success: normalizeUsageTotal(row.raw.success),
+              failure: normalizeUsageTotal(row.raw.failed),
+            };
+            const healthStatusData = statusBarDataFromRecentRequests(row.usage.recentRequests);
+            const hasHealthStatusData =
+              healthStatusData.totalSuccess + healthStatusData.totalFailure > 0;
+            const healthStatusTitle = hasHealthStatusData
               ? t('accounts.activity_health_title', {
-                  success: formatCompactNumber(item.activity.successCount),
-                  failure: formatCompactNumber(item.activity.failureCount),
-                  rate: evidenceRateLabel,
+                  success: formatCompactNumber(healthStatusData.totalSuccess),
+                  failure: formatCompactNumber(healthStatusData.totalFailure),
+                  rate: formatPercent(healthStatusData.successRate),
                 })
               : t('accounts.activity_no_health');
-            const evidenceWidth =
-              item.activity.hasHealthData && item.activity.successRate !== null
-                ? clampDisplayPercent(item.activity.successRate)
-                : 0;
             const quotaSourceShortLabel = t(item.quota.sourceShortLabelKey);
             const healthTitle = t(item.health.tooltipKey, item.health.tooltipParams);
             return (
@@ -2406,37 +2373,21 @@ export function AccountsPage() {
                   </div>
                 </div>
 
-                <div
-                  className={[
-                    styles.accountCardEvidence,
-                    hasEvidenceData ? '' : styles.accountCardEvidenceEmpty,
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                  title={evidenceTitle}
-                >
-                  <div
-                    className={[
-                      styles.evidenceSummaryRow,
-                      hasEvidenceData ? '' : styles.evidenceSummaryMuted,
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                  >
-                    <span>{evidenceSummary}</span>
-                    {hasEvidenceData ? <strong>{evidenceRateLabel}</strong> : null}
+                <div className={styles.accountCardEvidence} title={healthStatusTitle}>
+                  <div className={styles.accountHealthHeader}>
+                    <span className={styles.accountHealthTitle}>
+                      {t('auth_files.health_status_label')}
+                    </span>
+                    <span className={styles.accountHealthCounts}>
+                      <span>
+                        {t('stats.success')} {formatCompactNumber(healthStats.success)}
+                      </span>
+                      <span className={healthStats.failure > 0 ? styles.accountHealthFailure : ''}>
+                        {t('stats.failure')} {formatCompactNumber(healthStats.failure)}
+                      </span>
+                    </span>
                   </div>
-                  {hasEvidenceData ? (
-                    <div className={styles.evidenceTrack} aria-hidden="true">
-                      <span
-                        className={`${styles.evidenceBar} ${getEvidenceBarClass(
-                          item.activity.successRate,
-                          hasEvidenceData
-                        )}`}
-                        style={{ width: `${evidenceWidth}%` }}
-                      />
-                    </div>
-                  ) : null}
+                  <ProviderStatusBar statusData={healthStatusData} styles={styles} />
                 </div>
 
                 <div className={styles.accountCardBusiness}>
