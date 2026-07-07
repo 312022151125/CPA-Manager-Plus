@@ -10,11 +10,11 @@
   --inspect-line-strong: var(--border-primary);
   --inspect-ink: var(--text-primary);
   --inspect-muted: var(--text-secondary);
-  --inspect-accent: var(--primary-color);
-  --inspect-accent-strong: var(--primary-active);
-  --inspect-green: var(--success-color);
-  --inspect-amber: var(--warning-color);
-  --inspect-red: var(--error-color);
+  --inspect-accent: var(--data-blue-base);
+  --inspect-accent-strong: var(--data-blue-dark-2);
+  --inspect-green: var(--data-green-base);
+  --inspect-amber: var(--data-amber-base);
+  --inspect-red: var(--data-red-base);
   color: var(--inspect-ink);
 }
 
@@ -174,31 +174,31 @@
 }
 
 .tone-idle {
-  color: var(--inspect-muted);
+  color: var(--data-badge-neutral-text);
 }
 
 .tone-info {
-  color: var(--inspect-accent-strong);
-  border-color: color-mix(in srgb, var(--inspect-accent) 26%, var(--inspect-line));
-  background: color-mix(in srgb, var(--inspect-accent) 10%, var(--inspect-surface));
+  color: var(--data-badge-info-text);
+  border-color: var(--data-badge-info-border);
+  background: var(--data-badge-info-bg);
 }
 
 .tone-good {
-  color: var(--inspect-green);
-  border-color: color-mix(in srgb, var(--inspect-green) 26%, var(--inspect-line));
-  background: color-mix(in srgb, var(--inspect-green) 10%, var(--inspect-surface));
+  color: var(--data-badge-success-text);
+  border-color: var(--data-badge-success-border);
+  background: var(--data-badge-success-bg);
 }
 
 .tone-warn {
-  color: var(--inspect-amber);
-  border-color: color-mix(in srgb, var(--inspect-amber) 26%, var(--inspect-line));
-  background: color-mix(in srgb, var(--inspect-amber) 10%, var(--inspect-surface));
+  color: var(--data-badge-warning-text);
+  border-color: var(--data-badge-warning-border);
+  background: var(--data-badge-warning-bg);
 }
 
 .tone-bad {
-  color: var(--inspect-red);
-  border-color: color-mix(in srgb, var(--inspect-red) 26%, var(--inspect-line));
-  background: color-mix(in srgb, var(--inspect-red) 10%, var(--inspect-surface));
+  color: var(--data-badge-danger-text);
+  border-color: var(--data-badge-danger-border);
+  background: var(--data-badge-danger-bg);
 }
 
 .statusMeta {
@@ -230,8 +230,8 @@
 }
 
 .statusMetaWarn {
-  color: var(--inspect-amber) !important;
-  background: color-mix(in srgb, var(--inspect-amber) 10%, var(--inspect-surface)) !important;
+  color: var(--data-badge-warning-text) !important;
+  background: var(--data-badge-warning-bg) !important;
 }
 
 .iconButton,
@@ -484,15 +484,15 @@
 }
 
 .summaryAccentBlue {
-  --summary-accent: #409eff;
-  border-color: color-mix(in srgb, #409eff 34%, var(--inspect-line));
-  background: color-mix(in srgb, #409eff 7%, var(--inspect-surface-elevated));
+  --summary-accent: var(--data-blue-base);
+  border-color: color-mix(in srgb, var(--data-blue-base) 34%, var(--inspect-line));
+  background: color-mix(in srgb, var(--data-blue-base) 7%, var(--inspect-surface-elevated));
 }
 
 .summaryAccentCyan {
-  --summary-accent: #0ea5e9;
-  border-color: color-mix(in srgb, #0ea5e9 34%, var(--inspect-line));
-  background: color-mix(in srgb, #0ea5e9 7%, var(--inspect-surface-elevated));
+  --summary-accent: var(--data-cyan-base);
+  border-color: color-mix(in srgb, var(--data-cyan-base) 34%, var(--inspect-line));
+  background: color-mix(in srgb, var(--data-cyan-base) 7%, var(--inspect-surface-elevated));
 }
 
 .summaryAccentRed {
@@ -514,9 +514,9 @@
 }
 
 .summaryAccentViolet {
-  --summary-accent: #8b5cf6;
-  border-color: color-mix(in srgb, #8b5cf6 34%, var(--inspect-line));
-  background: color-mix(in srgb, #8b5cf6 7%, var(--inspect-surface-elevated));
+  --summary-accent: var(--data-violet-base);
+  border-color: color-mix(in srgb, var(--data-violet-base) 34%, var(--inspect-line));
+  background: color-mix(in srgb, var(--data-violet-base) 7%, var(--inspect-surface-elevated));
 }
 
 .summaryHeader {
@@ -961,9 +961,9 @@
   max-width: 100%;
   padding: 0 8px;
   border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--inspect-accent) 24%, var(--inspect-line));
-  background: color-mix(in srgb, var(--inspect-accent) 8%, var(--inspect-surface));
-  color: var(--inspect-accent-strong);
+  border: 1px solid var(--data-badge-info-border);
+  background: var(--data-badge-info-bg);
+  color: var(--data-badge-info-text);
   font-size: 12px;
   font-weight: 700;
   line-height: 1.35;
@@ -1085,28 +1085,28 @@
 }
 
 .actionKeep {
-  background: var(--inspect-surface-muted);
-  color: var(--inspect-muted);
+  background: var(--data-badge-neutral-bg);
+  color: var(--data-badge-neutral-text);
 }
 
 .actionDelete {
-  background: color-mix(in srgb, var(--inspect-red) 14%, var(--inspect-surface));
-  color: var(--inspect-red);
+  background: var(--data-badge-danger-bg);
+  color: var(--data-badge-danger-text);
 }
 
 .actionDisable {
-  background: color-mix(in srgb, var(--inspect-amber) 14%, var(--inspect-surface));
-  color: var(--inspect-amber);
+  background: var(--data-badge-warning-bg);
+  color: var(--data-badge-warning-text);
 }
 
 .actionEnable {
-  background: color-mix(in srgb, var(--inspect-green) 14%, var(--inspect-surface));
-  color: var(--inspect-green);
+  background: var(--data-badge-success-bg);
+  color: var(--data-badge-success-text);
 }
 
 .actionReauth {
-  background: color-mix(in srgb, var(--inspect-accent) 14%, var(--inspect-surface));
-  color: var(--inspect-accent-strong);
+  background: var(--data-badge-info-bg);
+  color: var(--data-badge-info-text);
 }
 
 .logActions {

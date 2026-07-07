@@ -9,13 +9,13 @@
   --accounts-strong-border: var(--border-primary);
   --accounts-text: var(--text-primary);
   --accounts-muted: var(--text-secondary);
-  --accounts-brand: var(--primary-color);
+  --accounts-brand: var(--data-blue-base);
   --accounts-brand-active: var(--primary-active, var(--primary-color));
   --accounts-primary: var(--accounts-brand);
-  --accounts-success: var(--success-color);
-  --accounts-warning: var(--warning-color);
-  --accounts-danger: var(--danger-color);
-  --accounts-info: var(--accounts-brand);
+  --accounts-success: var(--data-green-base);
+  --accounts-warning: var(--data-amber-base);
+  --accounts-danger: var(--data-red-base);
+  --accounts-info: var(--data-blue-base);
   --accounts-neutral: var(--accounts-muted);
   --accounts-overlay: color-mix(in srgb, var(--accounts-brand-active) 30%, transparent);
 }
@@ -736,38 +736,38 @@
 }
 
 .providerPill {
-  background: color-mix(in srgb, var(--primary-color) 10%, transparent);
-  color: var(--primary-color);
+  background: var(--data-badge-info-bg);
+  color: var(--data-badge-info-text);
 }
 
 .badgeGood {
-  background: color-mix(in srgb, var(--accounts-success) 13%, transparent);
-  color: var(--accounts-success);
+  background: var(--data-badge-success-bg);
+  color: var(--data-badge-success-text);
 }
 
 .badgeWarn {
-  background: color-mix(in srgb, var(--accounts-warning) 15%, transparent);
-  color: var(--accounts-warning);
+  background: var(--data-badge-warning-bg);
+  color: var(--data-badge-warning-text);
 }
 
 .badgeBad {
-  background: color-mix(in srgb, var(--accounts-danger) 13%, transparent);
-  color: var(--accounts-danger);
+  background: var(--data-badge-danger-bg);
+  color: var(--data-badge-danger-text);
 }
 
 .badgeMuted {
-  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
-  color: var(--text-secondary);
+  background: var(--data-badge-neutral-bg);
+  color: var(--data-badge-neutral-text);
 }
 
 .badgeInfo {
-  background: color-mix(in srgb, var(--primary-color) 11%, transparent);
-  color: var(--primary-color);
+  background: var(--data-badge-info-bg);
+  color: var(--data-badge-info-text);
 }
 
 .badgeNeutral {
-  background: var(--surface-subtle);
-  color: var(--text-secondary);
+  background: var(--data-badge-neutral-bg);
+  color: var(--data-badge-neutral-text);
 }
 
 .statusStack {
@@ -1495,8 +1495,8 @@
   min-height: 18px;
   padding: 2px 6px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accounts-primary) 12%, var(--accounts-surface));
-  color: var(--accounts-primary);
+  background: var(--data-badge-info-bg);
+  color: var(--data-badge-info-text);
   font-size: 11px;
   font-weight: 800;
   line-height: 1.2;
