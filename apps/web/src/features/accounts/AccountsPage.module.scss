@@ -16,6 +16,7 @@
   --accounts-warning: var(--data-amber-base);
   --accounts-danger: var(--data-red-base);
   --accounts-info: var(--data-blue-base);
+  --accounts-indigo: var(--data-indigo-base, var(--primary-color));
   --accounts-neutral: var(--accounts-muted);
   --accounts-overlay: color-mix(in srgb, var(--accounts-brand-active) 30%, transparent);
 }
@@ -296,18 +297,22 @@
 }
 
 .rowActions {
-  display: flex;
+  display: grid;
+  grid-template-columns: 64px 1px 54px;
   align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  min-width: 0;
+  justify-content: center;
+  gap: 6px;
+  width: 131px;
+  min-width: 131px;
   white-space: nowrap;
 
   :global(.btn) {
     justify-content: center;
     width: 30px;
     min-width: 30px;
-    min-height: 28px;
+    height: 30px;
+    min-height: 30px;
+    padding: 0;
     border-radius: 8px;
   }
 }
@@ -320,15 +325,16 @@
 }
 
 .accountCard {
+  position: relative;
   display: grid;
   grid-template-columns:
-    minmax(240px, 320px)
-    minmax(96px, 112px)
-    minmax(150px, 0.66fr)
-    minmax(300px, 1.24fr)
-    minmax(82px, 96px);
+    minmax(150px, 190px)
+    104px
+    196px
+    minmax(210px, 1fr)
+    124px;
   align-items: stretch;
-  column-gap: 0;
+  column-gap: clamp(10px, 0.8vw, 14px);
   row-gap: 10px;
   min-width: 0;
   min-height: 116px;
@@ -336,7 +342,7 @@
   border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
   border-radius: 8px;
   background: var(--bg-primary);
-  cursor: pointer;
+  cursor: default;
   transition:
     background-color 0.14s ease,
     border-color 0.14s ease,
@@ -345,6 +351,19 @@
   &:hover {
     border-color: color-mix(in srgb, var(--primary-color) 24%, var(--border-color));
     background: color-mix(in srgb, var(--primary-color) 4%, var(--bg-primary));
+  }
+}
+
+@media (min-width: 1360px) {
+  .accountCard {
+    grid-template-columns:
+      minmax(180px, 210px)
+      112px
+      216px
+      minmax(360px, 420px)
+      124px;
+    justify-content: space-between;
+    column-gap: clamp(16px, 1.15vw, 22px);
   }
 }
 
@@ -360,6 +379,8 @@
 }
 
 .accountCardSelectionMode {
+  cursor: pointer;
+
   &:hover {
     border-color: color-mix(in srgb, var(--primary-color) 42%, var(--border-color));
     background: color-mix(in srgb, var(--primary-color) 7%, var(--bg-primary));
@@ -380,20 +401,22 @@
 .accountCardHealth,
 .accountCardEvidence,
 .accountCardBusiness {
-  padding-right: 12px;
+  padding-right: 6px;
 }
 
 .accountCardHealth,
 .accountCardEvidence,
 .accountCardBusiness,
 .accountCardRecommendation {
-  padding-left: 12px;
-  border-left: 1px solid color-mix(in srgb, var(--border-color) 38%, transparent);
+  padding-left: 10px;
+  border-left: 1px solid color-mix(in srgb, var(--border-color) 18%, transparent);
 }
 
 .accountCardIdentity {
-  display: grid;
-  align-content: center;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  flex-direction: column;
   gap: 6px;
 }
 
@@ -415,6 +438,8 @@
 }
 
 .accountIdentityTitle {
+  display: block;
+  width: 100%;
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
@@ -427,6 +452,7 @@
 
 .accountCardFile {
   display: block;
+  width: 100%;
   min-width: 0;
   overflow: hidden;
   color: var(--text-secondary);
@@ -435,11 +461,68 @@
   white-space: nowrap;
 }
 
-.accountCardQuotaMeta {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.95fr);
+.accountIdentityCopyLine {
+  display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.accountIdentityCopyTarget {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  cursor: copy;
+  font: inherit;
+  overflow: hidden;
+  text-align: left;
+
+  &:hover {
+    .accountIdentityTitle,
+    .accountCardFile {
+      color: var(--primary-color);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--primary-color) 42%, transparent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+}
+
+.accountIdentityCopyHint {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: 56px;
+  min-height: 18px;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accounts-success) 18%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accounts-success) 10%, var(--bg-primary));
+  color: var(--accounts-success);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountCardQuotaMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -469,9 +552,10 @@
 }
 
 .accountCardHealth {
-  display: grid;
-  align-content: center;
-  justify-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
   gap: 9px;
   text-align: center;
 
@@ -493,20 +577,72 @@
 }
 
 .accountCardEvidence {
-  display: grid;
-  align-content: center;
-  gap: 7px;
-}
-
-.accountHealthHeader {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.accountHistoryGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 76px));
+  justify-content: center;
+  gap: 10px 8px;
   min-width: 0;
 }
 
-.accountHealthTitle {
+.accountHistoryMetric {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 76px;
+  color: var(--text-primary);
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 12.75px;
+    font-weight: 800;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.accountHistoryIcon {
+  display: inline-grid;
+  flex: 0 0 17px;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-secondary) 7%, transparent);
+  color: color-mix(in srgb, var(--text-secondary) 76%, var(--text-primary));
+}
+
+.accountHistoryMetricRequests .accountHistoryIcon {
+  background: color-mix(in srgb, var(--accounts-info) 12%, transparent);
+  color: var(--accounts-info);
+}
+
+.accountHistoryMetricTokens .accountHistoryIcon {
+  background: color-mix(in srgb, var(--data-violet-base) 12%, transparent);
+  color: var(--data-violet-base);
+}
+
+.accountHistoryMetricCost .accountHistoryIcon {
+  background: color-mix(in srgb, var(--accounts-warning) 13%, transparent);
+  color: var(--accounts-warning);
+}
+
+.accountHistoryMetricSuccess .accountHistoryIcon {
+  background: color-mix(in srgb, var(--accounts-success) 12%, transparent);
+  color: var(--accounts-success);
+}
+
+.accountHistoryFootnote {
   min-width: 0;
   overflow: hidden;
   color: var(--text-tertiary, var(--text-secondary));
@@ -515,187 +651,6 @@
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.accountHealthCounts {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex: 0 0 auto;
-  gap: 8px;
-  min-width: 0;
-  color: var(--accounts-muted);
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1;
-
-  span {
-    white-space: nowrap;
-  }
-}
-
-.accountHealthFailure {
-  color: var(--accounts-danger);
-}
-
-.statusBar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-width: 0;
-  max-width: none;
-  padding: 0;
-}
-
-.statusBlocks {
-  position: relative;
-  display: flex;
-  flex: 1;
-  gap: 3px;
-  min-width: 0;
-}
-
-.statusBlockWrapper {
-  position: relative;
-  flex: 1;
-  min-width: 5px;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.statusBlock {
-  width: 100%;
-  height: 6px;
-  border-radius: 999px;
-  transition:
-    opacity 0.15s ease,
-    transform 0.15s ease;
-
-  .statusBlockWrapper:hover &,
-  .statusBlockWrapper.statusBlockActive & {
-    opacity: 0.9;
-    transform: scaleY(1.6);
-  }
-}
-
-.statusBlockIdle {
-  background-color: color-mix(in srgb, var(--accounts-border) 64%, transparent);
-}
-
-.statusTooltip {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  z-index: $z-dropdown;
-  padding: 8px 10px;
-  border: 1px solid var(--border-subtle, var(--accounts-border));
-  border-radius: 10px;
-  background: var(--accounts-surface);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
-  color: var(--accounts-text);
-  font-size: 11px;
-  line-height: 1.5;
-  pointer-events: none;
-  transform: translateX(-50%);
-  white-space: nowrap;
-
-  &::after {
-    content: '';
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    border: 5px solid transparent;
-    border-top-color: var(--accounts-surface);
-    transform: translateX(-50%);
-  }
-
-  &::before {
-    content: '';
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    border: 6px solid transparent;
-    border-top-color: var(--border-subtle, var(--accounts-border));
-    transform: translateX(-50%);
-  }
-}
-
-.statusTooltipLeft {
-  left: 0;
-  transform: translateX(0);
-
-  &::after,
-  &::before {
-    left: 8px;
-    transform: none;
-  }
-}
-
-.statusTooltipRight {
-  right: 0;
-  left: auto;
-  transform: translateX(0);
-
-  &::after,
-  &::before {
-    right: 8px;
-    left: auto;
-    transform: none;
-  }
-}
-
-.tooltipTime {
-  display: block;
-  margin-bottom: 2px;
-  color: var(--text-secondary);
-}
-
-.tooltipStats {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.tooltipSuccess {
-  color: var(--data-green-base);
-}
-
-.tooltipFailure {
-  color: var(--data-red-base);
-}
-
-.tooltipRate {
-  margin-left: 2px;
-  color: var(--text-secondary);
-}
-
-.statusRate {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 8px;
-  border-radius: 999px;
-  background: var(--surface-subtle);
-  font-size: 11px;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.statusRateHigh {
-  background: var(--data-badge-success-bg);
-  color: var(--data-badge-success-text);
-}
-
-.statusRateMedium {
-  background: var(--data-badge-warning-bg);
-  color: var(--data-badge-warning-text);
-}
-
-.statusRateLow {
-  background: var(--data-badge-danger-bg);
-  color: var(--data-badge-danger-text);
 }
 
 .accountHealthMetaRow {
@@ -738,8 +693,9 @@
 }
 
 .accountCardBusiness {
-  display: grid;
-  align-content: center;
+  display: flex;
+  justify-content: center;
+  flex-direction: column;
   gap: 7px;
 
   .quotaTrack {
@@ -751,20 +707,33 @@
   span {
     min-width: 0;
     max-width: 100%;
+    flex: 0 1 auto;
     overflow: hidden;
     color: var(--text-secondary);
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
+    line-height: 1.2;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 }
 
+.quotaResetMeta {
+  flex-shrink: 0 !important;
+  color: var(--text-secondary) !important;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .accountCardRecommendation {
-  display: grid;
-  align-content: center;
-  justify-items: stretch;
-  gap: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
 
   :global(.btn) {
     max-width: 100%;
@@ -776,25 +745,117 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  .rowActions {
+    align-self: center;
+    justify-content: center;
+  }
+}
+
+.accountQuickActionsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 30px);
+  gap: 4px;
+}
+
+.accountActionsDivider {
+  width: 1px;
+  height: 58px;
+  align-self: center;
+  border-radius: $radius-full;
+  background: color-mix(in srgb, var(--border-color) 34%, transparent);
+}
+
+.accountSideActions {
+  display: grid;
+  grid-template-rows: 30px 30px;
+  align-items: center;
+  justify-items: center;
+  gap: 4px;
+  width: 54px;
+}
+
+.accountStatusSwitch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 30px;
+
+  :global(label) {
+    transform: scale(0.9);
+    transform-origin: center;
+  }
+}
+
+.accountIconButton:global(.btn.btn-sm),
+.rowDetailButton:global(.btn.btn-xs) {
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+
+.accountIconButtonRefresh:global(.btn) {
+  background: color-mix(in srgb, var(--accounts-info) 10%, var(--bg-primary));
+  color: var(--accounts-info);
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--accounts-info) 24%, transparent);
+    background: color-mix(in srgb, var(--accounts-info) 16%, var(--bg-primary));
+  }
+}
+
+.accountIconButtonModels:global(.btn) {
+  background: color-mix(in srgb, var(--primary-color) 10%, var(--bg-primary));
+  color: var(--primary-color);
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--primary-color) 24%, transparent);
+    background: color-mix(in srgb, var(--primary-color) 16%, var(--bg-primary));
+  }
+}
+
+.accountIconButtonDownload:global(.btn) {
+  background: color-mix(in srgb, var(--text-secondary) 8%, var(--bg-primary));
+  color: color-mix(in srgb, var(--text-secondary) 84%, var(--text-primary));
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--text-secondary) 18%, transparent);
+    background: color-mix(in srgb, var(--text-secondary) 12%, var(--bg-primary));
+    color: var(--text-primary);
+  }
+}
+
+.accountIconButtonDelete:global(.btn) {
+  background: color-mix(in srgb, var(--danger-color) 10%, var(--bg-primary));
+  color: var(--danger-color);
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--danger-color) 24%, transparent);
+    background: color-mix(in srgb, var(--danger-color) 16%, var(--bg-primary));
+  }
 }
 
 .rowDetailButton:global(.btn.btn-xs) {
   flex: 0 0 auto;
-}
+  width: 54px;
+  min-width: 54px;
+  padding: 0 8px;
+  background: color-mix(in srgb, var(--primary-color) 7%, var(--bg-primary));
+  color: var(--primary-color);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
 
-.rowActionMenu {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  padding: 0;
-  border-radius: 8px;
+  &:hover {
+    border-color: color-mix(in srgb, var(--primary-color) 20%, transparent);
+    background: color-mix(in srgb, var(--primary-color) 13%, var(--bg-primary));
+  }
 
   > span {
-    display: none;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 
@@ -823,9 +884,17 @@
 }
 
 .quotaWindowGrid {
+  --quota-window-label-width: 40px;
+  --quota-window-track-width: 168px;
+  --quota-window-percent-width: 42px;
+  --quota-window-reset-width: 98px;
+
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  gap: 9px;
   position: relative;
+  height: 100%;
   min-width: 0;
 }
 
@@ -835,38 +904,61 @@
 
 .quotaWindowCard {
   display: grid;
-  gap: 7px;
+  align-content: center;
   min-width: 0;
-  padding-inline: 10px;
-
-  &:first-child {
-    padding-left: 0;
-  }
-
-  &:only-child {
-    grid-column: 1 / -1;
-    padding-right: 0;
-  }
+  padding: 0;
 
   & + & {
-    border-left: 1px solid color-mix(in srgb, var(--border-color) 42%, transparent);
+    padding-top: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 34%, transparent);
   }
 }
 
-.quotaWindowSummary {
+.quotaWindowPrimaryLine {
+  display: grid;
+  grid-template-columns:
+    var(--quota-window-label-width)
+    var(--quota-window-track-width)
+    var(--quota-window-percent-width)
+    var(--quota-window-reset-width);
+  align-items: center;
+  gap: 8px;
+  justify-content: start;
   min-width: 0;
+}
+
+.quotaWindowSummary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--quota-window-label-width);
+  min-width: var(--quota-window-label-width);
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--accounts-brand) 18%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accounts-brand) 8%, transparent);
   overflow: hidden;
-  color: var(--text-primary);
-  font-size: 12px;
+  color: var(--accounts-brand);
+  font-size: 11px;
   font-weight: 800;
+  line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.quotaWindowPercent {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+}
+
 .quotaMoreButton {
   position: absolute;
-  top: 0;
+  top: 50%;
   right: 0;
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1011,10 +1103,11 @@
 }
 
 .quotaCellHeader {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: start;
+  gap: 2px;
 
   strong {
     font-size: 13px;
@@ -2470,25 +2563,7 @@
 }
 
 .rowActions {
-  justify-content: stretch;
-  gap: 6px;
-}
-
-.rowActionMenu {
-  width: 100%;
-  min-height: 28px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--accounts-muted);
-  justify-content: flex-start;
-}
-
-.rowActionMenu:hover {
-  background: color-mix(in srgb, var(--accounts-primary) 7%, var(--accounts-surface));
-  color: var(--accounts-primary);
-  transform: none;
+  justify-content: center;
 }
 
 .metricCard {
@@ -2622,6 +2697,11 @@
   }
 
   .quotaWindowGrid {
+    --quota-window-label-width: 40px;
+    --quota-window-track-width: 118px;
+    --quota-window-percent-width: 38px;
+    --quota-window-reset-width: 92px;
+
     grid-template-columns: 1fr;
     gap: 8px;
   }
@@ -2646,14 +2726,14 @@
   }
 
   .accountCardRecommendation {
-    align-content: start;
+    justify-content: flex-start;
   }
 
   .rowActions {
-    justify-content: flex-start;
-    width: 100%;
+    justify-content: start;
+    width: 131px;
     padding-top: 2px;
-    border-top: 1px solid color-mix(in srgb, var(--accounts-border) 62%, transparent);
+    border-top: 0;
   }
 
   .accountCardRecommendation {
@@ -2691,7 +2771,6 @@
   .batchDisplayToggle {
     display: none;
   }
-
 }
 
 .floatingBatchActionContainer {

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { DropdownMenu } from '@/components/ui/DropdownMenu';
 import type { AuthFileItem } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
+import { copyToClipboard } from '@/utils/clipboard';
 import { AccountsPage } from './AccountsPage';
 
 type AnalyticsRequestForTest = {
@@ -34,6 +35,57 @@ type HeaderSnapshotsResponseForTest = {
   from_ms: number;
   to_ms: number;
   items: UsageHeaderSnapshot[];
+};
+
+type AccountHistoryResponseForTest = {
+  generated_at_ms: number;
+  checkpoint: {
+    last_event_id: number;
+    latest_id: number;
+    pending: boolean;
+    processed: number;
+  };
+  items: Array<{
+    account_key: string;
+    matched: boolean;
+    total_requests: number;
+    success_calls: number;
+    failure_calls: number;
+    total_tokens: number;
+    total_cost: number;
+    success_rate: number | null;
+    first_seen_ms: number | null;
+    last_seen_ms: number | null;
+    sync_status: string;
+  }>;
+};
+
+type AccountHistoryRequestForTest = {
+  accounts: unknown[];
+  catch_up?: boolean;
+};
+
+type AccountWindowUsageResponseForTest = {
+  generated_at_ms: number;
+  items: Array<{
+    row_key: string;
+    window_key: string;
+    from_ms: number;
+    to_ms: number;
+    matched: boolean;
+    total_requests: number;
+    success_calls: number;
+    failure_calls: number;
+    total_tokens: number;
+    total_cost: number;
+    success_rate: number | null;
+    last_seen_ms: number | null;
+    sync_status: string;
+  }>;
+};
+
+type AccountWindowUsageRequestForTest = {
+  windows: unknown[];
 };
 
 const makeCodexFile = (name: string, authIndex: string, account: string): AuthFileItem =>
@@ -106,6 +158,19 @@ const defaultGetAnalytics = async (
   return makeEmptyAnalyticsResponse();
 };
 
+const makeAccountHistoryResponse = (
+  items: AccountHistoryResponseForTest['items']
+): AccountHistoryResponseForTest => ({
+  generated_at_ms: 1,
+  checkpoint: {
+    last_event_id: 1,
+    latest_id: 1,
+    pending: false,
+    processed: 0,
+  },
+  items,
+});
+
 const { mocks } = vi.hoisted(() => {
   (
     globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -139,6 +204,9 @@ const { mocks } = vi.hoisted(() => {
       batchSetStatus: vi.fn(async () => undefined),
       batchDownload: vi.fn(async () => undefined),
       batchDelete: vi.fn(),
+      handleDelete: vi.fn(),
+      handleDownload: vi.fn(async () => undefined),
+      showModels: vi.fn(async () => undefined),
       loadExcluded: vi.fn(async () => undefined),
       loadModelAlias: vi.fn(async () => undefined),
       listCodexInspectionRuns: vi.fn(async () => ({ items: [] })),
@@ -157,6 +225,32 @@ const { mocks } = vi.hoisted(() => {
           generated_at_ms: 1,
           from_ms: 0,
           to_ms: 1,
+          items: [],
+        })
+      ),
+      getAccountHistory: vi.fn(
+        async (
+          _base: string,
+          _managementKey: string | undefined,
+          _request: AccountHistoryRequestForTest
+        ): Promise<AccountHistoryResponseForTest> => ({
+          generated_at_ms: 1,
+          checkpoint: {
+            last_event_id: 1,
+            latest_id: 1,
+            pending: false,
+            processed: 0,
+          },
+          items: [],
+        })
+      ),
+      getAccountWindowUsage: vi.fn(
+        async (
+          _base: string,
+          _managementKey: string | undefined,
+          _request: AccountWindowUsageRequestForTest
+        ): Promise<AccountWindowUsageResponseForTest> => ({
+          generated_at_ms: 1,
           items: [],
         })
       ),
@@ -225,15 +319,15 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
     error: '',
     uploading: false,
     authJsonPasteSaving: false,
-    deleting: {},
+    deleting: null,
     batchFieldsUpdating: mocks.batchFieldsUpdating,
     fileInputRef: { current: null },
     loadFiles: mocks.loadFiles,
     handleUploadClick: vi.fn(),
     handleFileChange: vi.fn(),
     savePastedAuthJson: vi.fn(async () => 'saved.json'),
-    handleDelete: vi.fn(),
-    handleDownload: vi.fn(async () => undefined),
+    handleDelete: mocks.handleDelete,
+    handleDownload: mocks.handleDownload,
     toggleSelect: mocks.toggleSelect,
     selectAllVisible: mocks.selectAllVisible,
     invertVisibleSelection: mocks.invertVisibleSelection,
@@ -267,14 +361,12 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesOauth', () => ({
 
 vi.mock('@/features/authFiles/hooks/useAuthFilesModels', () => ({
   useAuthFilesModels: () => ({
-    modelsModalOpen: false,
     modelsLoading: false,
     modelsList: [],
     modelsFileName: '',
     modelsFileType: '',
     modelsError: '',
-    showModels: vi.fn(),
-    closeModelsModal: vi.fn(),
+    showModels: mocks.showModels,
   }),
 }));
 
@@ -295,6 +387,7 @@ vi.mock('@/features/authFiles/components/AuthJsonPasteModal', () => ({
 }));
 
 vi.mock('@/features/authFiles/components/AuthFileModelsModal', () => ({
+  AuthFileModelsContent: () => <div>models-content</div>,
   AuthFileModelsModal: () => null,
 }));
 
@@ -354,6 +447,8 @@ vi.mock('@/services/api', () => ({
   monitoringAnalyticsApi: {
     getAnalytics: mocks.getAnalytics,
     getHeaderSnapshots: mocks.getHeaderSnapshots,
+    getAccountHistory: mocks.getAccountHistory,
+    getAccountWindowUsage: mocks.getAccountWindowUsage,
   },
   usageServiceApi: {
     listCodexInspectionRuns: mocks.listCodexInspectionRuns,
@@ -466,6 +561,35 @@ const findDetailButtonByName = (renderer: ReactTestRenderer, fileName: string) =
   return button;
 };
 
+const findAccountCardByKey = (renderer: ReactTestRenderer, selectionKey: string) =>
+  renderer.root.findByProps({ 'data-account-card': selectionKey });
+
+const findAccountCardButtonByAriaLabel = (
+  renderer: ReactTestRenderer,
+  selectionKey: string,
+  label: string
+) => {
+  const card = findAccountCardByKey(renderer, selectionKey);
+  const button = card
+    .findAll((node) => node.type === 'button')
+    .find((node) => node.props['aria-label'] === label);
+  if (!button) throw new Error(`Card button not found: ${label}`);
+  return button;
+};
+
+const findAccountCardInputByAriaLabel = (
+  renderer: ReactTestRenderer,
+  selectionKey: string,
+  label: string
+) => {
+  const card = findAccountCardByKey(renderer, selectionKey);
+  const input = card
+    .findAll((node) => node.type === 'input')
+    .find((node) => node.props['aria-label'] === label);
+  if (!input) throw new Error(`Card input not found: ${label}`);
+  return input;
+};
+
 const getAccountTableRowTexts = (renderer: ReactTestRenderer) => {
   const table = renderer.root.findByType('table');
   const body = table.findByType('tbody');
@@ -490,6 +614,13 @@ const createDeferred = <T,>() => {
   return { promise, resolve };
 };
 
+const flushPromises = async () => {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+};
+
 describe('AccountsPage replacement flows', () => {
   beforeEach(() => {
     if (typeof window !== 'undefined') window.localStorage.clear();
@@ -509,8 +640,14 @@ describe('AccountsPage replacement flows', () => {
     mocks.selectAllVisible.mockClear();
     mocks.invertVisibleSelection.mockClear();
     mocks.deselectAll.mockClear();
+    mocks.batchSetStatus.mockClear();
     mocks.batchPatchFields.mockClear();
     mocks.batchDelete.mockClear();
+    mocks.handleDelete.mockClear();
+    mocks.handleDownload.mockClear();
+    mocks.showModels.mockClear();
+    vi.mocked(copyToClipboard).mockClear();
+    vi.mocked(copyToClipboard).mockResolvedValue(true);
     mocks.getAnalytics.mockReset();
     mocks.getAnalytics.mockImplementation(defaultGetAnalytics);
     mocks.getHeaderSnapshots.mockReset();
@@ -520,6 +657,10 @@ describe('AccountsPage replacement flows', () => {
       to_ms: 1,
       items: [],
     });
+    mocks.getAccountHistory.mockReset();
+    mocks.getAccountHistory.mockResolvedValue(makeAccountHistoryResponse([]));
+    mocks.getAccountWindowUsage.mockReset();
+    mocks.getAccountWindowUsage.mockResolvedValue({ generated_at_ms: 1, items: [] });
     mocks.loadFiles.mockClear();
     mocks.loadExcluded.mockClear();
     mocks.loadModelAlias.mockClear();
@@ -711,6 +852,142 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.toggleSelect).toHaveBeenCalledWith('codex.json\u0000auth-1');
   });
 
+  it('does not open account details from normal row clicks', async () => {
+    const renderer = await renderAccountsPage();
+    const card = findAccountCardByKey(renderer, 'codex.json\u0000auth-1');
+
+    expect(card.props.onClick).toBeUndefined();
+    expect(treeText(renderer)).not.toContain('accounts.detail_tab_overview');
+  });
+
+  it('copies account identity text from the first column with inline feedback', async () => {
+    const renderer = await renderAccountsPage();
+    const selectionKey = 'codex.json\u0000auth-1';
+
+    await act(async () => {
+      await findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'common.copy codex@example.com'
+      ).props.onClick({ stopPropagation: vi.fn() });
+    });
+
+    expect(copyToClipboard).toHaveBeenLastCalledWith('codex@example.com');
+    expect(treeText(renderer)).toContain('accounts.copy_feedback_copied');
+
+    await act(async () => {
+      await findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'common.copy codex.json'
+      ).props.onClick({ stopPropagation: vi.fn() });
+    });
+
+    expect(copyToClipboard).toHaveBeenLastCalledWith('codex.json');
+
+    await act(async () => {
+      renderer.unmount();
+    });
+  });
+
+  it('runs account row actions from the explicit action column', async () => {
+    const renderer = await renderAccountsPage();
+    const selectionKey = 'codex.json\u0000auth-1';
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'auth_files.models_button'
+      ).props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(mocks.showModels).toHaveBeenCalledWith(mocks.files[0]);
+    expect(treeText(renderer)).toContain('models-content');
+
+    const modelsTab = renderer.root
+      .findAll((node) => node.type === 'button' && node.props.role === 'tab')
+      .find((node) => readText(node.props.children) === 'auth_files.models_button');
+    expect(modelsTab?.props['aria-selected']).toBe(true);
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'auth_files.download_button'
+      ).props.onClick();
+    });
+    expect(mocks.handleDownload).toHaveBeenCalledWith('codex.json');
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'auth_files.delete_button'
+      ).props.onClick();
+    });
+    expect(mocks.handleDelete).toHaveBeenCalledWith('codex.json');
+
+    await act(async () => {
+      findAccountCardInputByAriaLabel(renderer, selectionKey, 'accounts.disable').props.onChange({
+        target: { checked: false },
+      });
+      await Promise.resolve();
+    });
+    expect(mocks.batchSetStatus).toHaveBeenCalledWith(['codex.json'], false);
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    expect(treeText(renderer)).toContain('accounts.detail_tab_overview');
+  });
+
+  it('refreshes single-account history from the row refresh action', async () => {
+    mocks.files = [
+      {
+        ...makeCodexFile('generic.json', 'auth-generic', 'generic@example.com'),
+        type: 'generic',
+        provider: 'generic',
+      } as AuthFileItem,
+    ];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    mocks.getAccountHistory.mockClear();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        'generic.json\u0000auth-generic',
+        'accounts.refresh_quota'
+      ).props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.getAccountHistory).toHaveBeenCalledWith(
+      'http://manager.local:18317',
+      'manager-key',
+      {
+        accounts: [
+          {
+            account_snapshot: 'generic@example.com',
+            auth_label_snapshot: undefined,
+            source: 'generic.json',
+            auth_index: 'auth-generic',
+          },
+        ],
+      }
+    );
+  });
+
   it('keeps auth-file selection helpers in accounts selection mode', async () => {
     mocks.files = [
       makeCodexFile('codex-page.json', 'auth-1', 'page@example.com'),
@@ -745,7 +1022,7 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.deselectAll).toHaveBeenCalledTimes(1);
   });
 
-  it('renders account health from auth-file card health data instead of monitoring stats', async () => {
+  it('renders account history from rollup data instead of monitoring account stats or auth-file health', async () => {
     mocks.files = [
       {
         ...makeCodexFile('healthy.json', 'auth-1', 'healthy@example.com'),
@@ -781,16 +1058,107 @@ describe('AccountsPage replacement flows', () => {
       ],
       timeline: [],
     });
+    mocks.getAccountHistory.mockResolvedValue(
+      makeAccountHistoryResponse([
+        {
+          account_key: 'healthy@example.com',
+          matched: true,
+          total_requests: 1234,
+          success_calls: 1218,
+          failure_calls: 16,
+          total_tokens: 5678900,
+          total_cost: 12.34,
+          success_rate: 0.987,
+          first_seen_ms: 1,
+          last_seen_ms: 2,
+          sync_status: 'ready',
+        },
+      ])
+    );
 
     const renderer = await renderAccountsPage();
+    await flushPromises();
     const cardText = getAccountListItemTexts(renderer).join('\n');
 
-    expect(cardText).toContain('stats.success 87');
-    expect(cardText).toContain('stats.failure 3');
-    expect(cardText).toContain('auth_files.health_status_label');
-    expect(cardText).toContain('100%');
+    expect(mocks.getAccountHistory).toHaveBeenCalledWith(
+      'http://manager.local:18317',
+      'manager-key',
+      {
+        accounts: [
+          {
+            account_snapshot: 'healthy@example.com',
+            auth_label_snapshot: undefined,
+            source: 'healthy.json',
+            auth_index: 'auth-1',
+          },
+        ],
+      }
+    );
+    const accountHistoryRequest = mocks.getAccountHistory.mock.calls[0]?.[2];
+    expect(accountHistoryRequest).not.toHaveProperty('catch_up');
+    expect(cardText).toContain('1.2K');
+    expect(cardText).toContain('5.7M');
+    expect(cardText).toContain('$12.34');
+    expect(cardText).toContain('98.7%');
+    expect(cardText).not.toContain('accounts.history_requests');
+    expect(cardText).not.toContain('accounts.history_tokens');
+    expect(cardText).not.toContain('accounts.history_cost');
+    expect(cardText).not.toContain('accounts.history_success');
+    expect(cardText).not.toContain('stats.success 87');
+    expect(cardText).not.toContain('stats.failure 3');
+    expect(cardText).not.toContain('auth_files.health_status_label');
     expect(cardText).not.toContain('accounts.activity_success_failure');
     expect(cardText).not.toContain('999');
+  });
+
+  it('shows pending history without blocking account rows', async () => {
+    mocks.files = [makeCodexFile('pending.json', 'auth-1', 'pending@example.com')];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory.mockResolvedValue(
+      makeAccountHistoryResponse([
+        {
+          account_key: 'pending@example.com',
+          matched: true,
+          total_requests: 5,
+          success_calls: 4,
+          failure_calls: 1,
+          total_tokens: 600,
+          total_cost: 0.08,
+          success_rate: 0.8,
+          first_seen_ms: 1,
+          last_seen_ms: 2,
+          sync_status: 'pending',
+        },
+      ])
+    );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(getAccountListItemTexts(renderer).join('\n')).toContain('pending.json');
+    expect(treeText(renderer)).toContain('accounts.history_syncing');
+  });
+
+  it('keeps the account list usable when account history is unavailable', async () => {
+    mocks.files = [makeCodexFile('offline.json', 'auth-1', 'offline@example.com')];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory.mockRejectedValue(new Error('history offline'));
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(getAccountListItemTexts(renderer).join('\n')).toContain('offline.json');
+    expect(treeText(renderer)).toContain('accounts.history_unavailable');
   });
 
   it('renders the mobile filters entrypoint in the accounts toolbar', async () => {
@@ -936,6 +1304,10 @@ describe('AccountsPage replacement flows', () => {
     });
     await act(async () => {
       findDetailButtonByName(renderer, 'codex-b.json').props.onClick();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_events').props.onClick();
       await Promise.resolve();
     });
 

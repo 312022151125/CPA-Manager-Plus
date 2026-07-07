@@ -448,6 +448,15 @@ export function IconBinary({ size = 20, ...props }: IconProps) {
   );
 }
 
+export function IconSend({ size = 20, ...props }: IconProps) {
+  return (
+    <svg {...baseSvgProps} width={size} height={size} {...props}>
+      <path d="m22 2-7 20-4-9-9-4Z" />
+      <path d="M22 2 11 13" />
+    </svg>
+  );
+}
+
 export function IconDatabaseZap({ size = 20, ...props }: IconProps) {
   return (
     <svg {...baseSvgProps} width={size} height={size} {...props}>
@@ -483,6 +492,17 @@ export function IconDollarSign({ size = 20, ...props }: IconProps) {
     <svg {...baseSvgProps} width={size} height={size} {...props}>
       <line x1="12" x2="12" y1="2" y2="22" />
       <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+    </svg>
+  );
+}
+
+export function IconPercentCircle({ size = 20, ...props }: IconProps) {
+  return (
+    <svg {...baseSvgProps} width={size} height={size} {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="m15 9-6 6" />
+      <path d="M9 9h.01" />
+      <path d="M15 15h.01" />
     </svg>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { KeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { TFunction } from 'i18next';
 import { useNavigate } from 'react-router-dom';
@@ -13,7 +13,9 @@ import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { Modal } from '@/components/ui/Modal';
 import { Select } from '@/components/ui/Select';
 import { SegmentedTabs, type SegmentedTabItem } from '@/components/ui/SegmentedTabs';
+import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import {
+  IconBinary,
   IconCheck,
   IconArrowDownWideNarrow,
   IconArrowUpNarrowWide,
@@ -28,6 +30,7 @@ import {
   IconPlus,
   IconRefreshCw,
   IconSearch,
+  IconSend,
   IconSettings,
   IconShield,
   IconSlidersHorizontal,
@@ -51,9 +54,8 @@ import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth'
 import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
 import { PaginationControls } from '@/features/monitoring/components/MonitoringShared';
-import { ProviderStatusBar } from '@/components/providers/ProviderStatusBar';
 import { AuthJsonPasteModal } from '@/features/authFiles/components/AuthJsonPasteModal';
-import { AuthFileModelsModal } from '@/features/authFiles/components/AuthFileModelsModal';
+import { AuthFileModelsContent } from '@/features/authFiles/components/AuthFileModelsModal';
 import { AuthFilesPrefixProxyEditorModal } from '@/features/authFiles/components/AuthFilesPrefixProxyEditorModal';
 import { OAuthExcludedCard } from '@/features/authFiles/components/OAuthExcludedCard';
 import {
@@ -94,6 +96,11 @@ import {
   type AccountListHealthStatusKey,
 } from '@/features/accounts/model/accountListPresentation';
 import {
+  buildAccountHistoryByRowKey,
+  buildAccountHistoryTargetEntries,
+  type AccountHistoryTargetEntry,
+} from '@/features/accounts/model/accountHistoryRows';
+import {
   getAuthFileCodexInspectionKey,
   getAuthFileCodexStatus,
   getAuthFilePatchTarget,
@@ -119,6 +126,7 @@ import {
   type MonitoringAnalyticsAccountStatRow,
   type MonitoringAnalyticsEventRow,
   type MonitoringAnalyticsTimelinePoint,
+  type MonitoringAccountHistoryItem,
   type QuotaCooldownInfo,
   type UsageHeaderSnapshot,
 } from '@/services/api';
@@ -141,11 +149,10 @@ import {
   buildUsageHeaderSnapshotLookup,
   getHighConfidenceUsageHeaderSnapshotForAuthFile,
 } from '@/utils/usageHeaderSnapshots';
-import { normalizeUsageTotal, statusBarDataFromRecentRequests } from '@/utils/recentRequests';
 import styles from './AccountsPage.module.scss';
 
 type AccountsView = 'accounts' | 'quota' | 'inspection' | 'oauth' | 'value';
-type DetailTab = 'overview' | 'quota' | 'auth' | 'strategy' | 'value' | 'events';
+type DetailTab = 'overview' | 'quota' | 'auth' | 'models' | 'strategy' | 'value' | 'events';
 type SortableAccountColumn = Extract<AccountRowSortKey, 'reset' | 'priority' | 'recent'>;
 type AccountSortFieldValue = 'default' | SortableAccountColumn;
 type QuotaUpdater<T> = T | ((prev: T) => T);
@@ -156,6 +163,10 @@ type AccountQuotaDisplayWindow = {
   remainingPercent: number | null;
   usedPercent: number | null;
   resetLabel: string;
+  limitWindowSeconds: number | null;
+  resetAtMs: number | null;
+  fromMs: number | null;
+  toMs: number | null;
 };
 
 const PAGE_SIZE_OPTIONS = [
@@ -227,6 +238,27 @@ const formatCompactNumber = (value: number) => {
   return String(value);
 };
 
+const formatHistorySuccessRate = (value: number | null | undefined) =>
+  typeof value === 'number' && Number.isFinite(value) ? formatPercent(value * 100, 1) : '-';
+
+const getAccountHistoryTitle = (
+  t: TFunction,
+  item: MonitoringAccountHistoryItem | null,
+  loading: boolean,
+  error: string
+) => {
+  if (error) return t('accounts.history_unavailable');
+  if (loading && !item) return t('accounts.history_loading');
+  if (!item || !item.matched) return t('accounts.history_empty');
+  if (item.sync_status === 'pending') return t('accounts.history_pending_title');
+  return t('accounts.history_title', {
+    requests: formatCompactNumber(item.total_requests),
+    tokens: formatCompactNumber(item.total_tokens),
+    cost: formatMoney(item.total_cost),
+    rate: formatHistorySuccessRate(item.success_rate),
+  });
+};
+
 const clampDisplayPercent = (value: number) => Math.max(0, Math.min(100, value));
 
 const remainingPercentFromUsed = (value: number | null | undefined) =>
@@ -247,6 +279,134 @@ const formatTimestamp = (value: number | null, locale: string) => {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
+};
+
+const formatQuotaResetInlineLabel = (value: string, locale: string) => {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '-') return '';
+  const timestamp = Date.parse(trimmed);
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed) && Number.isFinite(timestamp)) {
+    return formatTimestamp(timestamp, locale);
+  }
+  return trimmed;
+};
+
+const getQuotaWindowShortLabel = (window: AccountQuotaDisplayWindow) => {
+  const key = window.key.toLowerCase();
+  const label = window.label.toLowerCase();
+  const text = `${key} ${label}`;
+
+  if (
+    text.includes('five') ||
+    text.includes('5h') ||
+    text.includes('5 h') ||
+    text.includes('5 小时') ||
+    text.includes('五小时') ||
+    text.includes('primary')
+  ) {
+    return '5H';
+  }
+  if (
+    text.includes('week') ||
+    text.includes('7d') ||
+    text.includes('7 d') ||
+    text.includes('周') ||
+    text.includes('weekly')
+  ) {
+    return '7D';
+  }
+  if (
+    text.includes('month') ||
+    text.includes('30d') ||
+    text.includes('30 d') ||
+    text.includes('月') ||
+    text.includes('billing') ||
+    text.includes('账单')
+  ) {
+    return '30D';
+  }
+  if (text.includes('day') || text.includes('24h') || text.includes('日')) {
+    return '24H';
+  }
+  return window.label.slice(0, 3).toUpperCase();
+};
+
+const parseQuotaResetLabelMs = (value: string, nowMs = Date.now()) => {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '-') return null;
+  if (/^\d{4}[-/]/.test(trimmed)) {
+    const parsed = Date.parse(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  const compactMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})(?:,)?\s+(\d{1,2}):(\d{2})/);
+  if (compactMatch) {
+    const [, month, day, hourValue, minuteValue] = compactMatch;
+    const now = new Date(nowMs);
+    const candidate = new Date(
+      now.getFullYear(),
+      Number(month) - 1,
+      Number(day),
+      Number(hourValue),
+      Number(minuteValue),
+      0,
+      0
+    );
+    if (Number.isNaN(candidate.getTime())) return null;
+    if (candidate.getTime() < nowMs - 30 * 24 * 60 * 60 * 1000) {
+      candidate.setFullYear(candidate.getFullYear() + 1);
+    }
+    return candidate.getTime();
+  }
+
+  const parsed = Date.parse(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const buildQuotaWindowRange = (
+  resetLabel: string,
+  limitWindowSeconds: number | null | undefined,
+  nowMs = Date.now()
+) => {
+  if (!limitWindowSeconds || limitWindowSeconds <= 0) {
+    return { resetAtMs: null, fromMs: null, toMs: null };
+  }
+  const resetAtMs = parseQuotaResetLabelMs(resetLabel, nowMs);
+  if (!resetAtMs) return { resetAtMs: null, fromMs: null, toMs: null };
+  const durationMs = Math.round(limitWindowSeconds * 1000);
+  const fromMs = resetAtMs - durationMs;
+  const toMs = Math.min(nowMs, resetAtMs);
+  if (fromMs <= 0 || toMs <= fromMs) {
+    return { resetAtMs, fromMs: null, toMs: null };
+  }
+  return { resetAtMs, fromMs, toMs };
+};
+
+const buildAccountQuotaDisplayWindow = ({
+  key,
+  label,
+  remainingPercent,
+  usedPercent,
+  resetLabel,
+  limitWindowSeconds = null,
+}: {
+  key: string;
+  label: string;
+  remainingPercent: number | null;
+  usedPercent: number | null;
+  resetLabel: string;
+  limitWindowSeconds?: number | null;
+}): AccountQuotaDisplayWindow => {
+  const range = buildQuotaWindowRange(resetLabel, limitWindowSeconds);
+  return {
+    key,
+    label,
+    remainingPercent,
+    usedPercent,
+    resetLabel,
+    limitWindowSeconds,
+    ...range,
+  };
 };
 
 const formatDurationMs = (value: number | null | undefined) => {
@@ -422,16 +582,8 @@ export function AccountsPage() {
 
   const [oauthViewMode, setOauthViewMode] = useState<'diagram' | 'list'>('list');
   const oauthState = useAuthFilesOauth({ viewMode: oauthViewMode, files });
-  const {
-    modelsModalOpen,
-    modelsLoading,
-    modelsList,
-    modelsFileName,
-    modelsFileType,
-    modelsError,
-    showModels,
-    closeModelsModal,
-  } = useAuthFilesModels();
+  const { modelsLoading, modelsList, modelsFileName, modelsFileType, modelsError, showModels } =
+    useAuthFilesModels();
   const {
     prefixProxyEditor,
     prefixProxyUpdatedText,
@@ -499,6 +651,11 @@ export function AccountsPage() {
   const [usageSource, setUsageSource] = useState<UsageValueSource>('recent');
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageError, setUsageError] = useState('');
+  const [accountHistoryByRowKey, setAccountHistoryByRowKey] = useState<
+    Map<string, MonitoringAccountHistoryItem>
+  >(() => new Map());
+  const [accountHistoryLoading, setAccountHistoryLoading] = useState(false);
+  const [accountHistoryError, setAccountHistoryError] = useState('');
   const [oauthPreviewModel, setOauthPreviewModel] = useState('gpt-5');
   const [oauthExcludedEditorProvider, setOauthExcludedEditorProvider] = useState<string | null>(
     null
@@ -520,8 +677,11 @@ export function AccountsPage() {
   const [accountDisplayMode, setAccountDisplayMode] = useState<QuotaAccountDisplayMode>(
     DEFAULT_QUOTA_ACCOUNT_DISPLAY_MODE
   );
+  const [copiedIdentityKey, setCopiedIdentityKey] = useState<string | null>(null);
   const detailEventsRequestIdRef = useRef(0);
   const headerSnapshotReqIdRef = useRef(0);
+  const accountHistoryReqIdRef = useRef(0);
+  const identityCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accountSortDropdownRef = useRef<HTMLDivElement | null>(null);
   const accountSortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const accountSortOptionRefs = useRef<Map<AccountSortFieldValue, HTMLButtonElement | null>>(
@@ -676,6 +836,15 @@ export function AccountsPage() {
     void handleRefresh();
   }, [handleRefresh]);
 
+  useEffect(
+    () => () => {
+      if (identityCopyTimerRef.current !== null) {
+        clearTimeout(identityCopyTimerRef.current);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     if (!isAccountSortDropdownOpen || typeof document === 'undefined') return;
 
@@ -782,12 +951,18 @@ export function AccountsPage() {
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const currentPage = Math.min(page, totalPages);
-  const pageRows = filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const paginationStartItem =
-    filteredRows.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const pageRows = useMemo(
+    () => filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [currentPage, filteredRows, pageSize]
+  );
+  const paginationStartItem = filteredRows.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const paginationEndItem = Math.min(filteredRows.length, currentPage * pageSize);
   const pageAuthFiles = useMemo(() => pageRows.map((row) => row.raw), [pageRows]);
   const filteredAuthFiles = useMemo(() => filteredRows.map((row) => row.raw), [filteredRows]);
+  const accountHistoryTargets = useMemo(
+    () => buildAccountHistoryTargetEntries(pageRows),
+    [pageRows]
+  );
   const selectablePageRows = useMemo(() => pageRows.filter((row) => !row.runtimeOnly), [pageRows]);
   const selectableFilteredRows = useMemo(
     () => filteredRows.filter((row) => !row.runtimeOnly),
@@ -822,11 +997,19 @@ export function AccountsPage() {
         if (!row.runtimeOnly) {
           toggleSelect(row.selectionKey);
         }
-        return;
       }
-      setSelectedRowKey(row.selectionKey);
     },
     [isSelectionMode, toggleSelect]
+  );
+  const openAccountDetail = useCallback(
+    (row: AccountRow, tab: DetailTab = 'overview') => {
+      setSelectedRowKey(row.selectionKey);
+      setDetailTab(tab);
+      if (tab === 'models') {
+        void showModels(row.raw);
+      }
+    },
+    [showModels]
   );
   const cancelSelectionMode = useCallback(() => {
     deselectAll();
@@ -891,26 +1074,31 @@ export function AccountsPage() {
       if (row.provider === CODEX_CONFIG.type) {
         const quota = getDisplayCodexQuota(row.raw);
         if (quota?.windows?.length) {
-          return quota.windows.map((window) => ({
-            key: window.id,
-            label: translateQuotaWindowLabel(window.label, window.labelKey, window.labelParams),
-            remainingPercent: remainingPercentFromUsed(window.usedPercent),
-            usedPercent: window.usedPercent,
-            resetLabel: window.resetLabel || '-',
-          }));
+          return quota.windows.map((window) =>
+            buildAccountQuotaDisplayWindow({
+              key: window.id,
+              label: translateQuotaWindowLabel(window.label, window.labelKey, window.labelParams),
+              remainingPercent: remainingPercentFromUsed(window.usedPercent),
+              usedPercent: window.usedPercent,
+              resetLabel: window.resetLabel || '-',
+              limitWindowSeconds: window.limitWindowSeconds ?? null,
+            })
+          );
         }
       }
 
       if (row.provider === CLAUDE_CONFIG.type) {
         const quota = claudeQuota[row.fileName];
         if (quota?.windows?.length) {
-          return quota.windows.map((window) => ({
-            key: window.id,
-            label: translateQuotaWindowLabel(window.label, window.labelKey),
-            remainingPercent: remainingPercentFromUsed(window.usedPercent),
-            usedPercent: window.usedPercent,
-            resetLabel: window.resetLabel || '-',
-          }));
+          return quota.windows.map((window) =>
+            buildAccountQuotaDisplayWindow({
+              key: window.id,
+              label: translateQuotaWindowLabel(window.label, window.labelKey),
+              remainingPercent: remainingPercentFromUsed(window.usedPercent),
+              usedPercent: window.usedPercent,
+              resetLabel: window.resetLabel || '-',
+            })
+          );
         }
       }
 
@@ -920,13 +1108,13 @@ export function AccountsPage() {
         if (buckets.length) {
           return buckets.map((bucket) => {
             const remainingPercent = clampDisplayPercent(bucket.remainingFraction * 100);
-            return {
+            return buildAccountQuotaDisplayWindow({
               key: bucket.id,
               label: bucket.label || bucket.id,
               remainingPercent,
               usedPercent: clampDisplayPercent(100 - remainingPercent),
               resetLabel: bucket.resetTime || '-',
-            };
+            });
           });
         }
       }
@@ -939,7 +1127,7 @@ export function AccountsPage() {
               quotaRow.limit > 0
                 ? clampDisplayPercent(((quotaRow.limit - quotaRow.used) / quotaRow.limit) * 100)
                 : null;
-            return {
+            return buildAccountQuotaDisplayWindow({
               key: quotaRow.id,
               label: translateQuotaWindowLabel(
                 quotaRow.label,
@@ -950,7 +1138,7 @@ export function AccountsPage() {
               usedPercent:
                 remainingPercent === null ? null : clampDisplayPercent(100 - remainingPercent),
               resetLabel: quotaRow.resetHint || '-',
-            };
+            });
           });
         }
       }
@@ -961,26 +1149,26 @@ export function AccountsPage() {
         if (typeof usedPercent === 'number' && Number.isFinite(usedPercent)) {
           const remainingPercent = clampDisplayPercent(100 - usedPercent);
           return [
-            {
+            buildAccountQuotaDisplayWindow({
               key: 'billing',
               label: t('accounts.quota_window_billing'),
               remainingPercent,
               usedPercent: clampDisplayPercent(usedPercent),
               resetLabel: quota?.billing?.billingPeriodEnd || '-',
-            },
+            }),
           ];
         }
       }
 
       if (row.quota.remainingPercent !== null || row.quota.usedPercent !== null) {
         return [
-          {
+          buildAccountQuotaDisplayWindow({
             key: 'summary',
             label: t('accounts.col_quota'),
             remainingPercent: row.quota.remainingPercent,
             usedPercent: row.quota.usedPercent,
             resetLabel: row.quota.resetLabel,
-          },
+          }),
         ];
       }
 
@@ -996,6 +1184,13 @@ export function AccountsPage() {
       xaiQuota,
     ]
   );
+  const quotaDisplayWindowsByRowKey = useMemo(() => {
+    const result = new Map<string, AccountQuotaDisplayWindow[]>();
+    pageRows.forEach((row) => {
+      result.set(row.selectionKey, buildQuotaDisplayWindows(row));
+    });
+    return result;
+  }, [buildQuotaDisplayWindows, pageRows]);
   const accountDisplayHint = t(
     accountDisplayMode === 'masked'
       ? 'quota_management.show_full_credentials_hint'
@@ -1088,6 +1283,74 @@ export function AccountsPage() {
   useEffect(() => {
     void loadUsageValues();
   }, [loadUsageValues]);
+
+  const loadAccountHistory = useCallback(
+    async (targetEntries?: AccountHistoryTargetEntry[]) => {
+      const requestId = accountHistoryReqIdRef.current + 1;
+      accountHistoryReqIdRef.current = requestId;
+      const entries = targetEntries ?? accountHistoryTargets;
+      const mergeResult = targetEntries !== undefined;
+
+      if (
+        featureAvailability.checking ||
+        !featureAvailability.requestMonitoringAvailable ||
+        !featureAvailability.managerServiceBase ||
+        !managementKey ||
+        entries.length === 0
+      ) {
+        if (!mergeResult) {
+          setAccountHistoryByRowKey(new Map());
+        }
+        setAccountHistoryLoading(false);
+        setAccountHistoryError('');
+        return;
+      }
+
+      setAccountHistoryLoading(true);
+      setAccountHistoryError('');
+      try {
+        const response = await monitoringAnalyticsApi.getAccountHistory(
+          featureAvailability.managerServiceBase,
+          managementKey,
+          {
+            accounts: entries.map((entry) => entry.target),
+          }
+        );
+        if (accountHistoryReqIdRef.current !== requestId) return;
+        const nextHistory = buildAccountHistoryByRowKey(entries, response.items);
+        setAccountHistoryByRowKey((current) => {
+          if (!mergeResult) return nextHistory;
+          const merged = new Map(current);
+          nextHistory.forEach((item, rowKey) => {
+            merged.set(rowKey, item);
+          });
+          return merged;
+        });
+      } catch (err: unknown) {
+        if (accountHistoryReqIdRef.current !== requestId) return;
+        if (!mergeResult) {
+          setAccountHistoryByRowKey(new Map());
+        }
+        setAccountHistoryError(err instanceof Error ? err.message : t('notification.load_failed'));
+      } finally {
+        if (accountHistoryReqIdRef.current === requestId) {
+          setAccountHistoryLoading(false);
+        }
+      }
+    },
+    [
+      accountHistoryTargets,
+      featureAvailability.checking,
+      featureAvailability.managerServiceBase,
+      featureAvailability.requestMonitoringAvailable,
+      managementKey,
+      t,
+    ]
+  );
+
+  useEffect(() => {
+    void loadAccountHistory();
+  }, [loadAccountHistory]);
 
   const loadDetailEvents = useCallback(
     async (row: AccountRow) => {
@@ -1235,6 +1498,14 @@ export function AccountsPage() {
       }
     },
     [refreshQuotaForRow, showNotification, t]
+  );
+
+  const refreshAccountRow = useCallback(
+    async (row: AccountRow) => {
+      await refreshQuotaRows([row]);
+      await loadAccountHistory(buildAccountHistoryTargetEntries([row]));
+    },
+    [loadAccountHistory, refreshQuotaRows]
   );
 
   const canResetCodexQuota = useCallback(
@@ -1442,6 +1713,30 @@ export function AccountsPage() {
           : t('notification.copy_failed', { defaultValue: 'Copy failed' }),
         copied ? 'success' : 'error'
       );
+    },
+    [showNotification, t]
+  );
+
+  const handleCopyIdentityText = useCallback(
+    async (event: ReactMouseEvent<HTMLButtonElement>, text: string, feedbackKey: string) => {
+      event.stopPropagation();
+      const value = text.trim();
+      if (!value) return;
+
+      const copied = await copyToClipboard(value);
+      if (!copied) {
+        showNotification(t('notification.copy_failed', { defaultValue: 'Copy failed' }), 'error');
+        return;
+      }
+
+      setCopiedIdentityKey(feedbackKey);
+      if (identityCopyTimerRef.current !== null) {
+        clearTimeout(identityCopyTimerRef.current);
+      }
+      identityCopyTimerRef.current = setTimeout(() => {
+        setCopiedIdentityKey((current) => (current === feedbackKey ? null : current));
+        identityCopyTimerRef.current = null;
+      }, 1800);
     },
     [showNotification, t]
   );
@@ -2143,85 +2438,79 @@ export function AccountsPage() {
     return typeof document === 'undefined' ? content : createPortal(content, document.body);
   };
 
-  const buildRowMenuItems = (row: AccountRow): DropdownMenuItem[] => [
-    {
-      key: 'models',
-      label: t('auth_files.models_button'),
-      icon: <IconModelCluster size={15} />,
-      onClick: () => void showModels(row.raw),
-      disabled: row.runtimeOnly,
-    },
-    {
-      key: 'prefix-proxy',
-      label: t('auth_files.prefix_proxy_button'),
-      icon: <IconSettings size={15} />,
-      onClick: () => void openPrefixProxyEditor(row.raw),
-      disabled: disableControls || row.runtimeOnly,
-    },
-    ...(canResetCodexQuota(row)
-      ? [
-          {
-            key: 'reset-quota',
-            label: t('codex_quota.reset_action_button'),
-            icon: <IconRefreshCw size={15} />,
-            onClick: () => resetCodexQuotaForRow(row),
-          } satisfies DropdownMenuItem,
-        ]
-      : []),
-    { key: 'status-divider', type: 'divider' },
-    row.disabled
-      ? {
-          key: 'enable',
-          label: t('accounts.enable'),
-          icon: <IconCheck size={15} />,
-          onClick: () => void handleBatchStatus(true, [row]),
-          disabled: disableControls || statusUpdating || row.runtimeOnly,
-        }
-      : {
-          key: 'disable',
-          label: t('accounts.disable'),
-          icon: <IconX size={15} />,
-          onClick: () => void handleBatchStatus(false, [row]),
-          disabled: disableControls || statusUpdating || row.runtimeOnly,
-          tone: 'danger',
-        },
-    {
-      key: 'download',
-      label: t('auth_files.download_button'),
-      icon: <IconDownload size={15} />,
-      onClick: () => void handleDownload(row.fileName),
-      disabled: row.runtimeOnly,
-    },
-    { key: 'danger-divider', type: 'divider' },
-    {
-      key: 'delete',
-      label: t('auth_files.delete_button'),
-      icon: <IconTrash2 size={15} />,
-      onClick: () => handleDelete(row.fileName),
-      disabled: disableControls || row.runtimeOnly || deleting === row.fileName,
-      tone: 'danger',
-    },
-  ];
-
   const renderRowActions = (row: AccountRow) => (
-    <div className={styles.rowActions}>
-      <Button
-        variant="ghost"
-        size="xs"
-        iconOnly
-        className={styles.rowDetailButton}
-        onClick={() => setSelectedRowKey(row.selectionKey)}
-        title={t('accounts.open_detail', { name: row.fileName })}
-        aria-label={t('accounts.open_detail', { name: row.fileName })}
-      >
-        <IconChevronRight size={16} />
-      </Button>
-      <DropdownMenu
-        items={buildRowMenuItems(row)}
-        ariaLabel={t('accounts.col_actions')}
-        triggerIcon={<IconMoreVertical size={16} />}
-        triggerClassName={styles.rowActionMenu}
-      />
+    <div className={styles.rowActions} onClick={(event) => event.stopPropagation()}>
+      <div className={styles.accountQuickActionsGrid}>
+        <Button
+          variant="secondary"
+          size="sm"
+          iconOnly
+          className={`${styles.accountIconButton} ${styles.accountIconButtonRefresh}`}
+          onClick={() => void refreshAccountRow(row)}
+          disabled={quotaRefreshing || row.disabled || row.runtimeOnly}
+          title={t('accounts.refresh_quota')}
+          aria-label={t('accounts.refresh_quota')}
+        >
+          <IconRefreshCw size={15} />
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          iconOnly
+          className={`${styles.accountIconButton} ${styles.accountIconButtonModels}`}
+          onClick={() => openAccountDetail(row, 'models')}
+          disabled={row.runtimeOnly}
+          title={t('auth_files.models_button')}
+          aria-label={t('auth_files.models_button')}
+        >
+          <IconModelCluster size={15} />
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          iconOnly
+          className={`${styles.accountIconButton} ${styles.accountIconButtonDownload}`}
+          onClick={() => void handleDownload(row.fileName)}
+          disabled={row.runtimeOnly}
+          title={t('auth_files.download_button')}
+          aria-label={t('auth_files.download_button')}
+        >
+          <IconDownload size={15} />
+        </Button>
+        <Button
+          variant="danger"
+          size="sm"
+          iconOnly
+          className={`${styles.accountIconButton} ${styles.accountIconButtonDelete}`}
+          onClick={() => handleDelete(row.fileName)}
+          disabled={disableControls || row.runtimeOnly || deleting === row.fileName}
+          title={t('auth_files.delete_button')}
+          aria-label={t('auth_files.delete_button')}
+        >
+          {deleting === row.fileName ? <LoadingSpinner size={14} /> : <IconTrash2 size={15} />}
+        </Button>
+      </div>
+      <span className={styles.accountActionsDivider} aria-hidden="true" />
+      <div className={styles.accountSideActions}>
+        <div className={styles.accountStatusSwitch}>
+          <ToggleSwitch
+            checked={!row.disabled}
+            onChange={(enabled) => void handleBatchStatus(enabled, [row])}
+            disabled={disableControls || statusUpdating || row.runtimeOnly}
+            ariaLabel={row.disabled ? t('accounts.enable') : t('accounts.disable')}
+          />
+        </div>
+        <Button
+          variant="ghost"
+          size="xs"
+          className={styles.rowDetailButton}
+          onClick={() => openAccountDetail(row)}
+          title={t('accounts.open_detail', { name: row.fileName })}
+          aria-label={t('accounts.open_detail', { name: row.fileName })}
+        >
+          {t('accounts.open_detail_short')}
+        </Button>
+      </div>
     </div>
   );
 
@@ -2264,7 +2553,8 @@ export function AccountsPage() {
         <div className={styles.accountCardList}>
           {rowsToRender.map((row) => {
             const recommendation = recommendationBySelectionKey.get(row.selectionKey) ?? null;
-            const quotaWindows = buildQuotaDisplayWindows(row);
+            const quotaWindows =
+              quotaDisplayWindowsByRowKey.get(row.selectionKey) ?? buildQuotaDisplayWindows(row);
             const quotaCooldown =
               quotaCooldowns.get(
                 getAuthFileCodexInspectionKey(row.fileName, row.authIndex || null)
@@ -2289,35 +2579,47 @@ export function AccountsPage() {
               quotaWindows.length > 0
                 ? quotaWindows.slice(0, 2)
                 : [
-                    {
+                    buildAccountQuotaDisplayWindow({
                       key: 'unknown',
                       label: t('accounts.col_quota'),
                       remainingPercent: remaining,
                       usedPercent: item.quota.usedPercent,
                       resetLabel: item.quota.resetLabel,
-                    },
+                    }),
                   ];
             const hiddenQuotaWindowCount = Math.max(0, quotaWindows.length - 2);
             const quotaWindowTitle =
               quotaWindows
                 .map((window) => `${window.label}: ${formatPercent(window.remainingPercent)}`)
                 .join('\n') || t('accounts.quota_brief_unknown');
-            const healthStats = {
-              success: normalizeUsageTotal(row.raw.success),
-              failure: normalizeUsageTotal(row.raw.failed),
-            };
-            const healthStatusData = statusBarDataFromRecentRequests(row.usage.recentRequests);
-            const hasHealthStatusData =
-              healthStatusData.totalSuccess + healthStatusData.totalFailure > 0;
-            const healthStatusTitle = hasHealthStatusData
-              ? t('accounts.activity_health_title', {
-                  success: formatCompactNumber(healthStatusData.totalSuccess),
-                  failure: formatCompactNumber(healthStatusData.totalFailure),
-                  rate: formatPercent(healthStatusData.successRate),
-                })
-              : t('accounts.activity_no_health');
-            const quotaSourceShortLabel = t(item.quota.sourceShortLabelKey);
             const healthTitle = t(item.health.tooltipKey, item.health.tooltipParams);
+            const accountHistory = accountHistoryByRowKey.get(row.selectionKey) ?? null;
+            const accountHistoryMatched = accountHistory?.matched === true;
+            const accountHistoryTitle = getAccountHistoryTitle(
+              t,
+              accountHistory,
+              accountHistoryLoading,
+              accountHistoryError
+            );
+            const accountHistoryFootnote = accountHistoryError
+              ? t('accounts.history_unavailable')
+              : accountHistoryLoading && !accountHistory
+                ? t('accounts.history_loading')
+                : accountHistory?.sync_status === 'pending'
+                  ? t('accounts.history_syncing')
+                  : null;
+            const accountHistoryRequestValue = accountHistoryMatched
+              ? formatCompactNumber(accountHistory.total_requests)
+              : '-';
+            const accountHistoryTokenValue = accountHistoryMatched
+              ? formatCompactNumber(accountHistory.total_tokens)
+              : '-';
+            const accountHistoryCostValue = accountHistoryMatched
+              ? formatMoney(accountHistory.total_cost)
+              : '-';
+            const accountHistorySuccessValue = accountHistoryMatched
+              ? formatHistorySuccessRate(accountHistory.success_rate)
+              : '-';
             return (
               <article
                 key={row.selectionKey}
@@ -2331,7 +2633,7 @@ export function AccountsPage() {
                 ]
                   .filter(Boolean)
                   .join(' ')}
-                onClick={() => handleAccountCardClick(row)}
+                onClick={isSelectionMode ? () => handleAccountCardClick(row) : undefined}
               >
                 <div className={styles.accountCardIdentity}>
                   <div className={styles.accountIdentityBadgeRow}>
@@ -2342,12 +2644,50 @@ export function AccountsPage() {
                       <span className={styles.accountMetaPill}>{item.identity.planType}</span>
                     ) : null}
                   </div>
-                  <strong className={styles.accountIdentityTitle} title={item.identity.title}>
-                    {getDisplayAccount(row)}
-                  </strong>
-                  <span className={styles.accountCardFile} title={row.fileName}>
-                    {getDisplayFileName(row.fileName)}
-                  </span>
+                  <div className={styles.accountIdentityCopyLine}>
+                    <button
+                      type="button"
+                      className={styles.accountIdentityCopyTarget}
+                      title={row.accountLabel}
+                      aria-label={`${t('common.copy')} ${row.accountLabel}`}
+                      onClick={(event) =>
+                        void handleCopyIdentityText(
+                          event,
+                          row.accountLabel,
+                          `${row.selectionKey}:account`
+                        )
+                      }
+                    >
+                      <strong className={styles.accountIdentityTitle}>
+                        {getDisplayAccount(row)}
+                      </strong>
+                    </button>
+                    {copiedIdentityKey === `${row.selectionKey}:account` ? (
+                      <span className={styles.accountIdentityCopyHint}>
+                        {t('accounts.copy_feedback_copied')}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className={styles.accountIdentityCopyLine}>
+                    <button
+                      type="button"
+                      className={styles.accountIdentityCopyTarget}
+                      title={row.fileName}
+                      aria-label={`${t('common.copy')} ${row.fileName}`}
+                      onClick={(event) =>
+                        void handleCopyIdentityText(event, row.fileName, `${row.selectionKey}:file`)
+                      }
+                    >
+                      <span className={styles.accountCardFile}>
+                        {getDisplayFileName(row.fileName)}
+                      </span>
+                    </button>
+                    {copiedIdentityKey === `${row.selectionKey}:file` ? (
+                      <span className={styles.accountIdentityCopyHint}>
+                        {t('accounts.copy_feedback_copied')}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className={styles.accountCardHealth}>
@@ -2373,21 +2713,52 @@ export function AccountsPage() {
                   </div>
                 </div>
 
-                <div className={styles.accountCardEvidence} title={healthStatusTitle}>
-                  <div className={styles.accountHealthHeader}>
-                    <span className={styles.accountHealthTitle}>
-                      {t('auth_files.health_status_label')}
-                    </span>
-                    <span className={styles.accountHealthCounts}>
-                      <span>
-                        {t('stats.success')} {formatCompactNumber(healthStats.success)}
+                <div className={styles.accountCardEvidence} title={accountHistoryTitle}>
+                  <div className={styles.accountHistoryGrid}>
+                    <div
+                      className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricRequests}`}
+                      aria-label={`${t('accounts.history_requests')} ${accountHistoryRequestValue}`}
+                      title={t('accounts.history_requests')}
+                    >
+                      <span className={styles.accountHistoryIcon}>
+                        <IconSend size={13} />
                       </span>
-                      <span className={healthStats.failure > 0 ? styles.accountHealthFailure : ''}>
-                        {t('stats.failure')} {formatCompactNumber(healthStats.failure)}
+                      <strong>{accountHistoryRequestValue}</strong>
+                    </div>
+                    <div
+                      className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricTokens}`}
+                      aria-label={`${t('accounts.history_tokens')} ${accountHistoryTokenValue}`}
+                      title={t('accounts.history_tokens')}
+                    >
+                      <span className={styles.accountHistoryIcon}>
+                        <IconBinary size={13} />
                       </span>
-                    </span>
+                      <strong>{accountHistoryTokenValue}</strong>
+                    </div>
+                    <div
+                      className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricCost}`}
+                      aria-label={`${t('accounts.history_cost')} ${accountHistoryCostValue}`}
+                      title={t('accounts.history_cost')}
+                    >
+                      <span className={styles.accountHistoryIcon}>
+                        <IconDollarSign size={13} />
+                      </span>
+                      <strong>{accountHistoryCostValue}</strong>
+                    </div>
+                    <div
+                      className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricSuccess}`}
+                      aria-label={`${t('accounts.history_success')} ${accountHistorySuccessValue}`}
+                      title={t('accounts.history_success')}
+                    >
+                      <span className={styles.accountHistoryIcon}>
+                        <IconCheck size={13} />
+                      </span>
+                      <strong>{accountHistorySuccessValue}</strong>
+                    </div>
                   </div>
-                  <ProviderStatusBar statusData={healthStatusData} styles={styles} />
+                  {accountHistoryFootnote ? (
+                    <span className={styles.accountHistoryFootnote}>{accountHistoryFootnote}</span>
+                  ) : null}
                 </div>
 
                 <div className={styles.accountCardBusiness}>
@@ -2405,35 +2776,35 @@ export function AccountsPage() {
                       const windowWidth = Math.max(0, Math.min(100, windowRemaining ?? 0));
                       const resetLabel =
                         window.resetLabel && window.resetLabel !== '-' ? window.resetLabel : '';
+                      const resetDisplayLabel = resetLabel
+                        ? formatQuotaResetInlineLabel(resetLabel, i18n.language)
+                        : '';
+                      const shortLabel = getQuotaWindowShortLabel(window);
                       return (
-                        <div key={window.key} className={styles.quotaWindowCard}>
-                          <div className={styles.quotaCellHeader}>
-                            <span className={styles.quotaWindowSummary}>{window.label}</span>
-                            <strong>
-                              {windowRemaining !== null
-                                ? t('accounts.quota_brief_remaining', {
-                                    percent: formatPercent(windowRemaining),
-                                  })
-                                : t('accounts.quota_brief_unknown')}
-                            </strong>
-                          </div>
-                          {windowRemaining !== null ? (
+                        <div
+                          key={window.key}
+                          className={styles.quotaWindowCard}
+                          title={`${window.label}: ${formatPercent(windowRemaining)}`}
+                        >
+                          <div className={styles.quotaWindowPrimaryLine}>
+                            <span className={styles.quotaWindowSummary} title={window.label}>
+                              {shortLabel}
+                            </span>
                             <div className={styles.quotaTrack} aria-hidden="true">
                               <span
                                 className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
                                 style={{ width: `${windowWidth}%` }}
                               />
                             </div>
-                          ) : null}
-                          <div className={styles.accountCardQuotaMeta}>
-                            <span title={getQuotaSourceLabel(row.quota.source)}>
-                              {quotaSourceShortLabel}
+                            <strong className={styles.quotaWindowPercent}>
+                              {windowRemaining !== null ? formatPercent(windowRemaining) : '-'}
+                            </strong>
+                            <span
+                              className={styles.quotaResetMeta}
+                              title={resetLabel ? `${t('accounts.col_reset')}: ${resetLabel}` : ''}
+                            >
+                              {resetDisplayLabel || '-'}
                             </span>
-                            {resetLabel ? (
-                              <span title={resetLabel}>
-                                {t('accounts.col_reset')}: {resetLabel}
-                              </span>
-                            ) : null}
                           </div>
                         </div>
                       );
@@ -2447,7 +2818,7 @@ export function AccountsPage() {
                         })}
                         onClick={(event) => {
                           event.stopPropagation();
-                          setSelectedRowKey(row.selectionKey);
+                          openAccountDetail(row, 'quota');
                         }}
                       >
                         {t('accounts.quota_more_windows', {
@@ -2458,26 +2829,7 @@ export function AccountsPage() {
                   </div>
                 </div>
 
-                <div
-                  className={styles.accountCardRecommendation}
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  {recommendation ? (
-                    <Button
-                      variant={recommendation.priority === 'critical' ? 'danger' : 'secondary'}
-                      size="xs"
-                      onClick={() => void executeRecommendation(recommendation)}
-                      disabled={disableControls && recommendation.action !== 'review'}
-                    >
-                      {t(item.recommendation.actionLabelKey)}
-                    </Button>
-                  ) : (
-                    <span className={`${styles.badge} ${styles.badgeNeutral}`}>
-                      {t(item.recommendation.actionLabelKey)}
-                    </span>
-                  )}
-                  {renderRowActions(row)}
-                </div>
+                <div className={styles.accountCardRecommendation}>{renderRowActions(row)}</div>
               </article>
             );
           })}
@@ -2504,6 +2856,7 @@ export function AccountsPage() {
       { id: 'overview', label: t('accounts.detail_tab_overview') },
       { id: 'quota', label: t('accounts.detail_tab_quota') },
       { id: 'auth', label: t('accounts.detail_tab_auth') },
+      { id: 'models', label: t('auth_files.models_button') },
       { id: 'strategy', label: t('accounts.detail_tab_strategy') },
       { id: 'value', label: t('accounts.detail_tab_value') },
       { id: 'events', label: t('accounts.detail_tab_events') },
@@ -2609,6 +2962,22 @@ export function AccountsPage() {
                 <dd>{selectedRow.disabled ? t('common.disabled') : t('common.enabled')}</dd>
               </div>
             </dl>
+          </section>
+        );
+      }
+      if (detailTab === 'models') {
+        return (
+          <section className={styles.drawerSection}>
+            <h3>{t('auth_files.models_button')}</h3>
+            <p>{modelsFileName || selectedRow.fileName}</p>
+            <AuthFileModelsContent
+              fileType={modelsFileType || selectedRow.provider}
+              loading={modelsLoading}
+              error={modelsError}
+              models={modelsList}
+              excluded={oauthState.excluded}
+              onCopyText={copyTextWithNotification}
+            />
           </section>
         );
       }
@@ -2876,7 +3245,7 @@ export function AccountsPage() {
           <div className={styles.drawerActions}>
             <Button
               variant="secondary"
-              onClick={() => refreshQuotaRows([selectedRow])}
+              onClick={() => void refreshAccountRow(selectedRow)}
               loading={quotaRefreshing}
             >
               {!quotaRefreshing ? <IconRefreshCw size={16} /> : null}
@@ -2884,7 +3253,10 @@ export function AccountsPage() {
             </Button>
             <Button
               variant="secondary"
-              onClick={() => void showModels(selectedRow.raw)}
+              onClick={() => {
+                setDetailTab('models');
+                void showModels(selectedRow.raw);
+              }}
               disabled={selectedRow.runtimeOnly}
             >
               <IconModelCluster size={16} />
@@ -2939,7 +3311,12 @@ export function AccountsPage() {
               role="tab"
               aria-selected={detailTab === tab.id}
               className={detailTab === tab.id ? styles.drawerTabActive : ''}
-              onClick={() => setDetailTab(tab.id)}
+              onClick={() => {
+                setDetailTab(tab.id);
+                if (tab.id === 'models') {
+                  void showModels(selectedRow.raw);
+                }
+              }}
             >
               {tab.label}
             </button>
@@ -3613,17 +3990,6 @@ export function AccountsPage() {
           if (!authJsonPasteSaving) setAuthJsonPasteOpen(false);
         }}
         onSave={handleSavePastedAuthJson}
-      />
-      <AuthFileModelsModal
-        open={modelsModalOpen}
-        fileName={modelsFileName}
-        fileType={modelsFileType}
-        loading={modelsLoading}
-        error={modelsError}
-        models={modelsList}
-        excluded={oauthState.excluded}
-        onClose={closeModelsModal}
-        onCopyText={copyTextWithNotification}
       />
       <AuthFilesPrefixProxyEditorModal
         disableControls={disableControls}
