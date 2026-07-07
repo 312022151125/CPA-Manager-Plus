@@ -192,6 +192,33 @@ type AccountModelStat struct {
 	LatencySamples       int64
 }
 
+type AccountWindowUsageQuery struct {
+	RequestIndex      int
+	FromMS            int64
+	ToMS              int64
+	AccountSnapshot   string
+	AuthLabelSnapshot string
+	Source            string
+	AuthIndex         string
+}
+
+type AccountWindowModelStat struct {
+	RequestIndex        int
+	Model               string
+	BillingModel        string
+	ServiceTier         string
+	Calls               int64
+	SuccessCalls        int64
+	FailureCalls        int64
+	InputTokens         int64
+	OutputTokens        int64
+	CachedTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	TotalTokens         int64
+	LastSeenMS          int64
+}
+
 type CredentialModelStat struct {
 	ID                    string
 	AuthFileSnapshot      string
@@ -1113,6 +1140,95 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 			&stat.LastSeenMS,
 			&stat.AvgLatencyMS,
 			&stat.LatencySamples,
+		); err != nil {
+			return nil, err
+		}
+		stats = append(stats, stat)
+	}
+	return stats, rows.Err()
+}
+
+func (r *repository) AccountWindowModelStats(ctx context.Context, windows []AccountWindowUsageQuery) ([]AccountWindowModelStat, error) {
+	if len(windows) == 0 {
+		return []AccountWindowModelStat{}, nil
+	}
+
+	values := make([]string, 0, len(windows))
+	args := make([]any, 0, len(windows)*7)
+	for _, window := range windows {
+		values = append(values, "(?, ?, ?, ?, ?, ?, ?)")
+		args = append(
+			args,
+			window.RequestIndex,
+			window.FromMS,
+			window.ToMS,
+			strings.TrimSpace(window.AccountSnapshot),
+			strings.TrimSpace(window.AuthLabelSnapshot),
+			strings.TrimSpace(window.Source),
+			strings.TrimSpace(window.AuthIndex),
+		)
+	}
+
+	rows, err := r.db.QueryContext(ctx, `with window_targets(
+	request_index, from_ms, to_ms, account_snapshot, auth_label_snapshot, source, auth_index
+) as (
+	values `+strings.Join(values, ",")+`
+)
+select
+	w.request_index,
+	e.model,
+	coalesce(nullif(e.resolved_model, ''), e.model) as billing_model,
+	coalesce(e.service_tier, '') as service_tier,
+	count(*),
+	sum(case when e.failed = 0 then 1 else 0 end),
+	sum(case when e.failed = 1 then 1 else 0 end),
+	coalesce(sum(e.input_tokens), 0),
+	coalesce(sum(e.output_tokens), 0),
+	coalesce(sum(max(max(e.cached_tokens, e.cache_tokens) - max(e.cache_read_tokens, 0) - max(e.cache_creation_tokens, 0), 0)), 0),
+	coalesce(sum(e.cache_read_tokens), 0),
+	coalesce(sum(e.cache_creation_tokens), 0),
+	coalesce(sum(e.total_tokens), 0),
+	max(e.timestamp_ms)
+from window_targets w
+join usage_events e
+	on e.timestamp_ms >= w.from_ms
+	and e.timestamp_ms < w.to_ms
+	and (
+		case
+			when w.account_snapshot <> '' then lower(coalesce(e.account_snapshot, '')) = lower(w.account_snapshot)
+			when w.auth_label_snapshot <> '' then lower(coalesce(e.auth_label_snapshot, '')) = lower(w.auth_label_snapshot)
+			when w.source <> '' then lower(coalesce(e.auth_file_snapshot, '')) = lower(w.source)
+				or lower(coalesce(e.source, '')) = lower(w.source)
+			when w.auth_index <> '' then lower(coalesce(e.auth_index, '')) = lower(w.auth_index)
+			else 0
+		end
+	)
+	and (w.auth_index = '' or lower(coalesce(e.auth_index, '')) = lower(w.auth_index))
+group by w.request_index, e.model, billing_model, service_tier
+order by w.request_index, max(e.timestamp_ms) desc`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stats := make([]AccountWindowModelStat, 0)
+	for rows.Next() {
+		var stat AccountWindowModelStat
+		if err := rows.Scan(
+			&stat.RequestIndex,
+			&stat.Model,
+			&stat.BillingModel,
+			&stat.ServiceTier,
+			&stat.Calls,
+			&stat.SuccessCalls,
+			&stat.FailureCalls,
+			&stat.InputTokens,
+			&stat.OutputTokens,
+			&stat.CachedTokens,
+			&stat.CacheReadTokens,
+			&stat.CacheCreationTokens,
+			&stat.TotalTokens,
+			&stat.LastSeenMS,
 		); err != nil {
 			return nil, err
 		}

@@ -1473,6 +1473,84 @@ func TestAccountHistoryEmptyTargetDoesNotMatchAnonymousBucket(t *testing.T) {
 	}
 }
 
+func TestAccountWindowUsageReturnsWindowScopedTotalsAndComputedCost(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_700_000_000_000)
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"resolved-a": {
+			Prompt:     1,
+			Completion: 2,
+		},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+
+	first := monitoringEvent("window-usage-1", baseMS+1_000, "model-a", "auth-1", "source-a", false, 1_000_000, 500_000, 0, 0, 1_500_000, nil)
+	first.ResolvedModel = "resolved-a"
+	first.AccountSnapshot = "quota@example.com"
+	first.AuthFileSnapshot = "codex.json"
+	second := monitoringEvent("window-usage-2", baseMS+2_000, "model-a", "auth-1", "source-a", true, 0, 0, 0, 0, 0, nil)
+	second.ResolvedModel = "resolved-a"
+	second.AccountSnapshot = "quota@example.com"
+	second.AuthFileSnapshot = "codex.json"
+	outside := monitoringEvent("window-usage-outside", baseMS+9_000, "model-a", "auth-1", "source-a", false, 9, 9, 0, 0, 18, nil)
+	outside.ResolvedModel = "resolved-a"
+	outside.AccountSnapshot = "quota@example.com"
+	outside.AuthFileSnapshot = "codex.json"
+	if _, err := db.InsertEvents(ctx, []usage.Event{first, second, outside}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).AccountWindowUsage(ctx, AccountWindowUsageRequest{
+		Windows: []AccountWindowUsageTarget{
+			{
+				RowKey:          "codex.json\x00auth-1",
+				WindowKey:       "5h",
+				FromMS:          baseMS,
+				ToMS:            baseMS + 5_000,
+				AccountSnapshot: "quota@example.com",
+				AuthIndex:       "auth-1",
+				Source:          "codex.json",
+			},
+			{
+				RowKey:          "codex.json\x00auth-1",
+				WindowKey:       "7d",
+				FromMS:          baseMS - 10_000,
+				ToMS:            baseMS - 5_000,
+				AccountSnapshot: "quota@example.com",
+				AuthIndex:       "auth-1",
+				Source:          "codex.json",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("account window usage: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("items = %#v", resp.Items)
+	}
+	item := resp.Items[0]
+	if item.RowKey != "codex.json\x00auth-1" || item.WindowKey != "5h" || !item.Matched || item.SyncStatus != "ready" {
+		t.Fatalf("item identity = %#v", item)
+	}
+	if item.TotalRequests != 2 || item.SuccessCalls != 1 || item.FailureCalls != 1 || item.TotalTokens != 1_500_000 {
+		t.Fatalf("window totals = %#v", item)
+	}
+	if item.SuccessRate == nil || math.Abs(*item.SuccessRate-0.5) > 0.000001 {
+		t.Fatalf("success rate = %#v", item.SuccessRate)
+	}
+	if math.Abs(item.TotalCost-2.0) > 0.000001 {
+		t.Fatalf("total cost = %v", item.TotalCost)
+	}
+	if item.LastSeenMS == nil || *item.LastSeenMS != baseMS+2_000 {
+		t.Fatalf("last seen = %#v", item.LastSeenMS)
+	}
+	if resp.Items[1].Matched || resp.Items[1].SyncStatus != "empty" || resp.Items[1].TotalRequests != 0 {
+		t.Fatalf("empty item = %#v", resp.Items[1])
+	}
+}
+
 func newMonitoringTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
