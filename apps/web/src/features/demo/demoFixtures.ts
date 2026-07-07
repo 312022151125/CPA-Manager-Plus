@@ -7,6 +7,10 @@ import type {
   DashboardSummaryResponse,
   ManagerConfigResponse,
   ModelPricesResponse,
+  MonitoringAccountHistoryRequest,
+  MonitoringAccountHistoryResponse,
+  MonitoringAccountWindowUsageRequest,
+  MonitoringAccountWindowUsageResponse,
   MonitoringAnalyticsRequest,
   MonitoringAnalyticsResponse,
   QuotaCooldownInfo,
@@ -62,6 +66,14 @@ const isDemoOAuthAccountProvider = (provider: unknown) =>
   typeof provider === 'string' && demoOAuthAccountProviders.has(provider);
 
 const demoResetIso = (offsetMs: number) => new Date(now() + offsetMs).toISOString();
+const formatDemoQuotaResetLabel = (offsetMs: number) => {
+  const value = new Date(now() + offsetMs);
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const dayOfMonth = String(value.getDate()).padStart(2, '0');
+  const hours = String(value.getHours()).padStart(2, '0');
+  const minutes = String(value.getMinutes()).padStart(2, '0');
+  return `${month}/${dayOfMonth} ${hours}:${minutes}`;
+};
 
 const demoRecentRequests = (
   successBase: number,
@@ -2439,7 +2451,7 @@ const demoInspectionRunDetail = (baseNow = now()): CodexInspectionRunDetail => (
           id: 'primary',
           labelKey: 'codex_quota.primary_window',
           usedPercent: 63,
-          resetLabel: '2h 18m',
+          resetLabel: formatDemoQuotaResetLabel(2 * hour + 18 * minute),
           limitWindowSeconds: 18000,
         },
       ],
@@ -2555,6 +2567,72 @@ const demoAccountCandidates: AccountActionCandidate[] = [
   },
 ];
 
+type DemoAccountHistoryTarget = MonitoringAccountHistoryRequest['accounts'][number];
+type DemoAccountHistoryItem = MonitoringAccountHistoryResponse['items'][number];
+type DemoAccountWindowUsageTarget = MonitoringAccountWindowUsageRequest['windows'][number];
+
+const readDemoAccountHistoryKey = (value: unknown): string => {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return '';
+};
+
+const demoAccountHistoryTargetKey = (
+  target: DemoAccountHistoryTarget | DemoAccountWindowUsageTarget
+): { key: string; valid: boolean } => {
+  const explicitKey = 'account_key' in target ? readDemoAccountHistoryKey(target.account_key) : '';
+  if (explicitKey) return { key: explicitKey, valid: true };
+
+  const key =
+    readDemoAccountHistoryKey(target.account_snapshot) ||
+    readDemoAccountHistoryKey(target.auth_label_snapshot) ||
+    readDemoAccountHistoryKey(target.source) ||
+    readDemoAccountHistoryKey(target.auth_index);
+
+  return { key, valid: Boolean(key) };
+};
+
+const demoAccountHistoryRowKey = (row: {
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  source?: string;
+  auth_index?: string;
+}) =>
+  readDemoAccountHistoryKey(row.account_snapshot) ||
+  readDemoAccountHistoryKey(row.auth_label_snapshot) ||
+  readDemoAccountHistoryKey(row.source) ||
+  readDemoAccountHistoryKey(row.auth_index);
+
+const buildDemoAccountHistoryIndex = (baseNow = now()): Map<string, DemoAccountHistoryItem> => {
+  const analytics = buildMonitoringAnalytics(baseNow);
+  const rows = analytics.credential_stats ?? [];
+  const result = new Map<string, DemoAccountHistoryItem>();
+
+  rows.forEach((row) => {
+    const accountKey = demoAccountHistoryRowKey(row);
+    if (!accountKey) return;
+    const totalRequests = row.calls;
+    const successCalls = row.success_calls;
+    const failureCalls = row.failure_calls;
+
+    result.set(accountKey, {
+      account_key: accountKey,
+      matched: true,
+      total_requests: totalRequests,
+      success_calls: successCalls,
+      failure_calls: failureCalls,
+      total_tokens: row.total_tokens,
+      total_cost: row.cost,
+      success_rate: totalRequests > 0 ? successCalls / totalRequests : null,
+      first_seen_ms: baseNow - 30 * day,
+      last_seen_ms: row.last_seen_ms,
+      sync_status: 'ready',
+    });
+  });
+
+  return result;
+};
+
 export const getDemoRawConfig = () => clone(initialRawConfig);
 export const getDemoProviderModels = () => clone(demoProviderModels);
 export const getDemoAuthFiles = (): AuthFilesResponse => {
@@ -2567,6 +2645,98 @@ export const getDemoManagerConfig = () => clone(demoManagerConfig);
 export const getDemoDashboardSummary = () => clone(dashboardBase());
 export const getDemoMonitoringAnalytics = (request?: MonitoringAnalyticsRequest) =>
   clone(buildMonitoringAnalytics(undefined, request));
+export const getDemoAccountHistory = (
+  request: MonitoringAccountHistoryRequest
+): MonitoringAccountHistoryResponse => {
+  const generatedAtMS = now();
+  const historyByKey = buildDemoAccountHistoryIndex(generatedAtMS);
+  const latestID = 184_260;
+
+  return clone({
+    generated_at_ms: generatedAtMS,
+    checkpoint: {
+      last_event_id: latestID,
+      latest_id: latestID,
+      pending: false,
+      processed: 0,
+    },
+    items: request.accounts.map((account) => {
+      const { key, valid } = demoAccountHistoryTargetKey(account);
+      const history = historyByKey.get(key);
+      if (valid && history) return history;
+
+      return {
+        account_key: key,
+        matched: false,
+        total_requests: 0,
+        success_calls: 0,
+        failure_calls: 0,
+        total_tokens: 0,
+        total_cost: 0,
+        success_rate: null,
+        first_seen_ms: null,
+        last_seen_ms: null,
+        sync_status: 'empty',
+      };
+    }),
+  });
+};
+export const getDemoAccountWindowUsage = (
+  request: MonitoringAccountWindowUsageRequest
+): MonitoringAccountWindowUsageResponse => {
+  const generatedAtMS = now();
+  const historyByKey = buildDemoAccountHistoryIndex(generatedAtMS);
+
+  return clone({
+    generated_at_ms: generatedAtMS,
+    items: request.windows.map((window) => {
+      const { key, valid } = demoAccountHistoryTargetKey(window);
+      const history = historyByKey.get(key);
+      if (!valid || !history) {
+        return {
+          row_key: window.row_key,
+          window_key: window.window_key,
+          from_ms: window.from_ms,
+          to_ms: window.to_ms,
+          matched: false,
+          total_requests: 0,
+          success_calls: 0,
+          failure_calls: 0,
+          total_tokens: 0,
+          total_cost: 0,
+          success_rate: null,
+          last_seen_ms: null,
+          sync_status: 'empty',
+        };
+      }
+
+      const windowHours = Math.max(1, (window.to_ms - window.from_ms) / hour);
+      const ratio = Math.min(0.4, Math.max(0.035, windowHours / (30 * 24) / 2));
+      const totalRequests = Math.max(1, Math.round(history.total_requests * ratio));
+      const failureCalls = Math.min(
+        totalRequests,
+        Math.max(0, Math.round(history.failure_calls * ratio))
+      );
+      const successCalls = Math.max(0, totalRequests - failureCalls);
+
+      return {
+        row_key: window.row_key,
+        window_key: window.window_key,
+        from_ms: window.from_ms,
+        to_ms: window.to_ms,
+        matched: true,
+        total_requests: totalRequests,
+        success_calls: successCalls,
+        failure_calls: failureCalls,
+        total_tokens: Math.max(1, Math.round(history.total_tokens * ratio)),
+        total_cost: round2(history.total_cost * ratio),
+        success_rate: totalRequests > 0 ? successCalls / totalRequests : null,
+        last_seen_ms: Math.min(generatedAtMS, window.to_ms),
+        sync_status: 'ready',
+      };
+    }),
+  });
+};
 export const getDemoModelPrices = () => clone(demoModelPrices);
 export const getDemoUsagePayload = () => {
   const dashboard = dashboardBase();
@@ -2650,14 +2820,14 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           id: 'five-hour',
           label: '5 小时限额',
           usedPercent: 36,
-          resetLabel: '2h 18m',
+          resetLabel: formatDemoQuotaResetLabel(2 * hour + 18 * minute),
           limitWindowSeconds: 18_000,
         },
         {
           id: 'weekly',
           label: '周限额',
           usedPercent: 41,
-          resetLabel: '3d 08h',
+          resetLabel: formatDemoQuotaResetLabel(3 * day + 8 * hour),
           limitWindowSeconds: 604_800,
         },
       ],
@@ -2674,14 +2844,14 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           id: 'five-hour',
           label: '5 小时限额',
           usedPercent: 100,
-          resetLabel: '68m',
+          resetLabel: formatDemoQuotaResetLabel(68 * minute),
           limitWindowSeconds: 18_000,
         },
         {
           id: 'weekly',
           label: '周限额',
           usedPercent: 72,
-          resetLabel: '2d 04h',
+          resetLabel: formatDemoQuotaResetLabel(2 * day + 4 * hour),
           limitWindowSeconds: 604_800,
         },
       ],

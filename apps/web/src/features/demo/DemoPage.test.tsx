@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAppRoutes } from '@/app/appRoutes';
 import {
+  getDemoAccountHistory,
   getDemoAuthFiles,
   getDemoCodexInspectionRun,
   getDemoDashboardSummary,
@@ -123,6 +124,22 @@ describe('DemoPage', () => {
     const providers = new Set(authFiles.files.map((file) => String(file.provider ?? file.type)));
     const quota = getDemoQuotaStoreState();
     const analytics = getDemoMonitoringAnalytics();
+    const historyTargetString = (value: unknown) => {
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+      return undefined;
+    };
+    const accountHistory = getDemoAccountHistory({
+      accounts: authFiles.files.map((file) => ({
+        account_snapshot:
+          historyTargetString(file.account_snapshot) ??
+          historyTargetString(file.account) ??
+          historyTargetString(file.email),
+        auth_label_snapshot: historyTargetString(file.label) ?? historyTargetString(file.note),
+        source: file.name,
+        auth_index: historyTargetString(file.authIndex),
+      })),
+    });
     const oauthProviders = ['antigravity', 'claude', 'codex', 'kimi', 'xai'];
     const nonOauthFiles = [
       'gemini-prod-01.json',
@@ -173,6 +190,26 @@ describe('DemoPage', () => {
     expect(Array.from(providers).sort()).toEqual(oauthProviders);
     expect(Array.from(analyticsProviders).sort()).toEqual(oauthProviders);
     expect([...(analytics.filter_options?.providers ?? [])].sort()).toEqual(oauthProviders);
+    expect(accountHistory.checkpoint.pending).toBe(false);
+    expect(accountHistory.items).toHaveLength(authFiles.files.length);
+    expect(accountHistory.items.every((item) => item.matched)).toBe(true);
+    expect(
+      accountHistory.items.every(
+        (item) =>
+          item.total_requests > 0 &&
+          item.total_tokens > 0 &&
+          item.total_cost > 0 &&
+          item.success_rate !== null &&
+          item.sync_status === 'ready'
+      )
+    ).toBe(true);
+    expect(accountHistory.items.find((item) => item.account_key === 'Platform Team')).toMatchObject(
+      {
+        total_requests: 5200,
+        total_tokens: 4_220_000,
+        total_cost: 88.1,
+      }
+    );
     expect(Array.from(fileNames).sort()).toEqual(
       [
         'antigravity-builder.json',

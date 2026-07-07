@@ -2,6 +2,8 @@ import axios from 'axios';
 import type { UsagePayload } from '@/features/monitoring/hooks/useUsageData';
 import {
   getDemoAccountActionCandidates,
+  getDemoAccountHistory,
+  getDemoAccountWindowUsage,
   getDemoAccountProcessingPolicy,
   getDemoApiKeyAliases,
   getDemoCodexInspectionRun,
@@ -639,6 +641,82 @@ export interface MonitoringAnalyticsRequest {
   search_api_key_hash?: string;
   filters?: MonitoringAnalyticsFilters;
   include?: MonitoringAnalyticsInclude;
+}
+
+export interface MonitoringAccountHistoryTarget {
+  account_key?: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_index?: string;
+  source?: string;
+}
+
+export interface MonitoringAccountHistoryRequest {
+  accounts: MonitoringAccountHistoryTarget[];
+  catch_up?: boolean;
+}
+
+export interface MonitoringAccountHistoryCheckpoint {
+  last_event_id: number;
+  latest_id: number;
+  pending: boolean;
+  processed: number;
+}
+
+export interface MonitoringAccountHistoryItem {
+  account_key: string;
+  matched: boolean;
+  total_requests: number;
+  success_calls: number;
+  failure_calls: number;
+  total_tokens: number;
+  total_cost: number;
+  success_rate: number | null;
+  first_seen_ms: number | null;
+  last_seen_ms: number | null;
+  sync_status: 'ready' | 'pending' | 'empty' | string;
+}
+
+export interface MonitoringAccountHistoryResponse {
+  generated_at_ms: number;
+  checkpoint: MonitoringAccountHistoryCheckpoint;
+  items: MonitoringAccountHistoryItem[];
+}
+
+export interface MonitoringAccountWindowUsageTarget {
+  row_key: string;
+  window_key: string;
+  from_ms: number;
+  to_ms: number;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_index?: string;
+  source?: string;
+}
+
+export interface MonitoringAccountWindowUsageRequest {
+  windows: MonitoringAccountWindowUsageTarget[];
+}
+
+export interface MonitoringAccountWindowUsageItem {
+  row_key: string;
+  window_key: string;
+  from_ms: number;
+  to_ms: number;
+  matched: boolean;
+  total_requests: number;
+  success_calls: number;
+  failure_calls: number;
+  total_tokens: number;
+  total_cost: number;
+  success_rate: number | null;
+  last_seen_ms: number | null;
+  sync_status: 'ready' | 'empty' | string;
+}
+
+export interface MonitoringAccountWindowUsageResponse {
+  generated_at_ms: number;
+  items: MonitoringAccountWindowUsageItem[];
 }
 
 export interface MonitoringAnalyticsSummary {
@@ -2022,6 +2100,48 @@ export const monitoringAnalyticsApi = {
           timeout: USAGE_SERVICE_TIMEOUT_MS,
           headers: authHeaders(managementKey),
           params,
+        }
+      );
+      return response.data;
+    });
+  },
+  getAccountHistory: async (
+    base: string,
+    managementKey: string | undefined,
+    request: MonitoringAccountHistoryRequest
+  ): Promise<MonitoringAccountHistoryResponse> => {
+    if (__DEMO_SITE__ && isDemoMode()) {
+      return getDemoAccountHistory(request);
+    }
+
+    return withUsageServiceError(async () => {
+      const response = await axios.post<MonitoringAccountHistoryResponse>(
+        buildUrl(base, '/v0/management/monitoring/account-history'),
+        request,
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+        }
+      );
+      return response.data;
+    });
+  },
+  getAccountWindowUsage: async (
+    base: string,
+    managementKey: string | undefined,
+    request: MonitoringAccountWindowUsageRequest
+  ): Promise<MonitoringAccountWindowUsageResponse> => {
+    if (__DEMO_SITE__ && isDemoMode()) {
+      return getDemoAccountWindowUsage(request);
+    }
+
+    return withUsageServiceError(async () => {
+      const response = await axios.post<MonitoringAccountWindowUsageResponse>(
+        buildUrl(base, '/v0/management/monitoring/account-window-usage'),
+        request,
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
         }
       );
       return response.data;
