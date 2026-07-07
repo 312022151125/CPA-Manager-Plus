@@ -117,79 +117,96 @@ describe('DemoPage', () => {
     expect(visibleData.toLowerCase()).not.toContain(historicalAnalysisLabel);
   });
 
-  it('fills accounts with UI evaluation scenarios across statuses and quota providers', () => {
+  it('fills accounts with realistic OAuth login data across statuses and quota providers', () => {
     const authFiles = getDemoAuthFiles();
     const fileNames = new Set(authFiles.files.map((file) => file.name));
     const providers = new Set(authFiles.files.map((file) => String(file.provider ?? file.type)));
     const quota = getDemoQuotaStoreState();
+    const analytics = getDemoMonitoringAnalytics();
+    const oauthProviders = ['antigravity', 'claude', 'codex', 'kimi', 'xai'];
+    const nonOauthFiles = [
+      'gemini-prod-01.json',
+      'vertex-regional-01.json',
+      'openai-support-02.json',
+      'gemini-batch-02.json',
+      'deepseek-ops-01.json',
+    ];
+    const visibleAccountText = authFiles.files
+      .map((file) =>
+        [file.name, file.account, file.email, file.label, file.note, file.account_snapshot].join(
+          ' '
+        )
+      )
+      .join('\n');
     const cooldownKeys = new Set(
       getDemoQuotaCooldowns().map((item) => `${item.authFileName}:${item.authIndex ?? '-'}`)
     );
     const headerFiles = new Set(
-      getDemoHeaderSnapshots().items.map((item) => item.auth_file_snapshot).filter(Boolean)
+      getDemoHeaderSnapshots()
+        .items.map((item) => item.auth_file_snapshot)
+        .filter(Boolean)
     );
     const inspectionFiles = new Set(
       getDemoCodexInspectionRun().results.map((item) => item.fileName)
     );
+    const analyticsProviders = new Set(
+      [
+        ...(analytics.account_stats ?? []).map((item) => item.auth_provider_snapshot),
+        ...(analytics.credential_stats ?? []).map((item) => item.auth_provider_snapshot),
+        ...(analytics.events?.items ?? []).map((item) => item.auth_provider_snapshot),
+      ].filter((provider): provider is string => Boolean(provider))
+    );
 
     expect(authFiles.total).toBe(authFiles.files.length);
-    expect(authFiles.files.length).toBeGreaterThanOrEqual(28);
-    expect(Array.from(providers)).toEqual(
-      expect.arrayContaining(['codex', 'claude', 'antigravity', 'kimi', 'xai', 'gemini'])
+    expect(authFiles.files.length).toBe(8);
+    expect(visibleAccountText).not.toMatch(/\bui[-.]/i);
+    expect(
+      authFiles.files.every((file) =>
+        Boolean(file.account || file.email || file.label || file.note)
+      )
+    ).toBe(true);
+    expect(
+      authFiles.files.every((file) =>
+        (file.recent_requests ?? []).some((bucket) => bucket.success + bucket.failed > 0)
+      )
+    ).toBe(true);
+    expect(Array.from(providers).sort()).toEqual(oauthProviders);
+    expect(Array.from(analyticsProviders).sort()).toEqual(oauthProviders);
+    expect([...(analytics.filter_options?.providers ?? [])].sort()).toEqual(oauthProviders);
+    expect(Array.from(fileNames).sort()).toEqual(
+      [
+        'antigravity-builder.json',
+        'claude-research-02.json',
+        'claude-team-01.json',
+        'codex-expired-oauth-03.json',
+        'codex-fallback-02.json',
+        'codex-team-01.json',
+        'kimi-coding.json',
+        'xai-ops.json',
+      ].sort()
     );
-    expect(Array.from(fileNames)).toEqual(
-      expect.arrayContaining([
-        'ui-codex-available-5h-weekly.json',
-        'ui-codex-reauth-401.json',
-        'ui-codex-5h-exhausted.json',
-        'ui-codex-weekly-exhausted.json',
-        'ui-codex-monthly-exhausted.json',
-        'ui-codex-5h-cooldown.json',
-        'ui-codex-weekly-cooldown.json',
-        'ui-codex-monthly-cooldown.json',
-        'ui-codex-header-observed.json',
-        'ui-codex-refresh-error-500.json',
-        'ui-codex-disabled-recovered.json',
-        'ui-codex-negative-priority.json',
-        'ui-codex-runtime-review.json',
-        'ui-claude-low-multi-window.json',
-        'ui-antigravity-three-buckets.json',
-        'ui-kimi-daily-exhausted.json',
-        'ui-xai-billing-low.json',
-        'ui-raw-no-quota.json',
-      ])
-    );
+    nonOauthFiles.forEach((fileName) => expect(fileNames).not.toContain(fileName));
 
     expect(Object.keys(quota.codexQuota)).toEqual(
       expect.arrayContaining([
-        'ui-codex-available-5h-weekly.json',
-        'ui-codex-reauth-401.json',
-        'ui-codex-5h-exhausted.json',
-        'ui-codex-weekly-exhausted.json',
-        'ui-codex-monthly-exhausted.json',
-        'ui-codex-refresh-error-500.json',
+        'codex-team-01.json',
+        'codex-fallback-02.json',
+        'codex-expired-oauth-03.json',
       ])
     );
-    expect(quota.claudeQuota['ui-claude-low-multi-window.json']?.windows).toHaveLength(2);
-    expect(
-      quota.antigravityQuota['ui-antigravity-three-buckets.json']?.groups[0]?.buckets
-    ).toHaveLength(3);
-    expect(quota.kimiQuota['ui-kimi-daily-exhausted.json']?.rows[0]?.used).toBe(100);
-    expect(quota.xaiQuota['ui-xai-billing-low.json']?.billing?.usedPercent).toBe(86);
+    expect(quota.codexQuota['codex-expired-oauth-03.json']?.status).toBe('error');
+    expect(quota.codexQuota['codex-expired-oauth-03.json']?.errorStatus).toBe(401);
+    expect(quota.claudeQuota['claude-research-02.json']?.windows).toHaveLength(2);
+    expect(quota.antigravityQuota['antigravity-builder.json']?.groups[0]?.buckets).toHaveLength(3);
+    expect(quota.kimiQuota['kimi-coding.json']?.rows[0]?.used).toBe(62);
+    expect(quota.xaiQuota['xai-ops.json']?.billing?.usedPercent).toBe(86);
 
     expect(Array.from(cooldownKeys)).toEqual(
-      expect.arrayContaining([
-        'ui-codex-5h-cooldown.json:ui-codex-5h-cooldown',
-        'ui-codex-weekly-cooldown.json:ui-codex-weekly-cooldown',
-        'ui-codex-monthly-cooldown.json:ui-codex-monthly-cooldown',
-      ])
+      expect.arrayContaining(['codex-fallback-02.json:codex-fallback-02'])
     );
-    expect(headerFiles).toContain('ui-codex-header-observed.json');
+    expect(headerFiles).toContain('codex-fallback-02.json');
     expect(Array.from(inspectionFiles)).toEqual(
-      expect.arrayContaining([
-        'ui-codex-reauth-401.json',
-        'ui-codex-disabled-recovered.json',
-      ])
+      expect.arrayContaining(['codex-fallback-02.json', 'codex-expired-oauth-03.json'])
     );
   });
 
@@ -223,10 +240,10 @@ describe('DemoPage', () => {
     });
 
     expect(firstPage.model_stats?.length).toBeGreaterThanOrEqual(8);
-    expect(firstPage.account_stats?.length).toBeGreaterThanOrEqual(12);
-    expect(firstPage.api_key_stats?.length).toBeGreaterThanOrEqual(12);
-    expect(firstPage.credential_stats?.length).toBeGreaterThanOrEqual(10);
-    expect(firstPage.credential_timeline?.length).toBeGreaterThanOrEqual(70);
+    expect(firstPage.account_stats?.length).toBe(8);
+    expect(firstPage.api_key_stats?.length).toBe(8);
+    expect(firstPage.credential_stats?.length).toBe(8);
+    expect(firstPage.credential_timeline?.length).toBe(56);
     expect(firstPage.heatmap).toHaveLength(168);
     expect(firstPage.heatmap?.some((point) => point.calls > 0)).toBe(true);
     expect(firstPage.events?.items).toHaveLength(10);
