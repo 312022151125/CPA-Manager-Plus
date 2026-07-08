@@ -35,6 +35,7 @@ interface DropdownMenuProps {
   triggerLabel?: ReactNode;
   triggerIcon?: ReactNode;
   triggerClassName?: string;
+  triggerTitle?: string;
   align?: 'start' | 'end';
   disabled?: boolean;
 }
@@ -49,6 +50,7 @@ export function DropdownMenu({
   triggerLabel,
   triggerIcon,
   triggerClassName,
+  triggerTitle,
   align = 'end',
   disabled = false,
 }: DropdownMenuProps) {
@@ -218,6 +220,7 @@ export function DropdownMenu({
         aria-expanded={isOpen}
         aria-controls={isOpen ? menuId : undefined}
         aria-label={ariaLabel}
+        title={triggerTitle}
         disabled={disabled}
         onClick={() => (isOpen ? close() : open())}
         onKeyDown={handleTriggerKeyDown}

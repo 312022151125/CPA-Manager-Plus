@@ -91,28 +91,45 @@ export const QuotaWindowCard = ({
         </div>
         <b className={styles.headerValue}>{formatPercent(q.remainingPercent)}</b>
       </div>
-      <div className={styles.bar} aria-hidden="true">
+      <div className={styles.bar}>
+        <progress
+          className={`${styles.barProgress} ${getBarTone(q.remainingPercent)}`}
+          max={100}
+          value={width}
+          aria-label={t('accounts.detail_quota_remaining_aria', {
+            defaultValue: '剩余额度',
+            value: width,
+          })}
+        />
         <span
           className={`${styles.barFill} ${getBarTone(q.remainingPercent)}`}
           style={{ width: `${width}%` }}
+          aria-hidden="true"
         />
       </div>
       <div className={styles.meta}>
         <span>
           {t('accounts.detail_used')}: {formatPercent(q.usedPercent)}
         </span>
-        <span>
-          {t('accounts.detail_window_requests')}:{' '}
-          {usage?.matched ? formatCompactNumber(usage.totalRequests) : '-'}
-        </span>
-        <span>
-          {t('accounts.detail_window_tokens')}:{' '}
-          {usage?.matched ? formatCompactNumber(usage.totalTokens) : '-'}
-        </span>
-        <span>
-          {t('accounts.detail_window_cost')}:{' '}
-          {usage?.matched ? formatMoney(usage.totalCost) : '-'}
-        </span>
+        {usage?.matched ? (
+          <>
+            <span>
+              {t('accounts.detail_window_requests')}: {formatCompactNumber(usage.totalRequests)}
+            </span>
+            <span>
+              {t('accounts.detail_window_tokens')}: {formatCompactNumber(usage.totalTokens)}
+            </span>
+            <span>
+              {t('accounts.detail_window_cost')}: {formatMoney(usage.totalCost)}
+            </span>
+          </>
+        ) : (
+          <span className={styles.metaEmpty}>
+            {t('accounts.detail_window_stats_empty', {
+              defaultValue: '窗口统计暂未采集',
+            })}
+          </span>
+        )}
       </div>
     </div>
   );

@@ -71,11 +71,12 @@ export const AccountHealthBadge = ({
  * 不直接耦合 row / listItem — 调用方提供 raw 信号即可。
  */
 export const severityFromQuotaStatus = (
-  status: 'available' | 'warning' | 'cooldown' | 'exhausted' | 'unknown' | string,
+  status: string | number | null | undefined,
   disabled?: boolean
 ): AccountHealthSeverity => {
   if (disabled) return 'disabled';
-  switch (status) {
+  const token = String(status ?? '').trim();
+  switch (token) {
     case 'available':
       return 'ok';
     case 'warning':

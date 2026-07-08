@@ -9,3 +9,5 @@ export { RelativeTime } from './RelativeTime';
 export type { RelativeTimeMode } from './RelativeTime';
 
 export { QuotaWindowCard } from './QuotaWindowCard';
+
+export { CopyableText } from './CopyableText';

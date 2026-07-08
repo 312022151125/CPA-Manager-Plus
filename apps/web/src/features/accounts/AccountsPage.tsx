@@ -130,6 +130,7 @@ import {
 import { buildOAuthRulePreviewRows } from '@/features/accounts/model/oauthRulePreview';
 import {
   AccountHealthBadge,
+  CopyableText,
   QuotaWindowCard,
   RelativeTime,
   severityFromQuotaStatus,
@@ -687,6 +688,7 @@ export function AccountsPage() {
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [detailTab, setDetailTab] = useState<DetailTab>('overview');
+  const [authSafeFieldsOpen, setAuthSafeFieldsOpen] = useState(false);
   const [providerFilter, setProviderFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<AccountStatusFilter>('all');
   const [planFilter, setPlanFilter] = useState('all');
@@ -3066,6 +3068,9 @@ export function AccountsPage() {
     if (item.valueKind === 'number') {
       return typeof item.value === 'number' ? formatCompactNumber(item.value) : String(item.value);
     }
+    if (item.key === 'trace' && typeof item.value === 'string' && item.value.length > 8) {
+      return <CopyableText value={item.value} />;
+    }
     return String(item.value);
   };
 
@@ -3091,7 +3096,7 @@ export function AccountsPage() {
         <Drawer
           open={false}
           onClose={() => setSelectedRowKey(null)}
-          width={640}
+          width="clamp(540px, 45vw, 720px)"
           className={styles.accountDetailDrawer}
         />
       );
@@ -3148,7 +3153,7 @@ export function AccountsPage() {
                 <h3>{t('accounts.detail_quota_windows')}</h3>
                 <AccountHealthBadge
                   severity={severityFromQuotaStatus(
-                    detailView.quota.fields.find((f) => f.key === 'status')?.raw as
+                    detailView.quota.fields.find((f) => f.key === 'status')?.value as
                       | string
                       | undefined,
                     Boolean(selectedRow.disabled)
@@ -3157,7 +3162,7 @@ export function AccountsPage() {
                     const statusField = detailView.quota.fields.find(
                       (f) => f.key === 'status'
                     );
-                    return statusField ? String(statusField.displayValue) : '-';
+                    return statusField ? String(statusField.value) : '-';
                   })()}
                   hint={t('accounts.detail_quota_health_hint', {
                     defaultValue: '综合账号最近请求、配额与认证状态得出',
@@ -3225,11 +3230,38 @@ export function AccountsPage() {
           <div className={styles.drawerDetailStack}>
             <section className={styles.drawerSection}>
               <h3>{t('accounts.detail_auth_file')}</h3>
+              <div className={styles.authChips}>
+                <AccountHealthBadge
+                  severity={selectedRow.disabled ? 'disabled' : 'ok'}
+                  label={
+                    selectedRow.disabled
+                      ? t('accounts.detail_auth_status_disabled')
+                      : t('accounts.detail_auth_status_enabled')
+                  }
+                  size="sm"
+                />
+                <span className={styles.authChip}>
+                  {getProviderLabel(selectedRow.provider, t)}
+                </span>
+                <span className={styles.authChip}>{selectedRow.planType || '-'}</span>
+              </div>
               {renderDetailFieldList(detailView.auth.fields)}
             </section>
             <section className={styles.drawerSection}>
-              <h3>{t('accounts.detail_auth_safe_title')}</h3>
-              <p>{t('accounts.detail_auth_safe_hint')}</p>
+              <button
+                type="button"
+                className={styles.collapsibleHeader}
+                onClick={() => setAuthSafeFieldsOpen((open) => !open)}
+                aria-expanded={authSafeFieldsOpen}
+              >
+                <strong>{t('accounts.detail_auth_safe_title')}</strong>
+                <span className={styles.collapsibleChevron} aria-hidden="true">
+                  {authSafeFieldsOpen ? '▾' : '▸'}
+                </span>
+              </button>
+              {authSafeFieldsOpen ? (
+                <p>{t('accounts.detail_auth_safe_hint')}</p>
+              ) : null}
             </section>
           </div>
         );
@@ -3296,31 +3328,40 @@ export function AccountsPage() {
               <section className={styles.drawerSection}>
                 <h3>{t('accounts.detail_codex_status_badges')}</h3>
                 <div className={styles.detailBadgeList}>
-                  {detailView.strategy.codexBadges.map((badge) => (
-                    <span
-                      key={badge.kind}
-                      className={`${styles.badge} ${
-                        badge.tone === 'danger'
-                          ? styles.badgeBad
-                          : badge.tone === 'warning'
-                            ? styles.badgeWarn
-                            : styles.badgeInfo
-                      }`}
-                      title={
-                        badge.titleKey
-                          ? t(badge.titleKey, {
-                              defaultValue: badge.defaultTitle,
-                              ...badge.labelParams,
-                            })
-                          : undefined
-                      }
-                    >
-                      {t(badge.labelKey, {
-                        defaultValue: badge.defaultLabel,
-                        ...badge.labelParams,
-                      })}
-                    </span>
-                  ))}
+                  {[...detailView.strategy.codexBadges]
+                    .sort((a, b) => {
+                      const order: Record<typeof a.tone, number> = {
+                        danger: 0,
+                        warning: 1,
+                        info: 2,
+                      } as const;
+                      return (order[a.tone] ?? 3) - (order[b.tone] ?? 3);
+                    })
+                    .map((badge) => (
+                      <span
+                        key={badge.kind}
+                        className={`${styles.badge} ${
+                          badge.tone === 'danger'
+                            ? styles.badgeBad
+                            : badge.tone === 'warning'
+                              ? styles.badgeWarn
+                              : styles.badgeInfo
+                        }`}
+                        title={
+                          badge.titleKey
+                            ? t(badge.titleKey, {
+                                defaultValue: badge.defaultTitle,
+                                ...badge.labelParams,
+                              })
+                            : undefined
+                        }
+                      >
+                        {t(badge.labelKey, {
+                          defaultValue: badge.defaultLabel,
+                          ...badge.labelParams,
+                        })}
+                      </span>
+                    ))}
                 </div>
               </section>
             ) : null}
@@ -3417,7 +3458,15 @@ export function AccountsPage() {
                 <div className={styles.drawerUsageMetric}>
                   <span>{t('accounts.value_recent')}</span>
                   <strong>
-                    {value.lastSeenMs ? formatTimestamp(value.lastSeenMs, i18n.language) : '-'}
+                    {value.lastSeenMs ? (
+                      <RelativeTime
+                        timestamp={value.lastSeenMs}
+                        mode="both"
+                        locale={i18n.language}
+                      />
+                    ) : (
+                      '-'
+                    )}
                   </strong>
                 </div>
               </div>
@@ -3544,9 +3593,14 @@ export function AccountsPage() {
                           <strong>{formatTimestamp(event.timestamp_ms, i18n.language)}</strong>
                         </div>
                         <div className={styles.detailEventIdentity}>
-                          <span className={styles.monoCell} title={event.request_id || event.event_hash}>
-                            {requestLabel}
-                          </span>
+                          {event.request_id || event.event_hash ? (
+                            <CopyableText
+                              value={requestLabel}
+                              copyValue={event.request_id || event.event_hash}
+                            />
+                          ) : (
+                            <span>{requestLabel}</span>
+                          )}
                           <span title={modelLabel}>{modelLabel}</span>
                         </div>
                         {event.failed ? (
@@ -3567,6 +3621,22 @@ export function AccountsPage() {
                       </article>
                     );
                   })}
+                </div>
+                <div className={styles.detailEventsFooter}>
+                  <span>
+                    {t('accounts.detail_event_footer_count', {
+                      defaultValue: '显示 {{shown}} / 共 {{total}} 条',
+                      shown: rowEvents.length,
+                      total: rowEvents.length,
+                    })}
+                  </span>
+                  <a
+                    href={`#/demo/monitoring?account=${encodeURIComponent(selectedRow.fileName)}`}
+                  >
+                    {t('accounts.detail_event_footer_open_monitoring', {
+                      defaultValue: '前往请求监控',
+                    })}
+                  </a>
                 </div>
               </div>
             )}
@@ -3601,7 +3671,16 @@ export function AccountsPage() {
             <p>{t(detailView.overview.statusDescriptionKey)}</p>
           </section>
           <section className={styles.drawerSection}>
-            <h3>{t('accounts.detail_history_evidence')}</h3>
+            <div className={styles.sectionHeaderInline}>
+              <div>
+                <h3>{t('accounts.detail_history_evidence')}</h3>
+                <p>
+                  {t('accounts.detail_history_evidence_desc', {
+                    defaultValue: '历史累计统计,与上方即时指标不同源',
+                  })}
+                </p>
+              </div>
+            </div>
             {accountHistoryLoading && !detailView.history ? (
               <div className={styles.inlineLoading}>
                 <LoadingSpinner size={16} />
@@ -3678,7 +3757,7 @@ export function AccountsPage() {
       <Drawer
         open
         onClose={() => setSelectedRowKey(null)}
-        width={640}
+        width="clamp(540px, 45vw, 720px)"
         className={styles.accountDetailDrawer}
         title={
           <div className={styles.drawerTitleStack}>
@@ -3728,6 +3807,7 @@ export function AccountsPage() {
             <DropdownMenu
               items={drawerMoreItems}
               ariaLabel={t('accounts.drawer_more_actions')}
+              triggerTitle={t('accounts.drawer_more_actions')}
               triggerLabel={t('accounts.batch_more')}
               triggerIcon={<IconMoreVertical size={16} />}
               triggerClassName={styles.drawerMoreActions}
@@ -3736,6 +3816,17 @@ export function AccountsPage() {
         }
       >
         <div className={styles.drawerBodyShell}>
+          {selectedRow.disabled ? (
+            <div className={styles.drawerDisabledNotice} role="status">
+              <span>{t('accounts.detail_disabled_notice_title', { defaultValue: '账号已禁用' })}</span>
+              <p>
+                {t('accounts.detail_disabled_notice_desc', {
+                  defaultValue:
+                    '此账号当前不接收请求,各 Tab 仅展示只读摘要。点击底部"启用"按钮可恢复完整功能。',
+                })}
+              </p>
+            </div>
+          ) : null}
           <div className={styles.drawerTabs} role="tablist">
             {detailTabs.map((tab) => (
               <button
