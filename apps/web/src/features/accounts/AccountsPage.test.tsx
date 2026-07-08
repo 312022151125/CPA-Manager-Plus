@@ -212,6 +212,7 @@ const { mocks } = vi.hoisted(() => {
       listCodexInspectionRuns: vi.fn(async () => ({ items: [] })),
       getCodexInspectionRun: vi.fn(async () => ({ run: null, results: [] })),
       getActiveQuotaCooldowns: vi.fn(async () => []),
+      listAccountActionCandidates: vi.fn(async () => ({ items: [], pendingCount: 0 })),
       getAnalytics: vi.fn(
         async (_base: string, _key: string | undefined, _request: unknown): Promise<unknown> => ({
           generated_at_ms: 1,
@@ -454,6 +455,7 @@ vi.mock('@/services/api', () => ({
     listCodexInspectionRuns: mocks.listCodexInspectionRuns,
     getCodexInspectionRun: mocks.getCodexInspectionRun,
     getActiveQuotaCooldowns: mocks.getActiveQuotaCooldowns,
+    listAccountActionCandidates: mocks.listAccountActionCandidates,
   },
 }));
 

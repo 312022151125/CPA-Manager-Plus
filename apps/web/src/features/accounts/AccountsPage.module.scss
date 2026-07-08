@@ -297,6 +297,8 @@
 }
 
 .rowActions {
+  position: relative;
+  z-index: 2;
   display: grid;
   grid-template-columns: 64px 1px 54px;
   align-items: center;
@@ -697,6 +699,7 @@
   justify-content: center;
   flex-direction: column;
   gap: 7px;
+  overflow: hidden;
 
   .quotaTrack {
     max-width: none;
@@ -730,6 +733,8 @@
 }
 
 .accountCardRecommendation {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -918,12 +923,14 @@
   display: grid;
   grid-template-columns:
     var(--quota-window-label-width)
-    var(--quota-window-track-width)
+    minmax(44px, 1fr)
     var(--quota-window-percent-width)
-    var(--quota-window-reset-width);
+    minmax(0, var(--quota-window-reset-width));
   align-items: center;
   gap: 8px;
   justify-content: start;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -1217,6 +1224,18 @@
   color: var(--accounts-text);
 }
 
+.drawerBodyShell {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.drawerTabPanel {
+  min-width: 0;
+  padding-bottom: 10px;
+}
+
 .drawerTitleStack {
   display: flex;
   flex-direction: column;
@@ -1246,15 +1265,17 @@
   gap: 4px;
   min-width: 0;
   overflow-x: auto;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 3px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: var(--accounts-muted-surface);
 
   button {
     flex: 0 0 auto;
-    min-height: 32px;
+    min-height: 30px;
     padding: 0 10px;
     border: 1px solid transparent;
-    border-radius: var(--app-radius-sm);
+    border-radius: 8px;
     background: transparent;
     color: var(--text-secondary);
     font-size: 12px;
@@ -1297,6 +1318,47 @@
     margin-top: 4px;
     color: var(--text-primary);
     font-size: 18px;
+  }
+
+  @include mobile {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.drawerDetailStack {
+  display: grid;
+  gap: 12px;
+}
+
+.drawerHero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--accounts-border);
+  border-radius: $radius-md;
+  background: color-mix(in srgb, var(--accounts-muted-surface) 36%, var(--accounts-surface));
+
+  h3 {
+    margin: 8px 0 4px;
+    color: var(--accounts-text);
+    font-size: 15px;
+  }
+
+  p {
+    margin: 0;
+    color: var(--accounts-muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  > strong {
+    color: var(--accounts-text);
+    font-size: 24px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 }
 
@@ -1343,6 +1405,190 @@
     font-size: 13px;
     font-weight: 700;
   }
+}
+
+.detailInlineNote {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 12px;
+
+  strong {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.detailQuotaWindowList,
+.detailCandidateList {
+  display: grid;
+  gap: 8px;
+}
+
+.detailQuotaWindowCard,
+.detailCandidateItem {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--accounts-border) 84%, transparent);
+  border-radius: 8px;
+  background: var(--accounts-surface);
+}
+
+.detailQuotaWindowHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  min-width: 0;
+
+  > div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--accounts-text);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--accounts-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  b {
+    color: var(--accounts-text);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+}
+
+.detailQuotaWindowMeta,
+.detailEvidenceGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  margin-top: 8px;
+}
+
+.detailQuotaWindowMeta span,
+.detailEvidenceGrid span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accounts-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detailEvidenceGrid > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
+  border-radius: 8px;
+  background: var(--accounts-surface);
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--accounts-text);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.detailStrategySummary {
+  display: grid;
+  gap: 8px;
+}
+
+.detailBadgeList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detailCandidateItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+
+  > div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  strong,
+  span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    color: var(--accounts-text);
+    font-size: 13px;
+  }
+
+  span,
+  small {
+    color: var(--accounts-muted);
+    font-size: 11px;
+  }
+
+  small {
+    flex: 0 0 auto;
+    text-align: right;
+    white-space: nowrap;
+  }
+}
+
+.detailCandidateHeader {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.detailCandidateStatus {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  max-width: 120px;
+  padding: 0 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accounts-primary) 9%, transparent);
+  color: var(--accounts-primary) !important;
+  font-size: 11px !important;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sectionHeaderInline {
@@ -1410,6 +1656,139 @@
   }
 }
 
+.detailEventsStack,
+.detailEventsList {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.detailEventSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+
+  div {
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid color-mix(in srgb, var(--accounts-border) 78%, transparent);
+    border-radius: 8px;
+    background: var(--accounts-surface);
+  }
+
+  span,
+  strong {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  span {
+    color: var(--accounts-muted);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  strong {
+    margin-top: 4px;
+    color: var(--accounts-text);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.detailEventFailureSummary,
+.detailEventItem {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--accounts-border) 84%, transparent);
+  border-radius: 8px;
+  background: var(--accounts-surface);
+}
+
+.detailEventFailureSummary {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+
+  span {
+    color: var(--accounts-muted);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--accounts-danger);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.detailEventItem {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.detailEventHeader,
+.detailEventIdentity,
+.detailEventMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.detailEventHeader {
+  strong {
+    flex: 0 0 auto;
+    color: var(--accounts-muted);
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+}
+
+.detailEventIdentity {
+  span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--accounts-text);
+    font-size: 12px;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  span + span {
+    flex: 0 1 auto;
+    max-width: 48%;
+    color: var(--accounts-muted);
+    font-weight: 700;
+  }
+}
+
+.detailEventFailureReason {
+  margin: 0;
+  color: var(--accounts-danger) !important;
+  font-size: 12px !important;
+  line-height: 1.45;
+}
+
+.detailEventMeta {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  color: var(--accounts-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .monoCell {
   font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
 }
@@ -1439,6 +1818,16 @@
 
 .drawerActions {
   justify-content: flex-end;
+
+  :global(.btn) {
+    min-height: 36px;
+  }
+}
+
+.drawerMoreActions {
+  min-height: 36px;
+  border-radius: 8px;
+  background: var(--accounts-surface);
 }
 
 .rulesGrid {

@@ -101,10 +101,19 @@ import {
   type AccountHistoryTargetEntry,
 } from '@/features/accounts/model/accountHistoryRows';
 import {
+  buildAccountWindowUsageByKey,
+  buildAccountWindowUsageTargetEntries,
+} from '@/features/accounts/model/accountWindowUsageRows';
+import {
+  buildAccountDetailViewModel,
+  type AccountDetailField,
+} from '@/features/accounts/model/accountDetailViewModel';
+import {
   getAuthFileCodexInspectionKey,
   getAuthFileCodexStatus,
   getAuthFilePatchTarget,
   getAuthFileSelectionKey,
+  getAuthFileScopedCodexQuota,
   hasPartialSharedAuthFileSelection,
   type AuthFileCodexInspectionSnapshot,
 } from '@/features/authFiles/model/authFilesPageModel';
@@ -121,12 +130,14 @@ import { buildOAuthRulePreviewRows } from '@/features/accounts/model/oauthRulePr
 import {
   monitoringAnalyticsApi,
   usageServiceApi,
+  type AccountActionCandidate,
   type CodexInspectionRun,
   type CodexInspectionResult,
   type MonitoringAnalyticsAccountStatRow,
   type MonitoringAnalyticsEventRow,
   type MonitoringAnalyticsTimelinePoint,
   type MonitoringAccountHistoryItem,
+  type MonitoringAccountWindowUsageItem,
   type QuotaCooldownInfo,
   type UsageHeaderSnapshot,
 } from '@/services/api';
@@ -281,6 +292,25 @@ const formatTimestamp = (value: number | null, locale: string) => {
   }).format(new Date(value));
 };
 
+const normalizeDetailToken = (value: string | number | null | undefined) =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const translateDetailEnum = (
+  t: TFunction,
+  prefix: string,
+  value: string | number | null | undefined
+) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '-';
+  const token = normalizeDetailToken(raw);
+  if (!token) return raw;
+  return t(`${prefix}${token}`, { defaultValue: raw });
+};
+
 const formatQuotaResetInlineLabel = (value: string, locale: string) => {
   const trimmed = value.trim();
   if (!trimmed || trimmed === '-') return '';
@@ -414,6 +444,24 @@ const formatDurationMs = (value: number | null | undefined) => {
   return `${Math.round(value)} ms`;
 };
 
+const getEventFailureReason = (event: MonitoringAnalyticsEventRow) =>
+  event.fail_summary ||
+  event.header_error_code ||
+  event.header_error_kind ||
+  event.header_trace_id ||
+  '';
+
+const getEventStatusText = (event: MonitoringAnalyticsEventRow, t: TFunction) => {
+  if (!event.failed) return t('accounts.detail_event_success');
+  if (event.fail_status_code) {
+    return t('accounts.detail_event_failed_with_code', {
+      code: event.fail_status_code,
+      defaultValue: `${t('accounts.detail_event_failed')} ${event.fail_status_code}`,
+    });
+  }
+  return t('accounts.detail_event_failed');
+};
+
 const quotaStatusLabelKey = (status: AccountRow['quota']['status']) => {
   switch (status) {
     case 'ok':
@@ -519,15 +567,16 @@ async function refreshQuotaWithConfig<TState, TData>({
   setQuota: QuotaSetter<TState>;
   t: TFunction;
 }) {
+  const storeKey = config.getStoreKey?.(file) ?? file.name;
   setQuota((prev) => ({
     ...prev,
-    [file.name]: config.buildLoadingState(),
+    [storeKey]: config.buildLoadingState(file),
   }));
   try {
     const data = await config.fetchQuota(file, t);
     setQuota((prev) => ({
       ...prev,
-      [file.name]: config.buildSuccessState(data),
+      [storeKey]: config.buildSuccessState(data, file),
     }));
     return true;
   } catch (error: unknown) {
@@ -538,7 +587,11 @@ async function refreshQuotaWithConfig<TState, TData>({
         : undefined;
     setQuota((prev) => ({
       ...prev,
-      [file.name]: config.buildErrorState(message, Number.isFinite(status) ? status : undefined),
+      [storeKey]: config.buildErrorState(
+        message,
+        Number.isFinite(status) ? status : undefined,
+        file
+      ),
     }));
     return false;
   }
@@ -656,6 +709,16 @@ export function AccountsPage() {
   >(() => new Map());
   const [accountHistoryLoading, setAccountHistoryLoading] = useState(false);
   const [accountHistoryError, setAccountHistoryError] = useState('');
+  const [accountWindowUsageByKey, setAccountWindowUsageByKey] = useState<
+    Map<string, MonitoringAccountWindowUsageItem>
+  >(() => new Map());
+  const [accountWindowUsageLoading, setAccountWindowUsageLoading] = useState(false);
+  const [accountWindowUsageError, setAccountWindowUsageError] = useState('');
+  const [accountActionCandidates, setAccountActionCandidates] = useState<AccountActionCandidate[]>(
+    []
+  );
+  const [accountActionCandidatesLoading, setAccountActionCandidatesLoading] = useState(false);
+  const [accountActionCandidatesError, setAccountActionCandidatesError] = useState('');
   const [oauthPreviewModel, setOauthPreviewModel] = useState('gpt-5');
   const [oauthExcludedEditorProvider, setOauthExcludedEditorProvider] = useState<string | null>(
     null
@@ -681,6 +744,8 @@ export function AccountsPage() {
   const detailEventsRequestIdRef = useRef(0);
   const headerSnapshotReqIdRef = useRef(0);
   const accountHistoryReqIdRef = useRef(0);
+  const accountWindowUsageReqIdRef = useRef(0);
+  const accountActionCandidatesReqIdRef = useRef(0);
   const identityCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accountSortDropdownRef = useRef<HTMLDivElement | null>(null);
   const accountSortTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -793,6 +858,41 @@ export function AccountsPage() {
     managementKey,
   ]);
 
+  const loadAccountActionCandidates = useCallback(async () => {
+    const requestId = accountActionCandidatesReqIdRef.current + 1;
+    accountActionCandidatesReqIdRef.current = requestId;
+
+    if (featureAvailability.checking || !featureAvailability.managerServiceBase) {
+      setAccountActionCandidates([]);
+      setAccountActionCandidatesLoading(false);
+      setAccountActionCandidatesError('');
+      return;
+    }
+
+    setAccountActionCandidatesLoading(true);
+    setAccountActionCandidatesError('');
+    try {
+      const response = await usageServiceApi.listAccountActionCandidates(
+        featureAvailability.managerServiceBase,
+        managementKey,
+        'pending',
+        200
+      );
+      if (accountActionCandidatesReqIdRef.current !== requestId) return;
+      setAccountActionCandidates(response.items ?? []);
+    } catch (err: unknown) {
+      if (accountActionCandidatesReqIdRef.current !== requestId) return;
+      setAccountActionCandidates([]);
+      setAccountActionCandidatesError(
+        err instanceof Error ? err.message : t('notification.load_failed')
+      );
+    } finally {
+      if (accountActionCandidatesReqIdRef.current === requestId) {
+        setAccountActionCandidatesLoading(false);
+      }
+    }
+  }, [featureAvailability.checking, featureAvailability.managerServiceBase, managementKey, t]);
+
   useLayoutEffect(() => {
     const prev = headerSnapshotContextRef.current;
     if (
@@ -818,10 +918,12 @@ export function AccountsPage() {
       loadInspectionSummary(),
       loadQuotaCooldowns(),
       loadHeaderSnapshots(),
+      loadAccountActionCandidates(),
       loadOauthExcluded(),
       loadOauthModelAlias(),
     ]);
   }, [
+    loadAccountActionCandidates,
     loadFiles,
     loadInspectionSummary,
     loadHeaderSnapshots,
@@ -886,7 +988,10 @@ export function AccountsPage() {
   const getDisplayCodexQuota = useCallback(
     (file: AuthFileItem): CodexQuotaState | undefined => {
       if (normalizeAccountProvider(file) !== CODEX_CONFIG.type) return undefined;
-      const activeQuota = codexQuota[file.name];
+      const storeKey = CODEX_CONFIG.getStoreKey?.(file) ?? file.name;
+      const activeQuota =
+        getAuthFileScopedCodexQuota(file, codexQuota[storeKey]) ??
+        getAuthFileScopedCodexQuota(file, codexQuota[file.name]);
       if (activeQuota && activeQuota.status !== 'idle' && activeQuota.status !== 'error') {
         return activeQuota;
       }
@@ -1189,8 +1294,26 @@ export function AccountsPage() {
     pageRows.forEach((row) => {
       result.set(row.selectionKey, buildQuotaDisplayWindows(row));
     });
+    if (selectedRow && !result.has(selectedRow.selectionKey)) {
+      result.set(selectedRow.selectionKey, buildQuotaDisplayWindows(selectedRow));
+    }
     return result;
-  }, [buildQuotaDisplayWindows, pageRows]);
+  }, [buildQuotaDisplayWindows, pageRows, selectedRow]);
+  const accountWindowUsageTargets = useMemo(() => {
+    const targetRows = new Map<string, AccountRow>();
+    pageRows.forEach((row) => targetRows.set(row.selectionKey, row));
+    if (selectedRow) {
+      targetRows.set(selectedRow.selectionKey, selectedRow);
+    }
+    const windowsByRowKey = new Map<string, AccountQuotaDisplayWindow[]>();
+    targetRows.forEach((row) => {
+      windowsByRowKey.set(
+        row.selectionKey,
+        quotaDisplayWindowsByRowKey.get(row.selectionKey) ?? buildQuotaDisplayWindows(row)
+      );
+    });
+    return buildAccountWindowUsageTargetEntries(Array.from(targetRows.values()), windowsByRowKey);
+  }, [buildQuotaDisplayWindows, pageRows, quotaDisplayWindowsByRowKey, selectedRow]);
   const accountDisplayHint = t(
     accountDisplayMode === 'masked'
       ? 'quota_management.show_full_credentials_hint'
@@ -1217,6 +1340,60 @@ export function AccountsPage() {
       setDetailTab('overview');
     }
   }, [selectedRow]);
+
+  const loadAccountWindowUsage = useCallback(async () => {
+    const requestId = accountWindowUsageReqIdRef.current + 1;
+    accountWindowUsageReqIdRef.current = requestId;
+    const entries = accountWindowUsageTargets;
+
+    if (
+      featureAvailability.checking ||
+      !featureAvailability.requestMonitoringAvailable ||
+      !featureAvailability.managerServiceBase ||
+      !managementKey ||
+      entries.length === 0
+    ) {
+      setAccountWindowUsageByKey(new Map());
+      setAccountWindowUsageLoading(false);
+      setAccountWindowUsageError('');
+      return;
+    }
+
+    setAccountWindowUsageLoading(true);
+    setAccountWindowUsageError('');
+    try {
+      const response = await monitoringAnalyticsApi.getAccountWindowUsage(
+        featureAvailability.managerServiceBase,
+        managementKey,
+        {
+          windows: entries.map((entry) => entry.target),
+        }
+      );
+      if (accountWindowUsageReqIdRef.current !== requestId) return;
+      setAccountWindowUsageByKey(buildAccountWindowUsageByKey(entries, response.items ?? []));
+    } catch (err: unknown) {
+      if (accountWindowUsageReqIdRef.current !== requestId) return;
+      setAccountWindowUsageByKey(new Map());
+      setAccountWindowUsageError(
+        err instanceof Error ? err.message : t('notification.load_failed')
+      );
+    } finally {
+      if (accountWindowUsageReqIdRef.current === requestId) {
+        setAccountWindowUsageLoading(false);
+      }
+    }
+  }, [
+    accountWindowUsageTargets,
+    featureAvailability.checking,
+    featureAvailability.managerServiceBase,
+    featureAvailability.requestMonitoringAvailable,
+    managementKey,
+    t,
+  ]);
+
+  useEffect(() => {
+    void loadAccountWindowUsage();
+  }, [loadAccountWindowUsage]);
 
   const loadUsageValues = useCallback(async () => {
     const fallback = () => {
@@ -1511,15 +1688,16 @@ export function AccountsPage() {
   const canResetCodexQuota = useCallback(
     (row: AccountRow) => {
       if (row.provider !== CODEX_CONFIG.type || row.disabled || row.runtimeOnly) return false;
-      return CODEX_CONFIG.canResetQuota?.(row.raw, codexQuota[row.fileName]) === true;
+      return CODEX_CONFIG.canResetQuota?.(row.raw, getDisplayCodexQuota(row.raw)) === true;
     },
-    [codexQuota]
+    [getDisplayCodexQuota]
   );
 
   const resetCodexQuotaForRow = useCallback(
     (row: AccountRow) => {
       if (!canResetCodexQuota(row) || !CODEX_CONFIG.resetQuota) return;
-      const quota = codexQuota[row.fileName];
+      const quota = getDisplayCodexQuota(row.raw);
+      const storeKey = CODEX_CONFIG.getStoreKey?.(row.raw) ?? row.fileName;
       const resetCount = quota?.rateLimitResetCreditsAvailableCount ?? 0;
       const displayName = getDisplayAccount(row);
 
@@ -1535,7 +1713,7 @@ export function AccountsPage() {
         onConfirm: async () => {
           setCodexQuota((prev) => ({
             ...prev,
-            [row.fileName]: CODEX_CONFIG.buildLoadingState(),
+            [storeKey]: CODEX_CONFIG.buildLoadingState(row.raw),
           }));
 
           try {
@@ -1545,7 +1723,7 @@ export function AccountsPage() {
             }
             setCodexQuota((prev) => ({
               ...prev,
-              [row.fileName]: CODEX_CONFIG.buildSuccessState(data),
+              [storeKey]: CODEX_CONFIG.buildSuccessState(data, row.raw),
             }));
             showNotification(t('codex_quota.reset_success', { name: displayName }), 'success');
           } catch (err: unknown) {
@@ -1556,9 +1734,10 @@ export function AccountsPage() {
                 : undefined;
             setCodexQuota((prev) => ({
               ...prev,
-              [row.fileName]: CODEX_CONFIG.buildErrorState(
+              [storeKey]: CODEX_CONFIG.buildErrorState(
                 message,
-                Number.isFinite(status) ? status : undefined
+                Number.isFinite(status) ? status : undefined,
+                row.raw
               ) as CodexQuotaState,
             }));
             showNotification(
@@ -1571,8 +1750,8 @@ export function AccountsPage() {
     },
     [
       canResetCodexQuota,
-      codexQuota,
       getDisplayAccount,
+      getDisplayCodexQuota,
       setCodexQuota,
       showConfirmation,
       showNotification,
@@ -1678,8 +1857,13 @@ export function AccountsPage() {
   };
 
   const openUsageValueDetail = (row: UsageValueRow) => {
-    const targetFileName = row.row?.fileName ?? row.fileName;
-    const targetRow = rows.find((item) => item.fileName === targetFileName);
+    const targetRow =
+      (row.row ? rows.find((item) => item.selectionKey === row.row?.selectionKey) : null) ??
+      rows.find(
+        (item) =>
+          item.fileName === row.fileName &&
+          (!row.row || String(item.authIndex ?? '') === String(row.row.authIndex ?? ''))
+      );
     if (!targetRow) {
       showNotification(t('accounts.value_unmatched_detail'), 'info');
       return;
@@ -2841,13 +3025,66 @@ export function AccountsPage() {
     </section>
   );
 
+  const renderDetailFieldValue = (item: AccountDetailField) => {
+    if (item.value === null || item.value === '') return '-';
+    if (item.key === 'provider') {
+      return getProviderLabel(String(item.value), t);
+    }
+    if (item.key === 'actionStatus') {
+      return translateDetailEnum(t, 'accounts.action_status_', item.value);
+    }
+    if (item.key === 'errorKind') {
+      return translateDetailEnum(t, 'accounts.quota_error_kind_', item.value);
+    }
+    if (item.key === 'errorCode') {
+      return translateDetailEnum(t, 'accounts.quota_error_code_', item.value);
+    }
+    if (item.key === 'rateLimitReachedType') {
+      return translateDetailEnum(t, 'accounts.quota_rate_limit_type_', item.value);
+    }
+    if (item.valueKind === 'i18n') {
+      return t(String(item.value), { defaultValue: String(item.value) });
+    }
+    if (item.valueKind === 'percent') {
+      return typeof item.value === 'number'
+        ? formatPercent(item.value, item.key === 'successRate' ? 1 : 0)
+        : String(item.value);
+    }
+    if (item.valueKind === 'money') {
+      return typeof item.value === 'number' ? formatMoney(item.value) : String(item.value);
+    }
+    if (item.valueKind === 'timestamp') {
+      return typeof item.value === 'number' ? formatTimestamp(item.value, i18n.language) : '-';
+    }
+    if (item.valueKind === 'number') {
+      return typeof item.value === 'number' ? formatCompactNumber(item.value) : String(item.value);
+    }
+    return String(item.value);
+  };
+
+  const renderDetailFieldList = (fields: AccountDetailField[]) => {
+    if (fields.length === 0) {
+      return <p>{t('accounts.detail_no_data')}</p>;
+    }
+    return (
+      <dl>
+        {fields.map((item) => (
+          <div key={item.key}>
+            <dt>{t(item.labelKey, { defaultValue: item.labelKey })}</dt>
+            <dd>{renderDetailFieldValue(item)}</dd>
+          </div>
+        ))}
+      </dl>
+    );
+  };
+
   const renderDetailDrawer = () => {
     if (!selectedRow) {
       return (
         <Drawer
           open={false}
           onClose={() => setSelectedRowKey(null)}
-          width={560}
+          width={640}
           className={styles.accountDetailDrawer}
         />
       );
@@ -2861,115 +3098,168 @@ export function AccountsPage() {
       { id: 'value', label: t('accounts.detail_tab_value') },
       { id: 'events', label: t('accounts.detail_tab_events') },
     ];
-    const valueRow = usageRows.find(
-      (row) => row.row?.fileName === selectedRow.fileName || row.fileName === selectedRow.fileName
-    );
+    const valueRow =
+      usageRows.find((row) => row.row?.selectionKey === selectedRow.selectionKey) ??
+      usageRows.find((row) => !row.row && row.fileName === selectedRow.fileName);
+    const selectedQuotaWindows =
+      quotaDisplayWindowsByRowKey.get(selectedRow.selectionKey) ??
+      buildQuotaDisplayWindows(selectedRow);
+    const selectedQuotaCooldown =
+      quotaCooldowns.get(
+        getAuthFileCodexInspectionKey(selectedRow.fileName, selectedRow.authIndex || null)
+      ) ?? null;
     const selectedCodexQuota =
-      selectedRow.provider === CODEX_CONFIG.type ? codexQuota[selectedRow.fileName] : undefined;
+      selectedRow.provider === CODEX_CONFIG.type
+        ? getDisplayCodexQuota(selectedRow.raw)
+        : undefined;
+    const selectedCodexStatus =
+      selectedRow.provider === CODEX_CONFIG.type
+        ? getAuthFileCodexStatus(
+            selectedRow.raw,
+            selectedCodexQuota,
+            toAuthFileCodexInspectionSnapshot(selectedRow),
+            getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, selectedRow.raw)
+          )
+        : null;
+    const detailView = buildAccountDetailViewModel(selectedRow, {
+      recommendation: recommendationBySelectionKey.get(selectedRow.selectionKey) ?? null,
+      quotaCooldown: selectedQuotaCooldown,
+      codexStatus: selectedCodexStatus,
+      quotaWindows: selectedQuotaWindows,
+      windowUsageByKey: accountWindowUsageByKey,
+      actionCandidates: accountActionCandidates,
+      history: accountHistoryByRowKey.get(selectedRow.selectionKey) ?? null,
+      valueRow,
+      codexQuota: selectedCodexQuota,
+    });
     const renderActiveDetail = () => {
       if (detailTab === 'quota') {
         return (
-          <section className={styles.drawerSection}>
-            <h3>{t('accounts.detail_quota_windows')}</h3>
-            <dl>
-              <div>
-                <dt>{t('accounts.detail_status')}</dt>
-                <dd>{t(quotaStatusLabelKey(selectedRow.quota.status))}</dd>
+          <div className={styles.drawerDetailStack}>
+            <section className={styles.drawerSection}>
+              <h3>{t('accounts.detail_quota_windows')}</h3>
+              {renderDetailFieldList(detailView.quota.fields)}
+              {detailView.quota.resetCreditsAvailableCount !== null ? (
+                <div className={styles.detailInlineNote}>
+                  <span>{t('codex_quota.reset_credits_label')}</span>
+                  <strong>{detailView.quota.resetCreditsAvailableCount}</strong>
+                </div>
+              ) : null}
+              {detailView.quota.cooldown ? (
+                <div className={styles.detailInlineNote}>
+                  <span>{t('accounts.detail_cooldown')}</span>
+                  <strong>
+                    {formatTimestamp(detailView.quota.cooldown.recoverAtMs, i18n.language)}
+                  </strong>
+                </div>
+              ) : null}
+            </section>
+            <section className={styles.drawerSection}>
+              <div className={styles.sectionHeaderInline}>
+                <div>
+                  <h3>{t('accounts.detail_quota_window_usage')}</h3>
+                  <p>{t('accounts.detail_quota_window_usage_desc')}</p>
+                </div>
+                {accountWindowUsageLoading ? (
+                  <div className={styles.inlineLoading}>
+                    <LoadingSpinner size={16} />
+                    <span>{t('common.loading')}</span>
+                  </div>
+                ) : null}
               </div>
-              <div>
-                <dt>{t('accounts.detail_used')}</dt>
-                <dd>{formatPercent(selectedRow.quota.usedPercent)}</dd>
-              </div>
-              <div>
-                <dt>{t('accounts.detail_reset')}</dt>
-                <dd>{selectedRow.quota.resetLabel}</dd>
-              </div>
-              <div>
-                <dt>{t('accounts.detail_source')}</dt>
-                <dd>{getQuotaSourceLabel(selectedRow.quota.source)}</dd>
-              </div>
-              {selectedRow.quota.observedAtMs ? (
-                <div>
-                  <dt>{t('accounts.detail_observed_at')}</dt>
-                  <dd>{formatTimestamp(selectedRow.quota.observedAtMs, i18n.language)}</dd>
-                </div>
+              {accountWindowUsageError ? (
+                <div className={styles.errorBox}>{accountWindowUsageError}</div>
               ) : null}
-              {selectedRow.quota.observedTraceId ? (
-                <div>
-                  <dt>{t('accounts.detail_header_trace')}</dt>
-                  <dd>{selectedRow.quota.observedTraceId}</dd>
+              {detailView.quota.windows.length === 0 ? (
+                <p>{t('accounts.detail_no_quota_windows')}</p>
+              ) : (
+                <div className={styles.detailQuotaWindowList}>
+                  {detailView.quota.windows.map((window) => {
+                    const width = Math.max(0, Math.min(100, window.remainingPercent ?? 0));
+                    return (
+                      <div key={window.key} className={styles.detailQuotaWindowCard}>
+                        <div className={styles.detailQuotaWindowHeader}>
+                          <div>
+                            <strong title={window.label}>{window.label}</strong>
+                            <span>{window.resetLabel || '-'}</span>
+                          </div>
+                          <b>{formatPercent(window.remainingPercent)}</b>
+                        </div>
+                        <div className={styles.drawerQuotaTrack} aria-hidden="true">
+                          <span
+                            className={`${styles.drawerQuotaBar} ${getRemainingBarClass(selectedRow)}`}
+                            style={{ width: `${width}%` }}
+                          />
+                        </div>
+                        <div className={styles.detailQuotaWindowMeta}>
+                          <span>
+                            {t('accounts.detail_used')}: {formatPercent(window.usedPercent)}
+                          </span>
+                          <span>
+                            {t('accounts.detail_window_requests')}:{' '}
+                            {window.usage?.matched
+                              ? formatCompactNumber(window.usage.totalRequests)
+                              : '-'}
+                          </span>
+                          <span>
+                            {t('accounts.detail_window_tokens')}:{' '}
+                            {window.usage?.matched
+                              ? formatCompactNumber(window.usage.totalTokens)
+                              : '-'}
+                          </span>
+                          <span>
+                            {t('accounts.detail_window_cost')}:{' '}
+                            {window.usage?.matched ? formatMoney(window.usage.totalCost) : '-'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              ) : null}
-              {selectedRow.quota.observedErrorKind ? (
-                <div>
-                  <dt>{t('accounts.detail_header_error_kind')}</dt>
-                  <dd>{selectedRow.quota.observedErrorKind}</dd>
-                </div>
-              ) : null}
-              {selectedRow.quota.observedErrorCode ? (
-                <div>
-                  <dt>{t('accounts.detail_header_error_code')}</dt>
-                  <dd>{selectedRow.quota.observedErrorCode}</dd>
-                </div>
-              ) : null}
-              {selectedRow.quota.activeLimit ? (
-                <div>
-                  <dt>{t('accounts.detail_active_limit')}</dt>
-                  <dd>{selectedRow.quota.activeLimit}</dd>
-                </div>
-              ) : null}
-              {selectedRow.quota.rateLimitReachedType ? (
-                <div>
-                  <dt>{t('accounts.detail_rate_limit_reached_type')}</dt>
-                  <dd>{selectedRow.quota.rateLimitReachedType}</dd>
-                </div>
-              ) : null}
-              {selectedRow.quota.error ? (
-                <div>
-                  <dt>{t('common.error')}</dt>
-                  <dd>{selectedRow.quota.error}</dd>
-                </div>
-              ) : null}
-              {typeof selectedCodexQuota?.rateLimitResetCreditsAvailableCount === 'number' ? (
-                <div>
-                  <dt>{t('codex_quota.reset_credits_label')}</dt>
-                  <dd>{selectedCodexQuota.rateLimitResetCreditsAvailableCount}</dd>
-                </div>
-              ) : null}
-            </dl>
-          </section>
+              )}
+            </section>
+            {detailView.quota.diagnostics.length > 0 ? (
+              <section className={styles.drawerSection}>
+                <h3>{t('accounts.detail_quota_diagnostics')}</h3>
+                {renderDetailFieldList(detailView.quota.diagnostics)}
+              </section>
+            ) : null}
+          </div>
         );
       }
       if (detailTab === 'auth') {
         return (
-          <section className={styles.drawerSection}>
-            <h3>{t('accounts.detail_auth_file')}</h3>
-            <dl>
-              <div>
-                <dt>{t('accounts.detail_auth_index')}</dt>
-                <dd>{selectedRow.authIndex || '-'}</dd>
-              </div>
-              <div>
-                <dt>{t('accounts.detail_project_id')}</dt>
-                <dd>{selectedRow.projectId || '-'}</dd>
-              </div>
-              <div>
-                <dt>{t('accounts.col_provider')}</dt>
-                <dd>{getProviderLabel(selectedRow.provider, t)}</dd>
-              </div>
-              <div>
-                <dt>{t('common.status')}</dt>
-                <dd>{selectedRow.disabled ? t('common.disabled') : t('common.enabled')}</dd>
-              </div>
-            </dl>
-          </section>
+          <div className={styles.drawerDetailStack}>
+            <section className={styles.drawerSection}>
+              <h3>{t('accounts.detail_auth_file')}</h3>
+              {renderDetailFieldList(detailView.auth.fields)}
+            </section>
+            <section className={styles.drawerSection}>
+              <h3>{t('accounts.detail_auth_safe_title')}</h3>
+              <p>{t('accounts.detail_auth_safe_hint')}</p>
+            </section>
+          </div>
         );
       }
       if (detailTab === 'models') {
         return (
           <section className={styles.drawerSection}>
-            <h3>{t('auth_files.models_button')}</h3>
-            <p>{modelsFileName || selectedRow.fileName}</p>
+            <div className={styles.sectionHeaderInline}>
+              <div>
+                <h3>{t('auth_files.models_button')}</h3>
+                <p>{modelsFileName || selectedRow.fileName}</p>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void showModels(selectedRow.raw)}
+                disabled={selectedRow.runtimeOnly || modelsLoading}
+                loading={modelsLoading}
+              >
+                {!modelsLoading ? <IconRefreshCw size={14} /> : null}
+                {t('common.refresh')}
+              </Button>
+            </div>
             <AuthFileModelsContent
               fileType={modelsFileType || selectedRow.provider}
               loading={modelsLoading}
@@ -2983,41 +3273,114 @@ export function AccountsPage() {
       }
       if (detailTab === 'strategy') {
         return (
-          <section className={styles.drawerSection}>
-            <h3>{t('accounts.detail_inspection')}</h3>
-            {selectedRow.inspection ? (
-              <dl>
-                <div>
-                  <dt>{t('common.action')}</dt>
-                  <dd>
-                    {t(`accounts.action_${selectedRow.inspection.action}`, {
-                      defaultValue: selectedRow.inspection.action,
-                    })}
-                  </dd>
+          <div className={styles.drawerDetailStack}>
+            <section className={styles.drawerSection}>
+              <h3>{t('accounts.recommend_action')}</h3>
+              <div className={styles.detailStrategySummary}>
+                <span
+                  className={`${styles.badge} ${
+                    detailView.strategy.recommendation
+                      ? getRecommendationPriorityClass(detailView.strategy.recommendation.priority)
+                      : styles.badgeNeutral
+                  }`}
+                >
+                  {t(detailView.strategy.recommendationActionLabelKey)}
+                </span>
+                <p>{t(detailView.strategy.recommendationReasonKey)}</p>
+              </div>
+            </section>
+            <section className={styles.drawerSection}>
+              <h3>{t('accounts.detail_inspection')}</h3>
+              {detailView.strategy.inspectionFields.length > 0 ? (
+                renderDetailFieldList(detailView.strategy.inspectionFields)
+              ) : (
+                <p>
+                  {inspectionLoading ? t('common.loading') : t('accounts.detail_no_inspection')}
+                </p>
+              )}
+            </section>
+            {detailView.strategy.codexBadges.length > 0 ? (
+              <section className={styles.drawerSection}>
+                <h3>{t('accounts.detail_codex_status_badges')}</h3>
+                <div className={styles.detailBadgeList}>
+                  {detailView.strategy.codexBadges.map((badge) => (
+                    <span
+                      key={badge.kind}
+                      className={`${styles.badge} ${
+                        badge.tone === 'danger'
+                          ? styles.badgeBad
+                          : badge.tone === 'warning'
+                            ? styles.badgeWarn
+                            : styles.badgeInfo
+                      }`}
+                      title={
+                        badge.titleKey
+                          ? t(badge.titleKey, {
+                              defaultValue: badge.defaultTitle,
+                              ...badge.labelParams,
+                            })
+                          : undefined
+                      }
+                    >
+                      {t(badge.labelKey, {
+                        defaultValue: badge.defaultLabel,
+                        ...badge.labelParams,
+                      })}
+                    </span>
+                  ))}
                 </div>
+              </section>
+            ) : null}
+            <section className={styles.drawerSection}>
+              <div className={styles.sectionHeaderInline}>
                 <div>
-                  <dt>{t('accounts.detail_http_status')}</dt>
-                  <dd>{selectedRow.inspection.statusCode ?? '-'}</dd>
+                  <h3>{t('accounts.detail_action_candidates')}</h3>
+                  <p>{t('accounts.detail_action_candidates_desc')}</p>
                 </div>
-                <div>
-                  <dt>{t('accounts.detail_reason')}</dt>
-                  <dd>{selectedRow.inspection.actionReason || '-'}</dd>
+                {accountActionCandidatesLoading ? (
+                  <div className={styles.inlineLoading}>
+                    <LoadingSpinner size={16} />
+                    <span>{t('common.loading')}</span>
+                  </div>
+                ) : null}
+              </div>
+              {accountActionCandidatesError ? (
+                <div className={styles.errorBox}>{accountActionCandidatesError}</div>
+              ) : detailView.strategy.actionCandidates.length === 0 ? (
+                <p>{t('accounts.detail_action_candidates_empty')}</p>
+              ) : (
+                <div className={styles.detailCandidateList}>
+                  {detailView.strategy.actionCandidates.map((candidate) => (
+                    <div key={candidate.id} className={styles.detailCandidateItem}>
+                      <div>
+                        <div className={styles.detailCandidateHeader}>
+                          <strong>
+                            {t(`accounts.action_type_${candidate.actionType}`, {
+                              defaultValue: candidate.actionType,
+                            })}
+                          </strong>
+                          <span className={styles.detailCandidateStatus}>
+                            {translateDetailEnum(t, 'accounts.action_status_', candidate.status)}
+                          </span>
+                        </div>
+                        <span>{candidate.reason || '-'}</span>
+                      </div>
+                      <small>
+                        {t('accounts.detail_action_candidate_meta', {
+                          hits: candidate.hitCount,
+                          seen: formatTimestamp(candidate.lastSeenAtMs, i18n.language),
+                        })}
+                      </small>
+                    </div>
+                  ))}
                 </div>
-              </dl>
-            ) : (
-              <p>{inspectionLoading ? t('common.loading') : t('accounts.detail_no_inspection')}</p>
-            )}
-          </section>
+              )}
+            </section>
+          </div>
         );
       }
       if (detailTab === 'value') {
-        const requests =
-          valueRow?.requests ?? selectedRow.usage.success + selectedRow.usage.failure;
-        const successRate = valueRow?.successRate ?? selectedRow.usage.successRate;
-        const inputTokens = valueRow?.inputTokens ?? 0;
-        const outputTokens = valueRow?.outputTokens ?? 0;
-        const totalTokens = inputTokens + outputTokens;
-        const estimatedCost = valueRow?.estimatedCost ?? requests * 0.018;
+        const value = detailView.value;
         const quotaRemaining = selectedRow.quota.remainingPercent;
         const quotaWidth = Math.max(0, Math.min(100, quotaRemaining ?? 0));
 
@@ -3027,41 +3390,41 @@ export function AccountsPage() {
               <div className={styles.drawerUsageHeader}>
                 <div>
                   <h3>{t('accounts.value_title')}</h3>
-                  <p>
-                    {valueRow
-                      ? t(`accounts.value_source_${valueRow.source}`)
-                      : t('accounts.value_source_recent')}
-                  </p>
+                  <p>{t(`accounts.value_source_${value.source}`)}</p>
                 </div>
-                <strong>{formatMoney(estimatedCost)}</strong>
+                <strong>{formatMoney(value.estimatedCost)}</strong>
               </div>
               <div className={styles.drawerUsageMetricGrid}>
                 <div className={styles.drawerUsageMetric}>
                   <span>{t('accounts.value_requests')}</span>
-                  <strong>{formatCompactNumber(requests)}</strong>
+                  <strong>{formatCompactNumber(value.requests)}</strong>
                 </div>
                 <div className={styles.drawerUsageMetric}>
                   <span>{t('accounts.value_success_rate')}</span>
-                  <strong>{formatPercent(successRate, 1)}</strong>
+                  <strong>{formatPercent(value.successRate, 1)}</strong>
                 </div>
                 <div className={styles.drawerUsageMetric}>
                   <span>{t('accounts.value_input_tokens')}</span>
-                  <strong>{inputTokens > 0 ? formatCompactNumber(inputTokens) : '-'}</strong>
+                  <strong>
+                    {value.inputTokens > 0 ? formatCompactNumber(value.inputTokens) : '-'}
+                  </strong>
                 </div>
                 <div className={styles.drawerUsageMetric}>
                   <span>{t('accounts.value_output_tokens')}</span>
-                  <strong>{outputTokens > 0 ? formatCompactNumber(outputTokens) : '-'}</strong>
+                  <strong>
+                    {value.outputTokens > 0 ? formatCompactNumber(value.outputTokens) : '-'}
+                  </strong>
                 </div>
                 <div className={styles.drawerUsageMetric}>
                   <span>{t('usage_analytics.trend_metric_totalTokens')}</span>
-                  <strong>{totalTokens > 0 ? formatCompactNumber(totalTokens) : '-'}</strong>
+                  <strong>
+                    {value.totalTokens > 0 ? formatCompactNumber(value.totalTokens) : '-'}
+                  </strong>
                 </div>
                 <div className={styles.drawerUsageMetric}>
                   <span>{t('accounts.value_recent')}</span>
                   <strong>
-                    {valueRow?.lastSeenMs
-                      ? formatTimestamp(valueRow.lastSeenMs, i18n.language)
-                      : '-'}
+                    {value.lastSeenMs ? formatTimestamp(value.lastSeenMs, i18n.language) : '-'}
                   </strong>
                 </div>
               </div>
@@ -3111,6 +3474,12 @@ export function AccountsPage() {
           !featureAvailability.requestMonitoringAvailable ||
           !featureAvailability.managerServiceBase ||
           !managementKey;
+        const failedEventCount = rowEvents.filter((event) => event.failed).length;
+        const latestFailedEvent = rowEvents.find((event) => event.failed) ?? null;
+        const slowestLatencyMs = rowEvents.reduce<number | null>((current, event) => {
+          if (typeof event.latency_ms !== 'number') return current;
+          return current === null ? event.latency_ms : Math.max(current, event.latency_ms);
+        }, null);
 
         return (
           <section className={styles.drawerSection}>
@@ -3142,93 +3511,181 @@ export function AccountsPage() {
             ) : rowEvents.length === 0 ? (
               <p>{t('accounts.detail_events_empty')}</p>
             ) : (
-              <div className={styles.detailEventsTableWrap}>
-                <table className={styles.detailEventsTable}>
-                  <thead>
-                    <tr>
-                      <th>{t('accounts.detail_event_col_time')}</th>
-                      <th>{t('accounts.detail_event_col_request')}</th>
-                      <th>{t('accounts.detail_event_col_model')}</th>
-                      <th>{t('accounts.detail_event_col_status')}</th>
-                      <th>{t('accounts.detail_event_col_tokens')}</th>
-                      <th>{t('accounts.detail_event_col_latency')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rowEvents.map((event) => {
-                      const requestLabel = event.request_id || event.event_hash.slice(0, 10) || '-';
-                      const statusLabel = event.failed
-                        ? event.fail_status_code
-                          ? `${t('accounts.detail_event_failed')} ${event.fail_status_code}`
-                          : t('accounts.detail_event_failed')
-                        : t('accounts.detail_event_success');
-                      return (
-                        <tr key={event.event_hash}>
-                          <td>{formatTimestamp(event.timestamp_ms, i18n.language)}</td>
-                          <td
-                            className={styles.monoCell}
-                            title={event.request_id || event.event_hash}
+              <div className={styles.detailEventsStack}>
+                <div className={styles.detailEventSummary}>
+                  <div>
+                    <span>{t('accounts.detail_event_summary_total')}</span>
+                    <strong>{formatCompactNumber(rowEvents.length)}</strong>
+                  </div>
+                  <div>
+                    <span>{t('accounts.detail_event_summary_failed')}</span>
+                    <strong>{formatCompactNumber(failedEventCount)}</strong>
+                  </div>
+                  <div>
+                    <span>{t('accounts.detail_event_summary_slowest')}</span>
+                    <strong>{formatDurationMs(slowestLatencyMs)}</strong>
+                  </div>
+                </div>
+                {latestFailedEvent ? (
+                  <div className={styles.detailEventFailureSummary}>
+                    <span>{t('accounts.detail_event_latest_failure')}</span>
+                    <strong>{getEventFailureReason(latestFailedEvent) || '-'}</strong>
+                  </div>
+                ) : null}
+                <div className={styles.detailEventsList}>
+                  {rowEvents.map((event) => {
+                    const requestLabel = event.request_id || event.event_hash.slice(0, 10) || '-';
+                    const modelLabel = event.resolved_model || event.model || '-';
+                    const failureReason = getEventFailureReason(event);
+                    return (
+                      <article key={event.event_hash} className={styles.detailEventItem}>
+                        <div className={styles.detailEventHeader}>
+                          <span
+                            className={`${styles.eventStatus} ${
+                              event.failed ? styles.eventStatusFailed : styles.eventStatusSuccess
+                            }`}
+                            title={failureReason || undefined}
                           >
+                            {getEventStatusText(event, t)}
+                          </span>
+                          <strong>{formatTimestamp(event.timestamp_ms, i18n.language)}</strong>
+                        </div>
+                        <div className={styles.detailEventIdentity}>
+                          <span className={styles.monoCell} title={event.request_id || event.event_hash}>
                             {requestLabel}
-                          </td>
-                          <td title={event.resolved_model || event.model}>
-                            {event.resolved_model || event.model || '-'}
-                          </td>
-                          <td>
-                            <span
-                              className={`${styles.eventStatus} ${
-                                event.failed ? styles.eventStatusFailed : styles.eventStatusSuccess
-                              }`}
-                              title={event.fail_summary || undefined}
-                            >
-                              {statusLabel}
-                            </span>
-                          </td>
-                          <td>{formatCompactNumber(event.total_tokens)}</td>
-                          <td>{formatDurationMs(event.latency_ms)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                          </span>
+                          <span title={modelLabel}>{modelLabel}</span>
+                        </div>
+                        {event.failed ? (
+                          <p className={styles.detailEventFailureReason}>
+                            {failureReason || t('accounts.detail_event_failed_reason_empty')}
+                          </p>
+                        ) : null}
+                        <div className={styles.detailEventMeta}>
+                          <span>
+                            {t('accounts.detail_event_col_tokens')}:{' '}
+                            {formatCompactNumber(event.total_tokens)}
+                          </span>
+                          <span>
+                            {t('accounts.detail_event_col_latency')}:{' '}
+                            {formatDurationMs(event.latency_ms)}
+                          </span>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </section>
         );
       }
       return (
-        <>
+        <div className={styles.drawerDetailStack}>
+          <section className={styles.drawerHero}>
+            <div>
+              <span
+                className={`${styles.badge} ${getHealthStatusClass(detailView.health.status)}`}
+                title={t(detailView.health.tooltipKey, detailView.health.tooltipParams)}
+              >
+                {t(detailView.health.labelKey)}
+              </span>
+              <h3>{t('accounts.detail_overview_title')}</h3>
+              <p>{t(detailView.health.reasonKey, detailView.health.reasonParams)}</p>
+            </div>
+            <strong>{formatPercent(selectedRow.quota.remainingPercent)}</strong>
+          </section>
           <section className={styles.drawerSummary}>
-            <div>
-              <span>{t('accounts.detail_quota')}</span>
-              <strong>{formatPercent(selectedRow.quota.remainingPercent)}</strong>
-            </div>
-            <div>
-              <span>{t('accounts.col_priority')}</span>
-              <strong>{selectedRow.priority ?? 0}</strong>
-            </div>
-            <div>
-              <span>{t('accounts.detail_success_rate')}</span>
-              <strong>{formatPercent(selectedRow.usage.successRate, 1)}</strong>
-            </div>
+            {detailView.overview.metrics.map((metric) => (
+              <div key={metric.key}>
+                <span>{t(metric.labelKey, { defaultValue: metric.labelKey })}</span>
+                <strong>{renderDetailFieldValue(metric)}</strong>
+              </div>
+            ))}
           </section>
           <section className={styles.drawerSection}>
             <h3>{t('accounts.detail_status')}</h3>
-            <p>
-              {selectedRow.disabled
-                ? t('accounts.detail_overview_disabled')
-                : t('accounts.detail_overview_enabled')}
-            </p>
+            <p>{t(detailView.overview.statusDescriptionKey)}</p>
           </section>
-        </>
+          <section className={styles.drawerSection}>
+            <h3>{t('accounts.detail_history_evidence')}</h3>
+            {accountHistoryLoading && !detailView.history ? (
+              <div className={styles.inlineLoading}>
+                <LoadingSpinner size={16} />
+                <span>{t('common.loading')}</span>
+              </div>
+            ) : accountHistoryError ? (
+              <div className={styles.errorBox}>{accountHistoryError}</div>
+            ) : detailView.history?.matched ? (
+              <div className={styles.detailEvidenceGrid}>
+                <div>
+                  <span>{t('accounts.history_requests')}</span>
+                  <strong>{formatCompactNumber(detailView.history.totalRequests)}</strong>
+                </div>
+                <div>
+                  <span>{t('accounts.history_tokens')}</span>
+                  <strong>{formatCompactNumber(detailView.history.totalTokens)}</strong>
+                </div>
+                <div>
+                  <span>{t('accounts.history_cost')}</span>
+                  <strong>{formatMoney(detailView.history.totalCost)}</strong>
+                </div>
+                <div>
+                  <span>{t('accounts.history_success')}</span>
+                  <strong>{formatPercent(detailView.history.successRate, 1)}</strong>
+                </div>
+              </div>
+            ) : (
+              <p>{t('accounts.history_empty')}</p>
+            )}
+          </section>
+        </div>
       );
     };
+    const drawerMoreItems: DropdownMenuItem[] = [
+      {
+        key: 'models',
+        label: t('auth_files.models_button'),
+        icon: <IconModelCluster size={15} />,
+        onClick: () => {
+          setDetailTab('models');
+          void showModels(selectedRow.raw);
+        },
+        disabled: selectedRow.runtimeOnly,
+      },
+      {
+        key: 'download',
+        label: t('auth_files.download_button'),
+        icon: <IconDownload size={15} />,
+        onClick: () => void handleDownload(selectedRow.fileName),
+        disabled: selectedRow.runtimeOnly,
+      },
+      ...(canResetCodexQuota(selectedRow)
+        ? [
+            {
+              key: 'reset-codex-quota',
+              label: t('codex_quota.reset_action_button'),
+              icon: <IconRefreshCw size={15} />,
+              onClick: () => resetCodexQuotaForRow(selectedRow),
+            } satisfies DropdownMenuItem,
+          ]
+        : []),
+      { key: 'drawer-danger-divider', type: 'divider' },
+      {
+        key: 'delete',
+        label: t('auth_files.delete_button'),
+        icon: <IconTrash2 size={15} />,
+        onClick: () => handleDelete(selectedRow.fileName),
+        disabled: disableControls || selectedRow.runtimeOnly || deleting === selectedRow.fileName,
+        tone: 'danger',
+      },
+    ];
 
     return (
       <Drawer
         open
         onClose={() => setSelectedRowKey(null)}
-        width={560}
+        width={640}
         className={styles.accountDetailDrawer}
         title={
           <div className={styles.drawerTitleStack}>
@@ -3253,29 +3710,12 @@ export function AccountsPage() {
             </Button>
             <Button
               variant="secondary"
-              onClick={() => {
-                setDetailTab('models');
-                void showModels(selectedRow.raw);
-              }}
-              disabled={selectedRow.runtimeOnly}
-            >
-              <IconModelCluster size={16} />
-              {t('auth_files.models_button')}
-            </Button>
-            <Button
-              variant="secondary"
               onClick={() => void openPrefixProxyEditor(selectedRow.raw)}
               disabled={disableControls || selectedRow.runtimeOnly}
             >
               <IconSettings size={16} />
               {t('auth_files.prefix_proxy_button')}
             </Button>
-            {canResetCodexQuota(selectedRow) ? (
-              <Button variant="secondary" onClick={() => resetCodexQuotaForRow(selectedRow)}>
-                <IconRefreshCw size={16} />
-                {t('codex_quota.reset_action_button')}
-              </Button>
-            ) : null}
             <Button
               variant={selectedRow.disabled ? 'secondary' : 'danger'}
               onClick={() => handleBatchStatus(selectedRow.disabled, [selectedRow])}
@@ -3283,46 +3723,38 @@ export function AccountsPage() {
             >
               {selectedRow.disabled ? t('accounts.enable') : t('accounts.disable')}
             </Button>
-            <Button
-              variant="secondary"
-              onClick={() => void handleDownload(selectedRow.fileName)}
-              disabled={selectedRow.runtimeOnly}
-            >
-              <IconDownload size={16} />
-              {t('auth_files.download_button')}
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => handleDelete(selectedRow.fileName)}
-              disabled={disableControls || selectedRow.runtimeOnly}
-              loading={deleting === selectedRow.fileName}
-            >
-              {deleting !== selectedRow.fileName ? <IconTrash2 size={16} /> : null}
-              {t('auth_files.delete_button')}
-            </Button>
+            <DropdownMenu
+              items={drawerMoreItems}
+              ariaLabel={t('accounts.drawer_more_actions')}
+              triggerLabel={t('accounts.batch_more')}
+              triggerIcon={<IconMoreVertical size={16} />}
+              triggerClassName={styles.drawerMoreActions}
+            />
           </div>
         }
       >
-        <div className={styles.drawerTabs} role="tablist">
-          {detailTabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={detailTab === tab.id}
-              className={detailTab === tab.id ? styles.drawerTabActive : ''}
-              onClick={() => {
-                setDetailTab(tab.id);
-                if (tab.id === 'models') {
-                  void showModels(selectedRow.raw);
-                }
-              }}
-            >
-              {tab.label}
-            </button>
-          ))}
+        <div className={styles.drawerBodyShell}>
+          <div className={styles.drawerTabs} role="tablist">
+            {detailTabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={detailTab === tab.id}
+                className={detailTab === tab.id ? styles.drawerTabActive : ''}
+                onClick={() => {
+                  setDetailTab(tab.id);
+                  if (tab.id === 'models') {
+                    void showModels(selectedRow.raw);
+                  }
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div className={styles.drawerTabPanel}>{renderActiveDetail()}</div>
         </div>
-        {renderActiveDetail()}
       </Drawer>
     );
   };
