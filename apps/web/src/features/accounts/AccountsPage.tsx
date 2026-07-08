@@ -20,6 +20,7 @@ import {
   IconArrowDownWideNarrow,
   IconArrowUpNarrowWide,
   IconChevronRight,
+  IconCopy,
   IconDollarSign,
   IconDownload,
   IconEye,
@@ -3686,7 +3687,16 @@ export function AccountsPage() {
             </strong>
             <span className={styles.drawerTitleMeta}>
               {getProviderLabel(selectedRow.provider, t)} · {selectedRow.planType ?? '-'} ·{' '}
-              {getDisplayFileName(selectedRow.fileName)}
+              <button
+                type="button"
+                className={styles.drawerFileNameCopy}
+                onClick={() => copyTextWithNotification(selectedRow.fileName)}
+                title={t('common.copy', { defaultValue: '点击复制' })}
+                aria-label={`${t('common.copy', { defaultValue: '点击复制' })} ${getDisplayFileName(selectedRow.fileName)}`}
+              >
+                {getDisplayFileName(selectedRow.fileName)}
+                <IconCopy size={12} />
+              </button>
             </span>
           </div>
         }

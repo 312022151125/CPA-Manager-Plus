@@ -193,6 +193,7 @@ export function Drawer({
             className={styles.closeButton}
             onClick={handleClose}
             aria-label={t('common.close')}
+            title={t('common.close')}
           >
             <IconX size={18} />
           </button>
