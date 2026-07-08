@@ -1,0 +1,115 @@
+@use '@/styles/variables.scss' as *;
+
+.card {
+  border: 1px solid var(--color-border, var(--gray-200));
+  border-radius: $radius-md;
+  padding: $spacing-md;
+  background: var(--color-surface, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: $spacing-sm;
+}
+
+.headerLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--color-text-secondary, var(--gray-600));
+
+  strong {
+    color: var(--color-text, var(--gray-900));
+  }
+}
+
+.headerValue {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text, var(--gray-900));
+}
+
+.bar {
+  height: 6px;
+  border-radius: $radius-full;
+  background: var(--color-surface-muted, var(--gray-200));
+  overflow: hidden;
+}
+
+.barFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition: width $transition-normal;
+}
+
+.barOk {
+  background: var(--color-success, #{$success-color});
+}
+
+.barCooldown {
+  background: var(--color-info, var(--info-color, #{$info-color}));
+}
+
+.barWarning {
+  background: var(--color-warning, #{$warning-color});
+}
+
+.barCritical {
+  background: var(--color-error, #{$error-color});
+}
+
+.barUnknown {
+  background: var(--gray-400);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $spacing-sm $spacing-md;
+  font-size: 12px;
+  color: var(--color-text-secondary, var(--gray-600));
+}
+
+.compactCard {
+  display: grid;
+  grid-template-columns: 56px 1fr 48px 56px;
+  align-items: center;
+  gap: $spacing-sm;
+  font-size: 12px;
+}
+
+.compactLabel {
+  font-weight: 600;
+  color: var(--color-text, var(--gray-900));
+}
+
+.compactBar {
+  height: 4px;
+  border-radius: $radius-full;
+  background: var(--gray-200);
+  overflow: hidden;
+}
+
+.compactBarFill {
+  display: block;
+  height: 100%;
+}
+
+.compactValue {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text, var(--gray-900));
+  text-align: right;
+}
+
+.compactReset {
+  font-size: 11px;
+  color: var(--color-text-secondary, var(--gray-600));
+  text-align: right;
+}

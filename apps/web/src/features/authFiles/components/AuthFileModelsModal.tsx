@@ -55,8 +55,22 @@ export function AuthFileModelsContent(props: AuthFileModelsContentProps) {
       <EmptyState
         title={t('auth_files.models_empty', { defaultValue: '该凭证暂无可用模型' })}
         description={t('auth_files.models_empty_desc', {
-          defaultValue: '该认证凭证可能尚未被服务器加载或没有绑定任何模型',
+          defaultValue:
+            '该认证凭证可能尚未被服务器加载,或尚未在 AI 提供商里绑定任何模型。可前往 AI 提供商配置页检查绑定状态。',
         })}
+        action={
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => {
+              window.location.hash = '#/demo/ai-providers';
+            }}
+          >
+            {t('auth_files.models_empty_action', {
+              defaultValue: '前往 AI 提供商配置',
+            })}
+          </Button>
+        }
       />
     );
   }

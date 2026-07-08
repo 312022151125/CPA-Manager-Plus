@@ -128,6 +128,12 @@ import {
 } from '@/features/accounts/model/usageValueRows';
 import { buildOAuthRulePreviewRows } from '@/features/accounts/model/oauthRulePreview';
 import {
+  AccountHealthBadge,
+  QuotaWindowCard,
+  RelativeTime,
+  severityFromQuotaStatus,
+} from '@/features/accounts/components';
+import {
   monitoringAnalyticsApi,
   usageServiceApi,
   type AccountActionCandidate,
@@ -3137,7 +3143,27 @@ export function AccountsPage() {
         return (
           <div className={styles.drawerDetailStack}>
             <section className={styles.drawerSection}>
-              <h3>{t('accounts.detail_quota_windows')}</h3>
+              <div className={styles.quotaSectionHeader}>
+                <h3>{t('accounts.detail_quota_windows')}</h3>
+                <AccountHealthBadge
+                  severity={severityFromQuotaStatus(
+                    detailView.quota.fields.find((f) => f.key === 'status')?.raw as
+                      | string
+                      | undefined,
+                    Boolean(selectedRow.disabled)
+                  )}
+                  label={(() => {
+                    const statusField = detailView.quota.fields.find(
+                      (f) => f.key === 'status'
+                    );
+                    return statusField ? String(statusField.displayValue) : '-';
+                  })()}
+                  hint={t('accounts.detail_quota_health_hint', {
+                    defaultValue: '综合账号最近请求、配额与认证状态得出',
+                  })}
+                  size="md"
+                />
+              </div>
               {renderDetailFieldList(detailView.quota.fields)}
               {detailView.quota.resetCreditsAvailableCount !== null ? (
                 <div className={styles.detailInlineNote}>
@@ -3149,7 +3175,11 @@ export function AccountsPage() {
                 <div className={styles.detailInlineNote}>
                   <span>{t('accounts.detail_cooldown')}</span>
                   <strong>
-                    {formatTimestamp(detailView.quota.cooldown.recoverAtMs, i18n.language)}
+                    <RelativeTime
+                      timestamp={detailView.quota.cooldown.recoverAtMs}
+                      mode="both"
+                      locale={i18n.language}
+                    />
                   </strong>
                 </div>
               ) : null}
@@ -3174,47 +3204,9 @@ export function AccountsPage() {
                 <p>{t('accounts.detail_no_quota_windows')}</p>
               ) : (
                 <div className={styles.detailQuotaWindowList}>
-                  {detailView.quota.windows.map((window) => {
-                    const width = Math.max(0, Math.min(100, window.remainingPercent ?? 0));
-                    return (
-                      <div key={window.key} className={styles.detailQuotaWindowCard}>
-                        <div className={styles.detailQuotaWindowHeader}>
-                          <div>
-                            <strong title={window.label}>{window.label}</strong>
-                            <span>{window.resetLabel || '-'}</span>
-                          </div>
-                          <b>{formatPercent(window.remainingPercent)}</b>
-                        </div>
-                        <div className={styles.drawerQuotaTrack} aria-hidden="true">
-                          <span
-                            className={`${styles.drawerQuotaBar} ${getRemainingBarClass(selectedRow)}`}
-                            style={{ width: `${width}%` }}
-                          />
-                        </div>
-                        <div className={styles.detailQuotaWindowMeta}>
-                          <span>
-                            {t('accounts.detail_used')}: {formatPercent(window.usedPercent)}
-                          </span>
-                          <span>
-                            {t('accounts.detail_window_requests')}:{' '}
-                            {window.usage?.matched
-                              ? formatCompactNumber(window.usage.totalRequests)
-                              : '-'}
-                          </span>
-                          <span>
-                            {t('accounts.detail_window_tokens')}:{' '}
-                            {window.usage?.matched
-                              ? formatCompactNumber(window.usage.totalTokens)
-                              : '-'}
-                          </span>
-                          <span>
-                            {t('accounts.detail_window_cost')}:{' '}
-                            {window.usage?.matched ? formatMoney(window.usage.totalCost) : '-'}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {detailView.quota.windows.map((window) => (
+                    <QuotaWindowCard key={window.key} window={window} locale={i18n.language} />
+                  ))}
                 </div>
               )}
             </section>
