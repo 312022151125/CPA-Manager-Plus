@@ -122,6 +122,11 @@ describe('DemoPage', () => {
     const authFiles = getDemoAuthFiles();
     const fileNames = new Set(authFiles.files.map((file) => file.name));
     const providers = new Set(authFiles.files.map((file) => String(file.provider ?? file.type)));
+    const providerCounts = authFiles.files.reduce<Record<string, number>>((result, file) => {
+      const provider = String(file.provider ?? file.type);
+      result[provider] = (result[provider] ?? 0) + 1;
+      return result;
+    }, {});
     const quota = getDemoQuotaStoreState();
     const analytics = getDemoMonitoringAnalytics();
     const historyTargetString = (value: unknown) => {
@@ -175,7 +180,7 @@ describe('DemoPage', () => {
     );
 
     expect(authFiles.total).toBe(authFiles.files.length);
-    expect(authFiles.files.length).toBe(8);
+    expect(authFiles.files.length).toBe(15);
     expect(visibleAccountText).not.toMatch(/\bui[-.]/i);
     expect(
       authFiles.files.every((file) =>
@@ -188,6 +193,9 @@ describe('DemoPage', () => {
       )
     ).toBe(true);
     expect(Array.from(providers).sort()).toEqual(oauthProviders);
+    oauthProviders.forEach((provider) => {
+      expect(providerCounts[provider]).toBeGreaterThanOrEqual(3);
+    });
     expect(Array.from(analyticsProviders).sort()).toEqual(oauthProviders);
     expect([...(analytics.filter_options?.providers ?? [])].sort()).toEqual(oauthProviders);
     expect(accountHistory.checkpoint.pending).toBe(false);
@@ -212,14 +220,21 @@ describe('DemoPage', () => {
     );
     expect(Array.from(fileNames).sort()).toEqual(
       [
+        'antigravity-daily-exhausted.json',
         'antigravity-builder.json',
+        'antigravity-monthly-low.json',
+        'claude-extra-usage-03.json',
         'claude-research-02.json',
         'claude-team-01.json',
         'codex-expired-oauth-03.json',
         'codex-fallback-02.json',
         'codex-team-01.json',
         'kimi-coding.json',
+        'kimi-exhausted.json',
+        'kimi-healthy.json',
         'xai-ops.json',
+        'xai-payg-buffer.json',
+        'xai-payg-cap.json',
       ].sort()
     );
     nonOauthFiles.forEach((fileName) => expect(fileNames).not.toContain(fileName));
@@ -233,10 +248,27 @@ describe('DemoPage', () => {
     );
     expect(quota.codexQuota['codex-expired-oauth-03.json']?.status).toBe('error');
     expect(quota.codexQuota['codex-expired-oauth-03.json']?.errorStatus).toBe(401);
-    expect(quota.claudeQuota['claude-research-02.json']?.windows).toHaveLength(2);
-    expect(quota.antigravityQuota['antigravity-builder.json']?.groups[0]?.buckets).toHaveLength(3);
-    expect(quota.kimiQuota['kimi-coding.json']?.rows[0]?.used).toBe(62);
+    expect(quota.claudeQuota['claude-research-02.json']?.windows).toHaveLength(3);
+    expect(quota.claudeQuota['claude-extra-usage-03.json']?.extraUsage?.is_enabled).toBe(true);
+    expect(quota.antigravityQuota['antigravity-builder.json']?.groups).toHaveLength(2);
+    expect(quota.antigravityQuota['antigravity-builder.json']?.groups[0]?.buckets).toHaveLength(2);
+    expect(
+      quota.antigravityQuota['antigravity-daily-exhausted.json']?.groups[0]?.buckets[0]
+        ?.remainingFraction
+    ).toBe(0);
+    expect(
+      quota.antigravityQuota['antigravity-monthly-low.json']?.groups[1]?.buckets[1]
+        ?.remainingFraction
+    ).toBe(0.08);
+    expect(quota.kimiQuota['kimi-coding.json']?.rows[0]?.used).toBe(214);
+    expect(quota.kimiQuota['kimi-healthy.json']?.rows[0]?.used).toBe(320);
+    expect(quota.kimiQuota['kimi-exhausted.json']?.rows[1]?.used).toBe(200);
+    expect(quota.xaiQuota['xai-ops.json']?.billing?.periodType).toBe('weekly');
+    expect(quota.xaiQuota['xai-ops.json']?.billing?.usagePercent).toBe(42);
     expect(quota.xaiQuota['xai-ops.json']?.billing?.usedPercent).toBe(86);
+    expect(quota.xaiQuota['xai-payg-buffer.json']?.billing?.usedPercent).toBe(100);
+    expect(quota.xaiQuota['xai-payg-buffer.json']?.billing?.onDemandUsedPercent).toBe(26);
+    expect(quota.xaiQuota['xai-payg-cap.json']?.billing?.onDemandUsedPercent).toBe(100);
 
     expect(Array.from(cooldownKeys)).toEqual(
       expect.arrayContaining(['codex-fallback-02.json:codex-fallback-02'])
@@ -267,6 +299,7 @@ describe('DemoPage', () => {
   });
 
   it('fills usage analytics and request monitoring tabs with complete demo pages', () => {
+    const demoAuthCount = getDemoAuthFiles().files.length;
     const firstPage = getDemoMonitoringAnalytics({
       from_ms: 0,
       to_ms: Date.now(),
@@ -277,10 +310,10 @@ describe('DemoPage', () => {
     });
 
     expect(firstPage.model_stats?.length).toBeGreaterThanOrEqual(8);
-    expect(firstPage.account_stats?.length).toBe(8);
-    expect(firstPage.api_key_stats?.length).toBe(8);
-    expect(firstPage.credential_stats?.length).toBe(8);
-    expect(firstPage.credential_timeline?.length).toBe(56);
+    expect(firstPage.account_stats?.length).toBe(demoAuthCount);
+    expect(firstPage.api_key_stats?.length).toBe(demoAuthCount);
+    expect(firstPage.credential_stats?.length).toBe(demoAuthCount);
+    expect(firstPage.credential_timeline?.length).toBe(Math.min(demoAuthCount, 10) * 7);
     expect(firstPage.heatmap).toHaveLength(168);
     expect(firstPage.heatmap?.some((point) => point.calls > 0)).toBe(true);
     expect(firstPage.events?.items).toHaveLength(10);
