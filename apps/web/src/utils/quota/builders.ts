@@ -282,7 +282,7 @@ export function buildAntigravityQuotaGroupsFromModels(
   return [
     buildAntigravitySharedGroup(
       'claude-gpt',
-      'Claude/GPT',
+      'Claude',
       modelIds.filter((id) => isAntigravityExternalModel(id, models[id])),
       models,
       payload
@@ -361,6 +361,58 @@ function toInt(value: unknown): number | null {
 }
 
 type KimiRowLabel = Pick<KimiQuotaRow, 'label' | 'labelKey' | 'labelParams'>;
+
+function formatKimiScopeLabel(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const stripped = trimmed.replace(/^(FEATURE|SCOPE)[_-]+/i, '');
+  const words = stripped
+    .split(/[_\s-]+/)
+    .map((word) => word.trim())
+    .filter(Boolean);
+  if (words.length === 0) return trimmed;
+  return words
+    .map((word) => {
+      const lower = word.toLowerCase();
+      return `${lower.charAt(0).toUpperCase()}${lower.slice(1)}`;
+    })
+    .join(' ');
+}
+
+function applyKimiScopeLabel(label: KimiRowLabel, scope: unknown): KimiRowLabel {
+  const scopeLabel = formatKimiScopeLabel(scope);
+  if (!scopeLabel) return label;
+
+  if (label.label) {
+    return {
+      label: `${scopeLabel} · ${label.label}`,
+    };
+  }
+
+  if (label.labelKey === 'kimi_quota.weekly_limit') {
+    return {
+      labelKey: 'kimi_quota.scoped_weekly_limit',
+      labelParams: { scope: scopeLabel },
+    };
+  }
+
+  if (label.labelKey === 'kimi_quota.limit_window') {
+    return {
+      labelKey: 'kimi_quota.scoped_limit_window',
+      labelParams: { scope: scopeLabel, ...(label.labelParams ?? {}) },
+    };
+  }
+
+  if (label.labelKey === 'kimi_quota.limit_index') {
+    return {
+      labelKey: 'kimi_quota.scoped_limit_index',
+      labelParams: { scope: scopeLabel, ...(label.labelParams ?? {}) },
+    };
+  }
+
+  return label;
+}
 
 function kimiResetHint(data: Record<string, unknown>): string | undefined {
   const absoluteKeys = ['reset_at', 'resetAt', 'reset_time', 'resetTime'];
@@ -487,14 +539,15 @@ export function buildKimiQuotaRows(payload: KimiUsagePayload): KimiQuotaRow[] {
   const addRows = (
     usage: KimiUsagePayload['usage'],
     limits: KimiUsagePayload['limits'],
-    idPrefix = ''
+    idPrefix = '',
+    scope?: unknown
   ) => {
     if (usage && typeof usage === 'object') {
       const summary = toKimiUsageRow(usage as Record<string, unknown>, {
         labelKey: 'kimi_quota.weekly_limit',
       });
       if (summary) {
-        rows.push({ id: `${idPrefix}summary`, ...summary });
+        rows.push({ id: `${idPrefix}summary`, ...summary, ...applyKimiScopeLabel(summary, scope) });
       }
     }
 
@@ -509,7 +562,7 @@ export function buildKimiQuotaRows(payload: KimiUsagePayload): KimiQuotaRow[] {
         const fallbackLabel = kimiLimitLabel(item, detail, window, idx);
         const row = toKimiUsageRow(detail as Record<string, unknown>, fallbackLabel);
         if (row) {
-          rows.push({ id: `${idPrefix}limit-${idx}`, ...row });
+          rows.push({ id: `${idPrefix}limit-${idx}`, ...row, ...applyKimiScopeLabel(row, scope) });
         }
       });
     }
@@ -520,7 +573,12 @@ export function buildKimiQuotaRows(payload: KimiUsagePayload): KimiQuotaRow[] {
   if (Array.isArray(payload.usages)) {
     payload.usages.forEach((entry, index) => {
       const detail = entry?.detail && typeof entry.detail === 'object' ? entry.detail : undefined;
-      addRows(detail, Array.isArray(entry?.limits) ? entry.limits : undefined, `usage-${index}-`);
+      addRows(
+        detail,
+        Array.isArray(entry?.limits) ? entry.limits : undefined,
+        `usage-${index}-`,
+        entry?.scope
+      );
     });
   }
 

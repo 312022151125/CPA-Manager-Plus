@@ -180,6 +180,15 @@ const field = (
   return { key, labelKey, value, valueKind };
 };
 
+const booleanField = (
+  key: string,
+  labelKey: string,
+  value: boolean | null | undefined
+): AccountDetailField | null => {
+  if (value === undefined || value === null) return null;
+  return field(key, labelKey, value ? 'common.yes' : 'common.no', 'i18n');
+};
+
 const compactFields = (
   fields: Array<AccountDetailField | null | undefined>
 ): AccountDetailField[] =>
@@ -285,6 +294,36 @@ const buildQuotaDiagnostics = (row: AccountRow): AccountDetailField[] =>
     field('errorCode', 'accounts.detail_header_error_code', row.quota.observedErrorCode),
     field('activeLimit', 'accounts.detail_active_limit', row.quota.activeLimit),
     field('creditsBalance', 'accounts.detail_credits_balance', row.quota.creditsBalance),
+    booleanField('creditsHasCredits', 'accounts.detail_credits_available', row.quota.creditsHasCredits),
+    booleanField('creditsUnlimited', 'accounts.detail_credits_unlimited', row.quota.creditsUnlimited),
+    booleanField(
+      'creditsOverageLimitReached',
+      'accounts.detail_credits_overage_reached',
+      row.quota.creditsOverageLimitReached
+    ),
+    field(
+      'creditsApproxLocalMessages',
+      'accounts.detail_credits_approx_local_messages',
+      row.quota.creditsApproxLocalMessages,
+      'number'
+    ),
+    field(
+      'creditsApproxCloudMessages',
+      'accounts.detail_credits_approx_cloud_messages',
+      row.quota.creditsApproxCloudMessages,
+      'number'
+    ),
+    booleanField(
+      'spendControlReached',
+      'accounts.detail_spend_control_reached',
+      row.quota.spendControlReached
+    ),
+    field(
+      'spendControlIndividualLimit',
+      'accounts.detail_spend_control_individual_limit',
+      row.quota.spendControlIndividualLimit,
+      'number'
+    ),
     field(
       'rateLimitReachedType',
       'accounts.detail_rate_limit_reached_type',

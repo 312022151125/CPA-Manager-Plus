@@ -92,9 +92,9 @@ describe('buildAntigravityQuotaGroups', () => {
       tabModelIds: ['chat_20706'],
     });
 
-    expect(groups.map((group) => group.label)).toEqual(['Claude/GPT', 'Gemini']);
+    expect(groups.map((group) => group.label)).toEqual(['Claude', 'Gemini']);
     expect(groups.find((group) => group.id === 'claude-gpt')?.buckets[0]).toMatchObject({
-      label: 'Claude/GPT',
+      label: 'Claude',
       remainingFraction: 0.5,
       description: 'claude-sonnet-4-6, gpt-oss-120b-medium',
     });
@@ -176,14 +176,15 @@ describe('buildKimiQuotaRows', () => {
     expect(rows).toEqual([
       expect.objectContaining({
         id: 'usage-0-summary',
-        labelKey: 'kimi_quota.weekly_limit',
+        labelKey: 'kimi_quota.scoped_weekly_limit',
+        labelParams: { scope: 'Coding' },
         used: 214,
         limit: 2048,
       }),
       expect.objectContaining({
         id: 'usage-0-limit-0',
-        labelKey: 'kimi_quota.limit_window',
-        labelParams: { duration: '5h' },
+        labelKey: 'kimi_quota.scoped_limit_window',
+        labelParams: { scope: 'Coding', duration: '5h' },
         used: 139,
         limit: 200,
       }),

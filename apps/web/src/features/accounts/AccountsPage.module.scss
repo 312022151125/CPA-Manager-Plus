@@ -961,6 +961,83 @@
   text-align: right;
 }
 
+.quotaMatrix {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.quotaMatrixRow {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+
+  & + & {
+    padding-top: 7px;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 34%, transparent);
+  }
+}
+
+.quotaMatrixWindowLabel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  min-width: 34px;
+  height: 18px;
+  border: 1px solid color-mix(in srgb, var(--accounts-brand) 18%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accounts-brand) 8%, transparent);
+  color: var(--accounts-brand);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.quotaMatrixCells {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.quotaMatrixCell {
+  display: grid;
+  grid-template-columns: 52px minmax(24px, 1fr) 32px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.quotaMatrixGroupLabel {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quotaMatrixTrack {
+  height: 4px;
+  min-width: 0;
+}
+
+.quotaMatrixPercent {
+  color: var(--text-primary);
+  font-size: 10.5px;
+  font-weight: 850;
+  line-height: 1;
+  text-align: right;
+}
+
 .quotaMoreButton {
   position: absolute;
   top: 50%;
@@ -3250,6 +3327,32 @@
       border-top: 1px solid color-mix(in srgb, var(--accounts-border) 64%, transparent);
       border-left: 0;
     }
+  }
+
+  .quotaMatrixRow {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .quotaMatrixWindowLabel {
+    width: 32px;
+    min-width: 32px;
+    height: 18px;
+    font-size: 9.5px;
+  }
+
+  .quotaMatrixCells {
+    gap: 6px;
+  }
+
+  .quotaMatrixCell {
+    grid-template-columns: 50px minmax(18px, 1fr) 30px;
+    gap: 4px;
+  }
+
+  .quotaMatrixGroupLabel,
+  .quotaMatrixPercent {
+    font-size: 10px;
   }
 
   .accountCardQuotaMeta {

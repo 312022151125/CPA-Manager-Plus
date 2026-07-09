@@ -43,6 +43,13 @@ export interface AccountQuotaSummary {
   observedErrorCode?: string;
   activeLimit?: string | null;
   creditsBalance?: string | null;
+  creditsHasCredits?: boolean | null;
+  creditsUnlimited?: boolean | null;
+  creditsOverageLimitReached?: boolean | null;
+  creditsApproxLocalMessages?: number | null;
+  creditsApproxCloudMessages?: number | null;
+  spendControlReached?: boolean | null;
+  spendControlIndividualLimit?: number | null;
   rateLimitReachedType?: string | null;
   primaryOverSecondaryLimitPercent?: number | null;
 }
@@ -72,6 +79,13 @@ type AccountQuotaObservationFields = Partial<
     | 'observedErrorCode'
     | 'activeLimit'
     | 'creditsBalance'
+    | 'creditsHasCredits'
+    | 'creditsUnlimited'
+    | 'creditsOverageLimitReached'
+    | 'creditsApproxLocalMessages'
+    | 'creditsApproxCloudMessages'
+    | 'spendControlReached'
+    | 'spendControlIndividualLimit'
     | 'rateLimitReachedType'
     | 'primaryOverSecondaryLimitPercent'
   >
@@ -236,6 +250,14 @@ const quotaFromXaiBilling = (
   const periodResetLabel = billing.periodEnd ?? resetLabel;
   const periodRemainingPercent =
     billing.periodType === 'weekly' ? remainingPercentFromUsed(billing.usagePercent) : null;
+  const productRemainingWindows =
+    billing.productUsage
+      ?.map((product) => ({
+        remainingPercent: remainingPercentFromUsed(product.usagePercent),
+        usedPercent: product.usagePercent,
+        resetLabel: periodResetLabel,
+      }))
+      .filter((window) => window.remainingPercent !== null || window.usedPercent !== null) ?? [];
   const monthlyLimitCents = billing.monthlyLimitCents;
   const monthlyRemainingCents =
     monthlyLimitCents !== null && billing.includedUsedCents !== null
@@ -266,6 +288,7 @@ const quotaFromXaiBilling = (
               },
             ]
           : []),
+        ...productRemainingWindows,
         {
           remainingPercent: (totalRemainingCents / totalLimitCents) * 100,
           resetLabel,
@@ -289,6 +312,7 @@ const quotaFromXaiBilling = (
                 },
               ]
             : []),
+          ...productRemainingWindows,
           {
             remainingPercent: onDemandRemainingPercent,
             usedPercent: billing.onDemandUsedPercent,
@@ -316,6 +340,7 @@ const quotaFromXaiBilling = (
             },
           ]
         : []),
+      ...productRemainingWindows,
       {
         remainingPercent: remainingPercentFromUsed(billing.usedPercent),
         usedPercent: billing.usedPercent,
@@ -327,15 +352,21 @@ const quotaFromXaiBilling = (
 };
 
 const quotaObservationFields = (quota: CodexQuotaState): AccountQuotaObservationFields => {
-  if (!quota.observedFromUsageHeaders) return { source: 'cache' };
   return {
-    source: 'observed-header',
+    source: quota.observedFromUsageHeaders ? 'observed-header' : 'cache',
     observedAtMs: quota.observedAtMs,
     observedTraceId: quota.observedTraceId,
     observedErrorKind: quota.observedErrorKind,
     observedErrorCode: quota.observedErrorCode,
     activeLimit: quota.activeLimit,
     creditsBalance: quota.creditsBalance,
+    creditsHasCredits: quota.creditsHasCredits,
+    creditsUnlimited: quota.creditsUnlimited,
+    creditsOverageLimitReached: quota.creditsOverageLimitReached,
+    creditsApproxLocalMessages: quota.creditsApproxLocalMessages,
+    creditsApproxCloudMessages: quota.creditsApproxCloudMessages,
+    spendControlReached: quota.spendControlReached,
+    spendControlIndividualLimit: quota.spendControlIndividualLimit,
     rateLimitReachedType: quota.rateLimitReachedType,
     primaryOverSecondaryLimitPercent: quota.primaryOverSecondaryLimitPercent,
   };
@@ -354,6 +385,8 @@ const quotaObservationFieldsFromSnapshot = (
     observedErrorCode: getHeaderSnapshotErrorCode(snapshot) || undefined,
     activeLimit: observedQuota?.activeLimit ?? undefined,
     creditsBalance: observedQuota?.creditsBalance ?? undefined,
+    creditsHasCredits: observedQuota?.creditsHasCredits ?? undefined,
+    creditsUnlimited: observedQuota?.creditsUnlimited ?? undefined,
     rateLimitReachedType: observedQuota?.rateLimitReachedType ?? undefined,
     primaryOverSecondaryLimitPercent: observedQuota?.primaryOverSecondaryLimitPercent ?? undefined,
   };
@@ -378,6 +411,23 @@ const mergeQuotaObservationFields = (
   }
   if (fields.activeLimit !== undefined) merged.activeLimit = fields.activeLimit;
   if (fields.creditsBalance !== undefined) merged.creditsBalance = fields.creditsBalance;
+  if (fields.creditsHasCredits !== undefined) merged.creditsHasCredits = fields.creditsHasCredits;
+  if (fields.creditsUnlimited !== undefined) merged.creditsUnlimited = fields.creditsUnlimited;
+  if (fields.creditsOverageLimitReached !== undefined) {
+    merged.creditsOverageLimitReached = fields.creditsOverageLimitReached;
+  }
+  if (fields.creditsApproxLocalMessages !== undefined) {
+    merged.creditsApproxLocalMessages = fields.creditsApproxLocalMessages;
+  }
+  if (fields.creditsApproxCloudMessages !== undefined) {
+    merged.creditsApproxCloudMessages = fields.creditsApproxCloudMessages;
+  }
+  if (fields.spendControlReached !== undefined) {
+    merged.spendControlReached = fields.spendControlReached;
+  }
+  if (fields.spendControlIndividualLimit !== undefined) {
+    merged.spendControlIndividualLimit = fields.spendControlIndividualLimit;
+  }
   if (fields.rateLimitReachedType !== undefined) {
     merged.rateLimitReachedType = fields.rateLimitReachedType;
   }

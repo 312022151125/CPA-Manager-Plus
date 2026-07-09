@@ -23,7 +23,7 @@ const t = ((key: string, options?: Record<string, string | number>) => {
     'claude_quota.extra_usage_label': 'Extra Usage',
     'kimi_quota.reset_hint': `resets in ${options?.hint ?? ''}`,
     'kimi_quota.weekly_limit': 'Weekly limit',
-    'accounts.quota_rate_limit_type_weekly': 'Weekly window',
+    'xai_quota.weekly_credits': 'Weekly credits',
     'xai_quota.monthly_credits': 'Monthly credits',
     'xai_quota.pay_as_you_go_label': 'Pay-as-you-go',
     'xai_quota.usage_amount': `${options?.remaining ?? '--'} / ${options?.limit ?? '--'} remaining`,
@@ -304,10 +304,10 @@ describe('accountQuotaDisplayWindows', () => {
       t,
     });
 
-    expect(windows).toHaveLength(2);
+    expect(windows).toHaveLength(3);
     expect(windows[0]).toMatchObject({
       key: 'credits-period',
-      label: 'Weekly window',
+      label: 'Weekly credits',
       kind: 'weekly',
       remainingPercent: 58,
       usedPercent: 42,
@@ -317,6 +317,14 @@ describe('accountQuotaDisplayWindows', () => {
       key: 'billing',
       label: 'Monthly credits',
       remainingPercent: 60,
+      source: 'xai',
+    });
+    expect(windows[2]).toMatchObject({
+      key: 'product-0-grok-code-fast',
+      label: 'Grok Code Fast',
+      kind: 'product',
+      remainingPercent: 63,
+      usedPercent: 37,
       source: 'xai',
     });
   });

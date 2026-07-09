@@ -110,6 +110,7 @@ import {
   buildAccountQuotaDisplayWindows,
   formatQuotaResetInlineLabel,
   getQuotaWindowShortLabel,
+  type AccountQuotaWindowKind,
   type AccountQuotaDisplayWindow,
 } from '@/features/accounts/model/accountQuotaDisplayWindows';
 import {
@@ -186,6 +187,24 @@ type SortableAccountColumn = Extract<
 type AccountSortFieldValue = 'default' | SortableAccountColumn;
 type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
+type AntigravityQuotaMatrixWindowKind = Extract<AccountQuotaWindowKind, 'five_hour' | 'weekly'>;
+
+interface AntigravityQuotaMatrixCell {
+  groupLabel: string;
+  displayLabel: string;
+  window: AccountQuotaDisplayWindow;
+}
+
+interface AntigravityQuotaMatrixRow {
+  key: AntigravityQuotaMatrixWindowKind;
+  label: string;
+  cells: AntigravityQuotaMatrixCell[];
+}
+
+interface AntigravityQuotaMatrix {
+  rows: AntigravityQuotaMatrixRow[];
+  windowKeys: Set<string>;
+}
 
 const PAGE_SIZE_OPTIONS = [
   { value: '10', label: '10' },
@@ -411,6 +430,90 @@ const getRemainingBarClass = (row: AccountRow) => {
   if (row.quota.status === 'low') return styles.quotaBarWarn;
   if (row.quota.status === 'ok') return styles.quotaBarGood;
   return styles.quotaBarNeutral;
+};
+
+const getRemainingPercentBarClass = (remainingPercent: number | null) => {
+  if (remainingPercent === null) return styles.quotaBarNeutral;
+  if (remainingPercent <= 0) return styles.quotaBarBad;
+  if (remainingPercent < 20) return styles.quotaBarWarn;
+  return styles.quotaBarGood;
+};
+
+const getAntigravityGroupRank = (label: string) => {
+  const normalized = label.toLowerCase();
+  if (normalized.includes('claude') || normalized.includes('gpt')) return 0;
+  if (normalized.includes('gemini')) return 1;
+  return 2;
+};
+
+const getAntigravityMatrixGroupDisplayLabel = (label: string) => {
+  const normalized = label.toLowerCase();
+  if (normalized.includes('claude') || normalized.includes('gpt')) return 'Claude';
+  if (normalized.includes('gemini')) return 'Gemini';
+  return label;
+};
+
+const buildAntigravityQuotaMatrix = (
+  row: AccountRow,
+  windows: AccountQuotaDisplayWindow[]
+): AntigravityQuotaMatrix | null => {
+  if (row.provider !== ANTIGRAVITY_CONFIG.type) return null;
+
+  const matrixWindows = windows.filter(
+    (window) =>
+      window.source === 'antigravity' &&
+      Boolean(window.groupLabel) &&
+      (window.kind === 'five_hour' || window.kind === 'weekly')
+  );
+  const groupOrder = new Map<string, number>();
+  matrixWindows.forEach((window) => {
+    const groupLabel = window.groupLabel ?? '';
+    if (groupLabel && !groupOrder.has(groupLabel)) {
+      groupOrder.set(groupLabel, groupOrder.size);
+    }
+  });
+
+  const selectedGroupLabels = [...groupOrder.keys()]
+    .sort((first, second) => {
+      const rankDiff = getAntigravityGroupRank(first) - getAntigravityGroupRank(second);
+      if (rankDiff !== 0) return rankDiff;
+      return (groupOrder.get(first) ?? 0) - (groupOrder.get(second) ?? 0);
+    })
+    .slice(0, 2);
+  if (selectedGroupLabels.length < 2) return null;
+
+  const windowsByKindAndGroup = new Map<string, AccountQuotaDisplayWindow>();
+  matrixWindows.forEach((window) => {
+    if (!window.kind || !window.groupLabel) return;
+    windowsByKindAndGroup.set(`${window.kind}\u0000${window.groupLabel}`, window);
+  });
+
+  const windowKeys = new Set<string>();
+  const rows: AntigravityQuotaMatrixRow[] = [];
+  for (const kind of (['five_hour', 'weekly'] satisfies AntigravityQuotaMatrixWindowKind[])) {
+    const cells = selectedGroupLabels.map((groupLabel) => {
+      const window = windowsByKindAndGroup.get(`${kind}\u0000${groupLabel}`);
+      return window
+        ? {
+            groupLabel,
+            displayLabel: getAntigravityMatrixGroupDisplayLabel(groupLabel),
+            window,
+          }
+        : null;
+    });
+    if (cells.some((cell) => cell === null)) continue;
+    cells.forEach((cell) => {
+      if (cell) windowKeys.add(cell.window.key);
+    });
+    rows.push({
+      key: kind,
+      label: getQuotaWindowShortLabel(cells[0]!.window),
+      cells: cells as AntigravityQuotaMatrixCell[],
+    });
+  }
+
+  if (rows.length === 0) return null;
+  return { rows, windowKeys };
 };
 
 const getRecommendationPriorityClass = (priority: AccountRecommendationPriority) => {
@@ -2540,22 +2643,36 @@ export function AccountsPage() {
               quotaWindows,
             });
             const remaining = item.quota.remainingPercent;
+            const antigravityQuotaMatrix = buildAntigravityQuotaMatrix(row, quotaWindows);
             const displayQuotaWindows =
-              quotaWindows.length > 0
+              !antigravityQuotaMatrix && quotaWindows.length > 0
                 ? quotaWindows.slice(0, 2)
-                : [
-                    buildAccountQuotaDisplayWindow({
-                      key: 'unknown',
-                      label: t('accounts.col_quota'),
-                      remainingPercent: remaining,
-                      usedPercent: item.quota.usedPercent,
-                      resetLabel: item.quota.resetLabel,
-                    }),
-                  ];
-            const hiddenQuotaWindowCount = Math.max(0, quotaWindows.length - 2);
+                : antigravityQuotaMatrix
+                  ? []
+                  : [
+                      buildAccountQuotaDisplayWindow({
+                        key: 'unknown',
+                        label: t('accounts.col_quota'),
+                        remainingPercent: remaining,
+                        usedPercent: item.quota.usedPercent,
+                        resetLabel: item.quota.resetLabel,
+                      }),
+                    ];
+            const displayedQuotaWindowCount = antigravityQuotaMatrix
+              ? antigravityQuotaMatrix.windowKeys.size
+              : 2;
+            const hiddenQuotaWindowCount = Math.max(
+              0,
+              quotaWindows.length - displayedQuotaWindowCount
+            );
             const quotaWindowTitle =
               quotaWindows
-                .map((window) => `${window.label}: ${formatPercent(window.remainingPercent)}`)
+                .map((window) => {
+                  const label = window.groupLabel
+                    ? `${window.groupLabel} ${window.label}`
+                    : window.label;
+                  return `${label}: ${formatPercent(window.remainingPercent)}`;
+                })
                 .join('\n') || t('accounts.quota_brief_unknown');
             const healthTitle = t(item.health.tooltipKey, item.health.tooltipParams);
             const accountHistory = accountHistoryByRowKey.get(row.selectionKey) ?? null;
@@ -2736,44 +2853,107 @@ export function AccountsPage() {
                       .join(' ')}
                     title={quotaWindowTitle}
                   >
-                    {displayQuotaWindows.map((window) => {
-                      const windowRemaining = window.remainingPercent;
-                      const windowWidth = Math.max(0, Math.min(100, windowRemaining ?? 0));
-                      const resetLabel =
-                        window.resetLabel && window.resetLabel !== '-' ? window.resetLabel : '';
-                      const resetDisplayLabel = resetLabel
-                        ? formatQuotaResetInlineLabel(resetLabel, i18n.language)
-                        : '';
-                      const shortLabel = getQuotaWindowShortLabel(window);
-                      return (
-                        <div
-                          key={window.key}
-                          className={styles.quotaWindowCard}
-                          title={`${window.label}: ${formatPercent(windowRemaining)}`}
-                        >
-                          <div className={styles.quotaWindowPrimaryLine}>
-                            <span className={styles.quotaWindowSummary} title={window.label}>
-                              {shortLabel}
+                    {antigravityQuotaMatrix ? (
+                      <div
+                        className={styles.quotaMatrix}
+                        data-account-quota-matrix={row.selectionKey}
+                      >
+                        {antigravityQuotaMatrix.rows.map((matrixRow) => (
+                          <div
+                            key={matrixRow.key}
+                            className={styles.quotaMatrixRow}
+                            data-account-quota-matrix-row={matrixRow.key}
+                          >
+                            <span className={styles.quotaMatrixWindowLabel}>
+                              {matrixRow.label}
                             </span>
-                            <div className={styles.quotaTrack} aria-hidden="true">
-                              <span
-                                className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
-                                style={{ width: `${windowWidth}%` }}
-                              />
+                            <div className={styles.quotaMatrixCells}>
+                              {matrixRow.cells.map((cell) => {
+                                const windowRemaining = cell.window.remainingPercent;
+                                const windowWidth = Math.max(
+                                  0,
+                                  Math.min(100, windowRemaining ?? 0)
+                                );
+                                return (
+                                  <div
+                                    key={cell.window.key}
+                                    className={styles.quotaMatrixCell}
+                                    data-account-quota-matrix-cell={`${matrixRow.key}:${cell.groupLabel}`}
+                                    title={`${cell.groupLabel} ${cell.window.label}: ${formatPercent(
+                                      windowRemaining
+                                    )}`}
+                                  >
+                                    <span
+                                      className={styles.quotaMatrixGroupLabel}
+                                      title={cell.groupLabel}
+                                    >
+                                      {cell.displayLabel}
+                                    </span>
+                                    <div
+                                      className={`${styles.quotaTrack} ${styles.quotaMatrixTrack}`}
+                                      aria-hidden="true"
+                                    >
+                                      <span
+                                        className={`${styles.quotaBar} ${getRemainingPercentBarClass(
+                                          windowRemaining
+                                        )}`}
+                                        style={{ width: `${windowWidth}%` }}
+                                      />
+                                    </div>
+                                    <strong className={styles.quotaMatrixPercent}>
+                                      {windowRemaining !== null
+                                        ? formatPercent(windowRemaining)
+                                        : '-'}
+                                    </strong>
+                                  </div>
+                                );
+                              })}
                             </div>
-                            <strong className={styles.quotaWindowPercent}>
-                              {windowRemaining !== null ? formatPercent(windowRemaining) : '-'}
-                            </strong>
-                            <span
-                              className={styles.quotaResetMeta}
-                              title={resetLabel ? `${t('accounts.col_reset')}: ${resetLabel}` : ''}
-                            >
-                              {resetDisplayLabel || '-'}
-                            </span>
                           </div>
-                        </div>
-                      );
-                    })}
+                        ))}
+                      </div>
+                    ) : (
+                      displayQuotaWindows.map((window) => {
+                        const windowRemaining = window.remainingPercent;
+                        const windowWidth = Math.max(0, Math.min(100, windowRemaining ?? 0));
+                        const resetLabel =
+                          window.resetLabel && window.resetLabel !== '-' ? window.resetLabel : '';
+                        const resetDisplayLabel = resetLabel
+                          ? formatQuotaResetInlineLabel(resetLabel, i18n.language)
+                          : '';
+                        const shortLabel = getQuotaWindowShortLabel(window);
+                        return (
+                          <div
+                            key={window.key}
+                            className={styles.quotaWindowCard}
+                            title={`${window.label}: ${formatPercent(windowRemaining)}`}
+                          >
+                            <div className={styles.quotaWindowPrimaryLine}>
+                              <span className={styles.quotaWindowSummary} title={window.label}>
+                                {shortLabel}
+                              </span>
+                              <div className={styles.quotaTrack} aria-hidden="true">
+                                <span
+                                  className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
+                                  style={{ width: `${windowWidth}%` }}
+                                />
+                              </div>
+                              <strong className={styles.quotaWindowPercent}>
+                                {windowRemaining !== null ? formatPercent(windowRemaining) : '-'}
+                              </strong>
+                              <span
+                                className={styles.quotaResetMeta}
+                                title={
+                                  resetLabel ? `${t('accounts.col_reset')}: ${resetLabel}` : ''
+                                }
+                              >
+                                {resetDisplayLabel || '-'}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
                     {hiddenQuotaWindowCount > 0 ? (
                       <button
                         type="button"

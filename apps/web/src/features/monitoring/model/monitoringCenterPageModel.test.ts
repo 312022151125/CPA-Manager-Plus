@@ -61,6 +61,8 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'xai_quota.empty_data': 'No xAI quota data',
     'xai_quota.monthly_limit': 'Monthly billing limit',
     'xai_quota.monthly_credits': 'Monthly credits',
+    'xai_quota.weekly_credits': 'Weekly credits',
+    'xai_quota.product_usage': 'Product usage',
     'xai_quota.pay_as_you_go_label': 'Pay-as-you-go',
     'xai_quota.on_demand_cap': 'On-demand cap',
     'xai_quota.usage_amount': '{{remaining}} / {{limit}} remaining',
@@ -870,9 +872,16 @@ describe('monitoringCenterPageModel account quota', () => {
     expect(entry.metaLabels).toEqual(['Antigravity Quota']);
     expect(entry.windows).toMatchObject([
       {
-        id: 'agent',
-        label: 'Agent',
+        id: 'agent:daily',
+        label: 'Agent · Daily',
         remainingPercent: 25,
+        resetLabel: '-',
+        usageLabel: null,
+      },
+      {
+        id: 'agent:weekly',
+        label: 'Agent · Weekly',
+        remainingPercent: 50,
         resetLabel: '-',
         usageLabel: null,
       },
@@ -915,6 +924,10 @@ describe('monitoringCenterPageModel account quota', () => {
 
   it('maps xAI billing into account quota entries', async () => {
     vi.mocked(fetchXaiQuota).mockResolvedValue({
+      periodType: 'weekly',
+      usagePercent: 42,
+      periodEnd: '2026-05-08T00:00:00Z',
+      productUsage: [{ product: 'Grok Code Fast', usagePercent: 37 }],
       monthlyLimitCents: 10000,
       usedCents: 12500,
       includedUsedCents: 10000,
@@ -940,6 +953,18 @@ describe('monitoringCenterPageModel account quota', () => {
       providerLabel: 'xAI Quota',
       metaLabels: ['xAI Quota', 'On-demand cap: $50.00'],
       windows: [
+        {
+          id: 'credits-period',
+          label: 'Weekly credits',
+          remainingPercent: 58,
+          usageLabel: null,
+        },
+        {
+          id: 'product-0-Grok Code Fast',
+          label: 'Grok Code Fast',
+          remainingPercent: 63,
+          usageLabel: 'Product usage',
+        },
         {
           id: 'monthly-limit',
           label: 'Monthly credits',

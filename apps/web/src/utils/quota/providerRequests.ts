@@ -67,6 +67,14 @@ export type CodexQuotaData = {
   planType: string | null;
   windows: CodexQuotaWindow[];
   subscriptionActiveUntil: string | null;
+  creditsHasCredits?: boolean | null;
+  creditsUnlimited?: boolean | null;
+  creditsBalance?: string | null;
+  creditsOverageLimitReached?: boolean | null;
+  creditsApproxLocalMessages?: number | null;
+  creditsApproxCloudMessages?: number | null;
+  spendControlReached?: boolean | null;
+  spendControlIndividualLimit?: number | null;
   rateLimitResetCreditsAvailableCount: number | null;
   rateLimitResetCredits: CodexRateLimitResetCredit[];
   rateLimitResetCreditsError: string | null;
@@ -290,6 +298,46 @@ const resolveCodexRateLimitResetCreditsAvailableCount = (
 const resolveCodexSubscriptionActiveUntil = (payload: CodexUsagePayload): string | null =>
   normalizeStringValue(payload.subscription_active_until ?? payload.subscriptionActiveUntil);
 
+const normalizeBooleanValue = (value: unknown): boolean | null => {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
+  }
+  return null;
+};
+
+const resolveCodexCreditsInfo = (payload: CodexUsagePayload) => {
+  const credits = payload.credits;
+  return {
+    creditsHasCredits: normalizeBooleanValue(credits?.has_credits ?? credits?.hasCredits),
+    creditsUnlimited: normalizeBooleanValue(credits?.unlimited),
+    creditsBalance: normalizeStringValue(credits?.balance),
+    creditsOverageLimitReached: normalizeBooleanValue(
+      credits?.overage_limit_reached ?? credits?.overageLimitReached
+    ),
+    creditsApproxLocalMessages: normalizeNumberValue(
+      credits?.approx_local_messages ?? credits?.approxLocalMessages
+    ),
+    creditsApproxCloudMessages: normalizeNumberValue(
+      credits?.approx_cloud_messages ?? credits?.approxCloudMessages
+    ),
+  };
+};
+
+const resolveCodexSpendControlInfo = (payload: CodexUsagePayload) => {
+  const spendControl = payload.spend_control ?? payload.spendControl;
+  return {
+    spendControlReached: normalizeBooleanValue(spendControl?.reached),
+    spendControlIndividualLimit: normalizeNumberValue(
+      spendControl?.individual_limit ?? spendControl?.individualLimit
+    ),
+  };
+};
+
 type CodexResetCreditsData = {
   availableCount: number | null;
   credits: CodexRateLimitResetCredit[];
@@ -389,6 +437,8 @@ export const fetchCodexQuota = async (
     planType,
     windows,
     subscriptionActiveUntil: resolveCodexSubscriptionActiveUntil(payload),
+    ...resolveCodexCreditsInfo(payload),
+    ...resolveCodexSpendControlInfo(payload),
     rateLimitResetCreditsAvailableCount: resolveCodexResetCreditsAvailableCount(
       resetCredits,
       usageResetCreditsAvailableCount
@@ -528,7 +578,9 @@ const resolveClaudeStructuredLimitLabel = (
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')}`,
-    label: modelName ? `Week (${modelName})` : `Limit ${index + 1}`,
+    label: modelName
+      ? t('claude_quota.weekly_scoped_model', { model: modelName })
+      : t('claude_quota.limit_index', { index: index + 1 }),
   };
 };
 

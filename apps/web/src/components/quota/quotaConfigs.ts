@@ -387,6 +387,11 @@ const getCodexSearchText = (
     quota?.creditsHasCredits,
     quota?.creditsUnlimited,
     quota?.creditsBalance,
+    quota?.creditsOverageLimitReached,
+    quota?.creditsApproxLocalMessages,
+    quota?.creditsApproxCloudMessages,
+    quota?.spendControlReached,
+    quota?.spendControlIndividualLimit,
     quota?.rateLimitReachedType,
     quota?.primaryOverSecondaryLimitPercent,
     quota?.observedAtMs,
@@ -483,6 +488,11 @@ const mergeObservedQuotaIntoActive = <TState extends DisplayQuotaState>(
     'creditsHasCredits',
     'creditsUnlimited',
     'creditsBalance',
+    'creditsOverageLimitReached',
+    'creditsApproxLocalMessages',
+    'creditsApproxCloudMessages',
+    'spendControlReached',
+    'spendControlIndividualLimit',
     'rateLimitReachedType',
     'primaryOverSecondaryLimitPercent',
     'observedAtMs',
@@ -812,6 +822,68 @@ const renderCodexWindowInfo = (
   );
 };
 
+const getCodexBooleanLabel = (value: boolean | null | undefined, t: TFunction): string | null => {
+  if (value === undefined || value === null) return null;
+  return value ? t('common.yes') : t('common.no');
+};
+
+const buildCodexDiagnosticRows = (quota: CodexQuotaState, t: TFunction): ReactNode[] => {
+  const { createElement: h } = React;
+  const rows: ReactNode[] = [];
+  const creditsParts = [
+    quota.creditsUnlimited === true
+      ? t('codex_quota.credits_unlimited')
+      : quota.creditsHasCredits === true
+        ? t('codex_quota.credits_available')
+        : quota.creditsHasCredits === false
+          ? t('codex_quota.credits_unavailable')
+          : '',
+    quota.creditsBalance ? `${t('codex_quota.credits_balance')}: ${quota.creditsBalance}` : '',
+    typeof quota.creditsApproxLocalMessages === 'number'
+      ? t('codex_quota.approx_local_messages', { count: quota.creditsApproxLocalMessages })
+      : '',
+    typeof quota.creditsApproxCloudMessages === 'number'
+      ? t('codex_quota.approx_cloud_messages', { count: quota.creditsApproxCloudMessages })
+      : '',
+  ].filter(Boolean);
+
+  if (creditsParts.length > 0) {
+    rows.push(
+      h(
+        'div',
+        { key: 'credits-diagnostics', className: styles.codexPlan },
+        h('span', { className: styles.codexPlanLabel }, t('codex_quota.credits_label')),
+        h('span', { className: styles.codexPlanValue }, creditsParts.join(' · '))
+      )
+    );
+  }
+
+  const spendParts = [
+    getCodexBooleanLabel(quota.spendControlReached, t)
+      ? `${t('codex_quota.spend_control_reached')}: ${getCodexBooleanLabel(quota.spendControlReached, t)}`
+      : '',
+    typeof quota.spendControlIndividualLimit === 'number'
+      ? `${t('codex_quota.spend_control_individual_limit')}: ${quota.spendControlIndividualLimit}`
+      : '',
+    getCodexBooleanLabel(quota.creditsOverageLimitReached, t)
+      ? `${t('codex_quota.credits_overage_reached')}: ${getCodexBooleanLabel(quota.creditsOverageLimitReached, t)}`
+      : '',
+  ].filter(Boolean);
+
+  if (spendParts.length > 0) {
+    rows.push(
+      h(
+        'div',
+        { key: 'spend-diagnostics', className: styles.codexPlan },
+        h('span', { className: styles.codexPlanLabel }, t('codex_quota.spend_control_label')),
+        h('span', { className: styles.codexPlanValue }, spendParts.join(' · '))
+      )
+    );
+  }
+
+  return rows;
+};
+
 const renderCodexItems = (
   quota: CodexQuotaState,
   t: TFunction,
@@ -868,6 +940,8 @@ const renderCodexItems = (
 
     nodes.push(h('div', { key: 'plan', className: styleMap.codexPlan }, ...planNodes));
   }
+
+  nodes.push(...buildCodexDiagnosticRows(quota, t));
 
   if (windows.length === 0) {
     nodes.push(
@@ -1085,6 +1159,14 @@ export const CODEX_CONFIG: QuotaConfig<CodexQuotaState, CodexQuotaData> = {
     windows: data.windows,
     planType: data.planType,
     subscriptionActiveUntil: data.subscriptionActiveUntil,
+    creditsHasCredits: data.creditsHasCredits,
+    creditsUnlimited: data.creditsUnlimited,
+    creditsBalance: data.creditsBalance,
+    creditsOverageLimitReached: data.creditsOverageLimitReached,
+    creditsApproxLocalMessages: data.creditsApproxLocalMessages,
+    creditsApproxCloudMessages: data.creditsApproxCloudMessages,
+    spendControlReached: data.spendControlReached,
+    spendControlIndividualLimit: data.spendControlIndividualLimit,
     rateLimitResetCreditsAvailableCount: data.rateLimitResetCreditsAvailableCount,
     rateLimitResetCredits: data.rateLimitResetCredits,
     rateLimitResetCreditsError: data.rateLimitResetCreditsError,
@@ -1209,6 +1291,62 @@ const formatXaiOnDemandAmount = (billing: XaiBillingSummary): string => {
   return `${formatXaiCurrency(remainingCents)} / ${formatXaiCurrency(billing.onDemandCapCents)}`;
 };
 
+const getXaiRemainingPercent = (usedPercent: number | null | undefined): number | null => {
+  if (usedPercent === null || usedPercent === undefined) return null;
+  const clampedUsed = Math.max(0, Math.min(100, usedPercent));
+  return Math.max(0, Math.min(100, 100 - clampedUsed));
+};
+
+const formatXaiRemainingPercentLabel = (usedPercent: number | null | undefined): string => {
+  const remaining = getXaiRemainingPercent(usedPercent);
+  return remaining === null ? '--' : `${Math.round(remaining)}%`;
+};
+
+const hasXaiMonthlyBillingData = (billing: XaiBillingSummary): boolean =>
+  billing.usedPercent !== null ||
+  billing.monthlyLimitCents !== null ||
+  billing.includedUsedCents !== null ||
+  Boolean(billing.billingPeriodEnd);
+
+const hasXaiPeriodData = (billing: XaiBillingSummary): boolean =>
+  billing.periodType === 'weekly' ||
+  billing.usagePercent !== null ||
+  Boolean(billing.periodEnd) ||
+  (billing.productUsage?.length ?? 0) > 0;
+
+const renderXaiQuotaRow = (
+  key: string,
+  label: string,
+  usedPercent: number | null | undefined,
+  metaNodes: ReactNode[],
+  helpers: QuotaRenderHelpers
+): ReactNode => {
+  const { styles: styleMap, QuotaProgressBar } = helpers;
+  const { createElement: h } = React;
+  const remaining = getXaiRemainingPercent(usedPercent);
+
+  return h(
+    'div',
+    { key, className: styleMap.quotaRow },
+    h(
+      'div',
+      { className: styleMap.quotaRowHeader },
+      h('span', { className: styleMap.quotaModel }, label),
+      h(
+        'div',
+        { className: styleMap.quotaMeta },
+        h('span', { className: styleMap.quotaPercent }, formatXaiRemainingPercentLabel(usedPercent)),
+        ...metaNodes
+      )
+    ),
+    h(QuotaProgressBar, {
+      percent: remaining,
+      highThreshold: QUOTA_PROGRESS_HIGH_THRESHOLD,
+      mediumThreshold: QUOTA_PROGRESS_MEDIUM_THRESHOLD,
+    })
+  );
+};
+
 const XAI_SUPERGROK_LIMIT_CENTS = 15_000;
 const XAI_SUPERGROK_HEAVY_LIMIT_CENTS = 150_000;
 
@@ -1229,7 +1367,7 @@ const renderXaiItems = (
   t: TFunction,
   helpers: QuotaRenderHelpers
 ): ReactNode => {
-  const { styles: styleMap, QuotaProgressBar } = helpers;
+  const { styles: styleMap } = helpers;
   const { createElement: h } = React;
   const billing = quota.billing;
 
@@ -1237,25 +1375,16 @@ const renderXaiItems = (
     return h('div', { className: styleMap.quotaMessage }, t('xai_quota.empty_data'));
   }
 
-  const clampedUsed =
-    billing.usedPercent === null ? null : Math.max(0, Math.min(100, billing.usedPercent));
-  const remaining = clampedUsed === null ? null : Math.max(0, Math.min(100, 100 - clampedUsed));
-  const percentLabel = remaining === null ? '--' : `${Math.round(remaining)}%`;
   const amountLabel = formatXaiRemainingAmount(billing);
   const resetLabel = billing.billingPeriodEnd
     ? formatQuotaResetTime(billing.billingPeriodEnd)
     : t('xai_quota.reset_unknown');
   const onDemandCap = billing.onDemandCapCents ?? 0;
-  const clampedOnDemandUsed =
-    billing.onDemandUsedPercent === null
-      ? null
-      : Math.max(0, Math.min(100, billing.onDemandUsedPercent));
-  const onDemandRemaining =
-    clampedOnDemandUsed === null ? null : Math.max(0, Math.min(100, 100 - clampedOnDemandUsed));
-  const onDemandPercentLabel =
-    onDemandRemaining === null ? '--' : `${Math.round(onDemandRemaining)}%`;
   const onDemandAmountLabel = formatXaiOnDemandAmount(billing);
   const plan = resolveXaiPlan(billing.monthlyLimitCents);
+  const periodResetLabel = billing.periodEnd
+    ? formatQuotaResetTime(billing.periodEnd)
+    : t('xai_quota.reset_unknown');
 
   const nodes: ReactNode[] = [
     plan
@@ -1270,55 +1399,69 @@ const renderXaiItems = (
           )
         )
       : null,
-    onDemandCap > 0
-      ? h(
-          'div',
-          { key: 'pay-as-you-go', className: styleMap.quotaRow },
-          h(
-            'div',
-            { className: styleMap.quotaRowHeader },
-            h('span', { className: styleMap.quotaModel }, t('xai_quota.pay_as_you_go_label')),
-            h(
-              'div',
-              { className: styleMap.quotaMeta },
-              h('span', { className: styleMap.quotaPercent }, onDemandPercentLabel),
-              h('span', { className: styleMap.quotaAmount }, onDemandAmountLabel)
-            )
-          ),
-          h(QuotaProgressBar, {
-            percent: onDemandRemaining,
-            highThreshold: QUOTA_PROGRESS_HIGH_THRESHOLD,
-            mediumThreshold: QUOTA_PROGRESS_MEDIUM_THRESHOLD,
-          })
-        )
-      : h(
-          'div',
-          { key: 'pay-as-you-go', className: styleMap.codexPlan },
-          h('span', { className: styleMap.codexPlanLabel }, t('xai_quota.pay_as_you_go_label')),
-          h('span', { className: styleMap.codexPlanValue }, t('xai_quota.pay_as_you_go_disabled'))
-        ),
-    h(
-      'div',
-      { key: 'billing', className: styleMap.quotaRow },
+  ];
+
+  if (hasXaiPeriodData(billing)) {
+    nodes.push(
+      renderXaiQuotaRow(
+        'credits-period',
+        billing.periodType === 'weekly'
+          ? t('xai_quota.weekly_credits')
+          : t('xai_quota.monthly_credits'),
+        billing.usagePercent,
+        [h('span', { key: 'reset', className: styleMap.quotaReset }, periodResetLabel)],
+        helpers
+      )
+    );
+  }
+
+  billing.productUsage?.forEach((product, index) => {
+    nodes.push(
+      renderXaiQuotaRow(
+        `product-${index}-${product.product}`,
+        product.product,
+        product.usagePercent,
+        [h('span', { key: 'scope', className: styleMap.quotaAmount }, t('xai_quota.product_usage'))],
+        helpers
+      )
+    );
+  });
+
+  if (hasXaiMonthlyBillingData(billing)) {
+    nodes.push(
+      renderXaiQuotaRow(
+        'billing',
+        t('xai_quota.monthly_credits'),
+        billing.usedPercent,
+        [
+          h('span', { key: 'amount', className: styleMap.quotaAmount }, amountLabel),
+          h('span', { key: 'reset', className: styleMap.quotaReset }, resetLabel),
+        ],
+        helpers
+      )
+    );
+  }
+
+  if (onDemandCap > 0) {
+    nodes.push(
+      renderXaiQuotaRow(
+        'pay-as-you-go',
+        t('xai_quota.pay_as_you_go_label'),
+        billing.onDemandUsedPercent,
+        [h('span', { key: 'amount', className: styleMap.quotaAmount }, onDemandAmountLabel)],
+        helpers
+      )
+    );
+  } else if (billing.onDemandCapCents !== null) {
+    nodes.push(
       h(
         'div',
-        { className: styleMap.quotaRowHeader },
-        h('span', { className: styleMap.quotaModel }, t('xai_quota.monthly_credits')),
-        h(
-          'div',
-          { className: styleMap.quotaMeta },
-          h('span', { className: styleMap.quotaPercent }, percentLabel),
-          h('span', { className: styleMap.quotaAmount }, amountLabel),
-          h('span', { className: styleMap.quotaReset }, resetLabel)
-        )
-      ),
-      h(QuotaProgressBar, {
-        percent: remaining,
-        highThreshold: QUOTA_PROGRESS_HIGH_THRESHOLD,
-        mediumThreshold: QUOTA_PROGRESS_MEDIUM_THRESHOLD,
-      })
-    ),
-  ];
+        { key: 'pay-as-you-go', className: styleMap.codexPlan },
+        h('span', { className: styleMap.codexPlanLabel }, t('xai_quota.pay_as_you_go_label')),
+        h('span', { className: styleMap.codexPlanValue }, t('xai_quota.pay_as_you_go_disabled'))
+      )
+    );
+  }
 
   return h(React.Fragment, null, ...nodes);
 };

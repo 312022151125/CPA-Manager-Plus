@@ -370,6 +370,36 @@ describe('accountRows', () => {
     expect(rows[0].quota.status).toBe('low');
   });
 
+  it('uses xAI product usage when period usage is not available', () => {
+    const rows = buildAccountRows([{ name: 'xai.json', type: 'xai' }], {
+      ...emptyStores(),
+      xaiQuota: {
+        'xai.json': {
+          status: 'success',
+          billing: {
+            periodType: 'weekly',
+            usagePercent: null,
+            periodEnd: '2026-07-08T00:00:00Z',
+            productUsage: [{ product: 'Grok Code Fast', usagePercent: 100 }],
+            monthlyLimitCents: 10_000,
+            usedCents: 2_000,
+            includedUsedCents: 2_000,
+            onDemandCapCents: null,
+            onDemandUsedCents: null,
+            onDemandUsedPercent: null,
+            billingPeriodEnd: '2026-07-31T00:00:00Z',
+            usedPercent: 20,
+          },
+        },
+      },
+    });
+
+    expect(rows[0].quota.remainingPercent).toBe(0);
+    expect(rows[0].quota.usedPercent).toBe(100);
+    expect(rows[0].quota.resetLabel).toBe('2026-07-08T00:00:00Z');
+    expect(rows[0].quota.status).toBe('exhausted');
+  });
+
   it('keeps cached Codex quota source while appending header diagnostics', () => {
     const rows = buildAccountRows(
       [

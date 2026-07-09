@@ -889,6 +889,181 @@ describe('AccountsPage replacement flows', () => {
     expect(text).toContain('PAYG');
   });
 
+  it('renders Antigravity Pro model groups as a two-row quota matrix', async () => {
+    mocks.files = [
+      {
+        name: 'antigravity-pro-matrix.json',
+        type: 'antigravity',
+        provider: 'antigravity',
+        authIndex: 'antigravity-pro-matrix-04',
+        account: 'AG Pro Matrix',
+        label: 'Antigravity Pro Matrix',
+        priority: 0,
+        disabled: false,
+      } as AuthFileItem,
+    ];
+    mocks.quotaState.antigravityQuota = {
+      'antigravity-pro-matrix.json': {
+        status: 'success',
+        subscription: { plan: 'pro', tierName: 'Pro', tierId: 'g1-pro' },
+        groups: [
+          {
+            id: 'gemini-models',
+            label: 'Gemini Models',
+            description: 'Models within this group: Gemini Flash, Gemini Pro',
+            models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+            buckets: [
+              {
+                id: 'gemini-5h',
+                label: 'Five Hour Limit',
+                window: '5h',
+                remainingFraction: 0.96,
+                resetTime: '2026-07-09T12:00:00Z',
+              },
+              {
+                id: 'gemini-weekly',
+                label: 'Weekly Limit',
+                window: 'weekly',
+                remainingFraction: 0.04,
+                resetTime: '2026-07-15T12:00:00Z',
+              },
+            ],
+          },
+          {
+            id: 'claude-gpt-models',
+            label: 'Claude and GPT models',
+            description: 'Models within this group: Claude Sonnet, GPT-OSS',
+            models: ['claude-sonnet-4-5', 'gpt-oss-120b-medium'],
+            buckets: [
+              {
+                id: '3p-5h',
+                label: 'Five Hour Limit',
+                window: '5h',
+                remainingFraction: 0.11,
+                resetTime: '2026-07-09T11:00:00Z',
+              },
+              {
+                id: '3p-weekly',
+                label: 'Weekly Limit',
+                window: 'weekly',
+                remainingFraction: 0.19,
+                resetTime: '2026-07-13T12:00:00Z',
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const renderer = await renderAccountsPage();
+    const matrices = renderer.root.findAll(
+      (node) => typeof node.props['data-account-quota-matrix'] === 'string'
+    );
+    expect(matrices).toHaveLength(1);
+    const matrix = matrices[0];
+    const matrixRows = matrix.findAll(
+      (node) => typeof node.props['data-account-quota-matrix-row'] === 'string'
+    );
+    const matrixCells = matrix.findAll(
+      (node) => typeof node.props['data-account-quota-matrix-cell'] === 'string'
+    );
+
+    expect(matrixRows.map((node) => node.props['data-account-quota-matrix-row'])).toEqual([
+      'five_hour',
+      'weekly',
+    ]);
+    expect(matrixCells).toHaveLength(4);
+    expect(readText(matrix)).toContain('5H');
+    expect(readText(matrix)).toContain('7D');
+    expect(readText(matrix)).toContain('Claude');
+    expect(readText(matrix)).toContain('Gemini');
+    expect(readText(matrix)).toContain('11%');
+    expect(readText(matrix)).toContain('96%');
+    expect(readText(matrix)).toContain('19%');
+    expect(readText(matrix)).toContain('4%');
+    expect(readText(matrix)).not.toContain('Claude/GPT');
+    expect(readText(matrix)).not.toContain('accounts.quota_more_windows');
+  });
+
+  it('renders Antigravity Free weekly groups as a single-row quota matrix', async () => {
+    mocks.files = [
+      {
+        name: 'antigravity-free-weekly.json',
+        type: 'antigravity',
+        provider: 'antigravity',
+        authIndex: 'antigravity-free-weekly-05',
+        account: 'AG Free Seat',
+        label: 'Antigravity Free Weekly',
+        priority: 0,
+        disabled: false,
+      } as AuthFileItem,
+    ];
+    mocks.quotaState.antigravityQuota = {
+      'antigravity-free-weekly.json': {
+        status: 'success',
+        subscription: { plan: 'free', tierName: 'Free', tierId: 'g1-free' },
+        groups: [
+          {
+            id: 'gemini-models',
+            label: 'Gemini Models',
+            description: 'Models within this group: Gemini Flash, Gemini Pro',
+            models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+            buckets: [
+              {
+                id: 'gemini-weekly',
+                label: 'Weekly Limit',
+                window: 'weekly',
+                remainingFraction: 0.76,
+                resetTime: '2026-07-15T12:00:00Z',
+              },
+            ],
+          },
+          {
+            id: 'claude-gpt-models',
+            label: 'Claude and GPT models',
+            description: 'Models within this group: Claude Sonnet, GPT-OSS',
+            models: ['claude-sonnet-4-5', 'gpt-oss-120b-medium'],
+            buckets: [
+              {
+                id: '3p-weekly',
+                label: 'Weekly Limit',
+                window: 'weekly',
+                remainingFraction: 0.31,
+                resetTime: '2026-07-13T12:00:00Z',
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const renderer = await renderAccountsPage();
+    const matrices = renderer.root.findAll(
+      (node) => typeof node.props['data-account-quota-matrix'] === 'string'
+    );
+    expect(matrices).toHaveLength(1);
+    const matrix = matrices[0];
+    const matrixRows = matrix.findAll(
+      (node) => typeof node.props['data-account-quota-matrix-row'] === 'string'
+    );
+    const matrixCells = matrix.findAll(
+      (node) => typeof node.props['data-account-quota-matrix-cell'] === 'string'
+    );
+
+    expect(matrixRows.map((node) => node.props['data-account-quota-matrix-row'])).toEqual([
+      'weekly',
+    ]);
+    expect(matrixCells).toHaveLength(2);
+    expect(readText(matrix)).toContain('7D');
+    expect(readText(matrix)).toContain('Claude');
+    expect(readText(matrix)).toContain('Gemini');
+    expect(readText(matrix)).toContain('31%');
+    expect(readText(matrix)).toContain('76%');
+    expect(readText(matrix)).not.toContain('5H');
+    expect(readText(matrix)).not.toContain('Claude/GPT');
+    expect(readText(matrix)).not.toContain('accounts.quota_more_windows');
+  });
+
   it('keeps the accounts view in card mode without table controls', async () => {
     mocks.files = [
       {

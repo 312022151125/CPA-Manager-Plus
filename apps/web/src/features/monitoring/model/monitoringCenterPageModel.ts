@@ -1010,31 +1010,15 @@ const buildClaudeAccountQuotaWindows = (
 const buildAntigravityAccountQuotaWindows = (
   groups: AntigravityQuotaGroup[]
 ): AccountQuotaWindow[] =>
-  groups
-    .map((group): AccountQuotaWindow | null => {
-      if (group.buckets.length === 0) return null;
-      const remainingFraction = Math.min(
-        ...group.buckets.map((bucket) => bucket.remainingFraction)
-      );
-      const resetTime = group.buckets.reduce<string | undefined>((current, bucket) => {
-        if (!current) return bucket.resetTime;
-        if (!bucket.resetTime) return current;
-        const currentTime = new Date(current).getTime();
-        const nextTime = new Date(bucket.resetTime).getTime();
-        if (Number.isNaN(currentTime)) return bucket.resetTime;
-        if (Number.isNaN(nextTime)) return current;
-        return currentTime <= nextTime ? current : bucket.resetTime;
-      }, undefined);
-
-      return {
-        id: group.id,
-        label: group.label,
-        remainingPercent: clampRemainingPercent(remainingFraction * 100),
-        resetLabel: formatQuotaResetTime(resetTime),
-        usageLabel: null,
-      };
-    })
-    .filter((window): window is AccountQuotaWindow => window !== null);
+  groups.flatMap((group) =>
+    group.buckets.map((bucket) => ({
+      id: `${group.id}:${bucket.id}`,
+      label: `${group.label} · ${bucket.label}`,
+      remainingPercent: clampRemainingPercent(bucket.remainingFraction * 100),
+      resetLabel: formatQuotaResetTime(bucket.resetTime),
+      usageLabel: bucket.description ?? group.description ?? null,
+    }))
+  );
 
 const buildKimiAccountQuotaWindows = (rows: KimiQuotaRow[], t: TFunction): AccountQuotaWindow[] =>
   rows.map((row) => {
@@ -1069,12 +1053,47 @@ const buildXaiAccountQuotaWindows = (
   billing: XaiBillingSummary,
   t: TFunction
 ): AccountQuotaWindow[] => {
-  const remainingCents =
-    billing.monthlyLimitCents !== null && billing.includedUsedCents !== null
-      ? Math.max(0, billing.monthlyLimitCents - billing.includedUsedCents)
-      : null;
-  const windows: AccountQuotaWindow[] = [
-    {
+  const windows: AccountQuotaWindow[] = [];
+
+  if (
+    billing.periodType === 'weekly' ||
+    billing.usagePercent !== null ||
+    billing.periodEnd ||
+    (billing.productUsage?.length ?? 0) > 0
+  ) {
+    windows.push({
+      id: 'credits-period',
+      label:
+        billing.periodType === 'weekly'
+          ? t('xai_quota.weekly_credits')
+          : t('xai_quota.monthly_credits'),
+      remainingPercent: buildRemainingFromUsedPercent(billing.usagePercent),
+      resetLabel: billing.periodEnd ? formatQuotaResetTime(billing.periodEnd) : '-',
+      usageLabel: null,
+    });
+  }
+
+  billing.productUsage?.forEach((product, index) => {
+    windows.push({
+      id: `product-${index}-${product.product}`,
+      label: product.product,
+      remainingPercent: buildRemainingFromUsedPercent(product.usagePercent),
+      resetLabel: billing.periodEnd ? formatQuotaResetTime(billing.periodEnd) : '-',
+      usageLabel: t('xai_quota.product_usage'),
+    });
+  });
+
+  if (
+    billing.usedPercent !== null ||
+    billing.monthlyLimitCents !== null ||
+    billing.includedUsedCents !== null ||
+    billing.billingPeriodEnd
+  ) {
+    const remainingCents =
+      billing.monthlyLimitCents !== null && billing.includedUsedCents !== null
+        ? Math.max(0, billing.monthlyLimitCents - billing.includedUsedCents)
+        : null;
+    windows.push({
       id: 'monthly-limit',
       label: t('xai_quota.monthly_credits'),
       remainingPercent: buildRemainingFromUsedPercent(billing.usedPercent),
@@ -1083,8 +1102,8 @@ const buildXaiAccountQuotaWindows = (
         remaining: formatXaiCurrency(remainingCents),
         limit: formatXaiCurrency(billing.monthlyLimitCents),
       }),
-    },
-  ];
+    });
+  }
 
   if (billing.onDemandCapCents !== null && billing.onDemandCapCents > 0) {
     const onDemandRemainingCents =

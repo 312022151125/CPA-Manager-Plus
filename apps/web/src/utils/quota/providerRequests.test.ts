@@ -57,6 +57,18 @@ describe('fetchCodexQuota', () => {
           rate_limit_reset_credits: {
             available_count: 1,
           },
+          credits: {
+            has_credits: true,
+            unlimited: false,
+            balance: '120',
+            overage_limit_reached: false,
+            approx_local_messages: 24,
+            approx_cloud_messages: 12,
+          },
+          spend_control: {
+            reached: false,
+            individual_limit: 200,
+          },
         },
       })
       .mockResolvedValueOnce({
@@ -113,6 +125,16 @@ describe('fetchCodexQuota', () => {
     expect(result.rateLimitResetCreditsAvailableCount).toBe(2);
     expect(result.rateLimitResetCredits).toHaveLength(1);
     expect(result.rateLimitResetCreditsError).toBeNull();
+    expect(result).toMatchObject({
+      creditsHasCredits: true,
+      creditsUnlimited: false,
+      creditsBalance: '120',
+      creditsOverageLimitReached: false,
+      creditsApproxLocalMessages: 24,
+      creditsApproxCloudMessages: 12,
+      spendControlReached: false,
+      spendControlIndividualLimit: 200,
+    });
   });
 
   it('keeps usage quota data when reset credit details fail', async () => {

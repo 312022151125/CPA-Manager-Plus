@@ -344,6 +344,11 @@ export interface CodexQuotaState {
   creditsHasCredits?: boolean | null;
   creditsUnlimited?: boolean | null;
   creditsBalance?: string | null;
+  creditsOverageLimitReached?: boolean | null;
+  creditsApproxLocalMessages?: number | null;
+  creditsApproxCloudMessages?: number | null;
+  spendControlReached?: boolean | null;
+  spendControlIndividualLimit?: number | null;
   rateLimitReachedType?: string | null;
   primaryOverSecondaryLimitPercent?: number | null;
   subscriptionActiveUntil?: string | null;

@@ -180,7 +180,7 @@ describe('DemoPage', () => {
     );
 
     expect(authFiles.total).toBe(authFiles.files.length);
-    expect(authFiles.files.length).toBe(15);
+    expect(authFiles.files.length).toBe(17);
     expect(visibleAccountText).not.toMatch(/\bui[-.]/i);
     expect(
       authFiles.files.every((file) =>
@@ -222,7 +222,9 @@ describe('DemoPage', () => {
       [
         'antigravity-daily-exhausted.json',
         'antigravity-builder.json',
+        'antigravity-free-weekly.json',
         'antigravity-monthly-low.json',
+        'antigravity-pro-matrix.json',
         'claude-extra-usage-03.json',
         'claude-research-02.json',
         'claude-team-01.json',
@@ -260,6 +262,19 @@ describe('DemoPage', () => {
       quota.antigravityQuota['antigravity-monthly-low.json']?.groups[1]?.buckets[1]
         ?.remainingFraction
     ).toBe(0.08);
+    expect(quota.antigravityQuota['antigravity-free-weekly.json']?.subscription?.plan).toBe('free');
+    expect(quota.antigravityQuota['antigravity-free-weekly.json']?.groups).toHaveLength(2);
+    expect(
+      quota.antigravityQuota['antigravity-free-weekly.json']?.groups.every(
+        (group) => group.buckets.length === 1 && group.buckets[0]?.window === 'weekly'
+      )
+    ).toBe(true);
+    expect(
+      quota.antigravityQuota['antigravity-pro-matrix.json']?.groups[1]?.buckets[0]
+    ).toMatchObject({
+      window: '5h',
+      remainingFraction: 0.11,
+    });
     expect(quota.kimiQuota['kimi-coding.json']?.rows[0]?.used).toBe(214);
     expect(quota.kimiQuota['kimi-healthy.json']?.rows[0]?.used).toBe(320);
     expect(quota.kimiQuota['kimi-exhausted.json']?.rows[1]?.used).toBe(200);

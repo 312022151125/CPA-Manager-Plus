@@ -165,7 +165,7 @@ const formatXaiPaygAmount = (billing: XaiBillingSummary, t: TFunction): string =
 };
 
 const getXaiPeriodWindowLabel = (billing: XaiBillingSummary, t: TFunction): string => {
-  if (billing.periodType === 'weekly') return t('accounts.quota_rate_limit_type_weekly');
+  if (billing.periodType === 'weekly') return t('xai_quota.weekly_credits');
   if (billing.periodType === 'monthly') return t('xai_quota.monthly_credits');
   return t('xai_quota.monthly_credits');
 };
@@ -545,6 +545,28 @@ const buildXaiQuotaDisplayWindows = (
       })
     );
   }
+
+  billing.productUsage?.forEach((product, index) => {
+    const productUsedPercent =
+      typeof product.usagePercent === 'number' && Number.isFinite(product.usagePercent)
+        ? clampDisplayPercent(product.usagePercent)
+        : null;
+    windows.push(
+      buildAccountQuotaDisplayWindow({
+        key: `product-${index}-${product.product
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')}`,
+        label: product.product,
+        kind: 'product',
+        remainingPercent: remainingPercentFromUsed(productUsedPercent),
+        usedPercent: productUsedPercent,
+        resetLabel: billing.periodEnd ? formatDisplayResetTime(billing.periodEnd) : '-',
+        source: 'xai',
+        nowMs: options.nowMs,
+      })
+    );
+  });
 
   return windows;
 };
