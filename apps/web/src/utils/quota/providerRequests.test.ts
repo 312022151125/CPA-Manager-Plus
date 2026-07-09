@@ -223,6 +223,55 @@ describe('fetchClaudeQuota', () => {
       usedPercent: 12,
     });
   });
+
+  it('prefers structured Claude limits when present', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          five_hour: null,
+          seven_day: null,
+          limits: [
+            {
+              kind: 'session',
+              percent: 35,
+              resets_at: '2026-07-01T10:00:00Z',
+            },
+            {
+              kind: 'weekly_all',
+              percent: 14,
+              resets_at: '2026-07-07T10:00:00Z',
+            },
+            {
+              kind: 'weekly_scoped',
+              percent: 39,
+              resets_at: '2026-07-06T10:00:00Z',
+              scope: { model: { display_name: 'Sonnet' } },
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows.map((window) => window.id)).toEqual([
+      'five-hour',
+      'seven-day',
+      'seven-day-sonnet',
+    ]);
+    expect(result.windows.map((window) => window.usedPercent)).toEqual([35, 14, 39]);
+  });
 });
 
 describe('buildXaiBillingSummary', () => {
@@ -262,6 +311,59 @@ describe('buildXaiBillingSummary', () => {
       usedPercent: 100,
       onDemandUsedPercent: 50,
     });
+  });
+
+  it('normalizes xAI weekly credits payloads', () => {
+    const summary = buildXaiBillingSummary({
+      currentPeriod: {
+        type: 'USAGE_PERIOD_TYPE_WEEKLY',
+        start: '2026-07-01T00:00:00Z',
+        end: '2026-07-08T00:00:00Z',
+      },
+      creditUsagePercent: '42',
+      productUsage: [
+        { product: 'Grok Code Fast', usagePercent: '37' },
+        { product: 'Grok Code Thinking', usage_percent: 52 },
+      ],
+    });
+
+    expect(summary).toMatchObject({
+      periodType: 'weekly',
+      usagePercent: 42,
+      periodStart: '2026-07-01T00:00:00Z',
+      periodEnd: '2026-07-08T00:00:00Z',
+      productUsage: [
+        { product: 'Grok Code Fast', usagePercent: 37 },
+        { product: 'Grok Code Thinking', usagePercent: 52 },
+      ],
+    });
+  });
+
+  it('normalizes xAI RPC billing cycle and nested usage payloads', () => {
+    const summary = buildXaiBillingSummary({
+      billingCycle: {
+        billingPeriodStart: '2026-05-01T00:00:00Z',
+        billingPeriodEnd: '2026-06-01T00:00:00Z',
+      },
+      monthlyLimit: { val: 99900 },
+      onDemandCap: { val: 0 },
+      usage: {
+        includedUsed: { val: 12345 },
+        onDemandUsed: { val: 0 },
+        totalUsed: { val: 12345 },
+      },
+    });
+
+    expect(summary).toMatchObject({
+      periodType: 'monthly',
+      monthlyLimitCents: 99900,
+      usedCents: 12345,
+      includedUsedCents: 12345,
+      onDemandUsedCents: 0,
+      billingPeriodStart: '2026-05-01T00:00:00Z',
+      billingPeriodEnd: '2026-06-01T00:00:00Z',
+    });
+    expect(summary?.usedPercent).toBeCloseTo(12.36, 2);
   });
 });
 

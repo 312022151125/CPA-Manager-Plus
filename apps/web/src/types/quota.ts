@@ -220,6 +220,21 @@ export interface ClaudeUsageWindow {
   resets_at: string;
 }
 
+export interface ClaudeStructuredLimit {
+  kind?: string;
+  percent?: number | string | null;
+  utilization?: number | string | null;
+  resets_at?: string;
+  reset_at?: string;
+  scope?: {
+    model?: {
+      display_name?: string;
+      displayName?: string;
+      name?: string;
+    } | null;
+  } | null;
+}
+
 export interface ClaudeExtraUsage {
   is_enabled: boolean;
   monthly_limit: number;
@@ -235,6 +250,7 @@ export interface ClaudeUsagePayload {
   seven_day_sonnet?: ClaudeUsageWindow | null;
   seven_day_cowork?: ClaudeUsageWindow | null;
   iguana_necktie?: ClaudeUsageWindow | null;
+  limits?: ClaudeStructuredLimit[] | null;
   extra_usage?: ClaudeExtraUsage | null;
 }
 
@@ -351,22 +367,22 @@ export interface CodexQuotaState {
 
 // Kimi API payload types
 export interface KimiUsageDetail {
-  used?: number;
-  limit?: number;
-  remaining?: number;
+  used?: number | string;
+  limit?: number | string;
+  remaining?: number | string;
   name?: string;
   title?: string;
   resetAt?: string;
   reset_at?: string;
   resetTime?: string;
   reset_time?: string;
-  resetIn?: number;
-  reset_in?: number;
-  ttl?: number;
+  resetIn?: number | string;
+  reset_in?: number | string;
+  ttl?: number | string;
 }
 
 export interface KimiLimitWindow {
-  duration?: number;
+  duration?: number | string;
   timeUnit?: string;
 }
 
@@ -376,21 +392,28 @@ export interface KimiLimitItem {
   scope?: string;
   detail?: KimiUsageDetail;
   window?: KimiLimitWindow;
-  used?: number;
-  limit?: number;
-  remaining?: number;
-  duration?: number;
+  used?: number | string;
+  limit?: number | string;
+  remaining?: number | string;
+  duration?: number | string;
   timeUnit?: string;
   resetAt?: string;
   reset_at?: string;
-  resetIn?: number;
-  reset_in?: number;
-  ttl?: number;
+  resetIn?: number | string;
+  reset_in?: number | string;
+  ttl?: number | string;
+}
+
+export interface KimiUsageEntry {
+  scope?: string;
+  detail?: KimiUsageDetail;
+  limits?: KimiLimitItem[];
 }
 
 export interface KimiUsagePayload {
   usage?: KimiUsageDetail;
   limits?: KimiLimitItem[];
+  usages?: KimiUsageEntry[];
 }
 
 export interface KimiQuotaRow {
@@ -415,23 +438,94 @@ export interface XaiBillingCent {
   val?: number | string;
 }
 
-export interface XaiBillingConfig {
-  monthlyLimit?: XaiBillingCent | number | string | null;
-  monthly_limit?: XaiBillingCent | number | string | null;
-  used?: XaiBillingCent | number | string | null;
-  onDemandCap?: XaiBillingCent | number | string | null;
-  on_demand_cap?: XaiBillingCent | number | string | null;
+export type XaiBillingPeriodType = 'weekly' | 'monthly' | 'unknown';
+
+export interface XaiBillingPeriod {
+  type?: string;
+  start?: string;
+  end?: string;
+}
+
+export interface XaiProductUsage {
+  product?: string;
+  usagePercent?: number | string | null;
+  usage_percent?: number | string | null;
+}
+
+export interface XaiProductUsageSummary {
+  product: string;
+  usagePercent: number | null;
+}
+
+export interface XaiBillingCycle {
   billingPeriodStart?: string;
   billing_period_start?: string;
   billingPeriodEnd?: string;
   billing_period_end?: string;
 }
 
+export interface XaiBillingUsage {
+  includedUsed?: XaiBillingCent | number | string | null;
+  included_used?: XaiBillingCent | number | string | null;
+  onDemandUsed?: XaiBillingCent | number | string | null;
+  on_demand_used?: XaiBillingCent | number | string | null;
+  totalUsed?: XaiBillingCent | number | string | null;
+  total_used?: XaiBillingCent | number | string | null;
+}
+
+export interface XaiBillingConfig {
+  currentPeriod?: XaiBillingPeriod | null;
+  current_period?: XaiBillingPeriod | null;
+  creditUsagePercent?: number | string | null;
+  credit_usage_percent?: number | string | null;
+  productUsage?: XaiProductUsage[] | null;
+  product_usage?: XaiProductUsage[] | null;
+  monthlyLimit?: XaiBillingCent | number | string | null;
+  monthly_limit?: XaiBillingCent | number | string | null;
+  used?: XaiBillingCent | number | string | null;
+  onDemandCap?: XaiBillingCent | number | string | null;
+  on_demand_cap?: XaiBillingCent | number | string | null;
+  onDemandUsed?: XaiBillingCent | number | string | null;
+  on_demand_used?: XaiBillingCent | number | string | null;
+  billingPeriodStart?: string;
+  billing_period_start?: string;
+  billingPeriodEnd?: string;
+  billing_period_end?: string;
+  billingCycle?: XaiBillingCycle | null;
+  billing_cycle?: XaiBillingCycle | null;
+  usage?: XaiBillingUsage | null;
+}
+
 export interface XaiBillingPayload {
   config?: XaiBillingConfig | null;
+  currentPeriod?: XaiBillingPeriod | null;
+  current_period?: XaiBillingPeriod | null;
+  creditUsagePercent?: number | string | null;
+  credit_usage_percent?: number | string | null;
+  productUsage?: XaiProductUsage[] | null;
+  product_usage?: XaiProductUsage[] | null;
+  monthlyLimit?: XaiBillingCent | number | string | null;
+  monthly_limit?: XaiBillingCent | number | string | null;
+  used?: XaiBillingCent | number | string | null;
+  onDemandCap?: XaiBillingCent | number | string | null;
+  on_demand_cap?: XaiBillingCent | number | string | null;
+  onDemandUsed?: XaiBillingCent | number | string | null;
+  on_demand_used?: XaiBillingCent | number | string | null;
+  billingPeriodStart?: string;
+  billing_period_start?: string;
+  billingPeriodEnd?: string;
+  billing_period_end?: string;
+  billingCycle?: XaiBillingCycle | null;
+  billing_cycle?: XaiBillingCycle | null;
+  usage?: XaiBillingUsage | null;
 }
 
 export interface XaiBillingSummary {
+  periodType?: XaiBillingPeriodType;
+  usagePercent?: number | null;
+  periodStart?: string;
+  periodEnd?: string;
+  productUsage?: XaiProductUsageSummary[];
   monthlyLimitCents: number | null;
   usedCents: number | null;
   includedUsedCents: number | null;

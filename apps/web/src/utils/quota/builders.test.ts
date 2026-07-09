@@ -128,6 +128,7 @@ describe('buildKimiQuotaRows', () => {
         { window: { duration: 1, timeUnit: 'HOUR' }, detail: { used: 1, limit: 10 } },
         { window: { duration: 7, timeUnit: 'DAYS' }, detail: { used: 1, limit: 10 } },
         { window: { duration: 1, timeUnit: 'DAY' }, detail: { used: 1, limit: 10 } },
+        { window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' }, detail: { used: 1, limit: 10 } },
         { window: { duration: 90, timeUnit: '' }, detail: { used: 1, limit: 10 } },
       ],
     });
@@ -141,7 +142,51 @@ describe('buildKimiQuotaRows', () => {
       '1h',
       '7d',
       '1d',
+      '5h',
       '90s',
+    ]);
+  });
+
+  it('normalizes Kimi web fallback usages wrapper', () => {
+    const rows = buildKimiQuotaRows({
+      usages: [
+        {
+          scope: 'FEATURE_CODING',
+          detail: {
+            limit: '2048',
+            used: '214',
+            remaining: '1834',
+            resetTime: '2026-01-09T15:23:13.716839300Z',
+          },
+          limits: [
+            {
+              window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' },
+              detail: {
+                limit: '200',
+                used: '139',
+                remaining: '61',
+                resetTime: '2026-01-06T13:33:02.717479433Z',
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        id: 'usage-0-summary',
+        labelKey: 'kimi_quota.weekly_limit',
+        used: 214,
+        limit: 2048,
+      }),
+      expect.objectContaining({
+        id: 'usage-0-limit-0',
+        labelKey: 'kimi_quota.limit_window',
+        labelParams: { duration: '5h' },
+        used: 139,
+        limit: 200,
+      }),
     ]);
   });
 });

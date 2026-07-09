@@ -13,6 +13,9 @@ import type {
   CodexUsagePayload,
   KimiQuotaRow,
   XaiBillingConfig,
+  XaiBillingPayload,
+  XaiBillingPeriodType,
+  XaiProductUsageSummary,
   XaiBillingSummary,
 } from '@/types';
 import { apiCallApi, getApiCallErrorMessage } from '@/services/api/apiCall';
@@ -453,6 +456,9 @@ const buildClaudeQuotaWindows = (
   payload: ClaudeUsagePayload,
   t: TFunction
 ): ClaudeQuotaWindow[] => {
+  const structuredWindows = buildClaudeStructuredQuotaWindows(payload, t);
+  if (structuredWindows.length > 0) return structuredWindows;
+
   const windows: ClaudeQuotaWindow[] = [];
 
   for (const { key, id, labelKey } of CLAUDE_USAGE_WINDOW_KEYS) {
@@ -471,6 +477,80 @@ const buildClaudeQuotaWindows = (
   }
 
   return windows;
+};
+
+const resolveClaudeStructuredLimitLabel = (
+  limit: NonNullable<ClaudeUsagePayload['limits']>[number],
+  t: TFunction,
+  index: number
+): Pick<ClaudeQuotaWindow, 'id' | 'label' | 'labelKey'> => {
+  const kind = normalizeStringValue(limit.kind)?.toLowerCase();
+  if (kind === 'session') {
+    return {
+      id: 'five-hour',
+      label: t('claude_quota.five_hour'),
+      labelKey: 'claude_quota.five_hour',
+    };
+  }
+  if (kind === 'weekly_all') {
+    return {
+      id: 'seven-day',
+      label: t('claude_quota.seven_day'),
+      labelKey: 'claude_quota.seven_day',
+    };
+  }
+
+  const modelName =
+    normalizeStringValue(
+      limit.scope?.model?.display_name ??
+        limit.scope?.model?.displayName ??
+        limit.scope?.model?.name
+    ) ?? null;
+  const normalizedModelName = modelName?.toLowerCase() ?? '';
+  if (normalizedModelName.includes('opus')) {
+    return {
+      id: 'seven-day-opus',
+      label: t('claude_quota.seven_day_opus'),
+      labelKey: 'claude_quota.seven_day_opus',
+    };
+  }
+  if (normalizedModelName.includes('sonnet')) {
+    return {
+      id: 'seven-day-sonnet',
+      label: t('claude_quota.seven_day_sonnet'),
+      labelKey: 'claude_quota.seven_day_sonnet',
+    };
+  }
+
+  const idSuffix = normalizeStringValue(kind) ?? modelName ?? `limit-${index + 1}`;
+  return {
+    id: `structured-${idSuffix
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')}`,
+    label: modelName ? `Week (${modelName})` : `Limit ${index + 1}`,
+  };
+};
+
+const buildClaudeStructuredQuotaWindows = (
+  payload: ClaudeUsagePayload,
+  t: TFunction
+): ClaudeQuotaWindow[] => {
+  if (!Array.isArray(payload.limits)) return [];
+
+  return payload.limits
+    .map((limit, index): ClaudeQuotaWindow | null => {
+      if (!limit || typeof limit !== 'object') return null;
+      const usedPercent = normalizeNumberValue(limit.percent ?? limit.utilization);
+      const resetAt = normalizeStringValue(limit.resets_at ?? limit.reset_at);
+      if (usedPercent === null && !resetAt) return null;
+      return {
+        ...resolveClaudeStructuredLimitLabel(limit, t, index),
+        usedPercent,
+        resetLabel: formatQuotaResetTime(resetAt ?? undefined),
+      };
+    })
+    .filter((window): window is ClaudeQuotaWindow => window !== null);
 };
 
 export const fetchClaudeQuota = async (
@@ -552,7 +632,7 @@ export const fetchKimiQuota = async (file: AuthFileItem, t: TFunction): Promise<
   return buildKimiQuotaRows(payload);
 };
 
-const normalizeXaiCentValue = (value: XaiBillingConfig['monthlyLimit']): number | null => {
+const normalizeXaiCentValue = (value: unknown): number | null => {
   if (value === undefined || value === null) return null;
   if (typeof value === 'object' && !Array.isArray(value)) {
     return normalizeNumberValue((value as { val?: unknown }).val);
@@ -560,38 +640,118 @@ const normalizeXaiCentValue = (value: XaiBillingConfig['monthlyLimit']): number 
   return normalizeNumberValue(value);
 };
 
+const resolveXaiBillingConfig = (payload: XaiBillingPayload | null): XaiBillingConfig | null => {
+  if (!payload || typeof payload !== 'object') return null;
+  return payload.config ?? (payload as XaiBillingConfig);
+};
+
+const resolveXaiPeriodType = (
+  period: XaiBillingConfig['currentPeriod'] | XaiBillingConfig['current_period']
+): XaiBillingPeriodType => {
+  const rawType = normalizeStringValue(period?.type)?.toLowerCase() ?? '';
+  if (rawType.includes('weekly')) return 'weekly';
+  if (rawType.includes('monthly')) return 'monthly';
+  return 'unknown';
+};
+
+const normalizeXaiProductUsage = (
+  productUsage: XaiBillingConfig['productUsage'],
+  fallbackPrefix: string
+): XaiProductUsageSummary[] => {
+  if (!Array.isArray(productUsage)) return [];
+
+  return productUsage
+    .map((item, index): XaiProductUsageSummary | null => {
+      if (!item || typeof item !== 'object') return null;
+      const product = normalizeStringValue(item.product) ?? `${fallbackPrefix} ${index + 1}`;
+      const usagePercent = normalizeNumberValue(item.usagePercent ?? item.usage_percent);
+      return { product, usagePercent };
+    })
+    .filter((item): item is XaiProductUsageSummary => item !== null);
+};
+
 export const buildXaiBillingSummary = (
   config: XaiBillingConfig | null | undefined
 ): XaiBillingSummary | null => {
   if (!config || typeof config !== 'object') return null;
 
+  const currentPeriod = config.currentPeriod ?? config.current_period ?? null;
+  const periodType = resolveXaiPeriodType(currentPeriod);
+  const creditUsagePercent = normalizeNumberValue(
+    config.creditUsagePercent ?? config.credit_usage_percent
+  );
+  const productUsage = normalizeXaiProductUsage(
+    config.productUsage ?? config.product_usage,
+    'Product'
+  );
+  const periodStart =
+    normalizeStringValue(currentPeriod?.start) ??
+    normalizeStringValue(config.billingPeriodStart ?? config.billing_period_start) ??
+    undefined;
+  const periodEnd =
+    normalizeStringValue(currentPeriod?.end) ??
+    normalizeStringValue(config.billingPeriodEnd ?? config.billing_period_end) ??
+    undefined;
+  const billingCycle = config.billingCycle ?? config.billing_cycle ?? null;
+  const nestedUsage = config.usage ?? null;
   const monthlyLimitCents = normalizeXaiCentValue(config.monthlyLimit ?? config.monthly_limit);
-  const usedCents = normalizeXaiCentValue(config.used);
+  const nestedIncludedUsedCents = normalizeXaiCentValue(
+    nestedUsage?.includedUsed ?? nestedUsage?.included_used
+  );
+  const explicitOnDemandUsedCents = normalizeXaiCentValue(
+    config.onDemandUsed ??
+      config.on_demand_used ??
+      nestedUsage?.onDemandUsed ??
+      nestedUsage?.on_demand_used
+  );
+  const rawUsedCents = normalizeXaiCentValue(
+    config.used ?? nestedUsage?.totalUsed ?? nestedUsage?.total_used
+  );
+  const usedCents =
+    rawUsedCents ??
+    (nestedIncludedUsedCents !== null || explicitOnDemandUsedCents !== null
+      ? (nestedIncludedUsedCents ?? 0) + (explicitOnDemandUsedCents ?? 0)
+      : null);
   const onDemandCapCents = normalizeXaiCentValue(config.onDemandCap ?? config.on_demand_cap);
   const billingPeriodStart =
-    normalizeStringValue(config.billingPeriodStart ?? config.billing_period_start) ?? undefined;
+    normalizeStringValue(
+      config.billingPeriodStart ??
+        config.billing_period_start ??
+        billingCycle?.billingPeriodStart ??
+        billingCycle?.billing_period_start
+    ) ?? undefined;
   const billingPeriodEnd =
-    normalizeStringValue(config.billingPeriodEnd ?? config.billing_period_end) ?? undefined;
+    normalizeStringValue(
+      config.billingPeriodEnd ??
+        config.billing_period_end ??
+        billingCycle?.billingPeriodEnd ??
+        billingCycle?.billing_period_end
+    ) ?? undefined;
 
-  if (
-    monthlyLimitCents === null &&
-    usedCents === null &&
-    onDemandCapCents === null &&
-    !billingPeriodEnd
-  ) {
+  const hasWeeklyData =
+    creditUsagePercent !== null || periodType === 'weekly' || productUsage.length > 0;
+  const hasMonthlyData =
+    monthlyLimitCents !== null ||
+    usedCents !== null ||
+    onDemandCapCents !== null ||
+    !!billingPeriodEnd;
+
+  if (!hasWeeklyData && !hasMonthlyData) {
     return null;
   }
 
   const includedUsedCents =
-    usedCents === null
+    nestedIncludedUsedCents ??
+    (usedCents === null
       ? null
       : monthlyLimitCents !== null && monthlyLimitCents > 0
         ? Math.min(usedCents, monthlyLimitCents)
-        : usedCents;
+        : usedCents);
   const onDemandUsedCents =
-    usedCents !== null && monthlyLimitCents !== null
+    explicitOnDemandUsedCents ??
+    (usedCents !== null && monthlyLimitCents !== null
       ? Math.max(0, usedCents - monthlyLimitCents)
-      : null;
+      : null);
   const usedPercent =
     monthlyLimitCents !== null && monthlyLimitCents > 0 && includedUsedCents !== null
       ? (includedUsedCents / monthlyLimitCents) * 100
@@ -602,6 +762,11 @@ export const buildXaiBillingSummary = (
       : null;
 
   return {
+    periodType: hasWeeklyData ? (periodType === 'unknown' ? 'weekly' : periodType) : 'monthly',
+    usagePercent: hasWeeklyData ? creditUsagePercent : usedPercent,
+    periodStart: hasWeeklyData ? periodStart : billingPeriodStart,
+    periodEnd: hasWeeklyData ? periodEnd : billingPeriodEnd,
+    productUsage,
     monthlyLimitCents,
     usedCents,
     includedUsedCents,
@@ -636,7 +801,7 @@ export const fetchXaiQuota = async (
   }
 
   const payload = parseXaiBillingPayload(result.body ?? result.bodyText);
-  const summary = buildXaiBillingSummary(payload?.config);
+  const summary = buildXaiBillingSummary(resolveXaiBillingConfig(payload));
   if (!summary) {
     throw new Error(t('xai_quota.empty_data'));
   }

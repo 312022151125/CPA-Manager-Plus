@@ -404,7 +404,13 @@ function kimiResetHint(data: Record<string, unknown>): string | undefined {
 }
 
 function kimiDurationToken(duration: number, rawTimeUnit: unknown): string {
-  const unit = typeof rawTimeUnit === 'string' ? rawTimeUnit.trim().toUpperCase() : '';
+  const unit =
+    typeof rawTimeUnit === 'string'
+      ? rawTimeUnit
+          .trim()
+          .toUpperCase()
+          .replace(/^TIME_UNIT_/, '')
+      : '';
   if (unit === 'MINUTE' || unit === 'MINUTES') {
     return duration % 60 === 0 ? `${duration / 60}h` : `${duration}m`;
   }
@@ -478,30 +484,43 @@ function toKimiUsageRow(
 export function buildKimiQuotaRows(payload: KimiUsagePayload): KimiQuotaRow[] {
   const rows: KimiQuotaRow[] = [];
 
-  const usage = payload.usage;
-  if (usage && typeof usage === 'object') {
-    const summary = toKimiUsageRow(usage as Record<string, unknown>, {
-      labelKey: 'kimi_quota.weekly_limit',
-    });
-    if (summary) {
-      rows.push({ id: 'summary', ...summary });
-    }
-  }
-
-  const limits = payload.limits;
-  if (Array.isArray(limits)) {
-    limits.forEach((item, idx) => {
-      const detail = (item.detail && typeof item.detail === 'object' ? item.detail : item) as
-        | KimiUsageDetail
-        | KimiLimitItem;
-      const window = (
-        item.window && typeof item.window === 'object' ? item.window : {}
-      ) as KimiLimitWindow;
-      const fallbackLabel = kimiLimitLabel(item, detail, window, idx);
-      const row = toKimiUsageRow(detail as Record<string, unknown>, fallbackLabel);
-      if (row) {
-        rows.push({ id: `limit-${idx}`, ...row });
+  const addRows = (
+    usage: KimiUsagePayload['usage'],
+    limits: KimiUsagePayload['limits'],
+    idPrefix = ''
+  ) => {
+    if (usage && typeof usage === 'object') {
+      const summary = toKimiUsageRow(usage as Record<string, unknown>, {
+        labelKey: 'kimi_quota.weekly_limit',
+      });
+      if (summary) {
+        rows.push({ id: `${idPrefix}summary`, ...summary });
       }
+    }
+
+    if (Array.isArray(limits)) {
+      limits.forEach((item, idx) => {
+        const detail = (item.detail && typeof item.detail === 'object' ? item.detail : item) as
+          | KimiUsageDetail
+          | KimiLimitItem;
+        const window = (
+          item.window && typeof item.window === 'object' ? item.window : {}
+        ) as KimiLimitWindow;
+        const fallbackLabel = kimiLimitLabel(item, detail, window, idx);
+        const row = toKimiUsageRow(detail as Record<string, unknown>, fallbackLabel);
+        if (row) {
+          rows.push({ id: `${idPrefix}limit-${idx}`, ...row });
+        }
+      });
+    }
+  };
+
+  addRows(payload.usage, payload.limits);
+
+  if (Array.isArray(payload.usages)) {
+    payload.usages.forEach((entry, index) => {
+      const detail = entry?.detail && typeof entry.detail === 'object' ? entry.detail : undefined;
+      addRows(detail, Array.isArray(entry?.limits) ? entry.limits : undefined, `usage-${index}-`);
     });
   }
 
