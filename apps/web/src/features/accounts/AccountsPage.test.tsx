@@ -854,6 +854,41 @@ describe('AccountsPage replacement flows', () => {
     expect(getAccountListItemTexts(renderer)[0]).toContain('high.json');
   });
 
+  it('renders xAI monthly and pay-as-you-go quota windows on account cards', async () => {
+    mocks.files = [
+      {
+        name: 'xai.json',
+        type: 'xai',
+        provider: 'xai',
+        authIndex: 'xai-1',
+        account: 'xai@example.com',
+        priority: 0,
+        disabled: false,
+      } as AuthFileItem,
+    ];
+    mocks.quotaState.xaiQuota = {
+      'xai.json': {
+        status: 'success',
+        billing: {
+          monthlyLimitCents: 10_000,
+          usedCents: 12_500,
+          includedUsedCents: 10_000,
+          onDemandCapCents: 5_000,
+          onDemandUsedCents: 2_500,
+          onDemandUsedPercent: 50,
+          billingPeriodEnd: '2026-07-31T00:00:00Z',
+          usedPercent: 100,
+        },
+      },
+    };
+
+    const renderer = await renderAccountsPage();
+    const text = treeText(renderer);
+
+    expect(text).toContain('30D');
+    expect(text).toContain('PAYG');
+  });
+
   it('keeps the accounts view in card mode without table controls', async () => {
     mocks.files = [
       {

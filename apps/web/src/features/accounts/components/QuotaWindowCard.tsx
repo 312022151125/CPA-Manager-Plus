@@ -53,10 +53,13 @@ export const QuotaWindowCard = ({
   const usage = q.usage;
   const resetTimestamp =
     typeof q.resetAtMs === 'number' && Number.isFinite(q.resetAtMs) ? q.resetAtMs : null;
+  const compactTitle = [q.groupLabel, q.label, q.amountLabel, q.description]
+    .filter(Boolean)
+    .join(' · ');
 
   if (variant === 'compact') {
     return (
-      <div className={styles.compactCard}>
+      <div className={styles.compactCard} title={compactTitle || q.label}>
         <span className={styles.compactLabel}>{q.label}</span>
         <div className={styles.compactBar} aria-hidden="true">
           <span
@@ -65,11 +68,18 @@ export const QuotaWindowCard = ({
           />
         </div>
         <span className={styles.compactValue}>{formatPercent(q.remainingPercent)}</span>
-        {resetTimestamp !== null ? (
-          <span className={styles.compactReset}>
-            <RelativeTime timestamp={resetTimestamp} mode="relative" locale={locale ?? i18n.language} />
-          </span>
-        ) : null}
+        <span className={styles.compactReset}>
+          {q.amountLabel ??
+            (resetTimestamp !== null ? (
+              <RelativeTime
+                timestamp={resetTimestamp}
+                mode="relative"
+                locale={locale ?? i18n.language}
+              />
+            ) : (
+              ''
+            ))}
+        </span>
       </div>
     );
   }
@@ -78,7 +88,13 @@ export const QuotaWindowCard = ({
     <div className={styles.card}>
       <div className={styles.header}>
         <div className={styles.headerLabel}>
+          {q.groupLabel ? <span className={styles.groupLabel}>{q.groupLabel}</span> : null}
           <strong title={q.label}>{q.label}</strong>
+          {q.description ? (
+            <span className={styles.description} title={q.description}>
+              {q.description}
+            </span>
+          ) : null}
           {resetTimestamp !== null ? (
             <RelativeTime
               timestamp={resetTimestamp}
@@ -108,6 +124,7 @@ export const QuotaWindowCard = ({
         />
       </div>
       <div className={styles.meta}>
+        {q.amountLabel ? <span className={styles.amountLabel}>{q.amountLabel}</span> : null}
         <span>
           {t('accounts.detail_used')}: {formatPercent(q.usedPercent)}
         </span>

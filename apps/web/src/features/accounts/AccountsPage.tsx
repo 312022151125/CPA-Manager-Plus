@@ -106,6 +106,13 @@ import {
   buildAccountWindowUsageTargetEntries,
 } from '@/features/accounts/model/accountWindowUsageRows';
 import {
+  buildAccountQuotaDisplayWindow,
+  buildAccountQuotaDisplayWindows,
+  formatQuotaResetInlineLabel,
+  getQuotaWindowShortLabel,
+  type AccountQuotaDisplayWindow,
+} from '@/features/accounts/model/accountQuotaDisplayWindows';
+import {
   buildAccountDetailViewModel,
   type AccountDetailField,
 } from '@/features/accounts/model/accountDetailViewModel';
@@ -179,17 +186,6 @@ type SortableAccountColumn = Extract<
 type AccountSortFieldValue = 'default' | SortableAccountColumn;
 type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
-type AccountQuotaDisplayWindow = {
-  key: string;
-  label: string;
-  remainingPercent: number | null;
-  usedPercent: number | null;
-  resetLabel: string;
-  limitWindowSeconds: number | null;
-  resetAtMs: number | null;
-  fromMs: number | null;
-  toMs: number | null;
-};
 
 const PAGE_SIZE_OPTIONS = [
   { value: '10', label: '10' },
@@ -291,11 +287,6 @@ const getAccountHistoryTitle = (
   });
 };
 
-const clampDisplayPercent = (value: number) => Math.max(0, Math.min(100, value));
-
-const remainingPercentFromUsed = (value: number | null | undefined) =>
-  typeof value === 'number' && Number.isFinite(value) ? clampDisplayPercent(100 - value) : null;
-
 const parsePriorityValue = (value: string) => {
   const trimmed = value.trim();
   if (!/^-?\d+$/.test(trimmed)) return null;
@@ -330,134 +321,6 @@ const translateDetailEnum = (
   const token = normalizeDetailToken(raw);
   if (!token) return raw;
   return t(`${prefix}${token}`, { defaultValue: raw });
-};
-
-const formatQuotaResetInlineLabel = (value: string, locale: string) => {
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === '-') return '';
-  const timestamp = Date.parse(trimmed);
-  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed) && Number.isFinite(timestamp)) {
-    return formatTimestamp(timestamp, locale);
-  }
-  return trimmed;
-};
-
-const getQuotaWindowShortLabel = (window: AccountQuotaDisplayWindow) => {
-  const key = window.key.toLowerCase();
-  const label = window.label.toLowerCase();
-  const text = `${key} ${label}`;
-
-  if (
-    text.includes('five') ||
-    text.includes('5h') ||
-    text.includes('5 h') ||
-    text.includes('5 小时') ||
-    text.includes('五小时') ||
-    text.includes('primary')
-  ) {
-    return '5H';
-  }
-  if (
-    text.includes('week') ||
-    text.includes('7d') ||
-    text.includes('7 d') ||
-    text.includes('周') ||
-    text.includes('weekly')
-  ) {
-    return '7D';
-  }
-  if (
-    text.includes('month') ||
-    text.includes('30d') ||
-    text.includes('30 d') ||
-    text.includes('月') ||
-    text.includes('billing') ||
-    text.includes('账单')
-  ) {
-    return '30D';
-  }
-  if (text.includes('day') || text.includes('24h') || text.includes('日')) {
-    return '24H';
-  }
-  return window.label.slice(0, 3).toUpperCase();
-};
-
-const parseQuotaResetLabelMs = (value: string, nowMs = Date.now()) => {
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === '-') return null;
-  if (/^\d{4}[-/]/.test(trimmed)) {
-    const parsed = Date.parse(trimmed);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  const compactMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})(?:,)?\s+(\d{1,2}):(\d{2})/);
-  if (compactMatch) {
-    const [, month, day, hourValue, minuteValue] = compactMatch;
-    const now = new Date(nowMs);
-    const candidate = new Date(
-      now.getFullYear(),
-      Number(month) - 1,
-      Number(day),
-      Number(hourValue),
-      Number(minuteValue),
-      0,
-      0
-    );
-    if (Number.isNaN(candidate.getTime())) return null;
-    if (candidate.getTime() < nowMs - 30 * 24 * 60 * 60 * 1000) {
-      candidate.setFullYear(candidate.getFullYear() + 1);
-    }
-    return candidate.getTime();
-  }
-
-  const parsed = Date.parse(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
-const buildQuotaWindowRange = (
-  resetLabel: string,
-  limitWindowSeconds: number | null | undefined,
-  nowMs = Date.now()
-) => {
-  if (!limitWindowSeconds || limitWindowSeconds <= 0) {
-    return { resetAtMs: null, fromMs: null, toMs: null };
-  }
-  const resetAtMs = parseQuotaResetLabelMs(resetLabel, nowMs);
-  if (!resetAtMs) return { resetAtMs: null, fromMs: null, toMs: null };
-  const durationMs = Math.round(limitWindowSeconds * 1000);
-  const fromMs = resetAtMs - durationMs;
-  const toMs = Math.min(nowMs, resetAtMs);
-  if (fromMs <= 0 || toMs <= fromMs) {
-    return { resetAtMs, fromMs: null, toMs: null };
-  }
-  return { resetAtMs, fromMs, toMs };
-};
-
-const buildAccountQuotaDisplayWindow = ({
-  key,
-  label,
-  remainingPercent,
-  usedPercent,
-  resetLabel,
-  limitWindowSeconds = null,
-}: {
-  key: string;
-  label: string;
-  remainingPercent: number | null;
-  usedPercent: number | null;
-  resetLabel: string;
-  limitWindowSeconds?: number | null;
-}): AccountQuotaDisplayWindow => {
-  const range = buildQuotaWindowRange(resetLabel, limitWindowSeconds);
-  return {
-    key,
-    label,
-    remainingPercent,
-    usedPercent,
-    resetLabel,
-    limitWindowSeconds,
-    ...range,
-  };
 };
 
 const formatDurationMs = (value: number | null | undefined) => {
@@ -1198,118 +1061,14 @@ export function AccountsPage() {
   );
   const buildQuotaDisplayWindows = useCallback(
     (row: AccountRow): AccountQuotaDisplayWindow[] => {
-      if (row.provider === CODEX_CONFIG.type) {
-        const quota = getDisplayCodexQuota(row.raw);
-        if (quota?.windows?.length) {
-          return quota.windows.map((window) =>
-            buildAccountQuotaDisplayWindow({
-              key: window.id,
-              label: translateQuotaWindowLabel(window.label, window.labelKey, window.labelParams),
-              remainingPercent: remainingPercentFromUsed(window.usedPercent),
-              usedPercent: window.usedPercent,
-              resetLabel: window.resetLabel || '-',
-              limitWindowSeconds: window.limitWindowSeconds ?? null,
-            })
-          );
-        }
-      }
-
-      if (row.provider === CLAUDE_CONFIG.type) {
-        const quota = claudeQuota[row.fileName];
-        if (quota?.windows?.length) {
-          return quota.windows.map((window) =>
-            buildAccountQuotaDisplayWindow({
-              key: window.id,
-              label: translateQuotaWindowLabel(window.label, window.labelKey),
-              remainingPercent: remainingPercentFromUsed(window.usedPercent),
-              usedPercent: window.usedPercent,
-              resetLabel: window.resetLabel || '-',
-            })
-          );
-        }
-      }
-
-      if (row.provider === ANTIGRAVITY_CONFIG.type) {
-        const quota = antigravityQuota[row.fileName];
-        const buckets = quota?.groups?.flatMap((group) => group.buckets) ?? [];
-        if (buckets.length) {
-          return buckets.map((bucket) => {
-            const remainingPercent = clampDisplayPercent(bucket.remainingFraction * 100);
-            return buildAccountQuotaDisplayWindow({
-              key: bucket.id,
-              label: bucket.label || bucket.id,
-              remainingPercent,
-              usedPercent: clampDisplayPercent(100 - remainingPercent),
-              resetLabel: bucket.resetTime || '-',
-            });
-          });
-        }
-      }
-
-      if (row.provider === KIMI_CONFIG.type) {
-        const quota = kimiQuota[row.fileName];
-        if (quota?.rows?.length) {
-          return quota.rows.map((quotaRow) => {
-            const remainingPercent =
-              quotaRow.limit > 0
-                ? clampDisplayPercent(((quotaRow.limit - quotaRow.used) / quotaRow.limit) * 100)
-                : null;
-            return buildAccountQuotaDisplayWindow({
-              key: quotaRow.id,
-              label: translateQuotaWindowLabel(
-                quotaRow.label,
-                quotaRow.labelKey,
-                quotaRow.labelParams
-              ),
-              remainingPercent,
-              usedPercent:
-                remainingPercent === null ? null : clampDisplayPercent(100 - remainingPercent),
-              resetLabel: quotaRow.resetHint || '-',
-            });
-          });
-        }
-      }
-
-      if (row.provider === XAI_CONFIG.type) {
-        const quota = xaiQuota[row.fileName];
-        const usedPercent = quota?.billing?.usedPercent;
-        if (typeof usedPercent === 'number' && Number.isFinite(usedPercent)) {
-          const remainingPercent = clampDisplayPercent(100 - usedPercent);
-          return [
-            buildAccountQuotaDisplayWindow({
-              key: 'billing',
-              label: t('accounts.quota_window_billing'),
-              remainingPercent,
-              usedPercent: clampDisplayPercent(usedPercent),
-              resetLabel: quota?.billing?.billingPeriodEnd || '-',
-            }),
-          ];
-        }
-      }
-
-      if (row.quota.remainingPercent !== null || row.quota.usedPercent !== null) {
-        return [
-          buildAccountQuotaDisplayWindow({
-            key: 'summary',
-            label: t('accounts.col_quota'),
-            remainingPercent: row.quota.remainingPercent,
-            usedPercent: row.quota.usedPercent,
-            resetLabel: row.quota.resetLabel,
-          }),
-        ];
-      }
-
-      return [];
+      return buildAccountQuotaDisplayWindows(row, {
+        stores: baseQuotaStores,
+        getDisplayCodexQuota,
+        translateQuotaWindowLabel,
+        t,
+      });
     },
-    [
-      antigravityQuota,
-      claudeQuota,
-      getDisplayCodexQuota,
-      kimiQuota,
-      t,
-      translateQuotaWindowLabel,
-      xaiQuota,
-    ]
+    [baseQuotaStores, getDisplayCodexQuota, t, translateQuotaWindowLabel]
   );
   const quotaDisplayWindowsByRowKey = useMemo(() => {
     const result = new Map<string, AccountQuotaDisplayWindow[]>();
@@ -3172,9 +2931,7 @@ export function AccountsPage() {
                     Boolean(selectedRow.disabled)
                   )}
                   label={(() => {
-                    const statusField = detailView.quota.fields.find(
-                      (f) => f.key === 'status'
-                    );
+                    const statusField = detailView.quota.fields.find((f) => f.key === 'status');
                     return statusField ? String(statusField.value) : '-';
                   })()}
                   hint={t('accounts.detail_quota_health_hint', {
@@ -3253,9 +3010,7 @@ export function AccountsPage() {
                   }
                   size="sm"
                 />
-                <span className={styles.authChip}>
-                  {getProviderLabel(selectedRow.provider, t)}
-                </span>
+                <span className={styles.authChip}>{getProviderLabel(selectedRow.provider, t)}</span>
                 <span className={styles.authChip}>{selectedRow.planType || '-'}</span>
               </div>
               {renderDetailFieldList(detailView.auth.fields)}
@@ -3272,9 +3027,7 @@ export function AccountsPage() {
                   {authSafeFieldsOpen ? '▾' : '▸'}
                 </span>
               </button>
-              {authSafeFieldsOpen ? (
-                <p>{t('accounts.detail_auth_safe_hint')}</p>
-              ) : null}
+              {authSafeFieldsOpen ? <p>{t('accounts.detail_auth_safe_hint')}</p> : null}
             </section>
           </div>
         );
@@ -3643,9 +3396,7 @@ export function AccountsPage() {
                       total: rowEvents.length,
                     })}
                   </span>
-                  <a
-                    href={`#/demo/monitoring?account=${encodeURIComponent(selectedRow.fileName)}`}
-                  >
+                  <a href={`#/demo/monitoring?account=${encodeURIComponent(selectedRow.fileName)}`}>
                     {t('accounts.detail_event_footer_open_monitoring', {
                       defaultValue: '前往请求监控',
                     })}
@@ -3831,7 +3582,9 @@ export function AccountsPage() {
         <div className={styles.drawerBodyShell}>
           {selectedRow.disabled ? (
             <div className={styles.drawerDisabledNotice} role="status">
-              <span>{t('accounts.detail_disabled_notice_title', { defaultValue: '账号已禁用' })}</span>
+              <span>
+                {t('accounts.detail_disabled_notice_title', { defaultValue: '账号已禁用' })}
+              </span>
               <p>
                 {t('accounts.detail_disabled_notice_desc', {
                   defaultValue:

@@ -13,6 +13,7 @@ import {
   type AccountListHealthStatusKey,
   type AccountListPresentationItem,
 } from './accountListPresentation';
+import type { AccountQuotaDisplayWindow } from './accountQuotaDisplayWindows';
 import { accountWindowUsageRequestKey } from './accountWindowUsageRows';
 import type { AccountRecommendation } from './quotaRecommendations';
 import type { UsageValueRow, UsageValueSource } from './usageValueRows';
@@ -26,12 +27,10 @@ export interface AccountDetailField {
   valueKind?: AccountDetailValueKind;
 }
 
-export interface AccountDetailQuotaWindowInput {
-  key: string;
-  label: string;
-  remainingPercent: number | null;
-  usedPercent: number | null;
-  resetLabel: string;
+export interface AccountDetailQuotaWindowInput extends Omit<
+  AccountQuotaDisplayWindow,
+  'limitWindowSeconds' | 'resetAtMs' | 'fromMs' | 'toMs'
+> {
   limitWindowSeconds?: number | null;
   resetAtMs?: number | null;
   fromMs?: number | null;

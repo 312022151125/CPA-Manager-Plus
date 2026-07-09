@@ -146,11 +146,15 @@ describe('accountDetailViewModel', () => {
         {
           key: 'weekly',
           label: 'Weekly',
+          kind: 'weekly',
           remainingPercent: 40,
           usedPercent: 60,
           resetLabel: 'later',
           fromMs: 1000,
           toMs: 2000,
+          amountLabel: '40 / 100',
+          groupLabel: 'Gemini models',
+          description: 'Weekly shared model quota',
         },
       ],
       windowUsageByKey,
@@ -163,6 +167,12 @@ describe('accountDetailViewModel', () => {
 
     expect(viewModel.quota.windows[0].usage?.totalRequests).toBe(22);
     expect(viewModel.quota.windows[0].usage?.totalCost).toBe(0.22);
+    expect(viewModel.quota.windows[0]).toMatchObject({
+      kind: 'weekly',
+      amountLabel: '40 / 100',
+      groupLabel: 'Gemini models',
+      description: 'Weekly shared model quota',
+    });
     expect(viewModel.strategy.actionCandidates).toHaveLength(1);
     expect(viewModel.strategy.actionCandidates[0]).toMatchObject({
       id: 2,

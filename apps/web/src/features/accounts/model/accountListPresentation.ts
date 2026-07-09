@@ -1,6 +1,7 @@
 import type { QuotaCooldownInfo } from '@/services/api';
 import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/authFilesPageModel';
 import type { AccountRow } from './accountRows';
+import type { AccountQuotaWindowKind } from './accountQuotaDisplayWindows';
 import type { AccountRecommendation } from './quotaRecommendations';
 import type { UsageValueSource } from './usageValueRows';
 
@@ -19,13 +20,18 @@ export type AccountListHealthStatusKey =
   | 'raw';
 export type AccountListHealthReasonTone = 'muted' | 'warning' | 'danger';
 
-type AccountListQuotaWindowKind = 'five_hour' | 'weekly' | 'monthly';
-type AccountListQuotaLimitKind = AccountListQuotaWindowKind | 'unknown';
+type AccountListQuotaWindowKind = AccountQuotaWindowKind;
+type AccountListSupportedLimitKind = Extract<
+  AccountQuotaWindowKind,
+  'five_hour' | 'weekly' | 'monthly'
+>;
+type AccountListQuotaLimitKind = AccountListSupportedLimitKind | 'unknown';
 type HealthTooltipParams = Record<string, string | number>;
 
 export interface AccountListQuotaWindowPresentation {
   key: string;
   label: string;
+  kind?: AccountQuotaWindowKind;
   remainingPercent: number | null;
   usedPercent: number | null;
   resetLabel: string;
@@ -229,37 +235,60 @@ const getLimitedReasonKey = (row: AccountRow): string =>
 const inferQuotaWindowKind = (
   window: AccountListQuotaWindowPresentation
 ): AccountListQuotaWindowKind | null => {
+  if (window.kind) return window.kind;
   const text = `${window.key} ${window.label}`.toLowerCase();
+  if (/(pay-as-you-go|payg|on[-_\s]?demand|按量|按需)/.test(text)) return 'payg';
+  if (/(billing|账单|帳單)/.test(text)) return 'billing';
+  if (/(product|model|模型|产品|產品)/.test(text)) return 'product';
   if (/(month|monthly|30d|31d|月)/.test(text)) return 'monthly';
   if (/(week|weekly|7d|7 day|seven|周|週)/.test(text)) return 'weekly';
+  if (/(day|daily|24h|24 h|日)/.test(text)) return 'daily';
   if (/(five|5h|5 h|5-hour|5_hour|five-hour|5小时|5 小时)/.test(text)) {
     return 'five_hour';
   }
   return null;
 };
 
-const windowKindRank: Record<AccountListQuotaWindowKind, number> = {
+const isSupportedLimitWindowKind = (
+  kind: AccountListQuotaWindowKind | null
+): kind is AccountListSupportedLimitKind =>
+  kind === 'five_hour' || kind === 'weekly' || kind === 'monthly';
+
+const windowKindRank: Record<AccountListSupportedLimitKind, number> = {
   five_hour: 1,
   weekly: 2,
   monthly: 3,
 };
 
 const getHighestWindowKind = (
-  left: AccountListQuotaWindowKind | null,
-  right: AccountListQuotaWindowKind
-): AccountListQuotaWindowKind =>
+  left: AccountListSupportedLimitKind | null,
+  right: AccountListSupportedLimitKind
+): AccountListSupportedLimitKind =>
   left === null || windowKindRank[right] > windowKindRank[left] ? right : left;
+
+const hasAvailablePaygWindow = (quotaWindows: AccountListQuotaWindowPresentation[]): boolean =>
+  quotaWindows.some((window) => {
+    if (window.remainingPercent === null || window.remainingPercent <= 0) return false;
+    return inferQuotaWindowKind(window) === 'payg';
+  });
+
+const isCoveredBillingWindow = (
+  window: AccountListQuotaWindowPresentation,
+  hasPaygRemaining: boolean
+): boolean => hasPaygRemaining && inferQuotaWindowKind(window) === 'billing';
 
 const resolveQuotaWindowLimitKind = (
   quotaWindows: AccountListQuotaWindowPresentation[] = []
 ): AccountListQuotaLimitKind | null => {
-  let selected: AccountListQuotaWindowKind | null = null;
+  let selected: AccountListSupportedLimitKind | null = null;
   let hasUnknownLimitedWindow = false;
+  const hasPaygRemaining = hasAvailablePaygWindow(quotaWindows);
 
   quotaWindows.forEach((window) => {
     if (window.remainingPercent === null || window.remainingPercent > 0) return;
+    if (isCoveredBillingWindow(window, hasPaygRemaining)) return;
     const windowKind = inferQuotaWindowKind(window);
-    if (!windowKind) {
+    if (!isSupportedLimitWindowKind(windowKind)) {
       hasUnknownLimitedWindow = true;
       return;
     }
@@ -282,7 +311,7 @@ const resolveCodexLimitKind = (
 };
 
 const getCooldownStatusForWindow = (
-  windowKind: AccountListQuotaWindowKind
+  windowKind: AccountListSupportedLimitKind
 ): AccountListHealthStatusKey => {
   if (windowKind === 'monthly') return 'monthly_cooldown';
   if (windowKind === 'weekly') return 'weekly_cooldown';
@@ -290,7 +319,7 @@ const getCooldownStatusForWindow = (
 };
 
 const getExhaustedStatusForWindow = (
-  windowKind: AccountListQuotaWindowKind
+  windowKind: AccountListSupportedLimitKind
 ): AccountListHealthStatusKey => {
   if (windowKind === 'monthly') return 'monthly_exhausted';
   if (windowKind === 'weekly') return 'weekly_exhausted';
@@ -316,7 +345,9 @@ const hasKnownAvailableQuota = (
   row: AccountRow,
   quotaWindows: AccountListQuotaWindowPresentation[]
 ): boolean => {
+  const hasPaygRemaining = hasAvailablePaygWindow(quotaWindows);
   const knownWindowRemaining = quotaWindows
+    .filter((window) => !isCoveredBillingWindow(window, hasPaygRemaining))
     .map((window) => window.remainingPercent)
     .filter((value): value is number => value !== null && Number.isFinite(value));
 

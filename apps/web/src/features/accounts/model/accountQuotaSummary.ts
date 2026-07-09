@@ -4,6 +4,7 @@ import type {
   ClaudeQuotaState,
   CodexQuotaState,
   KimiQuotaState,
+  XaiBillingSummary,
   XaiQuotaState,
 } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
@@ -147,16 +148,38 @@ const getQuotaStatusFromRemaining = (remainingPercent: number | null): AccountQu
   return 'ok';
 };
 
-const quotaFromUsedWindows = (
-  windows: Array<{ usedPercent: number | null; resetLabel?: string }>,
+const remainingPercentFromUsed = (value: number | null | undefined) =>
+  typeof value === 'number' && Number.isFinite(value) ? clampPercent(100 - value) : null;
+
+const quotaFromRemainingWindows = (
+  windows: Array<{
+    remainingPercent: number | null;
+    usedPercent?: number | null;
+    resetLabel?: string;
+  }>,
   planType: string | null,
   options: AccountQuotaObservationFields = {}
 ): AccountQuotaSummary => {
   const source = options.source ?? 'cache';
-  const usedValues = windows
-    .map((window) => window.usedPercent)
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-  if (usedValues.length === 0) {
+  const candidates = windows
+    .map((window) => {
+      const remainingPercent =
+        typeof window.remainingPercent === 'number' && Number.isFinite(window.remainingPercent)
+          ? clampPercent(window.remainingPercent)
+          : remainingPercentFromUsed(window.usedPercent);
+      if (remainingPercent === null) return null;
+      return {
+        remainingPercent,
+        usedPercent: clampPercent(100 - remainingPercent),
+        resetLabel: readString(window.resetLabel),
+      };
+    })
+    .filter(
+      (window): window is { remainingPercent: number; usedPercent: number; resetLabel: string } =>
+        window !== null
+    );
+
+  if (candidates.length === 0) {
     return {
       status: 'unknown',
       remainingPercent: null,
@@ -168,18 +191,139 @@ const quotaFromUsedWindows = (
     };
   }
 
-  const usedPercent = clampPercent(Math.max(...usedValues));
-  const remainingPercent = clampPercent(100 - usedPercent);
-  const resetLabel = windows.find((window) => readString(window.resetLabel))?.resetLabel ?? '-';
+  const selected = candidates.reduce((current, next) =>
+    next.remainingPercent < current.remainingPercent ? next : current
+  );
+  const resetLabel =
+    selected.resetLabel ||
+    candidates.find((window) => readString(window.resetLabel))?.resetLabel ||
+    '-';
   return {
-    status: getQuotaStatusFromRemaining(remainingPercent),
-    remainingPercent,
-    usedPercent,
+    status: getQuotaStatusFromRemaining(selected.remainingPercent),
+    remainingPercent: selected.remainingPercent,
+    usedPercent: selected.usedPercent,
     resetLabel,
     planType,
     ...options,
     source,
   };
+};
+
+const quotaFromUsedWindows = (
+  windows: Array<{ usedPercent: number | null; resetLabel?: string }>,
+  planType: string | null,
+  options: AccountQuotaObservationFields = {}
+): AccountQuotaSummary =>
+  quotaFromRemainingWindows(
+    windows.map((window) => ({
+      remainingPercent: remainingPercentFromUsed(window.usedPercent),
+      usedPercent: window.usedPercent,
+      resetLabel: window.resetLabel,
+    })),
+    planType,
+    options
+  );
+
+const quotaFromXaiBilling = (
+  billing: XaiBillingSummary | null | undefined,
+  planType: string | null
+): AccountQuotaSummary => {
+  if (!billing) {
+    return quotaFromRemainingWindows([{ remainingPercent: null }], planType);
+  }
+
+  const resetLabel = billing.billingPeriodEnd ?? '-';
+  const periodResetLabel = billing.periodEnd ?? resetLabel;
+  const periodRemainingPercent =
+    billing.periodType === 'weekly' ? remainingPercentFromUsed(billing.usagePercent) : null;
+  const monthlyLimitCents = billing.monthlyLimitCents;
+  const monthlyRemainingCents =
+    monthlyLimitCents !== null && billing.includedUsedCents !== null
+      ? Math.max(0, monthlyLimitCents - billing.includedUsedCents)
+      : null;
+  const onDemandEnabled = billing.onDemandCapCents !== null && billing.onDemandCapCents > 0;
+  const onDemandRemainingCents =
+    onDemandEnabled && billing.onDemandUsedCents !== null && billing.onDemandCapCents !== null
+      ? Math.max(0, billing.onDemandCapCents - billing.onDemandUsedCents)
+      : null;
+  const hasMonthlyComponent = monthlyLimitCents !== null && monthlyLimitCents > 0;
+  const monthlyComponentKnown = !hasMonthlyComponent || monthlyRemainingCents !== null;
+  const onDemandComponentKnown = !onDemandEnabled || onDemandRemainingCents !== null;
+  const totalLimitCents =
+    (monthlyLimitCents ?? 0) + (onDemandEnabled ? (billing.onDemandCapCents ?? 0) : 0);
+  const totalRemainingCents =
+    (monthlyRemainingCents ?? 0) + (onDemandEnabled ? (onDemandRemainingCents ?? 0) : 0);
+
+  if (totalLimitCents > 0 && monthlyComponentKnown && onDemandComponentKnown) {
+    return quotaFromRemainingWindows(
+      [
+        ...(periodRemainingPercent !== null
+          ? [
+              {
+                remainingPercent: periodRemainingPercent,
+                usedPercent: billing.usagePercent,
+                resetLabel: periodResetLabel,
+              },
+            ]
+          : []),
+        {
+          remainingPercent: (totalRemainingCents / totalLimitCents) * 100,
+          resetLabel,
+        },
+      ],
+      planType
+    );
+  }
+
+  if (onDemandEnabled) {
+    const onDemandRemainingPercent = remainingPercentFromUsed(billing.onDemandUsedPercent);
+    if (onDemandRemainingPercent !== null) {
+      return quotaFromRemainingWindows(
+        [
+          ...(periodRemainingPercent !== null
+            ? [
+                {
+                  remainingPercent: periodRemainingPercent,
+                  usedPercent: billing.usagePercent,
+                  resetLabel: periodResetLabel,
+                },
+              ]
+            : []),
+          {
+            remainingPercent: onDemandRemainingPercent,
+            usedPercent: billing.onDemandUsedPercent,
+            resetLabel,
+          },
+        ],
+        planType
+      );
+    }
+
+    const monthlyRemainingPercent = remainingPercentFromUsed(billing.usedPercent);
+    if (monthlyRemainingPercent !== null && monthlyRemainingPercent <= 0) {
+      return quotaFromRemainingWindows([{ remainingPercent: null, resetLabel }], planType);
+    }
+  }
+
+  return quotaFromRemainingWindows(
+    [
+      ...(periodRemainingPercent !== null
+        ? [
+            {
+              remainingPercent: periodRemainingPercent,
+              usedPercent: billing.usagePercent,
+              resetLabel: periodResetLabel,
+            },
+          ]
+        : []),
+      {
+        remainingPercent: remainingPercentFromUsed(billing.usedPercent),
+        usedPercent: billing.usedPercent,
+        resetLabel,
+      },
+    ],
+    planType
+  );
 };
 
 const quotaObservationFields = (quota: CodexQuotaState): AccountQuotaObservationFields => {
@@ -244,35 +388,6 @@ const mergeQuotaObservationFields = (
     merged.source = fields.source;
   }
   return merged;
-};
-
-const quotaFromRemainingFractions = (
-  fractions: Array<number | null>,
-  resetLabel: string,
-  planType: string | null
-): AccountQuotaSummary => {
-  const values = fractions
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-    .map((value) => clampPercent(value * 100));
-  if (values.length === 0) {
-    return {
-      status: 'unknown',
-      remainingPercent: null,
-      usedPercent: null,
-      resetLabel,
-      planType,
-      source: 'cache',
-    };
-  }
-  const remainingPercent = Math.min(...values);
-  return {
-    status: getQuotaStatusFromRemaining(remainingPercent),
-    remainingPercent,
-    usedPercent: clampPercent(100 - remainingPercent),
-    resetLabel,
-    planType,
-    source: 'cache',
-  };
 };
 
 const quotaFromError = (
@@ -377,9 +492,14 @@ export const resolveAccountQuota = (
     if (quota.status === 'loading') return loadingQuota(planType);
     if (quota.status === 'error') return quotaFromError(quota.error, planType);
     const buckets = quota.groups.flatMap((group) => group.buckets);
-    return quotaFromRemainingFractions(
-      buckets.map((bucket) => bucket.remainingFraction),
-      buckets.find((bucket) => readString(bucket.resetTime))?.resetTime ?? '-',
+    return quotaFromRemainingWindows(
+      buckets.map((bucket) => ({
+        remainingPercent:
+          typeof bucket.remainingFraction === 'number' && Number.isFinite(bucket.remainingFraction)
+            ? bucket.remainingFraction * 100
+            : null,
+        resetLabel: bucket.resetTime,
+      })),
       planType
     );
   }
@@ -389,12 +509,12 @@ export const resolveAccountQuota = (
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(filePlanType);
     if (quota.status === 'error') return quotaFromError(quota.error, filePlanType);
-    const remainingFractions = quota.rows.map((row) =>
-      row.limit > 0 ? Math.max(0, row.limit - row.used) / row.limit : null
-    );
-    return quotaFromRemainingFractions(
-      remainingFractions,
-      quota.rows.find((row) => readString(row.resetHint))?.resetHint ?? '-',
+    return quotaFromRemainingWindows(
+      quota.rows.map((row) => ({
+        remainingPercent:
+          row.limit > 0 ? (Math.max(0, row.limit - row.used) / row.limit) * 100 : null,
+        resetLabel: row.resetHint,
+      })),
       filePlanType
     );
   }
@@ -404,19 +524,7 @@ export const resolveAccountQuota = (
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(filePlanType);
     if (quota.status === 'error') return quotaFromError(quota.error, filePlanType);
-    const usedPercent =
-      quota.billing?.usedPercent === null || quota.billing?.usedPercent === undefined
-        ? null
-        : clampPercent(quota.billing.usedPercent);
-    const remainingPercent = usedPercent === null ? null : clampPercent(100 - usedPercent);
-    return {
-      status: getQuotaStatusFromRemaining(remainingPercent),
-      remainingPercent,
-      usedPercent,
-      resetLabel: quota.billing?.billingPeriodEnd ?? '-',
-      planType: filePlanType,
-      source: 'cache',
-    };
+    return quotaFromXaiBilling(quota.billing, filePlanType);
   }
 
   return emptyQuota(filePlanType);

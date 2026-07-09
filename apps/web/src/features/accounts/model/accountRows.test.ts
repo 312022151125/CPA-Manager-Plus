@@ -248,41 +248,126 @@ describe('accountRows', () => {
   });
 
   it('uses Antigravity quota buckets and subscription plan in account rows', () => {
-    const rows = buildAccountRows(
-      [{ name: 'antigravity.json', type: 'antigravity' }],
-      {
-        ...emptyStores(),
-        antigravityQuota: {
-          'antigravity.json': {
-            status: 'success',
-            subscription: {
-              plan: 'pro',
-              tierName: 'Pro',
-              tierId: 'pro',
-            },
-            groups: [
-              {
-                id: 'primary',
-                label: 'Primary',
-                buckets: [
-                  {
-                    id: 'weekly',
-                    label: 'Weekly',
-                    remainingFraction: 0.42,
-                    resetTime: '07-11 12:00',
-                  },
-                ],
-              },
-            ],
+    const rows = buildAccountRows([{ name: 'antigravity.json', type: 'antigravity' }], {
+      ...emptyStores(),
+      antigravityQuota: {
+        'antigravity.json': {
+          status: 'success',
+          subscription: {
+            plan: 'pro',
+            tierName: 'Pro',
+            tierId: 'pro',
           },
+          groups: [
+            {
+              id: 'primary',
+              label: 'Primary',
+              buckets: [
+                {
+                  id: 'weekly',
+                  label: 'Weekly',
+                  remainingFraction: 0.42,
+                  resetTime: '07-11 12:00',
+                },
+              ],
+            },
+          ],
         },
-      }
-    );
+      },
+    });
 
     expect(rows[0].planType).toBe('pro');
     expect(rows[0].quota.remainingPercent).toBe(42);
     expect(rows[0].quota.usedPercent).toBe(58);
     expect(rows[0].quota.resetLabel).toBe('07-11 12:00');
+  });
+
+  it('uses the tightest Kimi quota row for account summary and reset label', () => {
+    const rows = buildAccountRows([{ name: 'kimi.json', type: 'kimi' }], {
+      ...emptyStores(),
+      kimiQuota: {
+        'kimi.json': {
+          status: 'success',
+          rows: [
+            {
+              id: 'daily',
+              label: 'Daily',
+              used: 1,
+              limit: 10,
+              resetHint: '1d',
+            },
+            {
+              id: 'weekly',
+              label: 'Weekly',
+              used: 9,
+              limit: 10,
+              resetHint: '6d',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(rows[0].quota.remainingPercent).toBe(10);
+    expect(rows[0].quota.usedPercent).toBe(90);
+    expect(rows[0].quota.resetLabel).toBe('6d');
+    expect(rows[0].quota.status).toBe('low');
+  });
+
+  it('keeps xAI account available while pay-as-you-go quota remains', () => {
+    const rows = buildAccountRows([{ name: 'xai.json', type: 'xai' }], {
+      ...emptyStores(),
+      xaiQuota: {
+        'xai.json': {
+          status: 'success',
+          billing: {
+            monthlyLimitCents: 10_000,
+            usedCents: 12_500,
+            includedUsedCents: 10_000,
+            onDemandCapCents: 5_000,
+            onDemandUsedCents: 2_500,
+            onDemandUsedPercent: 50,
+            billingPeriodEnd: '2026-07-31T00:00:00Z',
+            usedPercent: 100,
+          },
+        },
+      },
+    });
+
+    expect(rows[0].quota.remainingPercent).toBeCloseTo(16.667, 2);
+    expect(rows[0].quota.usedPercent).toBeCloseTo(83.333, 2);
+    expect(rows[0].quota.resetLabel).toBe('2026-07-31T00:00:00Z');
+    expect(rows[0].quota.status).toBe('low');
+  });
+
+  it('uses xAI weekly credits when they are the tightest quota window', () => {
+    const rows = buildAccountRows([{ name: 'xai.json', type: 'xai' }], {
+      ...emptyStores(),
+      xaiQuota: {
+        'xai.json': {
+          status: 'success',
+          billing: {
+            periodType: 'weekly',
+            usagePercent: 92,
+            periodEnd: '2026-07-08T00:00:00Z',
+            productUsage: [{ product: 'Grok Code Fast', usagePercent: 92 }],
+            monthlyLimitCents: 10_000,
+            usedCents: 2_000,
+            includedUsedCents: 2_000,
+            onDemandCapCents: null,
+            onDemandUsedCents: null,
+            onDemandUsedPercent: null,
+            billingPeriodEnd: '2026-07-31T00:00:00Z',
+            usedPercent: 20,
+          },
+        },
+      },
+    });
+
+    expect(rows[0].quota.remainingPercent).toBe(8);
+    expect(rows[0].quota.usedPercent).toBe(92);
+    expect(rows[0].quota.resetLabel).toBe('2026-07-08T00:00:00Z');
+    expect(rows[0].quota.status).toBe('low');
   });
 
   it('keeps cached Codex quota source while appending header diagnostics', () => {

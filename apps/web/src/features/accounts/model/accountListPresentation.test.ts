@@ -202,6 +202,93 @@ describe('accountListPresentation', () => {
     expect(weeklyExhaustedItem.health.reasonKey).toBe('accounts.health_reason_weekly_exhausted');
     expect(weeklyExhaustedItem.health.reasonTone).toBe('warning');
 
+    const explicitMonthlyItem = buildAccountListItem(
+      makeRow({
+        quota: {
+          status: 'exhausted',
+          remainingPercent: 0,
+          usedPercent: 100,
+          resetLabel: '-',
+          planType: null,
+          source: 'cache',
+        },
+      }),
+      {
+        quotaWindows: [
+          {
+            key: 'opaque-window',
+            label: 'Allowance',
+            kind: 'monthly',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: 'month-end',
+          },
+        ],
+      }
+    );
+    expect(explicitMonthlyItem.health.status).toBe('monthly_exhausted');
+
+    const dailyExhaustedItem = buildAccountListItem(
+      makeRow({
+        quota: {
+          status: 'exhausted',
+          remainingPercent: 0,
+          usedPercent: 100,
+          resetLabel: '-',
+          planType: null,
+          source: 'cache',
+        },
+      }),
+      {
+        quotaWindows: [
+          {
+            key: 'daily',
+            label: 'Daily limit',
+            kind: 'daily',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: 'tomorrow',
+          },
+        ],
+      }
+    );
+    expect(dailyExhaustedItem.health.status).toBe('limited');
+
+    const xaiPaygAvailableItem = buildAccountListItem(
+      makeRow({
+        provider: 'xai',
+        quota: {
+          status: 'low',
+          remainingPercent: 16.667,
+          usedPercent: 83.333,
+          resetLabel: 'month-end',
+          planType: null,
+          source: 'cache',
+        },
+      }),
+      {
+        quotaWindows: [
+          {
+            key: 'billing',
+            label: 'Monthly credits',
+            kind: 'billing',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: 'month-end',
+          },
+          {
+            key: 'pay-as-you-go',
+            label: 'Pay-as-you-go',
+            kind: 'payg',
+            remainingPercent: 50,
+            usedPercent: 50,
+            resetLabel: 'month-end',
+          },
+        ],
+      }
+    );
+    expect(xaiPaygAvailableItem.health.status).toBe('available');
+
     const lowQuotaItem = buildAccountListItem(
       makeRow({
         quota: {
