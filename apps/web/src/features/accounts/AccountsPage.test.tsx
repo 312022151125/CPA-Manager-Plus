@@ -663,6 +663,11 @@ describe('AccountsPage replacement flows', () => {
     mocks.getAccountHistory.mockResolvedValue(makeAccountHistoryResponse([]));
     mocks.getAccountWindowUsage.mockReset();
     mocks.getAccountWindowUsage.mockResolvedValue({ generated_at_ms: 1, items: [] });
+    mocks.quotaState.antigravityQuota = {};
+    mocks.quotaState.claudeQuota = {};
+    mocks.quotaState.codexQuota = {};
+    mocks.quotaState.kimiQuota = {};
+    mocks.quotaState.xaiQuota = {};
     mocks.loadFiles.mockClear();
     mocks.loadExcluded.mockClear();
     mocks.loadModelAlias.mockClear();
@@ -765,26 +770,45 @@ describe('AccountsPage replacement flows', () => {
       {
         ...makeCodexFile('low.json', 'auth-low', 'low@example.com'),
         priority: -1,
+        createdAtMs: 1000,
         recent_requests: [{ success: 1, failed: 0 }],
       },
       {
         ...makeCodexFile('middle.json', 'auth-middle', 'middle@example.com'),
         priority: 2,
+        createdAtMs: 3000,
         recent_requests: [{ success: 3, failed: 2 }],
       },
       {
         ...makeCodexFile('high.json', 'auth-high', 'high@example.com'),
         priority: 10,
+        createdAtMs: 4000,
         recent_requests: [{ success: 2, failed: 1 }],
       },
     ];
+    mocks.quotaState.codexQuota = {
+      'low.json': {
+        status: 'success',
+        windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 10, resetLabel: '2026-01-10' }],
+      },
+      'middle.json': {
+        status: 'success',
+        windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 40, resetLabel: '2026-01-02' }],
+      },
+      'high.json': {
+        status: 'success',
+        windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 70, resetLabel: '2026-01-05' }],
+      },
+    };
 
     const renderer = await renderAccountsPage();
+
+    expect(getAccountListItemTexts(renderer)[0]).toContain('middle.json');
 
     await act(async () => {
       findHostButtonByAriaLabel(
         renderer,
-        'accounts.sort_label: accounts.sort_default'
+        'accounts.sort_label: accounts.col_recent'
       ).props.onClick();
     });
     await act(async () => {
@@ -804,6 +828,30 @@ describe('AccountsPage replacement flows', () => {
     });
 
     expect(getAccountListItemTexts(renderer)[0]).toContain('middle.json');
+
+    await act(async () => {
+      findHostButtonByAriaLabel(
+        renderer,
+        'accounts.sort_label: accounts.col_recent'
+      ).props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.col_quota').props.onClick();
+    });
+
+    expect(getAccountListItemTexts(renderer)[0]).toContain('low.json');
+
+    await act(async () => {
+      findHostButtonByAriaLabel(
+        renderer,
+        'accounts.sort_label: accounts.col_quota'
+      ).props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.col_created').props.onClick();
+    });
+
+    expect(getAccountListItemTexts(renderer)[0]).toContain('high.json');
   });
 
   it('keeps the accounts view in card mode without table controls', async () => {
@@ -1167,7 +1215,7 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
 
     expect(treeText(renderer)).toContain('accounts.mobile_filters_button');
-    expect(treeText(renderer)).toContain('accounts.mobile_filters_default');
+    expect(treeText(renderer)).toContain('accounts.col_recent');
 
     await act(async () => {
       findButtonByText(renderer, 'accounts.mobile_filters_button').props.onClick();

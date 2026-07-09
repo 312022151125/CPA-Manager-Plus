@@ -442,18 +442,21 @@ describe('accountRows', () => {
           name: 'low.json',
           type: 'codex',
           priority: -1,
+          createdAtMs: 1000,
           recent_requests: [{ success: 1, failed: 0 }],
         },
         {
           name: 'middle.json',
           type: 'codex',
           priority: 2,
+          createdAtMs: 3000,
           recent_requests: [{ success: 3, failed: 2 }],
         },
         {
           name: 'high.json',
           type: 'codex',
           priority: 10,
+          createdAtMs: 2000,
           recent_requests: [{ success: 2, failed: 1 }],
         },
       ],
@@ -462,11 +465,11 @@ describe('accountRows', () => {
         codexQuota: {
           'low.json': {
             status: 'success',
-            windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 10, resetLabel: '2026-01-10' }],
+            windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 90, resetLabel: '2026-01-10' }],
           },
           'middle.json': {
             status: 'success',
-            windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 10, resetLabel: '2026-01-02' }],
+            windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 40, resetLabel: '2026-01-02' }],
           },
           'high.json': {
             status: 'success',
@@ -485,5 +488,17 @@ describe('accountRows', () => {
     expect(
       sortAccountRows(rows, { key: 'reset', direction: 'asc' }).map((row) => row.fileName)
     ).toEqual(['middle.json', 'low.json', 'high.json']);
+    expect(
+      sortAccountRows(rows, { key: 'quota', direction: 'desc' }).map((row) => row.fileName)
+    ).toEqual(['high.json', 'middle.json', 'low.json']);
+    expect(
+      sortAccountRows(rows, { key: 'quota', direction: 'asc' }).map((row) => row.fileName)
+    ).toEqual(['low.json', 'middle.json', 'high.json']);
+    expect(
+      sortAccountRows(rows, { key: 'created', direction: 'desc' }).map((row) => row.fileName)
+    ).toEqual(['middle.json', 'high.json', 'low.json']);
+    expect(
+      sortAccountRows(rows, { key: 'created', direction: 'asc' }).map((row) => row.fileName)
+    ).toEqual(['low.json', 'high.json', 'middle.json']);
   });
 });

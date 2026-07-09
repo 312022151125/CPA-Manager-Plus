@@ -31,6 +31,7 @@ const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
     authIndex: '0',
     projectId: '',
     priority: 0,
+    createdAtMs: null,
     quota: {
       status: 'ok',
       remainingPercent: 80,

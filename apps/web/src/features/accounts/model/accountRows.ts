@@ -1,12 +1,5 @@
-import type {
-  AntigravityQuotaState,
-  AuthFileItem,
-  ClaudeQuotaState,
-  CodexQuotaState,
-  KimiQuotaState,
-  XaiQuotaState,
-} from '@/types';
-import type { CodexInspectionResult, UsageHeaderSnapshot } from '@/services/api/usageService';
+import type { AuthFileItem } from '@/types';
+import type { CodexInspectionResult } from '@/services/api/usageService';
 import {
   normalizeRecentRequestBuckets,
   sumRecentRequests,
@@ -17,22 +10,29 @@ import {
   getAuthFileSelectionKey,
 } from '@/features/authFiles/model/authFilesPageModel';
 import {
-  buildObservedCodexQuotaFromHeaderSnapshot,
-  getHeaderSnapshotErrorCode,
-  getHeaderSnapshotErrorKind,
-  getHeaderSnapshotPlanType,
-  getHeaderSnapshotTraceId,
-  hasUsageHeaderDiagnosticSignal,
-} from '@/utils/usageHeaderSnapshots';
+  compareQuotaResetLabels,
+  normalizeAccountProvider,
+  readAuthFileCreatedAtMs,
+  resolveAccountQuota,
+  type AccountQuotaOverrides,
+  type AccountQuotaSortDirection,
+  type AccountQuotaStores,
+  type AccountQuotaSummary,
+} from '@/features/accounts/model/accountQuotaSummary';
 
-export type AccountQuotaStatus =
-  | 'unknown'
-  | 'loading'
-  | 'ok'
-  | 'low'
-  | 'exhausted'
-  | 'error'
-  | 'disabled';
+export {
+  compareQuotaResetLabels,
+  normalizeAccountProvider,
+  readAuthFileCreatedAtMs,
+  resolveAccountQuota,
+};
+export type {
+  AccountQuotaOverrides,
+  AccountQuotaSource,
+  AccountQuotaStatus,
+  AccountQuotaStores,
+  AccountQuotaSummary,
+} from '@/features/accounts/model/accountQuotaSummary';
 
 export type AccountQuotaBand = 'all' | 'ge50' | 'between20and50' | 'lt20' | 'spent';
 export type AccountStatusFilter =
@@ -43,31 +43,12 @@ export type AccountStatusFilter =
   | 'low'
   | 'exhausted'
   | 'inspection';
-export type AccountRowSortKey = 'default' | 'reset' | 'priority' | 'recent';
-export type AccountRowSortDirection = 'asc' | 'desc';
-export type AccountQuotaSource = 'cache' | 'observed-header' | 'none';
+export type AccountRowSortKey = 'default' | 'reset' | 'priority' | 'recent' | 'quota' | 'created';
+export type AccountRowSortDirection = AccountQuotaSortDirection;
 
 export interface AccountRowSort {
   key: AccountRowSortKey;
   direction: AccountRowSortDirection;
-}
-
-export interface AccountQuotaSummary {
-  status: AccountQuotaStatus;
-  remainingPercent: number | null;
-  usedPercent: number | null;
-  resetLabel: string;
-  planType: string | null;
-  source: AccountQuotaSource;
-  error?: string;
-  observedAtMs?: number;
-  observedTraceId?: string;
-  observedErrorKind?: string;
-  observedErrorCode?: string;
-  activeLimit?: string | null;
-  creditsBalance?: string | null;
-  rateLimitReachedType?: string | null;
-  primaryOverSecondaryLimitPercent?: number | null;
 }
 
 export interface AccountInspectionSummary {
@@ -102,6 +83,7 @@ export interface AccountRow {
   authIndex: string;
   projectId: string;
   priority: number | null;
+  createdAtMs: number | null;
   quota: AccountQuotaSummary;
   usage: AccountUsageSummary;
   inspection: AccountInspectionSummary | null;
@@ -118,19 +100,6 @@ export interface AccountMetrics {
   successRate: number | null;
 }
 
-export interface AccountQuotaStores {
-  antigravityQuota: Record<string, AntigravityQuotaState>;
-  claudeQuota: Record<string, ClaudeQuotaState>;
-  codexQuota: Record<string, CodexQuotaState>;
-  kimiQuota: Record<string, KimiQuotaState>;
-  xaiQuota: Record<string, XaiQuotaState>;
-}
-
-export interface AccountQuotaOverrides {
-  codexQuotaBySelectionKey?: Map<string, CodexQuotaState>;
-  codexHeaderSnapshotBySelectionKey?: Map<string, UsageHeaderSnapshot>;
-}
-
 export interface AccountRowFilters {
   provider: string;
   status: AccountStatusFilter;
@@ -141,23 +110,6 @@ export interface AccountRowFilters {
 
 const QUOTA_LOW_THRESHOLD = 20;
 const QUOTA_OK_THRESHOLD = 50;
-
-type AccountQuotaObservationFields = Partial<
-  Pick<
-    AccountQuotaSummary,
-    | 'source'
-    | 'observedAtMs'
-    | 'observedTraceId'
-    | 'observedErrorKind'
-    | 'observedErrorCode'
-    | 'activeLimit'
-    | 'creditsBalance'
-    | 'rateLimitReachedType'
-    | 'primaryOverSecondaryLimitPercent'
-  >
->;
-
-const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
 
 const readString = (value: unknown): string => {
   if (typeof value === 'string') return value.trim();
@@ -172,13 +124,6 @@ const readNumber = (value: unknown): number | null => {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
-};
-
-export const normalizeAccountProvider = (file: AuthFileItem): string => {
-  const raw = readString(file.provider) || readString(file.type) || 'unknown';
-  const key = raw.toLowerCase().replace(/_/g, '-');
-  if (key === 'x-ai' || key === 'grok') return 'xai';
-  return key || 'unknown';
 };
 
 const readAuthIndex = (file: AuthFileItem): string =>
@@ -209,288 +154,6 @@ const resolveAccountLabel = (file: AuthFileItem): string =>
 
 const resolveStatusMessage = (file: AuthFileItem): string =>
   readString(file.statusMessage ?? file['status_message']);
-
-const getQuotaStatusFromRemaining = (remainingPercent: number | null): AccountQuotaStatus => {
-  if (remainingPercent === null) return 'unknown';
-  if (remainingPercent <= 0) return 'exhausted';
-  if (remainingPercent < QUOTA_LOW_THRESHOLD) return 'low';
-  return 'ok';
-};
-
-const quotaFromUsedWindows = (
-  windows: Array<{ usedPercent: number | null; resetLabel?: string }>,
-  planType: string | null,
-  options: AccountQuotaObservationFields = {}
-): AccountQuotaSummary => {
-  const source = options.source ?? 'cache';
-  const usedValues = windows
-    .map((window) => window.usedPercent)
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-  if (usedValues.length === 0) {
-    return {
-      status: 'unknown',
-      remainingPercent: null,
-      usedPercent: null,
-      resetLabel: '-',
-      planType,
-      ...options,
-      source,
-    };
-  }
-
-  const usedPercent = clampPercent(Math.max(...usedValues));
-  const remainingPercent = clampPercent(100 - usedPercent);
-  const resetLabel = windows.find((window) => readString(window.resetLabel))?.resetLabel ?? '-';
-  return {
-    status: getQuotaStatusFromRemaining(remainingPercent),
-    remainingPercent,
-    usedPercent,
-    resetLabel,
-    planType,
-    ...options,
-    source,
-  };
-};
-
-const quotaObservationFields = (quota: CodexQuotaState): AccountQuotaObservationFields => {
-  if (!quota.observedFromUsageHeaders) return { source: 'cache' };
-  return {
-    source: 'observed-header',
-    observedAtMs: quota.observedAtMs,
-    observedTraceId: quota.observedTraceId,
-    observedErrorKind: quota.observedErrorKind,
-    observedErrorCode: quota.observedErrorCode,
-    activeLimit: quota.activeLimit,
-    creditsBalance: quota.creditsBalance,
-    rateLimitReachedType: quota.rateLimitReachedType,
-    primaryOverSecondaryLimitPercent: quota.primaryOverSecondaryLimitPercent,
-  };
-};
-
-const quotaObservationFieldsFromSnapshot = (
-  snapshot: UsageHeaderSnapshot | undefined
-): AccountQuotaObservationFields => {
-  if (!hasUsageHeaderDiagnosticSignal(snapshot)) return {};
-  const observedQuota = buildObservedCodexQuotaFromHeaderSnapshot(snapshot);
-  return {
-    source: 'observed-header',
-    observedAtMs: snapshot?.timestamp_ms,
-    observedTraceId: getHeaderSnapshotTraceId(snapshot) || undefined,
-    observedErrorKind: getHeaderSnapshotErrorKind(snapshot) || undefined,
-    observedErrorCode: getHeaderSnapshotErrorCode(snapshot) || undefined,
-    activeLimit: observedQuota?.activeLimit ?? undefined,
-    creditsBalance: observedQuota?.creditsBalance ?? undefined,
-    rateLimitReachedType: observedQuota?.rateLimitReachedType ?? undefined,
-    primaryOverSecondaryLimitPercent: observedQuota?.primaryOverSecondaryLimitPercent ?? undefined,
-  };
-};
-
-const hasObservedQuotaFields = (fields: AccountQuotaObservationFields): boolean =>
-  Object.values(fields).some((value) => value !== undefined);
-
-const mergeQuotaObservationFields = (
-  summary: AccountQuotaSummary,
-  fields: AccountQuotaObservationFields
-): AccountQuotaSummary => {
-  if (!hasObservedQuotaFields(fields)) return summary;
-  const merged: AccountQuotaSummary = { ...summary };
-  if (fields.observedAtMs !== undefined) merged.observedAtMs = fields.observedAtMs;
-  if (fields.observedTraceId !== undefined) merged.observedTraceId = fields.observedTraceId;
-  if (fields.observedErrorKind !== undefined) {
-    merged.observedErrorKind = fields.observedErrorKind;
-  }
-  if (fields.observedErrorCode !== undefined) {
-    merged.observedErrorCode = fields.observedErrorCode;
-  }
-  if (fields.activeLimit !== undefined) merged.activeLimit = fields.activeLimit;
-  if (fields.creditsBalance !== undefined) merged.creditsBalance = fields.creditsBalance;
-  if (fields.rateLimitReachedType !== undefined) {
-    merged.rateLimitReachedType = fields.rateLimitReachedType;
-  }
-  if (fields.primaryOverSecondaryLimitPercent !== undefined) {
-    merged.primaryOverSecondaryLimitPercent = fields.primaryOverSecondaryLimitPercent;
-  }
-  if (summary.source === 'none' && fields.source) {
-    merged.source = fields.source;
-  }
-  return merged;
-};
-
-const quotaFromRemainingFractions = (
-  fractions: Array<number | null>,
-  resetLabel: string,
-  planType: string | null
-): AccountQuotaSummary => {
-  const values = fractions
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-    .map((value) => clampPercent(value * 100));
-  if (values.length === 0) {
-    return {
-      status: 'unknown',
-      remainingPercent: null,
-      usedPercent: null,
-      resetLabel,
-      planType,
-      source: 'cache',
-    };
-  }
-  const remainingPercent = Math.min(...values);
-  return {
-    status: getQuotaStatusFromRemaining(remainingPercent),
-    remainingPercent,
-    usedPercent: clampPercent(100 - remainingPercent),
-    resetLabel,
-    planType,
-    source: 'cache',
-  };
-};
-
-const quotaFromError = (
-  error: string | undefined,
-  planType: string | null
-): AccountQuotaSummary => ({
-  status: 'error',
-  remainingPercent: null,
-  usedPercent: null,
-  resetLabel: '-',
-  planType,
-  source: 'cache',
-  error,
-});
-
-export const resolveAccountQuota = (
-  file: AuthFileItem,
-  stores: AccountQuotaStores,
-  overrides?: AccountQuotaOverrides
-): AccountQuotaSummary => {
-  const provider = normalizeAccountProvider(file);
-  const filePlanType = readPlanType(file);
-  if (file.disabled === true) {
-    return {
-      status: 'disabled',
-      remainingPercent: null,
-      usedPercent: null,
-      resetLabel: '-',
-      planType: filePlanType,
-      source: 'none',
-    };
-  }
-
-  if (provider === 'codex') {
-    const selectionKey = getAuthFileSelectionKey(file);
-    const quota =
-      overrides?.codexQuotaBySelectionKey?.get(selectionKey) ?? stores.codexQuota[file.name];
-    const headerSnapshot = overrides?.codexHeaderSnapshotBySelectionKey?.get(selectionKey);
-    const headerObservationFields = quotaObservationFieldsFromSnapshot(headerSnapshot);
-    const headerPlanType = readString(getHeaderSnapshotPlanType(headerSnapshot)).toLowerCase();
-    const observedPlanType = headerPlanType || filePlanType;
-    if (!quota) {
-      return mergeQuotaObservationFields(emptyQuota(observedPlanType), headerObservationFields);
-    }
-    if (quota.status === 'loading') {
-      return mergeQuotaObservationFields(
-        loadingQuota(quota.planType ?? observedPlanType),
-        headerObservationFields
-      );
-    }
-    if (quota.status === 'error') {
-      return mergeQuotaObservationFields(
-        quotaFromError(quota.error, quota.planType ?? observedPlanType),
-        headerObservationFields
-      );
-    }
-    return mergeQuotaObservationFields(
-      quotaFromUsedWindows(
-        quota.windows,
-        quota.planType ?? observedPlanType,
-        quotaObservationFields(quota)
-      ),
-      headerObservationFields
-    );
-  }
-
-  if (provider === 'claude') {
-    const quota = stores.claudeQuota[file.name];
-    if (!quota) return emptyQuota(filePlanType);
-    if (quota.status === 'loading') return loadingQuota(quota.planType ?? filePlanType);
-    if (quota.status === 'error')
-      return quotaFromError(quota.error, quota.planType ?? filePlanType);
-    return quotaFromUsedWindows(quota.windows, quota.planType ?? filePlanType);
-  }
-
-  if (provider === 'antigravity') {
-    const quota = stores.antigravityQuota[file.name];
-    if (!quota) return emptyQuota(filePlanType);
-    const subscriptionPlan =
-      readString(quota.subscription?.plan) ||
-      readString(quota.subscription?.tierName) ||
-      readString(quota.subscription?.tierId);
-    const planType = filePlanType ?? (subscriptionPlan ? subscriptionPlan.toLowerCase() : null);
-    if (quota.status === 'loading') return loadingQuota(planType);
-    if (quota.status === 'error') return quotaFromError(quota.error, planType);
-    const buckets = quota.groups.flatMap((group) => group.buckets);
-    return quotaFromRemainingFractions(
-      buckets.map((bucket) => bucket.remainingFraction),
-      buckets.find((bucket) => readString(bucket.resetTime))?.resetTime ?? '-',
-      planType
-    );
-  }
-
-  if (provider === 'kimi') {
-    const quota = stores.kimiQuota[file.name];
-    if (!quota) return emptyQuota(filePlanType);
-    if (quota.status === 'loading') return loadingQuota(filePlanType);
-    if (quota.status === 'error') return quotaFromError(quota.error, filePlanType);
-    const remainingFractions = quota.rows.map((row) =>
-      row.limit > 0 ? Math.max(0, row.limit - row.used) / row.limit : null
-    );
-    return quotaFromRemainingFractions(
-      remainingFractions,
-      quota.rows.find((row) => readString(row.resetHint))?.resetHint ?? '-',
-      filePlanType
-    );
-  }
-
-  if (provider === 'xai') {
-    const quota = stores.xaiQuota[file.name];
-    if (!quota) return emptyQuota(filePlanType);
-    if (quota.status === 'loading') return loadingQuota(filePlanType);
-    if (quota.status === 'error') return quotaFromError(quota.error, filePlanType);
-    const usedPercent =
-      quota.billing?.usedPercent === null || quota.billing?.usedPercent === undefined
-        ? null
-        : clampPercent(quota.billing.usedPercent);
-    const remainingPercent = usedPercent === null ? null : clampPercent(100 - usedPercent);
-    return {
-      status: getQuotaStatusFromRemaining(remainingPercent),
-      remainingPercent,
-      usedPercent,
-      resetLabel: quota.billing?.billingPeriodEnd ?? '-',
-      planType: filePlanType,
-      source: 'cache',
-    };
-  }
-
-  return emptyQuota(filePlanType);
-};
-
-const emptyQuota = (planType: string | null): AccountQuotaSummary => ({
-  status: 'unknown',
-  remainingPercent: null,
-  usedPercent: null,
-  resetLabel: '-',
-  planType,
-  source: 'none',
-});
-
-const loadingQuota = (planType: string | null): AccountQuotaSummary => ({
-  status: 'loading',
-  remainingPercent: null,
-  usedPercent: null,
-  resetLabel: '-',
-  planType,
-  source: 'cache',
-});
 
 const buildInspectionMap = (
   results: CodexInspectionResult[] | undefined
@@ -557,6 +220,7 @@ export const buildAccountRows = (
       authIndex,
       projectId: readProjectId(file),
       priority: readNumber(file.priority),
+      createdAtMs: readAuthFileCreatedAtMs(file),
       quota,
       usage: buildUsageSummary(file),
       inspection: inspectionByFile.get(getAuthFileCodexInspectionKey(file.name, authIndex)) ?? null,
@@ -692,8 +356,18 @@ const compareAccountRowsBySort = (left: AccountRow, right: AccountRow, sort: Acc
     const rightTotal = right.usage.success + right.usage.failure;
     return compareNumbers(leftTotal, rightTotal, sort.direction);
   }
+  if (sort.key === 'quota') {
+    return compareNullableNumbers(
+      left.quota.remainingPercent,
+      right.quota.remainingPercent,
+      sort.direction
+    );
+  }
+  if (sort.key === 'created') {
+    return compareNullableNumbers(left.createdAtMs, right.createdAtMs, sort.direction);
+  }
   if (sort.key === 'reset') {
-    return compareResetLabels(left.quota.resetLabel, right.quota.resetLabel, sort.direction);
+    return compareQuotaResetLabels(left.quota.resetLabel, right.quota.resetLabel, sort.direction);
   }
   return 0;
 };
@@ -703,29 +377,15 @@ const compareNumbers = (left: number, right: number, direction: AccountRowSortDi
   return direction === 'asc' ? result : -result;
 };
 
-const compareResetLabels = (
-  leftRaw: string,
-  rightRaw: string,
+const compareNullableNumbers = (
+  left: number | null,
+  right: number | null,
   direction: AccountRowSortDirection
 ) => {
-  const left = normalizeResetSortLabel(leftRaw);
-  const right = normalizeResetSortLabel(rightRaw);
-  if (!left && !right) return 0;
-  if (!left) return 1;
-  if (!right) return -1;
-
-  const result = left.localeCompare(right, undefined, {
-    numeric: true,
-    sensitivity: 'base',
-  });
-  return direction === 'asc' ? result : -result;
-};
-
-const normalizeResetSortLabel = (value: string) => {
-  const label = readString(value);
-  const normalized = label.toLowerCase();
-  if (!label || label === '-' || normalized.includes('unknown') || label.includes('未知')) {
-    return null;
-  }
-  return label;
+  const leftKnown = typeof left === 'number' && Number.isFinite(left);
+  const rightKnown = typeof right === 'number' && Number.isFinite(right);
+  if (!leftKnown && !rightKnown) return 0;
+  if (!leftKnown) return 1;
+  if (!rightKnown) return -1;
+  return compareNumbers(left, right, direction);
 };

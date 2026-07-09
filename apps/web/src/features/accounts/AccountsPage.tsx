@@ -172,7 +172,10 @@ import styles from './AccountsPage.module.scss';
 
 type AccountsView = 'accounts' | 'quota' | 'inspection' | 'oauth' | 'value';
 type DetailTab = 'overview' | 'quota' | 'auth' | 'models' | 'strategy' | 'value' | 'events';
-type SortableAccountColumn = Extract<AccountRowSortKey, 'reset' | 'priority' | 'recent'>;
+type SortableAccountColumn = Extract<
+  AccountRowSortKey,
+  'reset' | 'priority' | 'recent' | 'quota' | 'created'
+>;
 type AccountSortFieldValue = 'default' | SortableAccountColumn;
 type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
@@ -206,6 +209,8 @@ const ACCOUNT_SORT_DEFAULT_DIRECTIONS: Record<SortableAccountColumn, AccountRowS
   reset: 'asc',
   priority: 'desc',
   recent: 'desc',
+  quota: 'desc',
+  created: 'desc',
 };
 
 const DEFAULT_ACCOUNT_SORT_FIELD_OPTION = {
@@ -223,12 +228,20 @@ const ACCOUNT_SORT_FIELD_OPTIONS: Array<{
     labelKey: 'accounts.col_reset',
   },
   {
+    value: 'quota',
+    labelKey: 'accounts.col_quota',
+  },
+  {
     value: 'priority',
     labelKey: 'accounts.col_priority',
   },
   {
     value: 'recent',
     labelKey: 'accounts.col_recent',
+  },
+  {
+    value: 'created',
+    labelKey: 'accounts.col_created',
   },
 ];
 
@@ -695,7 +708,7 @@ export function AccountsPage() {
   const [quotaBandFilter, setQuotaBandFilter] = useState<AccountQuotaBand>('all');
   const [search, setSearch] = useState('');
   const [accountSort, setAccountSort] = useState<AccountRowSort>({
-    key: 'default',
+    key: 'recent',
     direction: 'desc',
   });
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);

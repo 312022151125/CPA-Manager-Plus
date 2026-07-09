@@ -9,7 +9,7 @@
  *
  * 不依赖 i18n, 由调用方传入 locale 或已格式化字符串 — 这样组件保持 pure / 易测。
  */
-import type { JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 
 export type RelativeTimeMode = 'absolute' | 'relative' | 'both';
 
@@ -64,14 +64,23 @@ export const RelativeTime = ({
   fallback = '-',
   formatAbsolute = defaultFormatAbsolute,
 }: RelativeTimeProps): JSX.Element => {
+  const [nowMs, setNowMs] = useState<number | null>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setNowMs(Date.now());
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [timestamp]);
+
   if (timestamp === null || timestamp === undefined || !Number.isFinite(timestamp)) {
     return <>{fallback}</>;
   }
   const absolute = formatAbsolute(timestamp, locale);
-  const diff = timestamp - Date.now();
-  const relative = formatRelative(diff);
+  const relative = nowMs === null ? null : formatRelative(timestamp - nowMs);
 
   if (mode === 'absolute') return <>{absolute}</>;
-  if (mode === 'relative') return <>{relative}</>;
+  if (mode === 'relative') return <>{relative ?? fallback}</>;
+  if (relative === null) return <>{absolute}</>;
   return <>{`${absolute} · ${relative}`}</>;
 };
