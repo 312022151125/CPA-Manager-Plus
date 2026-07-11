@@ -20,16 +20,18 @@ import (
 )
 
 const (
-	quotaAutoDisableQueueSize     = 256
-	quotaAutoDisableDefaultTick   = 15 * time.Second
-	quotaAutoDisableActionTimeout = 30 * time.Second
-	quotaCooldownDueLimit         = 100
+	quotaAutoDisableQueueSize      = 256
+	quotaAutoDisableDefaultTick    = 15 * time.Second
+	quotaAutoDisableActionTimeout  = 30 * time.Second
+	quotaCooldownDueLimit          = 100
+	xaiFreeUsageExhaustedCooldown = 24 * time.Hour
 )
 
 // RateLimitAutoDisableWorker reacts to request-monitoring events in near real time.
-// It only handles Codex 429 usage_limit_reached responses that include an explicit
-// reset time. Disables are persisted with CPAMP ownership, so recovery never relies
-// solely on in-memory timers and never re-enables pre-existing/manual disables.
+// It handles Codex 429 usage_limit_reached responses with a known reset time, and
+// xAI/Grok free-usage exhaustion (subscription:free-usage-exhausted) with a 24h default.
+// Disables are persisted with CPAMP ownership, so recovery never relies solely on
+// in-memory timers and never re-enables pre-existing/manual disables.
 type RateLimitAutoDisableWorker struct {
 	store  *store.Store
 	client *http.Client
@@ -40,7 +42,10 @@ type RateLimitAutoDisableWorker struct {
 	baseURL             string
 	managementKey       string
 	enableCheckInterval time.Duration
+	codexEnabled        bool
+	grokEnabled         bool
 }
+
 
 type quotaAutoDisableCandidate struct {
 	BaseURL        string
@@ -88,6 +93,26 @@ func (w *RateLimitAutoDisableWorker) UpdateRuntimeConfig(ctx context.Context, cf
 	w.enableDue(ctx, time.Now())
 }
 
+func (w *RateLimitAutoDisableWorker) SetQuotaCooldownPolicy(codexEnabled, grokEnabled bool) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.codexEnabled = codexEnabled
+	w.grokEnabled = grokEnabled
+	w.mu.Unlock()
+}
+
+func (w *RateLimitAutoDisableWorker) quotaCooldownPolicy() (codexEnabled, grokEnabled bool) {
+	if w == nil {
+		return false, false
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.codexEnabled, w.grokEnabled
+}
+
+
 // HandleUsageEvents is called by the request-monitoring collector after raw CPA
 // usage events are normalized and enriched with auth-file snapshots. It does not
 // poll historical events; it only reacts to newly observed request failures.
@@ -107,9 +132,22 @@ func (w *RateLimitAutoDisableWorker) HandleUsageEvents(ctx context.Context, cfg 
 		return
 	}
 	now := time.Now()
+	codexEnabled, grokEnabled := w.quotaCooldownPolicy()
 	for _, event := range events {
 		candidate, ok := quotaAutoDisableCandidateFromEvent(event, baseURL, managementKey, now)
 		if !ok {
+			continue
+		}
+		switch candidate.Provider {
+		case "codex":
+			if !codexEnabled {
+				continue
+			}
+		case "xai":
+			if !grokEnabled {
+				continue
+			}
+		default:
 			continue
 		}
 		select {
@@ -193,7 +231,7 @@ func (w *RateLimitAutoDisableWorker) handleCandidate(ctx context.Context, candid
 	}
 
 	resolvedAuthIndex := firstNonEmpty(candidate.AuthIndex, current.AuthIndex)
-	log.Printf("[quota-auto-disable] Codex usage limit reached for auth file %q account=%q provider=%q resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.Provider, candidate.ResetAt.Format(time.RFC3339))
+	log.Printf("[quota-auto-disable] quota usage limit reached for auth file %q account=%q provider=%q resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.Provider, candidate.ResetAt.Format(time.RFC3339))
 	if err := w.patchAuthFile(ctx, candidate.BaseURL, candidate.ManagementKey, candidate.FileName, resolvedAuthIndex, true); err != nil {
 		log.Printf("[quota-auto-disable] failed to disable auth file %q: %v", candidate.FileName, err)
 		return
@@ -322,33 +360,59 @@ func (w *RateLimitAutoDisableWorker) recoverCooldown(ctx context.Context, baseUR
 }
 
 func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, managementKey string, now time.Time) (quotaAutoDisableCandidate, bool) {
-	resetAt, ok := codexUsageLimitResetTimeFromEvent(event, now)
-	if !ok {
+	if !event.Failed || event.FailStatusCode != http.StatusTooManyRequests {
 		return quotaAutoDisableCandidate{}, false
 	}
 	fileName := strings.TrimSpace(event.AuthFileSnapshot)
 	if fileName == "" {
-		log.Printf("[quota-auto-disable] Codex usage-limit event %q has no auth file snapshot, skip auto disable", event.EventHash)
+		log.Printf("[quota-auto-disable] usage-limit event %q has no auth file snapshot, skip auto disable", event.EventHash)
 		return quotaAutoDisableCandidate{}, false
 	}
+
+	provider := normalizeQuotaAutoDisableProvider(firstNonEmpty(event.Provider, event.AuthProviderSnapshot))
+	var resetAt time.Time
+	var ok bool
+	switch provider {
+	case "codex":
+		resetAt, ok = codexUsageLimitResetTimeFromEvent(event, now)
+	case "xai":
+		resetAt, ok = xaiFreeUsageExhaustedResetTimeFromEvent(event, now)
+	default:
+		return quotaAutoDisableCandidate{}, false
+	}
+	if !ok {
+		return quotaAutoDisableCandidate{}, false
+	}
+
 	return quotaAutoDisableCandidate{
 		BaseURL:        baseURL,
 		ManagementKey:  managementKey,
 		FileName:       fileName,
 		AuthIndex:      strings.TrimSpace(event.AuthIndex),
 		DisplayAccount: firstNonEmpty(event.AccountSnapshot, event.AuthLabelSnapshot, event.Source, fileName),
-		Provider:       "codex",
+		Provider:       provider,
 		ResetAt:        resetAt,
 		EventHash:      event.EventHash,
 		Reason:         event.FailSummary,
 	}, true
 }
 
+func normalizeQuotaAutoDisableProvider(raw string) string {
+	provider := strings.ToLower(strings.TrimSpace(raw))
+	provider = strings.ReplaceAll(provider, "_", "-")
+	switch provider {
+	case "x-ai", "grok":
+		return "xai"
+	default:
+		return provider
+	}
+}
+
 func codexUsageLimitResetTimeFromEvent(event usage.Event, now time.Time) (time.Time, bool) {
 	if !event.Failed || event.FailStatusCode != http.StatusTooManyRequests {
 		return time.Time{}, false
 	}
-	provider := strings.ToLower(strings.TrimSpace(firstNonEmpty(event.Provider, event.AuthProviderSnapshot)))
+	provider := normalizeQuotaAutoDisableProvider(firstNonEmpty(event.Provider, event.AuthProviderSnapshot))
 	if provider != "codex" {
 		return time.Time{}, false
 	}
@@ -371,6 +435,145 @@ func codexUsageLimitResetTimeFromEvent(event usage.Event, now time.Time) (time.T
 		}
 	}
 	return time.Time{}, false
+}
+
+func xaiFreeUsageExhaustedResetTimeFromEvent(event usage.Event, now time.Time) (time.Time, bool) {
+	if !event.Failed || event.FailStatusCode != http.StatusTooManyRequests {
+		return time.Time{}, false
+	}
+	if !xaiFreeUsageExhaustedSignalFromEvent(event) {
+		return time.Time{}, false
+	}
+	if resetAt, ok := explicitResetTimeFromEventTexts(event, now); ok {
+		return resetAt, true
+	}
+	if resetAt, ok := xaiRetryAfterRecoverAt(event, now); ok {
+		return resetAt, true
+	}
+	return now.Add(xaiFreeUsageExhaustedCooldown), true
+}
+
+func xaiFreeUsageExhaustedSignalFromEvent(event usage.Event) bool {
+	for _, text := range []string{event.FailBody, event.RawJSON, event.FailSummary} {
+		if xaiFreeUsageExhaustedSignalText(text) {
+			return true
+		}
+		found := false
+		forEachJSONValue(text, func(decoded any) bool {
+			if xaiFreeUsageExhaustedSignalFromJSON(decoded) {
+				found = true
+				return true
+			}
+			return false
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func xaiFreeUsageExhaustedSignalText(text string) bool {
+	normalized := strings.ToLower(text)
+	return strings.Contains(normalized, "free-usage-exhausted") ||
+		strings.Contains(normalized, "included free usage")
+}
+
+func xaiFreeUsageExhaustedSignalFromJSON(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		if code, ok := typed["code"]; ok && xaiFreeUsageExhaustedSignalText(fmt.Sprint(code)) {
+			return true
+		}
+		if rawError, ok := typed["error"]; ok {
+			switch errVal := rawError.(type) {
+			case string:
+				if xaiFreeUsageExhaustedSignalText(errVal) {
+					return true
+				}
+			case map[string]any:
+				if code, ok := errVal["code"]; ok && xaiFreeUsageExhaustedSignalText(fmt.Sprint(code)) {
+					return true
+				}
+				if msg, ok := errVal["message"]; ok && xaiFreeUsageExhaustedSignalText(fmt.Sprint(msg)) {
+					return true
+				}
+			default:
+				if xaiFreeUsageExhaustedSignalText(fmt.Sprint(rawError)) {
+					return true
+				}
+			}
+		}
+		if msg, ok := typed["message"]; ok && xaiFreeUsageExhaustedSignalText(fmt.Sprint(msg)) {
+			return true
+		}
+		for _, child := range typed {
+			if xaiFreeUsageExhaustedSignalFromJSON(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if xaiFreeUsageExhaustedSignalFromJSON(child) {
+				return true
+			}
+		}
+	case string:
+		return xaiFreeUsageExhaustedSignalText(typed)
+	}
+	return false
+}
+
+func explicitResetTimeFromEventTexts(event usage.Event, now time.Time) (time.Time, bool) {
+	for _, text := range []string{event.FailBody, event.RawJSON, event.FailSummary} {
+		var resetAt time.Time
+		found := false
+		forEachJSONValue(text, func(decoded any) bool {
+			if at, ok := explicitResetTimeFromJSON(decoded, now); ok {
+				resetAt = at
+				found = true
+				return true
+			}
+			return false
+		})
+		if found {
+			return resetAt, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func explicitResetTimeFromJSON(value any, now time.Time) (time.Time, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		if resetAt, ok := explicitResetTime(typed, now); ok {
+			return resetAt, true
+		}
+		for _, child := range typed {
+			if resetAt, ok := explicitResetTimeFromJSON(child, now); ok {
+				return resetAt, true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if resetAt, ok := explicitResetTimeFromJSON(child, now); ok {
+				return resetAt, true
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+func xaiRetryAfterRecoverAt(event usage.Event, now time.Time) (time.Time, bool) {
+	metadata := event.ResponseMetadata
+	if metadata == nil && event.ResponseMetadataJSON != "" {
+		metadata = usage.ResponseHeaderMetadataFromJSON(event.ResponseMetadataJSON)
+	}
+	if metadata == nil || metadata.Errors == nil || metadata.Errors.RetryAfterRecoverAtMS <= 0 {
+		return time.Time{}, false
+	}
+	resetAt := time.UnixMilli(metadata.Errors.RetryAfterRecoverAtMS)
+	return resetAt, resetAt.After(now)
 }
 
 func codexUsageLimitResetTimeFromHeaders(event usage.Event, now time.Time) (time.Time, bool) {
@@ -553,6 +756,10 @@ func isUsageLimitMap(value map[string]any) bool {
 }
 
 func explicitCodexResetTime(value map[string]any, now time.Time) (time.Time, bool) {
+	return explicitResetTime(value, now)
+}
+
+func explicitResetTime(value map[string]any, now time.Time) (time.Time, bool) {
 	for _, key := range []string{"resets_at", "resetsAt"} {
 		if raw, ok := value[key]; ok {
 			return parseResetValue(raw, now, false)

@@ -10,6 +10,7 @@ package model
 // variables keep their original names, which are surfaced separately.
 type AutomationSettings struct {
 	QuotaCooldownEnabled      *bool `json:"codexQuotaCooldownEnabled,omitempty"`
+	GrokQuotaCooldownEnabled  *bool `json:"grokQuotaCooldownEnabled,omitempty"`
 	AccountActionsEnabled     *bool `json:"authIssueQueueEnabled,omitempty"`
 	AccountActionsAutoDisable *bool `json:"authIssueAutoDisableEnabled,omitempty"`
 	UpdatedAtMS               int64 `json:"updatedAtMs,omitempty"`

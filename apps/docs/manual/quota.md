@@ -34,14 +34,20 @@
 
 ## 配额冷却
 
-开启配额冷却后，账号触达用量上限时，CPAMP 可以临时禁用对应认证文件，并在重置时间后恢复。
+开启对应的配额冷却开关后，账号触达明确的用量上限时，CPAMP 可以临时禁用对应认证文件，并在重置时间后恢复。
 
-注意：
+支持的信号与开关：
 
-- 需要 `USAGE_QUOTA_COOLDOWN_ENABLED` 或配置中心开关启用。
+- **Codex**：`usage_limit_reached` 且能拿到明确重置时间（body/header）。通过 `USAGE_QUOTA_COOLDOWN_ENABLED` 或配置中心 **Codex 额度冷却处理** 启用。
+- **Grok/xAI 免费档**：`subscription:free-usage-exhausted`（或正文中的 free-usage 耗尽描述）。默认恢复窗口为 **24 小时**，除非响应体/头给出更准重置时间。通过 `USAGE_GROK_QUOTA_COOLDOWN_ENABLED` 或配置中心 **Grok/xAI 免费额度冷却** 启用。
+
+说明：
+
+- Codex 与 Grok/xAI 使用**独立**开关；打开其中一个不会启用另一个。
 - 自动恢复依赖 CPAMP 持续运行。
 - 手动禁用的账号不会被自动恢复覆盖。
 - 如果 `auth_index` 不稳定，冷却记录可能无法准确绑定账号。
+- 没有 free-usage / usage-limit 信号的普通限流 429 会被忽略。
 
 配额冷却适合处理明确的额度耗尽，不适合用来处理登录失效、上游封禁或配置错误。后几类问题应进入 [账号处理队列](./account-actions.md) 或 [OAuth 登录](./oauth.md) 处理。
 

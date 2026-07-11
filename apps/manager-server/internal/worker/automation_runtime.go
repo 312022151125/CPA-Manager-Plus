@@ -13,7 +13,9 @@ type quotaAutomationWorker interface {
 	Start(ctx context.Context)
 	HandleUsageEvents(ctx context.Context, cfg collectorpkg.RuntimeConfig, events []usage.Event)
 	UpdateRuntimeConfig(ctx context.Context, cfg collectorpkg.RuntimeConfig)
+	SetQuotaCooldownPolicy(codexEnabled, grokEnabled bool)
 }
+
 
 type accountAutomationWorker interface {
 	Start(ctx context.Context)
@@ -48,6 +50,7 @@ func (r *AutomationRuntime) Start(ctx context.Context) {
 	if r == nil {
 		return
 	}
+	r.applyQuotaCooldownPolicy(ctx)
 	if r.quotaWorker != nil {
 		r.quotaWorker.Start(ctx)
 	}
@@ -59,6 +62,7 @@ func (r *AutomationRuntime) Start(ctx context.Context) {
 	}
 	r.logState(ctx, "loaded")
 }
+
 
 func (r *AutomationRuntime) UsageEventHandler() collectorpkg.UsageEventHandler {
 	if r == nil {
@@ -72,6 +76,7 @@ func (r *AutomationRuntime) Reload(ctx context.Context) error {
 		return nil
 	}
 	settings := r.settings.RuntimeSettings(ctx)
+	r.applyQuotaCooldownPolicy(ctx)
 	if r.accountWorker != nil {
 		r.accountWorker.SetAutoDisable(settings.AccountActionsAutoDisable)
 	}
@@ -79,13 +84,22 @@ func (r *AutomationRuntime) Reload(ctx context.Context) error {
 	return nil
 }
 
+func (r *AutomationRuntime) applyQuotaCooldownPolicy(ctx context.Context) {
+	if r == nil || r.settings == nil || r.quotaWorker == nil {
+		return
+	}
+	settings := r.settings.RuntimeSettings(ctx)
+	r.quotaWorker.SetQuotaCooldownPolicy(settings.QuotaCooldownEnabled, settings.GrokQuotaCooldownEnabled)
+}
+
 func (r *AutomationRuntime) logState(ctx context.Context, action string) {
 	if r == nil || r.settings == nil {
 		return
 	}
 	settings := r.settings.RuntimeSettings(ctx)
-	log.Printf("[automation] runtime settings %s quotaCooldown=%t accountActions=%t accountActionsAutoDisable=%t", action, settings.QuotaCooldownEnabled, settings.AccountActionsEnabled, settings.AccountActionsAutoDisable)
+	log.Printf("[automation] runtime settings %s quotaCooldown=%t grokQuotaCooldown=%t accountActions=%t accountActionsAutoDisable=%t", action, settings.QuotaCooldownEnabled, settings.GrokQuotaCooldownEnabled, settings.AccountActionsEnabled, settings.AccountActionsAutoDisable)
 }
+
 
 type automationUsageHandler struct {
 	settings      *automationsvc.Service
@@ -98,7 +112,8 @@ func (h *automationUsageHandler) HandleUsageEvents(ctx context.Context, cfg coll
 		return
 	}
 	settings := h.settings.RuntimeSettings(ctx)
-	if settings.QuotaCooldownEnabled && h.quotaWorker != nil {
+	if (settings.QuotaCooldownEnabled || settings.GrokQuotaCooldownEnabled) && h.quotaWorker != nil {
+		h.quotaWorker.SetQuotaCooldownPolicy(settings.QuotaCooldownEnabled, settings.GrokQuotaCooldownEnabled)
 		h.quotaWorker.HandleUsageEvents(ctx, cfg, events)
 	}
 	if settings.AccountActionsEnabled && h.accountWorker != nil {
@@ -106,6 +121,7 @@ func (h *automationUsageHandler) HandleUsageEvents(ctx context.Context, cfg coll
 		h.accountWorker.HandleUsageEvents(ctx, cfg, events)
 	}
 }
+
 
 func (h *automationUsageHandler) UpdateRuntimeConfig(ctx context.Context, cfg collectorpkg.RuntimeConfig) {
 	if h == nil {

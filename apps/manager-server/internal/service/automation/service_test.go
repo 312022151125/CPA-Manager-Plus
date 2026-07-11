@@ -42,6 +42,7 @@ func mustStatus(t *testing.T, svc *Service, ctx context.Context) Status {
 func TestStatusExposesEffectiveFlagsAndKeys(t *testing.T) {
 	cfg := config.Config{
 		QuotaCooldownEnabled:      true,
+		GrokQuotaCooldownEnabled:  true,
 		AccountActionsEnabled:     true,
 		AccountActionsAutoDisable: false,
 	}
@@ -56,6 +57,13 @@ func TestStatusExposesEffectiveFlagsAndKeys(t *testing.T) {
 	}
 	if status.QuotaCooldown.DependsOn != "" {
 		t.Fatalf("quotaCooldown should not declare a dependency, got %q", status.QuotaCooldown.DependsOn)
+	}
+
+	if !status.GrokQuotaCooldown.Enabled || status.GrokQuotaCooldown.EnvKey != "USAGE_GROK_QUOTA_COOLDOWN_ENABLED" || status.GrokQuotaCooldown.ConfigFileKey != "grokQuotaCooldownEnabled" {
+		t.Fatalf("grokQuotaCooldown = %#v", status.GrokQuotaCooldown)
+	}
+	if status.GrokQuotaCooldown.DependsOn != "" {
+		t.Fatalf("grokQuotaCooldown should not declare a dependency, got %q", status.GrokQuotaCooldown.DependsOn)
 	}
 
 	if !status.AccountActions.Enabled || status.AccountActions.EnvKey != "USAGE_ACCOUNT_ACTIONS_ENABLED" || status.AccountActions.ConfigFileKey != "accountActionsEnabled" {
@@ -75,6 +83,7 @@ func TestStatusExposesEffectiveFlagsAndKeys(t *testing.T) {
 		t.Fatalf("accountActionsAutoDisable dependsOn = %q", status.AccountActionsAutoDisable.DependsOn)
 	}
 }
+
 
 func TestStatusAutoDisableReportsEffectiveValue(t *testing.T) {
 	status := mustStatus(t, New(config.Config{
@@ -110,6 +119,7 @@ func TestStatusUsesDBSettingsUnlessEnvLocked(t *testing.T) {
 
 	if _, err := st.SaveAutomationSettings(ctx, store.AutomationSettings{
 		QuotaCooldownEnabled:      boolPtr(true),
+		GrokQuotaCooldownEnabled:  boolPtr(true),
 		AccountActionsEnabled:     boolPtr(false),
 		AccountActionsAutoDisable: boolPtr(true),
 	}); err != nil {
@@ -118,6 +128,9 @@ func TestStatusUsesDBSettingsUnlessEnvLocked(t *testing.T) {
 	status := mustStatus(t, New(config.Config{}, st), ctx)
 	if !status.QuotaCooldown.Enabled || status.QuotaCooldown.Source != SourceDB || status.QuotaCooldown.Locked {
 		t.Fatalf("quotaCooldown = %#v", status.QuotaCooldown)
+	}
+	if !status.GrokQuotaCooldown.Enabled || status.GrokQuotaCooldown.Source != SourceDB || status.GrokQuotaCooldown.Locked {
+		t.Fatalf("grokQuotaCooldown = %#v", status.GrokQuotaCooldown)
 	}
 	if status.AccountActions.Enabled || status.AccountActions.Source != SourceDB {
 		t.Fatalf("accountActions = %#v", status.AccountActions)
@@ -130,6 +143,12 @@ func TestStatusUsesDBSettingsUnlessEnvLocked(t *testing.T) {
 	if status.QuotaCooldown.Enabled || !status.QuotaCooldown.Locked || status.QuotaCooldown.Source != SourceEnv {
 		t.Fatalf("env locked quotaCooldown = %#v", status.QuotaCooldown)
 	}
+
+	status = mustStatus(t, New(config.Config{GrokQuotaCooldownEnabled: false, GrokQuotaCooldownEnvSet: true}, st), ctx)
+	if status.GrokQuotaCooldown.Enabled || !status.GrokQuotaCooldown.Locked || status.GrokQuotaCooldown.Source != SourceEnv {
+		t.Fatalf("env locked grokQuotaCooldown = %#v", status.GrokQuotaCooldown)
+	}
+
 }
 
 func TestUpdateRejectsEnvLockedFields(t *testing.T) {
@@ -142,14 +161,20 @@ func TestUpdateRejectsEnvLockedFields(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "locked by environment variable") {
 		t.Fatalf("Update err = %v", err)
 	}
+	_, err = New(config.Config{GrokQuotaCooldownEnvSet: true}, st).Update(context.Background(), UpdateRequest{GrokQuotaCooldownEnabled: boolPtr(true)})
+	if err == nil || !strings.Contains(err.Error(), "grokQuotaCooldownEnabled is locked by environment variable") {
+		t.Fatalf("Update grok err = %v", err)
+	}
 }
+
 
 func TestStatusDefaultsAllOff(t *testing.T) {
 	status := mustStatus(t, New(config.Config{}), context.Background())
-	if status.QuotaCooldown.Enabled || status.AccountActions.Enabled || status.AccountActionsAutoDisable.Enabled {
+	if status.QuotaCooldown.Enabled || status.GrokQuotaCooldown.Enabled || status.AccountActions.Enabled || status.AccountActionsAutoDisable.Enabled {
 		t.Fatalf("expected all capabilities disabled by default, got %#v", status)
 	}
 }
+
 
 func TestStatusReturnsErrorWhenLoadFails(t *testing.T) {
 	svc := &Service{
@@ -207,6 +232,7 @@ func TestUpdateSerializesConcurrentPatches(t *testing.T) {
 
 	patches := []UpdateRequest{
 		{QuotaCooldownEnabled: boolPtr(true)},
+		{GrokQuotaCooldownEnabled: boolPtr(true)},
 		{AccountActionsEnabled: boolPtr(true)},
 		{AccountActionsAutoDisable: boolPtr(true)},
 	}
@@ -226,6 +252,9 @@ func TestUpdateSerializesConcurrentPatches(t *testing.T) {
 	status := mustStatus(t, svc, ctx)
 	if !status.QuotaCooldown.Enabled {
 		t.Fatalf("quotaCooldown field lost under concurrent updates: %#v", status)
+	}
+	if !status.GrokQuotaCooldown.Enabled {
+		t.Fatalf("grokQuotaCooldown field lost under concurrent updates: %#v", status)
 	}
 	if !status.AccountActions.Enabled {
 		t.Fatalf("accountActions field lost under concurrent updates: %#v", status)

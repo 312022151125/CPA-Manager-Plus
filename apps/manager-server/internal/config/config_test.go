@@ -79,8 +79,10 @@ func TestLoadReadsConfigAndResolvesRelativePaths(t *testing.T) {
   "corsOrigins": ["http://panel.local"],
   "tlsSkipVerify": true,
   "quotaCooldownEnabled": true,
+  "grokQuotaCooldownEnabled": true,
   "accountActionsEnabled": true,
   "accountActionsAutoDisable": true
+
 }`), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -123,12 +125,16 @@ func TestLoadReadsConfigAndResolvesRelativePaths(t *testing.T) {
 	if !cfg.QuotaCooldownEnabled {
 		t.Fatal("QuotaCooldownEnabled = false")
 	}
+	if !cfg.GrokQuotaCooldownEnabled {
+		t.Fatal("GrokQuotaCooldownEnabled = false")
+	}
 	if !cfg.AccountActionsEnabled {
 		t.Fatal("AccountActionsEnabled = false")
 	}
 	if !cfg.AccountActionsAutoDisable {
 		t.Fatal("AccountActionsAutoDisable = false")
 	}
+
 }
 
 func TestLoadEnvOverridesConfig(t *testing.T) {
@@ -216,6 +222,7 @@ func clearConfigEnv(t *testing.T) {
 		"USAGE_CORS_ORIGINS",
 		"USAGE_RESP_TLS_SKIP_VERIFY",
 		"USAGE_QUOTA_COOLDOWN_ENABLED",
+		"USAGE_GROK_QUOTA_COOLDOWN_ENABLED",
 		"USAGE_ACCOUNT_ACTIONS_ENABLED",
 		"USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE",
 		"USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED",

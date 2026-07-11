@@ -37,15 +37,18 @@ type Status struct {
 	Source                    string     `json:"source"`
 	UpdatedAtMS               int64      `json:"updatedAtMs,omitempty"`
 	QuotaCooldown             Capability `json:"codexQuotaCooldown"`
+	GrokQuotaCooldown         Capability `json:"grokQuotaCooldown"`
 	AccountActions            Capability `json:"authIssueQueue"`
 	AccountActionsAutoDisable Capability `json:"authIssueAutoDisable"`
 }
 
 type UpdateRequest struct {
 	QuotaCooldownEnabled      *bool `json:"codexQuotaCooldownEnabled,omitempty"`
+	GrokQuotaCooldownEnabled  *bool `json:"grokQuotaCooldownEnabled,omitempty"`
 	AccountActionsEnabled     *bool `json:"authIssueQueueEnabled,omitempty"`
 	AccountActionsAutoDisable *bool `json:"authIssueAutoDisableEnabled,omitempty"`
 }
+
 
 type Service struct {
 	cfg   config.Config
@@ -99,6 +102,13 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (Status, error)
 		}
 		current.QuotaCooldownEnabled = boolPtr(*req.QuotaCooldownEnabled)
 	}
+	if req.GrokQuotaCooldownEnabled != nil {
+		if s.cfg.GrokQuotaCooldownEnvSet {
+			return Status{}, errors.New("grokQuotaCooldownEnabled is locked by environment variable")
+		}
+		current.GrokQuotaCooldownEnabled = boolPtr(*req.GrokQuotaCooldownEnabled)
+	}
+
 	if req.AccountActionsEnabled != nil {
 		if s.cfg.AccountActionsEnvSet {
 			return Status{}, errors.New("accountActionsEnabled is locked by environment variable")
@@ -150,10 +160,12 @@ func (s *Service) RuntimeSettings(ctx context.Context) RuntimeSettings {
 }
 
 type RuntimeSettings struct {
-	QuotaCooldownEnabled      bool
-	AccountActionsEnabled     bool
+	QuotaCooldownEnabled     bool
+	GrokQuotaCooldownEnabled bool
+	AccountActionsEnabled    bool
 	AccountActionsAutoDisable bool
 }
+
 
 func (s *Service) loadSettings(ctx context.Context) (store.AutomationSettings, bool, error) {
 	if s == nil || s.store == nil {
@@ -165,6 +177,8 @@ func (s *Service) loadSettings(ctx context.Context) (store.AutomationSettings, b
 type resolved struct {
 	quotaValue, quotaLocked     bool
 	quotaSource                 string
+	grokValue, grokLocked       bool
+	grokSource                  string
 	accountValue, accountLocked bool
 	accountSource               string
 	autoConfigured, autoLocked  bool
@@ -173,12 +187,16 @@ type resolved struct {
 
 func (s *Service) resolve(settings store.AutomationSettings) resolved {
 	quotaValue, quotaSource, quotaLocked := s.resolveField(settings.QuotaCooldownEnabled, s.cfg.QuotaCooldownEnabled, s.cfg.QuotaCooldownEnvSet)
+	grokValue, grokSource, grokLocked := s.resolveField(settings.GrokQuotaCooldownEnabled, s.cfg.GrokQuotaCooldownEnabled, s.cfg.GrokQuotaCooldownEnvSet)
 	accountValue, accountSource, accountLocked := s.resolveField(settings.AccountActionsEnabled, s.cfg.AccountActionsEnabled, s.cfg.AccountActionsEnvSet)
 	autoConfigured, autoSource, autoLocked := s.resolveField(settings.AccountActionsAutoDisable, s.cfg.AccountActionsAutoDisable, s.cfg.AccountActionsAutoEnvSet)
 	return resolved{
 		quotaValue:     quotaValue,
 		quotaSource:    quotaSource,
 		quotaLocked:    quotaLocked,
+		grokValue:      grokValue,
+		grokSource:     grokSource,
+		grokLocked:     grokLocked,
 		accountValue:   accountValue,
 		accountSource:  accountSource,
 		accountLocked:  accountLocked,
@@ -188,12 +206,13 @@ func (s *Service) resolve(settings store.AutomationSettings) resolved {
 	}
 }
 
+
 func (s *Service) statusFromSettings(settings store.AutomationSettings) Status {
 	r := s.resolve(settings)
 	autoEffective := r.accountValue && r.autoConfigured
 
 	return Status{
-		Source:      overallSource(r.quotaSource, r.accountSource, r.autoSource),
+		Source:      overallSource(r.quotaSource, r.grokSource, r.accountSource, r.autoSource),
 		UpdatedAtMS: settings.UpdatedAtMS,
 		QuotaCooldown: Capability{
 			Enabled:       r.quotaValue,
@@ -202,6 +221,14 @@ func (s *Service) statusFromSettings(settings store.AutomationSettings) Status {
 			Locked:        r.quotaLocked,
 			EnvKey:        "USAGE_QUOTA_COOLDOWN_ENABLED",
 			ConfigFileKey: "quotaCooldownEnabled",
+		},
+		GrokQuotaCooldown: Capability{
+			Enabled:       r.grokValue,
+			Configured:    r.grokValue,
+			Source:        r.grokSource,
+			Locked:        r.grokLocked,
+			EnvKey:        "USAGE_GROK_QUOTA_COOLDOWN_ENABLED",
+			ConfigFileKey: "grokQuotaCooldownEnabled",
 		},
 		AccountActions: Capability{
 			Enabled:       r.accountValue,
@@ -227,6 +254,7 @@ func (s *Service) runtimeFromSettings(settings store.AutomationSettings) Runtime
 	r := s.resolve(settings)
 	return RuntimeSettings{
 		QuotaCooldownEnabled:      r.quotaValue,
+		GrokQuotaCooldownEnabled:  r.grokValue,
 		AccountActionsEnabled:     r.accountValue,
 		AccountActionsAutoDisable: r.accountValue && r.autoConfigured,
 	}

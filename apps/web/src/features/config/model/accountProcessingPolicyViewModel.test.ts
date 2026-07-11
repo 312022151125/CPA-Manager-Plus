@@ -13,6 +13,14 @@ function policy(overrides: Partial<AccountProcessingPolicy> = {}): AccountProces
       envKey: 'USAGE_QUOTA_COOLDOWN_ENABLED',
       configFileKey: 'quotaCooldownEnabled',
     },
+    grokQuotaCooldown: {
+      enabled: false,
+      configured: false,
+      source: 'startup',
+      locked: false,
+      envKey: 'USAGE_GROK_QUOTA_COOLDOWN_ENABLED',
+      configFileKey: 'grokQuotaCooldownEnabled',
+    },
     authIssueQueue: {
       enabled: false,
       configured: false,
@@ -34,13 +42,14 @@ function policy(overrides: Partial<AccountProcessingPolicy> = {}): AccountProces
   };
 }
 
+
 describe('buildAccountProcessingPolicyViewModel', () => {
   it('groups quota handling and auth issue handling separately', () => {
     const groups = buildAccountProcessingPolicyViewModel(policy());
 
     expect(groups).toHaveLength(2);
     expect(groups[0].key).toBe('quota');
-    expect(groups[0].items.map((item) => item.key)).toEqual(['codexQuotaCooldown']);
+    expect(groups[0].items.map((item) => item.key)).toEqual(['codexQuotaCooldown', 'grokQuotaCooldown']);
     expect(groups[1].key).toBe('authIssues');
     expect(groups[1].items.map((item) => item.key)).toEqual([
       'authIssueQueue',

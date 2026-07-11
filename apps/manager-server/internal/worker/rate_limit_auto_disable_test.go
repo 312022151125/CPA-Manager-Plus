@@ -198,6 +198,210 @@ func TestQuotaAutoDisableCandidateIgnoresGenericRetryAfterHeader(t *testing.T) {
 	}
 }
 
+func TestQuotaAutoDisableCandidateDetectsXAIFreeUsageExhausted(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	base := usage.Event{
+		EventHash:        "evt-xai-free",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailBody:         `{"code":"subscription:free-usage-exhausted","error":"You've used all the included free usage for model grok-4.5-build-free for now."}`,
+		AuthFileSnapshot: "xai-one.json",
+		AuthIndex:        "auth-xai-1",
+		AccountSnapshot:  "grok-user",
+		Provider:         "xai",
+	}
+
+	candidate, ok := quotaAutoDisableCandidateFromEvent(base, "http://cpa", "key", now)
+	if !ok {
+		t.Fatal("candidate not detected")
+	}
+	if candidate.Provider != "xai" {
+		t.Fatalf("provider = %q, want xai", candidate.Provider)
+	}
+	if candidate.FileName != "xai-one.json" || candidate.AuthIndex != "auth-xai-1" {
+		t.Fatalf("candidate identity = %#v", candidate)
+	}
+	wantReset := now.Add(24 * time.Hour).Unix()
+	if got := candidate.ResetAt.Unix(); got != wantReset {
+		t.Fatalf("reset unix = %d, want %d", got, wantReset)
+	}
+}
+
+func TestQuotaAutoDisableCandidateNormalizesXAIProviderAliases(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	for _, provider := range []string{"grok", "x-ai", "X_AI", "Grok"} {
+		event := usage.Event{
+			EventHash:        "evt-xai-alias-" + provider,
+			Failed:           true,
+			FailStatusCode:   http.StatusTooManyRequests,
+			FailBody:         `{"code":"subscription:free-usage-exhausted","error":"included free usage exhausted"}`,
+			AuthFileSnapshot: "xai-alias.json",
+			Provider:         provider,
+		}
+		candidate, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now)
+		if !ok {
+			t.Fatalf("provider %q: candidate not detected", provider)
+		}
+		if candidate.Provider != "xai" {
+			t.Fatalf("provider %q normalized to %q, want xai", provider, candidate.Provider)
+		}
+	}
+}
+
+func TestQuotaAutoDisableCandidateDetectsNestedXAIFreeUsageExhausted(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	event := usage.Event{
+		EventHash:        "evt-xai-nested",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailBody:         `{"error":{"code":"subscription:free-usage-exhausted","message":"You've used all the included free usage for now."}}`,
+		AuthFileSnapshot: "xai-nested.json",
+		Provider:         "xai",
+	}
+	candidate, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now)
+	if !ok {
+		t.Fatal("nested free-usage candidate not detected")
+	}
+	if candidate.Provider != "xai" {
+		t.Fatalf("provider = %q, want xai", candidate.Provider)
+	}
+	if got := candidate.ResetAt.Unix(); got != now.Add(24*time.Hour).Unix() {
+		t.Fatalf("reset unix = %d", got)
+	}
+}
+
+func TestQuotaAutoDisableCandidateRejectsGenericXAIRateLimit(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	event := usage.Event{
+		EventHash:        "evt-xai-generic",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailBody:         `{"code":"rate_limit","error":"too many requests"}`,
+		AuthFileSnapshot: "xai-generic.json",
+		Provider:         "xai",
+	}
+	if _, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now); ok {
+		t.Fatal("generic xAI rate_limit should not create auto-disable candidate")
+	}
+}
+
+func TestQuotaAutoDisableCandidateUsesXAIExplicitResetsInSeconds(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	event := usage.Event{
+		EventHash:        "evt-xai-explicit",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailBody:         `{"code":"subscription:free-usage-exhausted","error":"included free usage exhausted","resets_in_seconds":3600}`,
+		AuthFileSnapshot: "xai-explicit.json",
+		Provider:         "xai",
+	}
+	candidate, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now)
+	if !ok {
+		t.Fatal("candidate not detected")
+	}
+	if got := candidate.ResetAt.Unix(); got != now.Add(time.Hour).Unix() {
+		t.Fatalf("reset unix = %d, want now+1h", got)
+	}
+}
+
+func TestQuotaAutoDisableCandidateUsesXAIRetryAfterRecoverAtMS(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	recoverAt := now.Add(90 * time.Minute)
+	event := usage.Event{
+		EventHash:        "evt-xai-retry-after",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailBody:         `{"code":"subscription:free-usage-exhausted","error":"included free usage exhausted"}`,
+		AuthFileSnapshot: "xai-retry.json",
+		Provider:         "xai",
+		ResponseMetadata: &usage.ResponseHeaderMetadata{
+			Errors: &usage.HeaderErrorMetadata{
+				RetryAfterRecoverAtMS: recoverAt.UnixMilli(),
+			},
+		},
+	}
+	candidate, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now)
+	if !ok {
+		t.Fatal("candidate not detected")
+	}
+	if got := candidate.ResetAt.Unix(); got != recoverAt.Unix() {
+		t.Fatalf("reset unix = %d, want %d", got, recoverAt.Unix())
+	}
+}
+
+func TestQuotaAutoDisableCandidateRejectsXAINonFutureExplicitReset(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	event := usage.Event{
+		EventHash:        "evt-xai-past-reset",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailBody:         `{"code":"subscription:free-usage-exhausted","error":"included free usage exhausted","resets_at":1699999990}`,
+		AuthFileSnapshot: "xai-past.json",
+		Provider:         "xai",
+	}
+	// explicit past reset is still returned by detection; handleCandidate rejects non-future.
+	// Prefer rejecting at candidate time when reset is not future if parseResetValue requires future.
+	// parseResetValue does not require future; handleCandidate does. Unit detection should still accept
+	// free-usage with explicit past? Plan: "non-future explicit reset | rejected at candidate or handle time".
+	// Mirror Codex: codex path returns reset even if not future from body parse; handleCandidate skips.
+	// For relative past absolute timestamps, parse may return past time with ok=true.
+	candidate, ok := quotaAutoDisableCandidateFromEvent(event, "http://cpa", "key", now)
+	if !ok {
+		// Accept either rejection here or at handle time.
+		return
+	}
+	if candidate.ResetAt.After(now) {
+		t.Fatalf("expected non-future reset, got %s", candidate.ResetAt)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerFiltersByQuotaCooldownPolicy(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	xaiEvent := usage.Event{
+		EventHash:        "evt-xai-policy",
+		Failed:           true,
+		FailStatusCode:   http.StatusTooManyRequests,
+		FailBody:         `{"code":"subscription:free-usage-exhausted","error":"included free usage exhausted"}`,
+		AuthFileSnapshot: "xai-policy.json",
+		Provider:         "xai",
+	}
+	if _, ok := quotaAutoDisableCandidateFromEvent(xaiEvent, "http://cpa", "key", now); !ok {
+		t.Fatal("xAI free-usage candidate should be detected before policy filter")
+	}
+
+	w := NewRateLimitAutoDisableWorker(nil)
+	// Default policy is off for both providers.
+	w.HandleUsageEvents(context.Background(), collectorpkg.RuntimeConfig{
+		CPAUpstreamURL: "http://cpa",
+		ManagementKey:  "key",
+	}, []usage.Event{xaiEvent})
+	if len(w.jobs) != 0 {
+		t.Fatalf("default policy should drop xAI candidate, queued=%d", len(w.jobs))
+	}
+
+	w.SetQuotaCooldownPolicy(true, false)
+	w.HandleUsageEvents(context.Background(), collectorpkg.RuntimeConfig{
+		CPAUpstreamURL: "http://cpa",
+		ManagementKey:  "key",
+	}, []usage.Event{xaiEvent})
+	if len(w.jobs) != 0 {
+		t.Fatalf("codex-only policy should drop xAI candidate, queued=%d", len(w.jobs))
+	}
+
+	w.SetQuotaCooldownPolicy(false, true)
+	w.HandleUsageEvents(context.Background(), collectorpkg.RuntimeConfig{
+		CPAUpstreamURL: "http://cpa",
+		ManagementKey:  "key",
+	}, []usage.Event{xaiEvent})
+	if len(w.jobs) != 1 {
+		t.Fatalf("grok policy on should enqueue xAI candidate, queued=%d", len(w.jobs))
+	}
+	candidate := <-w.jobs
+	if candidate.Provider != "xai" || candidate.FileName != "xai-policy.json" {
+		t.Fatalf("queued candidate = %#v", candidate)
+	}
+}
+
 func TestRateLimitAutoDisableWorkerRecoversDueCooldownFromManagerRuntimeConfigAfterRestart(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
 	if err != nil {

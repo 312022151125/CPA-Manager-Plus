@@ -24,8 +24,10 @@ const { mocks } = vi.hoisted(() => {
       getHeaderSnapshots: vi.fn(),
       apiCallRequest: vi.fn(),
       setCodexQuota: vi.fn(),
+      setXaiQuota: vi.fn(),
       intervalCallbacks: [] as Array<{ callback: () => void; delay: number | null }>,
       codexQuota: {} as Record<string, unknown>,
+      xaiQuota: {} as Record<string, unknown>,
       panelFeatureAvailability: {
         checking: false,
         panelHostMode: 'manager_embedded' as const,
@@ -141,11 +143,15 @@ vi.mock('@/stores', () => ({
     selector: (state: {
       codexQuota: Record<string, unknown>;
       setCodexQuota: typeof mocks.setCodexQuota;
+      xaiQuota: Record<string, unknown>;
+      setXaiQuota: typeof mocks.setXaiQuota;
     }) => unknown
   ) =>
     selector({
       codexQuota: mocks.codexQuota,
       setCodexQuota: mocks.setCodexQuota,
+      xaiQuota: mocks.xaiQuota,
+      setXaiQuota: mocks.setXaiQuota,
     }),
 }));
 
@@ -369,12 +375,19 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
     mocks.apiCallRequest.mockReset();
     mocks.intervalCallbacks = [];
     mocks.codexQuota = {};
+    mocks.xaiQuota = {};
     mocks.setCodexQuota = vi.fn((updater: unknown) => {
       mocks.codexQuota =
         typeof updater === 'function'
           ? (updater as (prev: Record<string, unknown>) => Record<string, unknown>)(
               mocks.codexQuota
             )
+          : (updater as Record<string, unknown>);
+    });
+    mocks.setXaiQuota = vi.fn((updater: unknown) => {
+      mocks.xaiQuota =
+        typeof updater === 'function'
+          ? (updater as (prev: Record<string, unknown>) => Record<string, unknown>)(mocks.xaiQuota)
           : (updater as Record<string, unknown>);
     });
     mocks.connectionStatus = 'connected';
@@ -622,6 +635,122 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
     expect(card.props['data-codex-quota-plan']).toBe('plus');
     expect(card.props['data-codex-quota-window-percent']).toBe('12');
     expect(card.props['data-codex-quota-window-seconds']).toBe('18000');
+  });
+
+  it('shows active quota cooldown badge for xAI auth files', async () => {
+    mocks.list.mockReturnValue([
+      { name: 'xai-one.json', type: 'xai', authIndex: 'xai-1' },
+      { name: 'codex-one.json', type: 'codex' },
+    ]);
+    mocks.getActiveQuotaCooldowns.mockResolvedValue([
+      {
+        authFileName: 'xai-one.json',
+        authIndex: 'xai-1',
+        provider: 'xai',
+        owner: 'cpamp_usage_429',
+        recoverAtMs: 2_000_000_000_000,
+      },
+    ]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'xai-one.json' }).props[
+          'data-quota-cooldown'
+        ]
+      ).toBe('xai-one.json@2000000000000');
+    });
+
+    expect(
+      renderer!.root.findByProps({ 'data-auth-card': 'codex-one.json' }).props[
+        'data-quota-cooldown'
+      ]
+    ).toBe('');
+  });
+
+  it('refreshes xAI quota when a CPAMP cooldown recovers', async () => {
+    const recoveredAtMs = Date.now() - 1_000;
+    mocks.list.mockReturnValue([
+      { name: 'xai-one.json', type: 'xai', authIndex: 'xai-1' },
+      { name: 'codex-one.json', type: 'codex' },
+    ]);
+    mocks.getActiveQuotaCooldowns
+      .mockResolvedValueOnce([
+        {
+          authFileName: 'xai-one.json',
+          authIndex: 'xai-1',
+          provider: 'xai',
+          owner: 'cpamp_usage_429',
+          recoverAtMs: recoveredAtMs,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    mocks.apiCallRequest
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        body: {
+          config: {
+            current_period: {
+              type: 'weekly',
+              start: '2026-07-01T00:00:00Z',
+              end: '2026-07-08T00:00:00Z',
+            },
+            credit_usage_percent: 40,
+            product_usage: [{ product: 'Grok 4', usage_percent: 25 }],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        body: {
+          config: {
+            monthly_limit: 10000,
+            used: 3000,
+            on_demand_cap: 5000,
+            billing_period_end: '2026-08-01T00:00:00Z',
+          },
+        },
+      });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'xai-one.json' }).props[
+          'data-quota-cooldown'
+        ]
+      ).toBe(`xai-one.json@${recoveredAtMs}`);
+    });
+
+    const quotaInterval = mocks.intervalCallbacks.find((item) => item.delay === 60_000);
+    await act(async () => {
+      quotaInterval?.callback();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.apiCallRequest).toHaveBeenCalledTimes(2);
+      expect(mocks.setXaiQuota).toHaveBeenCalled();
+    });
+
+    await act(async () => {
+      renderer!.update(<AuthFilesPage />);
+    });
+
+    const card = renderer!.root.findByProps({ 'data-auth-card': 'xai-one.json' });
+    expect(card.props['data-quota-cooldown']).toBe('');
+    expect(mocks.apiCallRequest.mock.calls.map(([payload]) => payload.authIndex)).toEqual([
+      'xai-1',
+      'xai-1',
+    ]);
   });
 
   it('refreshes only the recovered auth index for shared Codex auth files', async () => {

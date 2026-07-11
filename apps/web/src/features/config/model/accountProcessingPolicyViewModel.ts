@@ -2,8 +2,10 @@ import type { AccountPolicyCapability, AccountProcessingPolicy } from '@/service
 
 export type AccountPolicyCapabilityKey =
   | 'codexQuotaCooldown'
+  | 'grokQuotaCooldown'
   | 'authIssueQueue'
   | 'authIssueAutoDisable';
+
 
 export type AccountPolicyGroupKey = 'quota' | 'authIssues';
 
@@ -42,9 +44,11 @@ export interface AccountPolicyViewGroup {
 
 const capabilityKeys: AccountPolicyCapabilityKey[] = [
   'codexQuotaCooldown',
+  'grokQuotaCooldown',
   'authIssueQueue',
   'authIssueAutoDisable',
 ];
+
 
 const capabilityMetadata: Record<
   AccountPolicyCapabilityKey,
@@ -59,6 +63,14 @@ const capabilityMetadata: Record<
     behaviorKey: 'accountPolicy.codexQuotaCooldown_behavior',
     summaryKey: 'accountPolicy.codexQuotaCooldown_summary',
     toggleLabelKey: 'accountPolicy.codexQuotaCooldown_toggle',
+    nested: false,
+  },
+  grokQuotaCooldown: {
+    titleKey: 'accountPolicy.grokQuotaCooldown_title',
+    descriptionKey: 'accountPolicy.grokQuotaCooldown_description',
+    behaviorKey: 'accountPolicy.grokQuotaCooldown_behavior',
+    summaryKey: 'accountPolicy.grokQuotaCooldown_summary',
+    toggleLabelKey: 'accountPolicy.grokQuotaCooldown_toggle',
     nested: false,
   },
   authIssueQueue: {
@@ -89,7 +101,7 @@ const groupDefinitions: Array<{
     key: 'quota',
     titleKey: 'accountPolicy.group_quota_title',
     descriptionKey: 'accountPolicy.group_quota_description',
-    itemKeys: ['codexQuotaCooldown'],
+    itemKeys: ['codexQuotaCooldown', 'grokQuotaCooldown'],
   },
   {
     key: 'authIssues',

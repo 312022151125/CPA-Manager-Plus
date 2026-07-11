@@ -34,14 +34,20 @@ Different providers return different data. Unknown means CPAMP did not get enoug
 
 ## Quota Cooldown
 
-When quota cooldown is enabled and an account reaches its usage limit, CPAMP can temporarily disable the related auth file and recover it after the reset time.
+When a quota cooldown switch is enabled and an account reaches a clear usage limit, CPAMP can temporarily disable the related auth file and recover it after the reset time.
+
+Supported signals and switches:
+
+- **Codex**: `usage_limit_reached` with a known reset time (body/header). Enable with `USAGE_QUOTA_COOLDOWN_ENABLED` or Configuration → **Codex Quota Cooldown Handling**.
+- **Grok/xAI free tier**: `subscription:free-usage-exhausted` (or body text containing free-usage exhaustion). Default recover window is **24 hours** unless the response body/header supplies a better reset time. Enable with `USAGE_GROK_QUOTA_COOLDOWN_ENABLED` or Configuration → **Grok/xAI Free-Usage Cooldown**.
 
 Notes:
 
-- Enable it with `USAGE_QUOTA_COOLDOWN_ENABLED` or the Configuration switch.
+- Codex and Grok/xAI use **separate** on/off switches; turning one on does not enable the other.
 - Auto-restore depends on CPAMP continuing to run.
 - Manually disabled accounts are not restored automatically.
 - Unstable `auth_index` values can prevent accurate account binding.
+- Generic rate-limit 429s without a free-usage / usage-limit signal are ignored.
 
 Quota cooldown is for clear quota exhaustion. It is not a good tool for expired login, upstream bans, or configuration errors. Use [Account Action Queue](./account-actions.md) or [OAuth Login](./oauth.md) for those.
 

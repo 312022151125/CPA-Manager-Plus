@@ -43,6 +43,17 @@ func TestAutomationUsageHandlerGatesNewEvents(t *testing.T) {
 	if quota.handleCount != 2 || account.handleCount != 1 || !account.autoDisable {
 		t.Fatalf("enabled counts quota=%d account=%d auto=%t", quota.handleCount, account.handleCount, account.autoDisable)
 	}
+
+	if _, err := settings.Update(ctx, automationsvc.UpdateRequest{QuotaCooldownEnabled: boolPtr(false), GrokQuotaCooldownEnabled: boolPtr(true)}); err != nil {
+		t.Fatalf("enable grok quota: %v", err)
+	}
+	handler.HandleUsageEvents(ctx, collectorpkg.RuntimeConfig{}, []usage.Event{{EventHash: "evt-grok"}})
+	if quota.handleCount != 3 {
+		t.Fatalf("grok-only should still call quota worker, count=%d", quota.handleCount)
+	}
+	if !quota.grokEnabled || quota.codexEnabled {
+		t.Fatalf("policy after grok-only enable codex=%t grok=%t", quota.codexEnabled, quota.grokEnabled)
+	}
 }
 
 func TestAutomationRuntimeReloadUpdatesAutoDisable(t *testing.T) {
@@ -71,6 +82,8 @@ type recordingQuotaAutomationWorker struct {
 	startCount   int
 	handleCount  int
 	runtimeCount int
+	codexEnabled bool
+	grokEnabled  bool
 }
 
 func (w *recordingQuotaAutomationWorker) Start(context.Context) {
@@ -83,6 +96,11 @@ func (w *recordingQuotaAutomationWorker) HandleUsageEvents(context.Context, coll
 
 func (w *recordingQuotaAutomationWorker) UpdateRuntimeConfig(context.Context, collectorpkg.RuntimeConfig) {
 	w.runtimeCount++
+}
+
+func (w *recordingQuotaAutomationWorker) SetQuotaCooldownPolicy(codexEnabled, grokEnabled bool) {
+	w.codexEnabled = codexEnabled
+	w.grokEnabled = grokEnabled
 }
 
 type recordingAccountAutomationWorker struct {

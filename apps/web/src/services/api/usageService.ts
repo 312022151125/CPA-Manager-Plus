@@ -101,15 +101,18 @@ export interface AccountProcessingPolicy {
   source: string;
   updatedAtMs?: number;
   codexQuotaCooldown: AccountPolicyCapability;
+  grokQuotaCooldown: AccountPolicyCapability;
   authIssueQueue: AccountPolicyCapability;
   authIssueAutoDisable: AccountPolicyCapability;
 }
 
 export interface AccountProcessingPolicyPatch {
   codexQuotaCooldownEnabled?: boolean;
+  grokQuotaCooldownEnabled?: boolean;
   authIssueQueueEnabled?: boolean;
   authIssueAutoDisableEnabled?: boolean;
 }
+
 
 export interface QuotaCooldownInfo {
   authFileName: string;
@@ -1379,6 +1382,10 @@ const getDemoPatchedAccountProcessingPolicy = (
     codexQuotaCooldown: {
       ...policy.codexQuotaCooldown,
       enabled: patch.codexQuotaCooldownEnabled ?? policy.codexQuotaCooldown.enabled,
+    },
+    grokQuotaCooldown: {
+      ...policy.grokQuotaCooldown,
+      enabled: patch.grokQuotaCooldownEnabled ?? policy.grokQuotaCooldown.enabled,
     },
     authIssueQueue: {
       ...policy.authIssueQueue,
