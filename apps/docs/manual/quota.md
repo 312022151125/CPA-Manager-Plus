@@ -11,6 +11,7 @@
 1. [认证文件](./auth-files.md) 中账号存在且 `auth_index` 稳定。
 2. 请求确实经过 CPA，并且最近有相关请求。
 3. 如果是 Codex 账号，必要时先跑一次 [Codex 账号巡检](./codex-inspection.md)。
+4. 需要批量检查 Grok/xAI 账号健康时，使用 [Grok 账号巡检](./grok-inspection.md)。
 
 ## 数据来源
 

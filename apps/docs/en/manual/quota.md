@@ -11,6 +11,7 @@ Quota data depends on auth files and provider responses. Before using this page,
 1. The account exists in [Auth Files](./auth-files.md) and has a stable `auth_index`.
 2. Requests are flowing through CPA and recent requests exist.
 3. For Codex accounts, run [Codex Inspection](./codex-inspection.md) when needed.
+4. For batch Grok/xAI account health, use [Grok Account Inspection](./grok-inspection.md).
 
 ## Data Sources
 
