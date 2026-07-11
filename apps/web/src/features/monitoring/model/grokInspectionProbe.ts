@@ -135,7 +135,7 @@ export const resolveGrokProbeAction = (
       isQuota: false,
     };
   }
-  if (account.disabled && usedPercent < threshold) {
+  if (account.disabled && usedPercent !== null && usedPercent < threshold) {
     return {
       action: 'enable',
       actionReason: 'monitoring.grok_inspection_reason_recovered',
