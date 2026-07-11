@@ -2256,6 +2256,7 @@
     "grok_inspection_reason_quota_high": "Использование ≥ порога; предложено отключить",
     "grok_inspection_reason_quota_high_already_disabled": "Использование ≥ порога, но файл уже отключён",
     "grok_inspection_reason_recovered": "Использование восстановилось; предложено включить",
+    "grok_inspection_reason_disabled_usage_unknown": "Файл отключён, использование неизвестно; оставить отключённым",
     "grok_inspection_reason_reauth": "Биллинговый probe вернул 401/403; переавторизуйте на странице OAuth",
     "grok_inspection_reason_probe_failed": "Биллинговый probe не удался; аккаунт оставлен, см. ошибку",
     "grok_inspection_threshold": "Порог отключения",

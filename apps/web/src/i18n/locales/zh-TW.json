@@ -2256,6 +2256,7 @@
     "grok_inspection_reason_quota_high": "用量達到閾值，建議停用",
     "grok_inspection_reason_quota_high_already_disabled": "用量達到閾值，但檔案已停用",
     "grok_inspection_reason_recovered": "用量已恢復，建議啟用",
+    "grok_inspection_reason_disabled_usage_unknown": "檔案已停用且用量未知，保持停用",
     "grok_inspection_reason_reauth": "帳單探測返回 401/403，請到 OAuth 頁重新授權",
     "grok_inspection_reason_probe_failed": "帳單探測失敗，保留帳號並查看錯誤",
     "grok_inspection_threshold": "停用閾值",

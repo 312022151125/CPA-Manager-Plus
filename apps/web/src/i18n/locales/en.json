@@ -2256,6 +2256,7 @@
     "grok_inspection_reason_quota_high": "Usage at or above threshold; suggest disable",
     "grok_inspection_reason_quota_high_already_disabled": "Usage at or above threshold, but file already disabled",
     "grok_inspection_reason_recovered": "Usage recovered; suggest enable",
+    "grok_inspection_reason_disabled_usage_unknown": "File disabled and usage unknown; keep disabled",
     "grok_inspection_reason_reauth": "Billing probe returned 401/403; re-authorize on OAuth page",
     "grok_inspection_reason_probe_failed": "Billing probe failed; keep account and review error",
     "grok_inspection_threshold": "Disable Threshold",

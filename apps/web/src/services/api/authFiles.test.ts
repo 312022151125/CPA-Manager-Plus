@@ -437,3 +437,34 @@ describe('authFilesApi patchFieldsForAuthIndexes', () => {
     );
   });
 });
+
+describe('authFilesApi setStatusWithFallback', () => {
+  it('prefers /auth-files/status over /auth-files for disable', async () => {
+    mocks.patch.mockResolvedValueOnce({ status: 'ok', disabled: true });
+
+    await authFilesApi.setStatusWithFallback('xai.json', true);
+
+    expect(mocks.patch).toHaveBeenCalledTimes(1);
+    expect(mocks.patch).toHaveBeenCalledWith('/auth-files/status', {
+      name: 'xai.json',
+      disabled: true,
+    });
+  });
+
+  it('falls back to PATCH /auth-files when status endpoint fails', async () => {
+    mocks.patch
+      .mockRejectedValueOnce(new Error('status endpoint missing'))
+      .mockResolvedValueOnce({ status: 'ok', disabled: true });
+
+    await authFilesApi.setStatusWithFallback('xai.json', true);
+
+    expect(mocks.patch).toHaveBeenNthCalledWith(1, '/auth-files/status', {
+      name: 'xai.json',
+      disabled: true,
+    });
+    expect(mocks.patch).toHaveBeenNthCalledWith(2, '/auth-files', {
+      name: 'xai.json',
+      disabled: true,
+    });
+  });
+});

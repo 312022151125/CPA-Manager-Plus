@@ -2256,6 +2256,7 @@
     "grok_inspection_reason_quota_high": "用量达到阈值，建议禁用",
     "grok_inspection_reason_quota_high_already_disabled": "用量达到阈值，但文件已禁用",
     "grok_inspection_reason_recovered": "用量已恢复，建议启用",
+    "grok_inspection_reason_disabled_usage_unknown": "文件已禁用且用量未知，保持禁用",
     "grok_inspection_reason_reauth": "账单探测返回 401/403，请到 OAuth 页重新授权",
     "grok_inspection_reason_probe_failed": "账单探测失败，保留账号并查看错误",
     "grok_inspection_threshold": "禁用阈值",

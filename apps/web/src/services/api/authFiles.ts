@@ -635,9 +635,10 @@ export const authFilesApi = {
 
   setStatusWithFallback: async (name: string, disabled: boolean) => {
     try {
-      return await authFilesApi.patchFile({ name, disabled });
+      // CPA disables via /auth-files/status. PATCH /auth-files can 200 without applying disabled.
+      return await authFilesApi.setStatus(name, disabled);
     } catch {
-      return authFilesApi.setStatus(name, disabled);
+      return authFilesApi.patchFile({ name, disabled });
     }
   },
 

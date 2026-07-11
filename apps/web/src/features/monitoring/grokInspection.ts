@@ -673,9 +673,7 @@ export const resolveGrokInspectionAutoActionItems = (
 
   if (normalizedMode === 'disable') {
     return items
-      .filter(
-        (item) => item.action === 'delete' || item.action === 'disable' || item.action === 'enable'
-      )
+      .filter((item) => item.action === 'delete' || item.action === 'disable')
       .map((item) =>
         item.action === 'delete'
           ? {

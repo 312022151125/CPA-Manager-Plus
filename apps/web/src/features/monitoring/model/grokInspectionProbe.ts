@@ -128,7 +128,14 @@ export const resolveGrokProbeAction = (
       isQuota: true,
     };
   }
-  if (account.disabled && (usedPercent === null || usedPercent < threshold)) {
+  if (account.disabled && usedPercent === null) {
+    return {
+      action: 'keep',
+      actionReason: 'monitoring.grok_inspection_reason_disabled_usage_unknown',
+      isQuota: false,
+    };
+  }
+  if (account.disabled && usedPercent < threshold) {
     return {
       action: 'enable',
       actionReason: 'monitoring.grok_inspection_reason_recovered',

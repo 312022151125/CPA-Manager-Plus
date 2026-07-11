@@ -99,6 +99,14 @@ describe('resolveGrokProbeAction', () => {
     });
   });
 
+  it('keeps disabled accounts when usage is unknown', () => {
+    expect(resolveGrokProbeAction({ disabled: true }, null, 100)).toEqual({
+      action: 'keep',
+      actionReason: 'monitoring.grok_inspection_reason_disabled_usage_unknown',
+      isQuota: false,
+    });
+  });
+
   it('keeps healthy accounts', () => {
     expect(resolveGrokProbeAction({ disabled: false }, 10, 100)).toEqual({
       action: 'keep',
@@ -264,6 +272,6 @@ describe('Grok inspection helpers', () => {
     ]);
     expect(
       resolveGrokInspectionAutoActionItems('disable', items).map((item) => item.action)
-    ).toEqual(['enable', 'disable', 'disable']);
+    ).toEqual(['disable', 'disable']);
   });
 });
