@@ -231,7 +231,7 @@ func (w *RateLimitAutoDisableWorker) handleCandidate(ctx context.Context, candid
 	}
 
 	resolvedAuthIndex := firstNonEmpty(candidate.AuthIndex, current.AuthIndex)
-	log.Printf("[quota-auto-disable] quota usage limit reached for auth file %q account=%q provider=%q resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.Provider, candidate.ResetAt.Format(time.RFC3339))
+	log.Printf("[quota-auto-disable] quota limit reached for auth file %q account=%q provider=%q resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.Provider, candidate.ResetAt.Format(time.RFC3339))
 	if err := w.patchAuthFile(ctx, candidate.BaseURL, candidate.ManagementKey, candidate.FileName, resolvedAuthIndex, true); err != nil {
 		log.Printf("[quota-auto-disable] failed to disable auth file %q: %v", candidate.FileName, err)
 		return
@@ -384,6 +384,10 @@ func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, manag
 		return quotaAutoDisableCandidate{}, false
 	}
 
+	owner := model.QuotaCooldownOwnerUsage429
+	if provider == "xai" {
+		owner = model.QuotaCooldownOwnerXAIFreeUsage
+	}
 	return quotaAutoDisableCandidate{
 		BaseURL:        baseURL,
 		ManagementKey:  managementKey,
@@ -394,6 +398,7 @@ func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, manag
 		ResetAt:        resetAt,
 		EventHash:      event.EventHash,
 		Reason:         event.FailSummary,
+		Owner:          owner,
 	}, true
 }
 

@@ -125,7 +125,14 @@ import {
 } from '@/features/authFiles/uiState';
 import type { AuthJsonInputType } from '@/features/authFiles/sessionAuthConverter';
 import type { AuthFileItem, CodexQuotaState } from '@/types';
-import { useAuthStore, useNotificationStore, useQuotaStore, useThemeStore } from '@/stores';
+import {
+  captureQuotaCacheGeneration,
+  commitIfQuotaCacheCurrent,
+  useAuthStore,
+  useNotificationStore,
+  useQuotaStore,
+  useThemeStore,
+} from '@/stores';
 import styles from './AuthFilesPage.module.scss';
 
 const hasInlineQuotaLayout = (file: AuthFileItem): boolean => {
@@ -299,9 +306,8 @@ export function AuthFilesPage() {
   const uniqueAuthFileKeyByFallbackCooldownKey = useMemo(() => {
     const fallbackEntries = new Map<string, { authFileKey: string; count: number }>();
     files.forEach((file) => {
-      if (isRuntimeOnlyAuthFile(file)) return;
       const provider = resolveAuthProvider(file);
-      if (provider !== 'codex' && provider !== 'xai') return;
+      if (isRuntimeOnlyAuthFile(file) || (provider !== 'codex' && provider !== 'xai')) return;
       const fallbackKey = getAuthFileCodexInspectionKey(file.name, null);
       const authFileKey = getAuthFileCodexInspectionKeyForFile(file);
       const existing = fallbackEntries.get(fallbackKey);
@@ -320,11 +326,8 @@ export function AuthFilesPage() {
   }, [files]);
   const getQuotaCooldownForFile = useCallback(
     (file: AuthFileItem): QuotaCooldownInfo | undefined => {
-      if (isRuntimeOnlyAuthFile(file)) {
-        return undefined;
-      }
       const provider = resolveAuthProvider(file);
-      if (provider !== 'codex' && provider !== 'xai') {
+      if (isRuntimeOnlyAuthFile(file) || (provider !== 'codex' && provider !== 'xai')) {
         return undefined;
       }
       const authFileKey = getAuthFileCodexInspectionKeyForFile(file);
@@ -716,6 +719,7 @@ export function AuthFilesPage() {
       const authFileKey = getAuthFileCodexInspectionKeyForFile(file);
       if (autoRefreshingProviderQuotaRef.current.has(authFileKey)) return false;
       autoRefreshingProviderQuotaRef.current.add(authFileKey);
+      const cacheGeneration = captureQuotaCacheGeneration();
 
       try {
         if (provider === 'codex') {
@@ -730,20 +734,23 @@ export function AuthFilesPage() {
 
           try {
             const data = await CODEX_CONFIG.fetchQuota(file, t);
-            setCodexQuota((prev) => ({
-              ...prev,
-              [storeKey]: CODEX_CONFIG.buildSuccessState(data, file),
-            }));
-            return true;
+            return commitIfQuotaCacheCurrent(cacheGeneration, () => {
+              setCodexQuota((prev) => ({
+                ...prev,
+                [storeKey]: CODEX_CONFIG.buildSuccessState(data, file),
+              }));
+            });
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : t('common.unknown_error');
             const status = getStatusFromError(err);
-            setCodexQuota((prev) => ({
-              ...prev,
-              [storeKey]: CODEX_CONFIG.buildFailureState
-                ? CODEX_CONFIG.buildFailureState(message, status, file, previousQuota, Date.now())
-                : CODEX_CONFIG.buildErrorState(message, status, file),
-            }));
+            commitIfQuotaCacheCurrent(cacheGeneration, () => {
+              setCodexQuota((prev) => ({
+                ...prev,
+                [storeKey]: CODEX_CONFIG.buildFailureState
+                  ? CODEX_CONFIG.buildFailureState(message, status, file, previousQuota, Date.now())
+                  : CODEX_CONFIG.buildErrorState(message, status, file),
+              }));
+            });
             return false;
           }
         }
@@ -759,26 +766,29 @@ export function AuthFilesPage() {
 
         try {
           const data = await XAI_CONFIG.fetchQuota(file, t);
-          setXaiQuota((prev) => ({
-            ...prev,
-            [storeKey]: XAI_CONFIG.buildSuccessState(data, file),
-          }));
-          return true;
+          return commitIfQuotaCacheCurrent(cacheGeneration, () => {
+            setXaiQuota((prev) => ({
+              ...prev,
+              [storeKey]: XAI_CONFIG.buildSuccessState(data, file),
+            }));
+          });
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : t('common.unknown_error');
           const status = getStatusFromError(err);
-          setXaiQuota((prev) => ({
-            ...prev,
-            [storeKey]: XAI_CONFIG.buildFailureState
-              ? XAI_CONFIG.buildFailureState(
-                  message,
-                  status,
-                  file,
-                  previousQuota as never,
-                  Date.now()
-                )
-              : XAI_CONFIG.buildErrorState(message, status, file),
-          }));
+          commitIfQuotaCacheCurrent(cacheGeneration, () => {
+            setXaiQuota((prev) => ({
+              ...prev,
+              [storeKey]: XAI_CONFIG.buildFailureState
+                ? XAI_CONFIG.buildFailureState(
+                    message,
+                    status,
+                    file,
+                    previousQuota as never,
+                    Date.now()
+                  )
+                : XAI_CONFIG.buildErrorState(message, status, file),
+            }));
+          });
           return false;
         }
       } finally {

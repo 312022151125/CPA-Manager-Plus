@@ -597,6 +597,7 @@ export interface MonitoringAnalyticsFilters {
   models?: string[];
   providers?: string[];
   accounts?: string[];
+  credential_ids?: string[];
   auth_files?: string[];
   auth_indices?: string[];
   api_key_hashes?: string[];
@@ -627,6 +628,8 @@ export interface MonitoringAnalyticsDrilldownPreviewRequest {
 
 export interface MonitoringAnalyticsInclude {
   summary?: boolean;
+  summary_profile?: 'full' | 'compact';
+  summary_percentiles?: boolean;
   summary_comparison?: boolean;
   timeline?: boolean;
   hourly_distribution?: boolean;
@@ -670,6 +673,7 @@ export interface MonitoringAnalyticsSummary {
   cached_tokens: number;
   cache_read_tokens: number;
   cache_creation_tokens: number;
+  cache_hit_rate?: number;
   reasoning_tokens: number;
   total_tokens: number;
   total_cost: number;
@@ -712,6 +716,7 @@ export interface MonitoringAnalyticsTimelinePoint {
   cached_tokens?: number;
   cache_read_tokens?: number;
   cache_creation_tokens?: number;
+  cache_hit_rate?: number;
   reasoning_tokens?: number;
   total_tokens?: number;
   cost?: number;
@@ -792,6 +797,9 @@ export interface MonitoringAnalyticsModelStat {
   cached_tokens: number;
   cache_read_tokens: number;
   cache_creation_tokens: number;
+  cache_hit_tokens?: number;
+  cache_hit_input_tokens?: number;
+  cache_hit_rate?: number;
   total_tokens: number;
   cost: number;
 }
@@ -834,6 +842,9 @@ export interface MonitoringAnalyticsAccountModelStatRow {
   cached_tokens: number;
   cache_read_tokens: number;
   cache_creation_tokens: number;
+  cache_hit_tokens?: number;
+  cache_hit_input_tokens?: number;
+  cache_hit_rate?: number;
   total_tokens: number;
   cost: number;
   last_seen_ms: number;
