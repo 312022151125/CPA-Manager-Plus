@@ -15,6 +15,7 @@ type GrokInspectionConfigFieldsProps = {
   t: TFunction;
   onFieldChange: (field: GrokInspectionSettingsDraftField, value: string) => void;
   onAutoActionModeChange: (mode: GrokInspectionAutoActionMode) => void;
+  onAutoRecoverEnabledChange: (enabled: boolean) => void;
 };
 
 export function GrokInspectionConfigFields({
@@ -23,6 +24,7 @@ export function GrokInspectionConfigFields({
   t,
   onFieldChange,
   onAutoActionModeChange,
+  onAutoRecoverEnabledChange,
 }: GrokInspectionConfigFieldsProps) {
   return (
     <>
@@ -100,8 +102,10 @@ export function GrokInspectionConfigFields({
         <div className={styles.autoActionField} id="autoActionMode">
           <CodexInspectionAutoActionEditor
             value={draft.autoActionMode}
+            autoRecoverEnabled={draft.autoRecoverEnabled}
             t={t}
             onChange={onAutoActionModeChange}
+            onAutoRecoverChange={onAutoRecoverEnabledChange}
           />
         </div>
       </section>

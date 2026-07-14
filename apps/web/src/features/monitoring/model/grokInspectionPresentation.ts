@@ -58,11 +58,12 @@ export type GrokInspectionSettingsDraft = {
   usedPercentThreshold: string;
   sampleSize: string;
   autoActionMode: GrokInspectionAutoActionMode;
+  autoRecoverEnabled: boolean;
 };
 
 export type GrokInspectionSettingsDraftField = Exclude<
   keyof GrokInspectionSettingsDraft,
-  'autoActionMode'
+  'autoActionMode' | 'autoRecoverEnabled'
 >;
 
 export type GrokInspectionConfigFieldErrors = Partial<
@@ -78,6 +79,7 @@ export const toGrokSettingsDraft = (
   usedPercentThreshold: String(settings.usedPercentThreshold),
   sampleSize: String(settings.sampleSize),
   autoActionMode: settings.autoActionMode,
+  autoRecoverEnabled: settings.autoRecoverEnabled,
 });
 
 export const formatGrokActionLabel = (action: GrokInspectionAction, t: TFunction) => {
@@ -250,6 +252,7 @@ export const validateGrokInspectionConfigDraft = (
       usedPercentThreshold: Number(draft.usedPercentThreshold.trim()),
       sampleSize: Number(draft.sampleSize.trim()),
       autoActionMode,
+      autoRecoverEnabled: draft.autoRecoverEnabled === true,
     },
   };
 };
@@ -281,6 +284,13 @@ export const buildGrokConfigOverviewItems = (
       label: t('monitoring.grok_inspection_settings_auto_action_mode_label'),
       value: formatGrokAutoActionModeLabel(settings.autoActionMode, t),
       tone: getAutoActionTone(settings.autoActionMode),
+      field: 'autoActionMode',
+    },
+    {
+      key: 'recover',
+      label: t('monitoring.codex_inspection_settings_auto_recover_label'),
+      value: settings.autoRecoverEnabled ? t('common.enabled') : t('common.disabled'),
+      tone: settings.autoRecoverEnabled ? 'good' : 'idle',
       field: 'autoActionMode',
     },
     {

@@ -117,6 +117,7 @@ export type GrokInspectionConfigurableSettings = {
   usedPercentThreshold: number;
   sampleSize: number;
   autoActionMode: GrokInspectionAutoActionMode;
+  autoRecoverEnabled: boolean;
 };
 
 export type GrokInspectionSettings = GrokInspectionConfigurableSettings & {
@@ -662,18 +663,22 @@ export const toReauthDeleteExecutionItem = (
 
 export const resolveGrokInspectionAutoActionItems = (
   mode: GrokInspectionAutoActionMode,
+  autoRecoverEnabled: boolean,
   items: GrokInspectionResultItem[]
 ): GrokInspectionResultItem[] => {
   const normalizedMode = normalizeAutoActionMode(mode);
-  if (normalizedMode === 'none') return [];
+  const canAutoRecover = (item: GrokInspectionResultItem) =>
+    autoRecoverEnabled && item.action === 'enable';
 
-  if (normalizedMode === 'enable') {
-    return items.filter((item) => item.action === 'enable');
+  if (normalizedMode === 'none' || normalizedMode === 'enable') {
+    return items.filter(canAutoRecover);
   }
 
   if (normalizedMode === 'disable') {
     return items
-      .filter((item) => item.action === 'delete' || item.action === 'disable')
+      .filter(
+        (item) => canAutoRecover(item) || item.action === 'delete' || item.action === 'disable'
+      )
       .map((item) =>
         item.action === 'delete'
           ? {
@@ -688,7 +693,7 @@ export const resolveGrokInspectionAutoActionItems = (
   }
 
   return items.filter(
-    (item) => item.action === 'delete' || item.action === 'disable' || item.action === 'enable'
+    (item) => canAutoRecover(item) || item.action === 'delete' || item.action === 'disable'
   );
 };
 

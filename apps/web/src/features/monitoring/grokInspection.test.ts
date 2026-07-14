@@ -241,6 +241,7 @@ describe('Grok inspection settings storage', () => {
       usedPercentThreshold: 90,
       sampleSize: 5,
       autoActionMode: 'enable',
+      autoRecoverEnabled: true,
     });
 
     expect(storage.setItem).toHaveBeenCalledWith(
@@ -248,6 +249,7 @@ describe('Grok inspection settings storage', () => {
       expect.any(String)
     );
     expect(saved.workers).toBe(3);
+    expect(saved.autoRecoverEnabled).toBe(true);
     expect(loadGrokInspectionConfigurableSettings()).toEqual(saved);
   });
 });
@@ -267,11 +269,17 @@ describe('Grok inspection helpers', () => {
       createResultItem('disable'),
       createResultItem('delete'),
     ];
-    expect(resolveGrokInspectionAutoActionItems('enable', items).map((item) => item.action)).toEqual([
-      'enable',
-    ]);
     expect(
-      resolveGrokInspectionAutoActionItems('disable', items).map((item) => item.action)
+      resolveGrokInspectionAutoActionItems('enable', true, items).map((item) => item.action)
+    ).toEqual(['enable']);
+    expect(
+      resolveGrokInspectionAutoActionItems('enable', false, items).map((item) => item.action)
+    ).toEqual([]);
+    expect(
+      resolveGrokInspectionAutoActionItems('disable', false, items).map((item) => item.action)
     ).toEqual(['disable', 'disable']);
+    expect(
+      resolveGrokInspectionAutoActionItems('none', true, items).map((item) => item.action)
+    ).toEqual(['enable']);
   });
 });

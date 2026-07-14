@@ -23,6 +23,7 @@ export const DEFAULT_GROK_INSPECTION_SETTINGS: GrokInspectionConfigurableSetting
   usedPercentThreshold: 100,
   sampleSize: 0,
   autoActionMode: 'none',
+  autoRecoverEnabled: false,
 };
 
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -119,6 +120,7 @@ type GrokInspectionConfigurableSettingsInput = {
   usedPercentThreshold?: unknown;
   sampleSize?: unknown;
   autoActionMode?: unknown;
+  autoRecoverEnabled?: unknown;
 };
 
 export const normalizeConfigurableSettings = (
@@ -132,6 +134,12 @@ export const normalizeConfigurableSettings = (
   const threshold = normalizeThreshold(merged.usedPercentThreshold);
   const retriesValue = normalizeNumberValue(merged.retries);
   const sampleSizeValue = normalizeNumberValue(merged.sampleSize);
+  const autoActionMode = normalizeAutoActionMode(merged.autoActionMode);
+  // ponytail: no ownership model for Grok; legacy mode=enable implies recover on
+  const autoRecoverEnabled =
+    merged.autoRecoverEnabled === undefined
+      ? autoActionMode === 'enable'
+      : readBoolean(merged.autoRecoverEnabled, false);
 
   return {
     workers: clampPositiveInteger(
@@ -153,7 +161,8 @@ export const normalizeConfigurableSettings = (
       sampleSizeValue === null
         ? DEFAULT_GROK_INSPECTION_SETTINGS.sampleSize
         : Math.max(0, Math.floor(sampleSizeValue)),
-    autoActionMode: normalizeAutoActionMode(merged.autoActionMode),
+    autoActionMode,
+    autoRecoverEnabled,
   };
 };
 

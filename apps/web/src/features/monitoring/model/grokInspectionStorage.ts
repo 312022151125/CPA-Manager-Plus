@@ -49,6 +49,8 @@ const sanitizeInspectionSettingsForStorage = (
     DEFAULT_GROK_INSPECTION_SETTINGS.usedPercentThreshold,
   sampleSize: Math.max(0, Math.floor(normalizeNumberValue(settings.sampleSize) ?? 0)),
   autoActionMode: settings.autoActionMode ?? DEFAULT_GROK_INSPECTION_SETTINGS.autoActionMode,
+  autoRecoverEnabled:
+    settings.autoRecoverEnabled ?? DEFAULT_GROK_INSPECTION_SETTINGS.autoRecoverEnabled,
 });
 
 const normalizeStoredSettings = (value: unknown): GrokInspectionSettings => {
@@ -60,6 +62,7 @@ const normalizeStoredSettings = (value: unknown): GrokInspectionSettings => {
     usedPercentThreshold: input.usedPercentThreshold,
     sampleSize: input.sampleSize,
     autoActionMode: input.autoActionMode,
+    autoRecoverEnabled: input.autoRecoverEnabled,
   });
 
   return {

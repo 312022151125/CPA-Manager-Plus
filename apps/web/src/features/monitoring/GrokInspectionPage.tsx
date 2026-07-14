@@ -64,6 +64,7 @@ import {
   type StatusTone,
   type SummaryCard,
 } from '@/features/monitoring/model/grokInspectionPresentation';
+import { isCodexInspectionAutoExecutionEnabled } from '@/features/monitoring/model/codexInspectionPresentation';
 import { useAuthStore, useNotificationStore } from '@/stores';
 import styles from './CodexInspectionPage.module.scss';
 
@@ -224,6 +225,7 @@ export function GrokInspectionPage() {
       session: GrokInspectionSession,
       promise: Promise<GrokInspectionRunResult>,
       autoActionMode: GrokInspectionAutoActionMode,
+      autoRecoverEnabled: boolean,
       runConnectionFingerprint: string | null
     ) => {
       const sessionId = session.id;
@@ -234,6 +236,7 @@ export function GrokInspectionPage() {
           const nextSuggestedResults = nextResult.results.filter(isSuggestedAction);
           const autoTargets = resolveGrokInspectionAutoActionItems(
             autoActionMode,
+            autoRecoverEnabled,
             nextSuggestedResults
           );
           setResult(nextResult);
@@ -241,11 +244,15 @@ export function GrokInspectionPage() {
           setProgress(session.getProgress());
           setRunStatus('success');
           setLogsCollapsed(true);
-          if (autoActionMode !== 'none') {
+          if (isCodexInspectionAutoExecutionEnabled(autoActionMode, autoRecoverEnabled)) {
+            const autoExecutionLabel =
+              autoActionMode === 'none' && autoRecoverEnabled
+                ? t('monitoring.codex_inspection_settings_auto_recover_on')
+                : formatGrokAutoActionModeLabel(autoActionMode, t);
             if (autoTargets.length > 0 && executeItemsRef.current) {
               const startedMessage = t('monitoring.grok_inspection_auto_execute_started', {
                 count: autoTargets.length,
-                mode: formatGrokAutoActionModeLabel(autoActionMode, t),
+                mode: autoExecutionLabel,
               });
               appendLog('info', startedMessage);
               showNotification(startedMessage, 'info');
@@ -259,7 +266,7 @@ export function GrokInspectionPage() {
 
             if (nextSuggestedResults.length > 0) {
               const skippedMessage = t('monitoring.grok_inspection_auto_execute_skipped_by_mode', {
-                mode: formatGrokAutoActionModeLabel(autoActionMode, t),
+                mode: autoExecutionLabel,
                 count: nextSuggestedResults.length,
               });
               appendLog('warning', skippedMessage);
@@ -361,7 +368,13 @@ export function GrokInspectionPage() {
       sessionRef.current = session;
       activeSessionIdRef.current = session.id;
       setProgress(session.getProgress());
-      attachSessionPromise(session, session.start(), autoActionMode, runConnectionFingerprint);
+      attachSessionPromise(
+        session,
+        session.start(),
+        autoActionMode,
+        inspectionSettings.autoRecoverEnabled,
+        runConnectionFingerprint
+      );
     },
     [
       apiBase,
@@ -786,6 +799,13 @@ export function GrokInspectionPage() {
     }));
   }, []);
 
+  const handleAutoRecoverEnabledChange = useCallback((value: boolean) => {
+    setSettingsDraft((previous) => ({
+      ...previous,
+      autoRecoverEnabled: value,
+    }));
+  }, []);
+
   const settingsFieldErrors = useMemo(
     () => validateGrokInspectionConfigFields(settingsDraft, t),
     [settingsDraft, t]
@@ -1022,6 +1042,7 @@ export function GrokInspectionPage() {
           t={t}
           onFieldChange={handleSettingsDraftChange}
           onAutoActionModeChange={handleAutoActionModeChange}
+          onAutoRecoverEnabledChange={handleAutoRecoverEnabledChange}
         />
       </InspectionConfigDrawer>
     </div>
