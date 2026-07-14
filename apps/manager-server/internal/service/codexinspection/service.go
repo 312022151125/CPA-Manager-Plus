@@ -19,27 +19,30 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpaauthfiles"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 )
 
 const (
-	codexUsageURL       = "https://chatgpt.com/backend-api/wham/usage"
-	codexFiveHourWindow = 18_000
-	codexWeekWindow     = 604_800
-	codexMonthWindow    = 2_592_000
-	codexMinMonthWindow = 28 * 24 * 60 * 60
-	codexMaxMonthWindow = 31 * 24 * 60 * 60
-	maxStoredBodyText   = 2048
+	codexUsageURL             = "https://chatgpt.com/backend-api/wham/usage"
+	codexFiveHourWindow       = 18_000
+	codexWeekWindow           = 604_800
+	codexMonthWindow          = 2_592_000
+	codexMinMonthWindow       = 28 * 24 * 60 * 60
+	codexMaxMonthWindow       = 31 * 24 * 60 * 60
+	maxStoredBodyText         = 2048
+	maxCPAAPICallResponseSize = 16 * 1024 * 1024
 )
 
 var (
-	ErrRunAlreadyActive    = errors.New("codex inspection is already running")
-	ErrNotConfigured       = errors.New("usage service is not configured")
-	ErrRunNotFound         = errors.New("codex inspection run not found")
-	ErrRunNotCompleted     = errors.New("codex inspection run is not completed")
-	ErrActionIDsRequired   = errors.New("codex inspection action result ids are required")
-	ErrNoActionableResults = errors.New("codex inspection has no actionable results")
+	ErrRunAlreadyActive           = errors.New("codex inspection is already running")
+	ErrNotConfigured              = errors.New("usage service is not configured")
+	ErrRunNotFound                = errors.New("codex inspection run not found")
+	ErrRunNotCompleted            = errors.New("codex inspection run is not completed")
+	ErrActionIDsRequired          = errors.New("codex inspection action result ids are required")
+	ErrNoActionableResults        = errors.New("codex inspection has no actionable results")
+	errCPAAPICallResponseTooLarge = errors.New("CPA api-call response too large")
 )
 
 type Service struct {
@@ -85,16 +88,17 @@ type ExecuteActionsResult struct {
 type authFile map[string]any
 
 type account struct {
-	Key            string
-	FileName       string
-	DisplayAccount string
-	AuthIndex      string
-	AccountID      string
-	Provider       string
-	Disabled       bool
-	Status         string
-	State          string
-	File           authFile
+	Key              string
+	FileName         string
+	DisplayAccount   string
+	AuthIndex        string
+	AccountID        string
+	Provider         string
+	Disabled         bool
+	AutoRecoverOwned bool
+	Status           string
+	State            string
+	File             authFile
 }
 
 type apiCallResponse struct {
@@ -234,9 +238,14 @@ func (s *Service) Run(ctx context.Context, req RunRequest) (RunDetail, error) {
 		return s.failRun(persistCtx, run, err)
 	}
 
-	accounts := make([]account, 0, len(files))
+	allAccounts := make([]account, 0, len(files))
 	for _, file := range files {
-		next := toAccount(file)
+		allAccounts = append(allAccounts, toAccount(file))
+	}
+	s.applyDisableOwnership(ctx, allAccounts, logger)
+
+	accounts := make([]account, 0, len(allAccounts))
+	for _, next := range allAccounts {
 		if next.Provider == settings.TargetType {
 			accounts = append(accounts, next)
 		}
@@ -385,7 +394,7 @@ func (s *Service) ExecuteManualActions(ctx context.Context, runID int64, req Exe
 	outcomes := make([]ActionOutcome, 0, len(preflightOutcomes)+len(validationOutcomes)+len(validItems))
 	outcomes = append(outcomes, preflightOutcomes...)
 	outcomes = append(outcomes, validationOutcomes...)
-	outcomes = append(outcomes, s.executeActionItems(ctx, setup, settings, validItems, logger, "手动处理", func(item model.CodexInspectionResult) string {
+	outcomes = append(outcomes, s.executeActionItems(ctx, setup, settings, validItems, logger, "手动处理", false, func(item model.CodexInspectionResult) string {
 		return item.Action
 	})...)
 	if len(outcomes) == 0 {
@@ -478,37 +487,15 @@ func (s *Service) failRun(ctx context.Context, run model.CodexInspectionRun, cau
 }
 
 func (s *Service) fetchAuthFiles(ctx context.Context, setup store.Setup) ([]authFile, error) {
-	files, _, err := s.fetchAuthFilesAt(ctx, setup, "/v0/management/auth-files")
-	return files, err
-}
-
-func (s *Service) fetchAuthFilesAt(ctx context.Context, setup store.Setup, path string) ([]authFile, int, error) {
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		cpa.NormalizeBaseURL(setup.CPAUpstreamURL)+path,
-		nil,
-	)
+	files, err := cpaauthfiles.New(s.client).Fetch(ctx, setup.CPAUpstreamURL, setup.ManagementKey)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+setup.ManagementKey)
-	res, err := s.client.Do(req)
-	if err != nil {
-		return nil, 0, err
+	result := make([]authFile, 0, len(files))
+	for _, file := range files {
+		result = append(result, authFile(file.Raw))
 	}
-	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 8*1024*1024))
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, res.StatusCode, fmt.Errorf("auth files request failed: %s %s", res.Status, truncate(string(body), maxStoredBodyText))
-	}
-	var payload struct {
-		Files []authFile `json:"files"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, res.StatusCode, err
-	}
-	return payload.Files, res.StatusCode, nil
+	return result, nil
 }
 
 func (s *Service) inspectAccounts(
@@ -656,6 +643,10 @@ func (s *Service) inspectSingleAccount(
 	base.ActionReason = decision.ActionReason
 	base.UsedPercent = decision.UsedPercent
 	base.IsQuota = decision.IsQuota
+	base.AutoRecoverEligible = decision.Action == "enable" && item.AutoRecoverOwned
+	if decision.Action == "enable" && !base.AutoRecoverEligible {
+		base.ActionReason += "；禁用来源不受巡检管理，仅允许手动启用"
+	}
 	base.PlanType = planType
 	base.QuotaWindows = buildCodexInspectionQuotaWindows(payload, planType)
 	base.Error = ""
@@ -742,13 +733,13 @@ func (s *Service) requestCodexUsageAt(
 		return apiCallResponse{}, 0, err
 	}
 	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 8*1024*1024))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, maxStoredBodyText))
 		return apiCallResponse{}, res.StatusCode, fmt.Errorf("api-call failed: %s %s", res.Status, truncate(string(body), maxStoredBodyText))
 	}
 
 	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
+	if err := decodeCPAAPICallResponse(res.Body, maxCPAAPICallResponseSize, &raw); err != nil {
 		return apiCallResponse{}, res.StatusCode, err
 	}
 	statusRaw, hasStatus := firstValue(raw, "status_code", "statusCode")
@@ -763,6 +754,38 @@ func (s *Service) requestCodexUsageAt(
 	}, res.StatusCode, nil
 }
 
+func decodeCPAAPICallResponse(body io.Reader, maxBytes int64, target any) error {
+	if body == nil {
+		return io.EOF
+	}
+	if maxBytes <= 0 {
+		return errors.New("CPA api-call response size limit must be positive")
+	}
+	limited := &io.LimitedReader{R: body, N: maxBytes + 1}
+	decoder := json.NewDecoder(limited)
+	if err := decoder.Decode(target); err != nil {
+		if limited.N == 0 {
+			return fmt.Errorf("%w: exceeds %d bytes", errCPAAPICallResponseTooLarge, maxBytes)
+		}
+		return err
+	}
+	if limited.N == 0 {
+		return fmt.Errorf("%w: exceeds %d bytes", errCPAAPICallResponseTooLarge, maxBytes)
+	}
+	var trailing any
+	trailingErr := decoder.Decode(&trailing)
+	if limited.N == 0 {
+		return fmt.Errorf("%w: exceeds %d bytes", errCPAAPICallResponseTooLarge, maxBytes)
+	}
+	if errors.Is(trailingErr, io.EOF) {
+		return nil
+	}
+	if trailingErr == nil {
+		return errors.New("api-call response contains multiple JSON values")
+	}
+	return fmt.Errorf("decode api-call response trailing data: %w", trailingErr)
+}
+
 func (s *Service) executeAutoActions(
 	ctx context.Context,
 	setup store.Setup,
@@ -771,13 +794,13 @@ func (s *Service) executeAutoActions(
 	logger runLogger,
 ) []ActionOutcome {
 	mode := model.NormalizeCodexInspectionAutoActionMode(settings.AutoActionMode, model.CodexInspectionAutoActionNone)
-	items, preflightOutcomes := selectAutoActionItems(mode, results)
+	items, preflightOutcomes := selectAutoActionItems(mode, settings.AutoRecoverEnabled, results)
 	if len(items) == 0 {
 		return preflightOutcomes
 	}
 	outcomes := make([]ActionOutcome, 0, len(preflightOutcomes)+len(items))
 	outcomes = append(outcomes, preflightOutcomes...)
-	outcomes = append(outcomes, s.executeActionItems(ctx, setup, settings, items, logger, "自动处理", func(item model.CodexInspectionResult) string {
+	outcomes = append(outcomes, s.executeActionItems(ctx, setup, settings, items, logger, "自动处理", true, func(item model.CodexInspectionResult) string {
 		return resolveExecutableAction(mode, item.Action)
 	})...)
 	return outcomes
@@ -790,6 +813,7 @@ func (s *Service) executeActionItems(
 	items []model.CodexInspectionResult,
 	logger runLogger,
 	logPrefix string,
+	automatic bool,
 	actionFor func(model.CodexInspectionResult) string,
 ) []ActionOutcome {
 	workers := settings.DeleteWorkers
@@ -827,7 +851,7 @@ func (s *Service) executeActionItems(
 						DisplayAccount: item.DisplayAccount,
 						Action:         action,
 					}
-					if err := s.executeAction(ctx, setup, actionItem); err != nil {
+					if err := s.executeAction(ctx, setup, actionItem, automatic); err != nil {
 						outcome.Success = false
 						outcome.Status = model.CodexInspectionActionStatusFailed
 						outcome.Error = err.Error()
@@ -883,18 +907,60 @@ func collectActionOutcomes(outcomes <-chan ActionOutcome, capacity int) []Action
 	return result
 }
 
-func (s *Service) executeAction(ctx context.Context, setup store.Setup, item model.CodexInspectionResult) error {
+func (s *Service) executeAction(ctx context.Context, setup store.Setup, item model.CodexInspectionResult, automatic bool) error {
+	var revokedOwnership []store.CodexInspectionDisableOwnership
+	shouldRevokeOwnership := item.Action == "enable" || item.Action == "delete" || (item.Action == "disable" && !automatic)
+	if shouldRevokeOwnership {
+		var err error
+		revokedOwnership, err = s.store.RevokeCodexInspectionDisableOwnership(ctx, []string{item.FileName}, false)
+		if err != nil {
+			return fmt.Errorf("revoke inspection disable ownership: %w", err)
+		}
+	}
+
+	var actionErr error
 	switch item.Action {
 	case "delete":
-		return s.deleteAuthFileOnly(ctx, setup, "/v0/management/auth-files", item.FileName)
+		actionErr = s.deleteAuthFileOnly(ctx, setup, "/v0/management/auth-files", item.FileName)
 	case "disable", "enable":
 		disabled := item.Action == "disable"
 		payload := map[string]any{"name": item.FileName, "disabled": disabled}
-		err, _ := s.patchAuthFile(ctx, setup, "/v0/management/auth-files/status", payload)
-		return err
+		actionErr, _ = s.patchAuthFile(ctx, setup, "/v0/management/auth-files/status", payload)
 	default:
 		return nil
 	}
+	if actionErr != nil {
+		if restoreErr := s.store.RestoreCodexInspectionDisableOwnership(context.WithoutCancel(ctx), revokedOwnership); restoreErr != nil {
+			return fmt.Errorf("%w; restore inspection disable ownership: %v", actionErr, restoreErr)
+		}
+		return actionErr
+	}
+
+	switch item.Action {
+	case "disable":
+		if !automatic {
+			return nil
+		}
+		if item.Disabled {
+			return nil
+		}
+		if err := s.store.UpsertCodexInspectionDisableOwnership(ctx, model.CodexInspectionDisableOwnership{
+			FileName:     item.FileName,
+			AuthIndex:    item.AuthIndex,
+			AccountID:    item.AccountID,
+			DisabledAtMS: time.Now().UnixMilli(),
+		}); err != nil {
+			rollbackErr, _ := s.patchAuthFile(ctx, setup, "/v0/management/auth-files/status", map[string]any{
+				"name":     item.FileName,
+				"disabled": false,
+			})
+			if rollbackErr != nil {
+				return fmt.Errorf("persist inspection disable ownership: %w; rollback enable failed: %v", err, rollbackErr)
+			}
+			return fmt.Errorf("persist inspection disable ownership: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) deleteAuthFileOnly(ctx context.Context, setup store.Setup, path string, fileName string) error {
@@ -936,15 +1002,12 @@ func (s *Service) doCPAAction(req *http.Request, managementKey string) (error, i
 		return err, 0
 	}
 	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, maxStoredBodyText))
 		return fmt.Errorf("%s %s", res.Status, truncate(string(body), maxStoredBodyText)), res.StatusCode
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err == nil {
-		if failed, ok := payload["failed"].([]any); ok && len(failed) > 0 {
-			return fmt.Errorf("CPA action failed: %s", truncate(fmt.Sprint(failed[0]), maxStoredBodyText)), res.StatusCode
-		}
+	if err := cpaauthfiles.ValidateActionResponse(res.Body); err != nil {
+		return err, res.StatusCode
 	}
 	return nil, res.StatusCode
 }
@@ -1017,7 +1080,13 @@ func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string
 	classified := classifyWindows(rateLimit, planType)
 	longWindow := classified.longWindow()
 	if longWindow == nil || longWindow.UsedPercent == nil {
-		return nil
+		decision := inspectionDecision{
+			Action:       "keep",
+			ActionReason: "额度信息不完整，保留账号",
+			UsedPercent:  deriveRateLimitUsedPercent(rateLimit),
+			IsQuota:      false,
+		}
+		return &decision
 	}
 	longWindowUsedPercent := *longWindow.UsedPercent
 	longWindowLabel := classified.longWindowLabel(longWindow)
@@ -1045,10 +1114,15 @@ func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string
 		}
 	}
 	if item.Disabled {
-		reason := fmt.Sprintf("%s仍可用，建议立即启用账号", longWindowLabel)
 		if fiveHourOverThreshold {
-			reason = fmt.Sprintf("5 小时额度达到阈值，但%s仍可用，建议立即启用账号", longWindowLabel)
+			return &inspectionDecision{
+				Action:       "keep",
+				ActionReason: fmt.Sprintf("5 小时额度仍达到阈值，%s可用但继续保持禁用", longWindowLabel),
+				UsedPercent:  ptrFloat(longWindowUsedPercent),
+				IsQuota:      true,
+			}
 		}
+		reason := fmt.Sprintf("%s仍可用，建议立即启用账号", longWindowLabel)
 		return &inspectionDecision{
 			Action:       "enable",
 			ActionReason: reason,
@@ -1091,10 +1165,18 @@ func resolveLegacyProbeAction(item account, statusCode int, bodyText string, use
 		}
 		return inspectionDecision{Action: "disable", ActionReason: reason, UsedPercent: usedPercent, IsQuota: isQuota}
 	}
-	if statusCode == http.StatusOK && item.Disabled {
+	if statusCode == http.StatusOK && item.Disabled && usedPercent != nil {
 		return inspectionDecision{
 			Action:       "enable",
 			ActionReason: "账号恢复健康，建议重新启用",
+			UsedPercent:  usedPercent,
+			IsQuota:      false,
+		}
+	}
+	if statusCode == http.StatusOK && item.Disabled {
+		return inspectionDecision{
+			Action:       "keep",
+			ActionReason: "额度信息不完整，无法确认恢复，保留账号",
 			UsedPercent:  usedPercent,
 			IsQuota:      false,
 		}
@@ -1161,9 +1243,9 @@ func resolveExecutableAction(mode string, action string) string {
 	return action
 }
 
-func selectAutoActionItems(mode string, results []model.CodexInspectionResult) ([]model.CodexInspectionResult, []ActionOutcome) {
+func selectAutoActionItems(mode string, autoRecoverEnabled bool, results []model.CodexInspectionResult) ([]model.CodexInspectionResult, []ActionOutcome) {
 	mode = model.NormalizeCodexInspectionAutoActionMode(mode, model.CodexInspectionAutoActionNone)
-	if mode == model.CodexInspectionAutoActionNone {
+	if mode == model.CodexInspectionAutoActionNone && !autoRecoverEnabled {
 		return nil, nil
 	}
 
@@ -1176,7 +1258,7 @@ func selectAutoActionItems(mode string, results []model.CodexInspectionResult) (
 			}
 			continue
 		}
-		if len(group.Items) == 0 || !allowAutoAction(mode, group.Items[0]) {
+		if len(group.Items) == 0 || !allowAutoAction(mode, autoRecoverEnabled, group.Items[0]) {
 			continue
 		}
 		items = append(items, group.Items[0])
@@ -1216,16 +1298,53 @@ func buildExecutableFileActionGroups(results []model.CodexInspectionResult) []fi
 	return groups
 }
 
-func allowAutoAction(mode string, result model.CodexInspectionResult) bool {
+func allowAutoAction(mode string, autoRecoverEnabled bool, result model.CodexInspectionResult) bool {
+	if result.Action == "enable" {
+		return autoRecoverEnabled && result.AutoRecoverEligible
+	}
 	switch mode {
 	case model.CodexInspectionAutoActionEnable:
-		return result.Action == "enable"
+		return false
 	case model.CodexInspectionAutoActionDisable:
-		return result.Action == "enable" || result.Action == "disable" || result.Action == "delete"
+		return result.Action == "disable" || result.Action == "delete"
 	case model.CodexInspectionAutoActionDelete:
-		return result.Action == "enable" || result.Action == "disable" || result.Action == "delete"
+		return result.Action == "disable" || result.Action == "delete"
 	default:
 		return false
+	}
+}
+
+func (s *Service) applyDisableOwnership(ctx context.Context, accounts []account, logger runLogger) {
+	items, err := s.store.ListCodexInspectionDisableOwnership(ctx)
+	if err != nil {
+		logger.warning(ctx, "加载巡检禁用所有权失败，自动恢复将保持关闭", map[string]any{"error": err.Error()})
+		return
+	}
+	for _, item := range items {
+		matched := false
+		disabled := false
+		for _, candidate := range accounts {
+			if candidate.FileName != item.FileName {
+				continue
+			}
+			if item.AuthIndex != "" && candidate.AuthIndex != item.AuthIndex {
+				continue
+			}
+			if item.AccountID != "" && candidate.AccountID != item.AccountID {
+				continue
+			}
+			matched = true
+			disabled = disabled || candidate.Disabled
+		}
+		if !matched || !disabled {
+			_ = s.store.DeleteCodexInspectionDisableOwnership(ctx, item.FileName)
+			continue
+		}
+		for index := range accounts {
+			if accounts[index].FileName == item.FileName {
+				accounts[index].AutoRecoverOwned = true
+			}
+		}
 	}
 }
 

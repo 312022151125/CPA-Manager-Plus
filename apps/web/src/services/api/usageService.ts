@@ -186,6 +186,7 @@ export interface ManagerCodexInspectionConfig {
   usedPercentThreshold?: number;
   sampleSize?: number;
   autoActionMode?: ManagerCodexInspectionAutoActionMode | string;
+  autoRecoverEnabled?: boolean;
 }
 
 export interface ManagerConfig {
@@ -260,6 +261,7 @@ export interface CodexInspectionResult {
   statusCode?: number;
   usedPercent?: number;
   isQuota: boolean;
+  autoRecoverEligible?: boolean;
   error?: string;
   planType?: string | null;
   quotaWindows?: CodexInspectionQuotaWindow[];
