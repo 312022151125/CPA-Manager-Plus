@@ -119,6 +119,8 @@ export interface QuotaCooldownInfo {
   authIndex?: string;
   provider?: string;
   owner?: string;
+  reasonCode?: string;
+  windowKind?: 'five_hour' | 'weekly' | 'monthly' | 'rolling_24h' | 'unknown' | string;
   recoverAtMs: number;
   disabledAtMs?: number;
   createdAtMs?: number;
@@ -377,7 +379,10 @@ export interface AccountActionCandidate {
   accountSnapshot?: string;
   accountIdSnapshot?: string;
   authLabel?: string;
+  reasonCode?: string;
   reason: string;
+  autoDisableEligible?: boolean;
+  autoDisabledAtMs?: number;
   evidence?: unknown;
   lastError?: string;
   firstSeenAtMs: number;

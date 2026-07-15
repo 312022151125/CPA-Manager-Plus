@@ -42,11 +42,14 @@ Supported signals and switches:
 - **Codex**: `usage_limit_reached` with a known reset time (body/header). Enable with `USAGE_QUOTA_COOLDOWN_ENABLED` or Configuration → **Codex Quota Cooldown Handling**.
 - **Grok/xAI free tier**: `subscription:free-usage-exhausted` (or body text containing free-usage exhaustion). Default recover window is **24 hours** unless the response body/header supplies a better reset time. Enable with `USAGE_GROK_QUOTA_COOLDOWN_ENABLED` or Configuration → **Grok/xAI Free-Usage Cooldown**.
 
+Cooldown records include a reason code and window kind. Current window kinds are `five_hour`, `weekly`, `monthly`, `rolling_24h`, and `unknown`. For example, if a Codex five-hour limit is exhausted while the weekly limit remains available, only the five-hour window controls the cooldown. After recovery, the credential can re-enter CPA scheduling without waiting for the weekly window.
+
 Notes:
 
 - Codex and Grok/xAI use **separate** on/off switches; turning one on does not enable the other.
 - Auto-restore depends on CPAMP continuing to run.
-- Manually disabled accounts are not restored automatically.
+- While the CPAMP cooldown is active, the credential is disabled in CPA and is not selected for new requests.
+- Quota cooldown restores only credentials disabled by that cooldown record. Manual, inspection-owned, or auth-failure disables are not overridden.
 - Unstable `auth_index` values can prevent accurate account binding.
 - Generic rate-limit 429s without a free-usage / usage-limit signal are ignored.
 
@@ -61,4 +64,3 @@ If an account looks usable but requests fail:
 3. Check Auth Files for manual disabled state or cooldown.
 4. Check whether the account action queue has pending candidates.
 5. If the page has no quota data, confirm whether that provider supports active quota lookup or only passive header observation.
-
