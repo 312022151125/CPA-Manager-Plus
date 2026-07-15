@@ -372,37 +372,36 @@ func (w *RateLimitAutoDisableWorker) recoverCooldown(ctx context.Context, baseUR
 }
 
 func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, managementKey string, now time.Time) (quotaAutoDisableCandidate, bool) {
-	if !event.Failed || event.FailStatusCode != http.StatusTooManyRequests {
+	if resetAt, ok := xaiFreeUsageExhaustedResetTimeFromEvent(event, now); ok {
+		fileName := strings.TrimSpace(event.AuthFileSnapshot)
+		if fileName == "" {
+			log.Printf("[quota-auto-disable] xAI free-usage event %q has no auth file snapshot, skip auto disable", event.EventHash)
+			return quotaAutoDisableCandidate{}, false
+		}
+		return quotaAutoDisableCandidate{
+			BaseURL:        baseURL,
+			ManagementKey:  managementKey,
+			FileName:       fileName,
+			AuthIndex:      strings.TrimSpace(event.AuthIndex),
+			DisplayAccount: firstNonEmpty(event.AccountSnapshot, event.AuthLabelSnapshot, event.Source, fileName),
+			Provider:       "xai",
+			ReasonCode:     quotaReasonXAIFreeUsage,
+			WindowKind:     quotaWindowRolling24H,
+			ResetAt:        resetAt,
+			EventHash:      event.EventHash,
+			Reason:         event.FailSummary,
+			Owner:          model.QuotaCooldownOwnerXAIFreeUsage,
+		}, true
+	}
+
+	resetAt, ok := codexUsageLimitResetTimeFromEvent(event, now)
+	if !ok {
 		return quotaAutoDisableCandidate{}, false
 	}
 	fileName := strings.TrimSpace(event.AuthFileSnapshot)
 	if fileName == "" {
-		log.Printf("[quota-auto-disable] usage-limit event %q has no auth file snapshot, skip auto disable", event.EventHash)
+		log.Printf("[quota-auto-disable] Codex usage-limit event %q has no auth file snapshot, skip auto disable", event.EventHash)
 		return quotaAutoDisableCandidate{}, false
-	}
-
-	provider := normalizeQuotaAutoDisableProvider(firstNonEmpty(event.Provider, event.AuthProviderSnapshot))
-	var resetAt time.Time
-	var ok bool
-	switch provider {
-	case "codex":
-		resetAt, ok = codexUsageLimitResetTimeFromEvent(event, now)
-	case "xai":
-		resetAt, ok = xaiFreeUsageExhaustedResetTimeFromEvent(event, now)
-	default:
-		return quotaAutoDisableCandidate{}, false
-	}
-	if !ok {
-		return quotaAutoDisableCandidate{}, false
-	}
-
-	owner := model.QuotaCooldownOwnerUsage429
-	reasonCode := quotaReasonCodexUsageLimit
-	windowKind := codexQuotaWindowKindFromEvent(event)
-	if provider == "xai" {
-		owner = model.QuotaCooldownOwnerXAIFreeUsage
-		reasonCode = quotaReasonXAIFreeUsage
-		windowKind = quotaWindowRolling24H
 	}
 	return quotaAutoDisableCandidate{
 		BaseURL:        baseURL,
@@ -410,13 +409,13 @@ func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, manag
 		FileName:       fileName,
 		AuthIndex:      strings.TrimSpace(event.AuthIndex),
 		DisplayAccount: firstNonEmpty(event.AccountSnapshot, event.AuthLabelSnapshot, event.Source, fileName),
-		Provider:       provider,
-		ReasonCode:     reasonCode,
-		WindowKind:     windowKind,
+		Provider:       "codex",
+		ReasonCode:     quotaReasonCodexUsageLimit,
+		WindowKind:     codexQuotaWindowKindFromEvent(event),
 		ResetAt:        resetAt,
 		EventHash:      event.EventHash,
 		Reason:         event.FailSummary,
-		Owner:          owner,
+		Owner:          model.QuotaCooldownOwnerUsage429,
 	}, true
 }
 
@@ -429,6 +428,11 @@ func normalizeQuotaAutoDisableProvider(raw string) string {
 	default:
 		return provider
 	}
+}
+
+// normalizeQuotaProvider is the seakee-compatible alias used by shared xAI helpers/tests.
+func normalizeQuotaProvider(value string) string {
+	return normalizeQuotaAutoDisableProvider(value)
 }
 
 func codexUsageLimitResetTimeFromEvent(event usage.Event, now time.Time) (time.Time, bool) {
@@ -461,19 +465,29 @@ func codexUsageLimitResetTimeFromEvent(event usage.Event, now time.Time) (time.T
 }
 
 func xaiFreeUsageExhaustedResetTimeFromEvent(event usage.Event, now time.Time) (time.Time, bool) {
-	if !event.Failed || event.FailStatusCode != http.StatusTooManyRequests {
+	if !event.Failed || (event.FailStatusCode != http.StatusPaymentRequired && event.FailStatusCode != http.StatusTooManyRequests) {
+		return time.Time{}, false
+	}
+	provider := normalizeQuotaAutoDisableProvider(firstNonEmpty(event.Provider, event.AuthProviderSnapshot))
+	if provider != "xai" {
 		return time.Time{}, false
 	}
 	if !xaiFreeUsageExhaustedSignalFromEvent(event) {
 		return time.Time{}, false
 	}
-	if resetAt, ok := explicitResetTimeFromEventTexts(event, now); ok {
-		return resetAt, true
-	}
+	// Prefer header recovery time when present (Retry-After / recover-at metadata).
 	if resetAt, ok := xaiRetryAfterRecoverAt(event, now); ok {
 		return resetAt, true
 	}
+	if resetAt, ok := explicitResetTimeFromEventTexts(event, now); ok {
+		return resetAt, true
+	}
 	return now.Add(xaiFreeUsageExhaustedCooldown), true
+}
+
+// xaiFreeUsageResetTimeFromEvent is the seakee-compatible name for free-usage reset detection.
+func xaiFreeUsageResetTimeFromEvent(event usage.Event, now time.Time) (time.Time, bool) {
+	return xaiFreeUsageExhaustedResetTimeFromEvent(event, now)
 }
 
 func xaiFreeUsageExhaustedSignalFromEvent(event usage.Event) bool {
@@ -559,7 +573,8 @@ func explicitResetTimeFromEventTexts(event usage.Event, now time.Time) (time.Tim
 			}
 			return false
 		})
-		if found {
+		// Ignore non-future explicit timestamps so free-usage can fall back to the 24h window.
+		if found && resetAt.After(now) {
 			return resetAt, true
 		}
 	}
@@ -819,16 +834,47 @@ func isUsageLimitMap(value map[string]any) bool {
 }
 
 func explicitCodexResetTime(value map[string]any, now time.Time) (time.Time, bool) {
-	return explicitResetTime(value, now)
-}
-
-func explicitResetTime(value map[string]any, now time.Time) (time.Time, bool) {
+	// Codex path stays strict: only resets_at / resets_in_seconds (and camelCase).
+	// Legacy reset_at is intentionally ignored to avoid false positives.
 	for _, key := range []string{"resets_at", "resetsAt"} {
 		if raw, ok := value[key]; ok {
 			return parseResetValue(raw, now, false)
 		}
 	}
 	for _, key := range []string{"resets_in_seconds", "resetsInSeconds"} {
+		if raw, ok := value[key]; ok {
+			return parseResetValue(raw, now, true)
+		}
+	}
+	return time.Time{}, false
+}
+
+func explicitResetTime(value map[string]any, now time.Time) (time.Time, bool) {
+	// xAI free-usage path accepts broader explicit reset fields from seakee.
+	for _, key := range []string{
+		"resets_at",
+		"resetsAt",
+		"reset_at",
+		"resetAt",
+		"period_end",
+		"periodEnd",
+		"billing_period_end",
+		"billingPeriodEnd",
+	} {
+		if raw, ok := value[key]; ok {
+			return parseResetValue(raw, now, false)
+		}
+	}
+	for _, key := range []string{
+		"resets_in_seconds",
+		"resetsInSeconds",
+		"retry_after",
+		"retryAfter",
+		"retry_after_seconds",
+		"retryAfterSeconds",
+		"reset_after_seconds",
+		"resetAfterSeconds",
+	} {
 		if raw, ok := value[key]; ok {
 			return parseResetValue(raw, now, true)
 		}
