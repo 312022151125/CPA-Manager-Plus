@@ -37,7 +37,9 @@ export interface AccountQuotaSummary {
   planType: string | null;
   source: AccountQuotaSource;
   error?: string;
+  errorStatus?: number;
   observedAtMs?: number;
+  fetchedAtMs?: number;
   observedTraceId?: string;
   observedErrorKind?: string;
   observedErrorCode?: string;
@@ -74,6 +76,7 @@ type AccountQuotaObservationFields = Partial<
     AccountQuotaSummary,
     | 'source'
     | 'observedAtMs'
+    | 'fetchedAtMs'
     | 'observedTraceId'
     | 'observedErrorKind'
     | 'observedErrorCode'
@@ -354,6 +357,7 @@ const quotaFromXaiBilling = (
 const quotaObservationFields = (quota: CodexQuotaState): AccountQuotaObservationFields => {
   return {
     source: quota.observedFromUsageHeaders ? 'observed-header' : 'cache',
+    fetchedAtMs: quota.fetchedAtMs,
     observedAtMs: quota.observedAtMs,
     observedTraceId: quota.observedTraceId,
     observedErrorKind: quota.observedErrorKind,
@@ -402,6 +406,7 @@ const mergeQuotaObservationFields = (
   if (!hasObservedQuotaFields(fields)) return summary;
   const merged: AccountQuotaSummary = { ...summary };
   if (fields.observedAtMs !== undefined) merged.observedAtMs = fields.observedAtMs;
+  if (fields.fetchedAtMs !== undefined) merged.fetchedAtMs = fields.fetchedAtMs;
   if (fields.observedTraceId !== undefined) merged.observedTraceId = fields.observedTraceId;
   if (fields.observedErrorKind !== undefined) {
     merged.observedErrorKind = fields.observedErrorKind;
@@ -442,7 +447,8 @@ const mergeQuotaObservationFields = (
 
 const quotaFromError = (
   error: string | undefined,
-  planType: string | null
+  planType: string | null,
+  errorStatus?: number
 ): AccountQuotaSummary => ({
   status: 'error',
   remainingPercent: null,
@@ -451,6 +457,7 @@ const quotaFromError = (
   planType,
   source: 'cache',
   error,
+  errorStatus,
 });
 
 const emptyQuota = (planType: string | null): AccountQuotaSummary => ({
@@ -507,8 +514,19 @@ export const resolveAccountQuota = (
       );
     }
     if (quota.status === 'error') {
+      if (quota.windows.length > 0) {
+        return mergeQuotaObservationFields(
+          {
+            ...quotaFromUsedWindows(quota.windows, quota.planType ?? observedPlanType),
+            error: quota.error,
+            errorStatus: quota.errorStatus,
+            fetchedAtMs: quota.fetchedAtMs,
+          },
+          headerObservationFields
+        );
+      }
       return mergeQuotaObservationFields(
-        quotaFromError(quota.error, quota.planType ?? observedPlanType),
+        quotaFromError(quota.error, quota.planType ?? observedPlanType, quota.errorStatus),
         headerObservationFields
       );
     }
@@ -527,7 +545,7 @@ export const resolveAccountQuota = (
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(quota.planType ?? filePlanType);
     if (quota.status === 'error')
-      return quotaFromError(quota.error, quota.planType ?? filePlanType);
+      return quotaFromError(quota.error, quota.planType ?? filePlanType, quota.errorStatus);
     return quotaFromUsedWindows(quota.windows, quota.planType ?? filePlanType);
   }
 
@@ -540,7 +558,7 @@ export const resolveAccountQuota = (
       readString(quota.subscription?.tierId);
     const planType = filePlanType ?? (subscriptionPlan ? subscriptionPlan.toLowerCase() : null);
     if (quota.status === 'loading') return loadingQuota(planType);
-    if (quota.status === 'error') return quotaFromError(quota.error, planType);
+    if (quota.status === 'error') return quotaFromError(quota.error, planType, quota.errorStatus);
     const buckets = quota.groups.flatMap((group) => group.buckets);
     return quotaFromRemainingWindows(
       buckets.map((bucket) => ({
@@ -558,7 +576,8 @@ export const resolveAccountQuota = (
     const quota = stores.kimiQuota[file.name];
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(filePlanType);
-    if (quota.status === 'error') return quotaFromError(quota.error, filePlanType);
+    if (quota.status === 'error')
+      return quotaFromError(quota.error, filePlanType, quota.errorStatus);
     return quotaFromRemainingWindows(
       quota.rows.map((row) => ({
         remainingPercent:
@@ -573,7 +592,8 @@ export const resolveAccountQuota = (
     const quota = stores.xaiQuota[file.name];
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(filePlanType);
-    if (quota.status === 'error') return quotaFromError(quota.error, filePlanType);
+    if (quota.status === 'error')
+      return quotaFromError(quota.error, filePlanType, quota.errorStatus);
     return quotaFromXaiBilling(quota.billing, filePlanType);
   }
 

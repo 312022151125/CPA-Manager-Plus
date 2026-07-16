@@ -86,6 +86,26 @@ describe('quotaRecommendations', () => {
     expect(recommendation?.reasonKey).toBe('accounts.recommend_reason_low');
   });
 
+  it('refreshes accounts whose last quota is preserved after a failed refresh', () => {
+    const recommendation = buildAccountRecommendation(
+      makeRow({
+        quota: {
+          status: 'ok',
+          remainingPercent: 80,
+          usedPercent: 20,
+          resetLabel: 'Mon',
+          planType: 'plus',
+          source: 'cache',
+          error: 'temporary failure',
+        },
+      })
+    );
+
+    expect(recommendation?.action).toBe('refresh');
+    expect(recommendation?.priority).toBe('medium');
+    expect(recommendation?.reasonKey).toBe('accounts.recommend_reason_error');
+  });
+
   it('enables disabled accounts after quota recovery', () => {
     const recommendation = buildAccountRecommendation(makeRow({ disabled: true }));
 
@@ -133,9 +153,39 @@ describe('quotaRecommendations', () => {
 
   it('sorts recommendations by priority rank and then account name', () => {
     const rows = [
-      makeRow({ fileName: 'z-low.json', quota: { status: 'low', remainingPercent: 10, usedPercent: 90, resetLabel: '-', planType: null, source: 'cache' } }),
-      makeRow({ fileName: 'a-exhausted.json', quota: { status: 'exhausted', remainingPercent: 0, usedPercent: 100, resetLabel: '-', planType: null, source: 'cache' } }),
-      makeRow({ fileName: 'b-low.json', quota: { status: 'low', remainingPercent: 15, usedPercent: 85, resetLabel: '-', planType: null, source: 'cache' } }),
+      makeRow({
+        fileName: 'z-low.json',
+        quota: {
+          status: 'low',
+          remainingPercent: 10,
+          usedPercent: 90,
+          resetLabel: '-',
+          planType: null,
+          source: 'cache',
+        },
+      }),
+      makeRow({
+        fileName: 'a-exhausted.json',
+        quota: {
+          status: 'exhausted',
+          remainingPercent: 0,
+          usedPercent: 100,
+          resetLabel: '-',
+          planType: null,
+          source: 'cache',
+        },
+      }),
+      makeRow({
+        fileName: 'b-low.json',
+        quota: {
+          status: 'low',
+          remainingPercent: 15,
+          usedPercent: 85,
+          resetLabel: '-',
+          planType: null,
+          source: 'cache',
+        },
+      }),
     ];
 
     expect(buildAccountRecommendations(rows).map((item) => item.row.fileName)).toEqual([

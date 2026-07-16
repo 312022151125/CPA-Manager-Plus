@@ -18,11 +18,7 @@ import { AiProvidersOpenAIEditLayout } from '@/pages/AiProvidersOpenAIEditLayout
 import { AiProvidersOpenAIEditPage } from '@/pages/AiProvidersOpenAIEditPage';
 import { AiProvidersOpenAIModelsPage } from '@/pages/AiProvidersOpenAIModelsPage';
 import { AiProvidersVertexEditPage } from '@/pages/AiProvidersVertexEditPage';
-import { AuthFilesPage } from '@/pages/AuthFilesPage';
-import { AuthFilesOAuthExcludedEditPage } from '@/pages/AuthFilesOAuthExcludedEditPage';
-import { AuthFilesOAuthModelAliasEditPage } from '@/pages/AuthFilesOAuthModelAliasEditPage';
 import { OAuthPage } from '@/pages/OAuthPage';
-import { QuotaPage } from '@/pages/QuotaPage';
 import { UsageAnalyticsPage } from '@/pages/UsageAnalyticsPage';
 import { MonitoringCenterPage } from '@/pages/MonitoringCenterPage';
 import { AccountActionCandidatesPage } from '@/pages/AccountActionCandidatesPage';
@@ -43,6 +39,28 @@ import { useAuthStore, useConfigStore } from '@/stores';
 import codexInspectionStyles from '@/features/monitoring/CodexInspectionPage.module.scss';
 
 type FeatureKey = 'requestMonitoring' | 'modelPrices' | 'serverCodexInspection';
+
+function LegacyAccountsRedirect({
+  view,
+  editor,
+}: {
+  view?: 'quota' | 'oauth';
+  editor?: 'excluded' | 'alias';
+}) {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  if (view) params.set('view', view);
+  if (editor) {
+    params.set('editor', editor);
+    const provider = params.get('provider');
+    if (provider) {
+      params.set('editorProvider', provider);
+      params.delete('provider');
+    }
+  }
+  const search = params.toString();
+  return <Navigate to={{ pathname: '/accounts', search: search ? `?${search}` : '' }} replace />;
+}
 
 function PluginGate({ children }: { children: ReactElement }) {
   const supportsPlugin = useAuthStore((state) => state.supportsPlugin);
@@ -196,11 +214,17 @@ const mainRoutes: RouteObject[] = [
   { path: '/ai-providers', element: <AiProvidersPage /> },
   { path: '/ai-providers/*', element: <AiProvidersPage /> },
   { path: '/accounts', element: <AccountsPage /> },
-  { path: '/auth-files', element: <AuthFilesPage /> },
-  { path: '/auth-files/oauth-excluded', element: <AuthFilesOAuthExcludedEditPage /> },
-  { path: '/auth-files/oauth-model-alias', element: <AuthFilesOAuthModelAliasEditPage /> },
+  { path: '/auth-files', element: <LegacyAccountsRedirect /> },
+  {
+    path: '/auth-files/oauth-excluded',
+    element: <LegacyAccountsRedirect view="oauth" editor="excluded" />,
+  },
+  {
+    path: '/auth-files/oauth-model-alias',
+    element: <LegacyAccountsRedirect view="oauth" editor="alias" />,
+  },
   { path: '/oauth', element: <OAuthPage /> },
-  { path: '/quota', element: <QuotaPage /> },
+  { path: '/quota', element: <LegacyAccountsRedirect view="quota" /> },
   {
     path: '/usage-analytics',
     element: (
@@ -317,13 +341,7 @@ const ensureRouteLocationBase = (
   };
 };
 
-export function MainRoutes({
-  location,
-  routeBase,
-}: {
-  location?: Location;
-  routeBase?: string;
-}) {
+export function MainRoutes({ location, routeBase }: { location?: Location; routeBase?: string }) {
   const routeLocation = useMemo(
     () => ensureRouteLocationBase(location, routeBase),
     [location, routeBase]

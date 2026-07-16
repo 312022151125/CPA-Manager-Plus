@@ -11,6 +11,7 @@ export type { RelativeTimeMode } from './RelativeTime';
 export { QuotaWindowCard } from './QuotaWindowCard';
 
 export { AccountQuotaMatrix } from './AccountQuotaMatrix';
+export { AccountsBatchDeletePreview } from './AccountsBatchDeletePreview';
 
 export { CopyableText } from './CopyableText';
 

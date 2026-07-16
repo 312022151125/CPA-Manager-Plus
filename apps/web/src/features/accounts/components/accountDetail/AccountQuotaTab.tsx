@@ -17,6 +17,8 @@ interface AccountQuotaTabProps {
   windowUsageError: string;
   refreshing: boolean;
   onRefresh: () => void;
+  canReset: boolean;
+  onReset: () => void;
 }
 
 export function AccountQuotaTab({
@@ -26,6 +28,8 @@ export function AccountQuotaTab({
   windowUsageError,
   refreshing,
   onRefresh,
+  canReset,
+  onReset,
 }: AccountQuotaTabProps) {
   const { t, i18n } = useTranslation();
   const statusField = detailView.quota.fields.find((field) => field.key === 'status');
@@ -54,6 +58,11 @@ export function AccountQuotaTab({
               {!refreshing ? <IconRefreshCw size={14} /> : null}
               {t('accounts.refresh_quota')}
             </Button>
+            {canReset ? (
+              <Button variant="secondary" size="sm" onClick={onReset}>
+                {t('codex_quota.reset_action_button')}
+              </Button>
+            ) : null}
           </div>
         </div>
         <AccountDetailFieldList fields={detailView.quota.fields} />
@@ -61,6 +70,18 @@ export function AccountQuotaTab({
           <div className={styles.detailInlineNote}>
             <span>{t('codex_quota.reset_credits_label')}</span>
             <strong>{detailView.quota.resetCreditsAvailableCount}</strong>
+          </div>
+        ) : null}
+        {detailView.quota.resetCreditExpiries.length > 0 ? (
+          <div className={styles.detailCandidateList}>
+            {detailView.quota.resetCreditExpiries.map((item, index) => (
+              <div key={`${item.id}:${item.expiresAtMs}`} className={styles.detailCandidateItem}>
+                <span>{t('codex_quota.reset_credit_expiry_item', { index: index + 1 })}</span>
+                <strong>
+                  <RelativeTime timestamp={item.expiresAtMs} mode="both" locale={i18n.language} />
+                </strong>
+              </div>
+            ))}
           </div>
         ) : null}
         {detailView.quota.cooldown ? (

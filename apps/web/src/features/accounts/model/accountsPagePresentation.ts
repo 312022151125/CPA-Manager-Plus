@@ -18,7 +18,7 @@ export type AccountsView = 'accounts' | 'quota' | 'inspection' | 'oauth' | 'valu
 export type DetailTab = 'overview' | 'quota' | 'credential' | 'models' | 'diagnostics';
 export type SortableAccountColumn = Extract<
   AccountRowSortKey,
-  'reset' | 'priority' | 'recent' | 'quota' | 'created'
+  'name' | 'plan' | 'note' | 'reset' | 'priority' | 'recent' | 'quota' | 'created'
 >;
 export type AccountSortFieldValue = 'default' | SortableAccountColumn;
 type AntigravityQuotaMatrixWindowKind = Extract<AccountQuotaWindowKind, 'five_hour' | 'weekly'>;
@@ -63,6 +63,9 @@ export const ACCOUNT_SORT_DEFAULT_DIRECTIONS: Record<
   SortableAccountColumn,
   AccountRowSortDirection
 > = {
+  name: 'asc',
+  plan: 'asc',
+  note: 'asc',
   reset: 'asc',
   priority: 'desc',
   recent: 'desc',
@@ -80,6 +83,9 @@ export const ACCOUNT_SORT_FIELD_OPTIONS: Array<{
   labelKey: string;
 }> = [
   DEFAULT_ACCOUNT_SORT_FIELD_OPTION,
+  { value: 'name', labelKey: 'accounts.sort_name' },
+  { value: 'plan', labelKey: 'accounts.col_plan' },
+  { value: 'note', labelKey: 'auth_files.note_label' },
   { value: 'reset', labelKey: 'accounts.col_reset' },
   { value: 'quota', labelKey: 'accounts.col_quota' },
   { value: 'priority', labelKey: 'accounts.col_priority' },

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { authFilesApi, type AuthFileFieldsPatch } from '@/services/api';
 import { apiClient } from '@/services/api/client';
@@ -47,6 +55,12 @@ export type AuthFilesBatchPatchResult = {
   failedNames: string[];
 };
 
+export type AuthFilesBatchDeleteOptions = {
+  title?: string;
+  message?: ReactNode;
+  confirmText?: string;
+};
+
 export type UseAuthFilesDataResult = {
   files: AuthFileItem[];
   selectedFiles: Set<string>;
@@ -83,7 +97,7 @@ export type UseAuthFilesDataResult = {
     targets: AuthFilePatchTarget[],
     fields: AuthFileFieldsPatch
   ) => Promise<AuthFilesBatchPatchResult | null>;
-  batchDelete: (names: string[]) => void;
+  batchDelete: (names: string[], options?: AuthFilesBatchDeleteOptions) => void;
 };
 
 type AuthFilePreparationFailure = {
@@ -1023,15 +1037,16 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
   );
 
   const batchDelete = useCallback(
-    (names: string[]) => {
+    (names: string[], options?: AuthFilesBatchDeleteOptions) => {
       const uniqueNames = Array.from(new Set(names));
       if (uniqueNames.length === 0) return;
 
       showConfirmation({
-        title: t('auth_files.batch_delete_title'),
-        message: t('auth_files.batch_delete_confirm', { count: uniqueNames.length }),
+        title: options?.title ?? t('auth_files.batch_delete_title'),
+        message:
+          options?.message ?? t('auth_files.batch_delete_confirm', { count: uniqueNames.length }),
         variant: 'danger',
-        confirmText: t('common.confirm'),
+        confirmText: options?.confirmText ?? t('common.confirm'),
         onConfirm: async () => {
           try {
             const result = await authFilesApi.deleteFiles(uniqueNames);

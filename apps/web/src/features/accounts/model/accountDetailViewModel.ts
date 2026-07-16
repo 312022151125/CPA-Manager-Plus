@@ -1,4 +1,5 @@
-import type { CodexQuotaState } from '@/types';
+import type { CodexQuotaState, XaiQuotaState } from '@/types';
+import { getSortedCodexResetCreditExpiries } from '@/components/quota/quotaConfigs';
 import type {
   AccountActionCandidate,
   MonitoringAccountHistoryItem,
@@ -51,6 +52,11 @@ export interface AccountDetailWindowUsageSummary {
 
 export interface AccountDetailQuotaWindow extends AccountDetailQuotaWindowInput {
   usage: AccountDetailWindowUsageSummary | null;
+}
+
+export interface AccountDetailResetCreditExpiry {
+  id: string;
+  expiresAtMs: number;
 }
 
 export interface AccountDetailActionCandidateSummary {
@@ -136,6 +142,7 @@ export interface AccountDetailViewModel {
     windows: AccountDetailQuotaWindow[];
     cooldown: QuotaCooldownInfo | null;
     resetCreditsAvailableCount: number | null;
+    resetCreditExpiries: AccountDetailResetCreditExpiry[];
   };
   auth: {
     fields: AccountDetailField[];
@@ -159,9 +166,11 @@ export interface BuildAccountDetailViewModelOptions {
   quotaWindows?: AccountDetailQuotaWindowInput[];
   windowUsageByKey?: Map<string, MonitoringAccountWindowUsageItem>;
   actionCandidates?: AccountActionCandidate[];
+  matchedActionCandidates?: AccountActionCandidate[];
   history?: MonitoringAccountHistoryItem | null;
   valueRow?: UsageValueRow | null;
   codexQuota?: CodexQuotaState | null;
+  xaiQuota?: XaiQuotaState | null;
 }
 
 const normalizeAuthIndexKey = (value: unknown): string => {
@@ -286,8 +295,19 @@ const buildQuotaWindows = (
     ),
   }));
 
-const buildQuotaDiagnostics = (row: AccountRow): AccountDetailField[] =>
-  compactFields([
+const buildQuotaDiagnostics = (
+  row: AccountRow,
+  xaiQuota?: XaiQuotaState | null
+): AccountDetailField[] => {
+  const xaiBilling = xaiQuota?.billing;
+  const quotaErrorGuidance =
+    row.quota.errorStatus === 404
+      ? 'common.quota_update_required'
+      : row.quota.errorStatus === 403
+        ? 'common.quota_check_credential'
+        : null;
+  return compactFields([
+    field('fetchedAtMs', 'accounts.detail_fetched_at', row.quota.fetchedAtMs, 'timestamp'),
     field('observedAtMs', 'accounts.detail_observed_at', row.quota.observedAtMs, 'timestamp'),
     field('trace', 'accounts.detail_header_trace', row.quota.observedTraceId),
     field('errorKind', 'accounts.detail_header_error_kind', row.quota.observedErrorKind),
@@ -344,7 +364,19 @@ const buildQuotaDiagnostics = (row: AccountRow): AccountDetailField[] =>
       'percent'
     ),
     field('error', 'common.error', row.quota.error),
+    field('errorGuidance', 'accounts.detail_quota_error_guidance', quotaErrorGuidance, 'i18n'),
+    booleanField('xaiPartial', 'accounts.detail_xai_partial', xaiBilling?.partial),
+    ...(xaiBilling?.diagnostics ?? []).map((diagnostic, index) =>
+      field(
+        `xaiDiagnostic-${index}`,
+        'accounts.detail_xai_diagnostic',
+        [diagnostic.statusCode ? `HTTP ${diagnostic.statusCode}` : '', diagnostic.message]
+          .filter(Boolean)
+          .join(' · ')
+      )
+    ),
   ]);
+};
 
 const quotaSourceLabelKey = (source: AccountRow['quota']['source']) => {
   switch (source) {
@@ -442,8 +474,12 @@ export const buildAccountDetailViewModel = (
   });
   const value = buildValueSummary(row, options.valueRow);
   const history = toHistorySummary(options.history);
-  const actionCandidates = (options.actionCandidates ?? [])
-    .filter((candidate) => isMatchingActionCandidate(row, candidate))
+  const actionCandidates = [
+    ...(options.matchedActionCandidates ??
+      (options.actionCandidates ?? []).filter((candidate) =>
+        isMatchingActionCandidate(row, candidate)
+      )),
+  ]
     .sort((left, right) => right.lastSeenAtMs - left.lastSeenAtMs)
     .map(toActionCandidateSummary);
 
@@ -482,10 +518,13 @@ export const buildAccountDetailViewModel = (
       statusLabelKey: listItem.quota.statusLabelKey,
       sourceShortLabelKey: listItem.quota.sourceShortLabelKey,
       fields: buildQuotaFields(row, listItem),
-      diagnostics: buildQuotaDiagnostics(row),
+      diagnostics: buildQuotaDiagnostics(row, options.xaiQuota),
       windows: buildQuotaWindows(row, quotaWindows, options.windowUsageByKey ?? new Map()),
       cooldown: quotaCooldown,
       resetCreditsAvailableCount: options.codexQuota?.rateLimitResetCreditsAvailableCount ?? null,
+      resetCreditExpiries: getSortedCodexResetCreditExpiries(
+        options.codexQuota?.rateLimitResetCredits
+      ).map((item) => ({ id: item.id, expiresAtMs: item.expiresAtMs })),
     },
     auth: {
       fields: buildAuthFields(row),

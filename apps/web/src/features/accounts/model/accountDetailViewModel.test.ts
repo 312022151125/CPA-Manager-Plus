@@ -180,6 +180,26 @@ describe('accountDetailViewModel', () => {
     });
   });
 
+  it('accepts safely pre-scoped file-level action candidates', () => {
+    const row = makeRow({ authIndex: '1' });
+    const fileLevelCandidate = makeCandidate({
+      id: 4,
+      authIndex: undefined,
+      reason: 'file-level fallback',
+    });
+
+    const viewModel = buildAccountDetailViewModel(row, {
+      actionCandidates: [],
+      matchedActionCandidates: [fileLevelCandidate],
+    });
+
+    expect(viewModel.strategy.actionCandidates).toHaveLength(1);
+    expect(viewModel.strategy.actionCandidates[0]).toMatchObject({
+      id: 4,
+      reason: 'file-level fallback',
+    });
+  });
+
   it('keeps raw secrets and candidate evidence out of the drawer contract', () => {
     const row = makeRow({
       key: 'secret.codex.json',

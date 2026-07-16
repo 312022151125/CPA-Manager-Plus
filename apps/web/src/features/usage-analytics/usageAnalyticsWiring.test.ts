@@ -329,7 +329,7 @@ describe('usage analytics app wiring', () => {
   });
 
   it('places Usage Analytics in the top-level sidebar between dashboard and monitoring when monitoring is available', () => {
-    const dashboardIndex = layoutSource.indexOf("path: '/', label: t('nav.dashboard')");
+    const dashboardIndex = layoutSource.indexOf('const dashboardNavItem: NavItem = {');
     const usageIndex = layoutSource.indexOf(
       '...(usageAnalyticsNavItem ? [usageAnalyticsNavItem] : [])'
     );

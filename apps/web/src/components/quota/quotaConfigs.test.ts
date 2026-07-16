@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { CodexQuotaState } from '@/types';
-import { getSortedCodexResetCreditExpiries, resolveQuotaDisplayState } from './quotaConfigs';
+import {
+  buildQuotaFailureState,
+  getSortedCodexResetCreditExpiries,
+  resolveQuotaDisplayState,
+} from './quotaConfigs';
 
 type TestQuotaState = {
   status: 'idle' | 'loading' | 'success' | 'error';
@@ -10,6 +14,54 @@ type TestQuotaState = {
   observedFromUsageHeaders?: boolean;
   windows?: unknown[];
 };
+
+type FailureTestState = {
+  status: 'success' | 'error';
+  fetchedAtMs?: number;
+  windows?: Array<{ id: string; usedPercent: number }>;
+  error?: string;
+  lastError?: string;
+  errorStatus?: number;
+  failedAtMs?: number;
+};
+
+describe('buildQuotaFailureState', () => {
+  it('lets providers preserve the last successful quota while recording refresh failure', () => {
+    const activeState: FailureTestState = {
+      status: 'success' as const,
+      fetchedAtMs: 1_000,
+      windows: [{ id: 'weekly', usedPercent: 25 }],
+    };
+    const result = buildQuotaFailureState<FailureTestState, unknown>(
+      {
+        buildErrorState: (message: string, status?: number) => ({
+          status: 'error' as const,
+          error: message,
+          errorStatus: status,
+        }),
+        buildFailureState: (message, status, _file, previous, failedAtMs) => ({
+          ...previous,
+          status: 'success' as const,
+          lastError: message,
+          errorStatus: status,
+          failedAtMs,
+        }),
+      },
+      'temporary failure',
+      503,
+      { name: 'codex.json', type: 'codex' },
+      activeState,
+      2_000
+    );
+
+    expect(result).toEqual({
+      ...activeState,
+      lastError: 'temporary failure',
+      errorStatus: 503,
+      failedAtMs: 2_000,
+    });
+  });
+});
 
 describe('getSortedCodexResetCreditExpiries', () => {
   it('filters expired or invalid reset credits and sorts by expiry time', () => {
@@ -312,10 +364,7 @@ describe('resolveQuotaDisplayState', () => {
     expect(result.observedFromUsageHeaders).toBe(true);
     expect(result.rateLimitResetCreditsAvailableCount).toBe(2);
     expect(result.rateLimitResetCredits).toHaveLength(1);
-    expect(result.windows.map((window) => window.id)).toEqual([
-      'five-hour',
-      'spark-five-hour-0',
-    ]);
+    expect(result.windows.map((window) => window.id)).toEqual(['five-hour', 'spark-five-hour-0']);
     expect(result.windows[0]).toMatchObject({
       id: 'five-hour',
       usedPercent: 80,

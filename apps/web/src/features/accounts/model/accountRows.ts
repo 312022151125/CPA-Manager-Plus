@@ -43,7 +43,16 @@ export type AccountStatusFilter =
   | 'low'
   | 'exhausted'
   | 'inspection';
-export type AccountRowSortKey = 'default' | 'reset' | 'priority' | 'recent' | 'quota' | 'created';
+export type AccountRowSortKey =
+  | 'default'
+  | 'name'
+  | 'plan'
+  | 'note'
+  | 'reset'
+  | 'priority'
+  | 'recent'
+  | 'quota'
+  | 'created';
 export type AccountRowSortDirection = AccountQuotaSortDirection;
 
 export interface AccountRowSort {
@@ -82,6 +91,7 @@ export interface AccountRow {
   statusMessage: string;
   authIndex: string;
   projectId: string;
+  note?: string;
   priority: number | null;
   createdAtMs: number | null;
   quota: AccountQuotaSummary;
@@ -219,6 +229,7 @@ export const buildAccountRows = (
       statusMessage: resolveStatusMessage(file),
       authIndex,
       projectId: readProjectId(file),
+      note: readString(file.note),
       priority: readNumber(file.priority),
       createdAtMs: readAuthFileCreatedAtMs(file),
       quota,
@@ -241,7 +252,7 @@ export const buildAccountMetrics = (rows: AccountRow[]): AccountMetrics => {
   const totalRequests = totals.success + totals.failure;
   return {
     total: rows.length,
-    available: rows.filter((row) => !row.disabled && !row.statusMessage).length,
+    available: rows.filter(isAccountRowAvailable).length,
     lowQuota: rows.filter((row) => row.quota.status === 'low').length,
     exhausted: rows.filter((row) => row.quota.status === 'exhausted').length,
     disabled: rows.filter((row) => row.disabled).length,
@@ -254,8 +265,25 @@ export const buildAccountMetrics = (rows: AccountRow[]): AccountMetrics => {
   };
 };
 
+const isAccountRowAvailable = (row: AccountRow): boolean =>
+  !row.disabled &&
+  !row.statusMessage &&
+  !row.quota.error &&
+  row.quota.status !== 'error' &&
+  row.quota.status !== 'exhausted' &&
+  (!row.inspection || row.inspection.action === 'keep');
+
 export const filterAccountRows = (rows: AccountRow[], filters: AccountRowFilters): AccountRow[] => {
   const search = filters.search.trim().toLowerCase();
+  const wildcard = search.includes('*')
+    ? new RegExp(
+        search
+          .split('*')
+          .map((segment) => segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+          .join('.*'),
+        'i'
+      )
+    : null;
   return rows.filter((row) => {
     if (filters.provider !== 'all' && row.provider !== filters.provider) return false;
     if (filters.plan !== 'all' && (row.planType ?? 'unknown') !== filters.plan) return false;
@@ -269,7 +297,13 @@ export const filterAccountRows = (rows: AccountRow[], filters: AccountRowFilters
       row.planType,
       row.authIndex,
       row.projectId,
+      row.note,
       row.statusMessage,
+      row.raw.state,
+      row.raw.status,
+      row.raw.error,
+      row.raw.errorStatus,
+      row.raw['error_status'],
       row.quota.source,
       row.quota.error,
       row.quota.observedTraceId,
@@ -280,7 +314,10 @@ export const filterAccountRows = (rows: AccountRow[], filters: AccountRowFilters
       row.quota.rateLimitReachedType,
       row.inspection?.actionReason,
     ];
-    return values.some((value) => readString(value).toLowerCase().includes(search));
+    return values.some((value) => {
+      const text = readString(value);
+      return wildcard ? wildcard.test(text) : text.toLowerCase().includes(search);
+    });
   });
 };
 
@@ -304,9 +341,11 @@ export const getPlanOptions = (rows: AccountRow[]) =>
 
 const matchesStatusFilter = (row: AccountRow, status: AccountStatusFilter) => {
   if (status === 'all') return true;
-  if (status === 'available') return !row.disabled && !row.statusMessage;
+  if (status === 'available') return isAccountRowAvailable(row);
   if (status === 'disabled') return row.disabled;
-  if (status === 'problem') return Boolean(row.statusMessage) || row.quota.status === 'error';
+  if (status === 'problem') {
+    return Boolean(row.statusMessage || row.quota.error) || row.quota.status === 'error';
+  }
   if (status === 'low') return row.quota.status === 'low';
   if (status === 'exhausted') return row.quota.status === 'exhausted';
   if (status === 'inspection') return Boolean(row.inspection && row.inspection.action !== 'keep');
@@ -330,7 +369,7 @@ const getRiskRank = (row: AccountRow) => {
   if (row.inspection && row.inspection.action !== 'keep') return 6;
   if (row.quota.status === 'exhausted') return 5;
   if (row.quota.status === 'low') return 4;
-  if (row.quota.status === 'error') return 3;
+  if (row.quota.status === 'error' || row.quota.error) return 3;
   if (row.disabled) return 2;
   if (row.statusMessage) return 1;
   return 0;
@@ -348,6 +387,16 @@ const compareDefaultAccountRows = (left: AccountRow, right: AccountRow) => {
 };
 
 const compareAccountRowsBySort = (left: AccountRow, right: AccountRow, sort: AccountRowSort) => {
+  if (sort.key === 'name') {
+    const accountComparison = compareText(left.accountLabel, right.accountLabel, sort.direction);
+    return accountComparison || compareText(left.fileName, right.fileName, sort.direction);
+  }
+  if (sort.key === 'plan') {
+    return compareText(left.planType ?? '', right.planType ?? '', sort.direction, true);
+  }
+  if (sort.key === 'note') {
+    return compareText(left.note ?? '', right.note ?? '', sort.direction, true);
+  }
   if (sort.key === 'priority') {
     return compareNumbers(left.priority ?? 0, right.priority ?? 0, sort.direction);
   }
@@ -370,6 +419,26 @@ const compareAccountRowsBySort = (left: AccountRow, right: AccountRow, sort: Acc
     return compareQuotaResetLabels(left.quota.resetLabel, right.quota.resetLabel, sort.direction);
   }
   return 0;
+};
+
+const compareText = (
+  left: string,
+  right: string,
+  direction: AccountRowSortDirection,
+  emptyLast = false
+) => {
+  const leftValue = left.trim();
+  const rightValue = right.trim();
+  if (emptyLast) {
+    if (!leftValue && !rightValue) return 0;
+    if (!leftValue) return 1;
+    if (!rightValue) return -1;
+  }
+  const result = leftValue.localeCompare(rightValue, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+  return direction === 'asc' ? result : -result;
 };
 
 const compareNumbers = (left: number, right: number, direction: AccountRowSortDirection) => {

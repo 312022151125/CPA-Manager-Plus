@@ -50,6 +50,55 @@ describe('accountRows', () => {
     expect(rows[0].planType).toBe('plus');
   });
 
+  it('keeps the last successful Codex windows visible after a refresh failure', () => {
+    const rows = buildAccountRows([{ name: 'codex-stale.json', type: 'codex', authIndex: '1' }], {
+      ...emptyStores(),
+      codexQuota: {
+        'codex-stale.json': {
+          status: 'error',
+          error: 'temporary failure',
+          errorStatus: 503,
+          fetchedAtMs: 1_000,
+          windows: [
+            {
+              id: 'weekly',
+              label: 'Weekly',
+              usedPercent: 25,
+              resetLabel: 'Mon',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(rows[0].quota).toMatchObject({
+      status: 'ok',
+      remainingPercent: 75,
+      error: 'temporary failure',
+      errorStatus: 503,
+      fetchedAtMs: 1_000,
+    });
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'problem',
+        plan: 'all',
+        quotaBand: 'all',
+        search: '',
+      })
+    ).toHaveLength(1);
+    expect(buildAccountMetrics(rows).available).toBe(0);
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'available',
+        plan: 'all',
+        quotaBand: 'all',
+        search: '',
+      })
+    ).toHaveLength(0);
+  });
+
   it('marks observed Codex usage header quota and searches header diagnostics', () => {
     const rows = buildAccountRows(
       [
@@ -110,6 +159,36 @@ describe('accountRows', () => {
         search: 'usage_limit',
       }).map((row) => row.fileName)
     ).toEqual(['codex-observed.json']);
+  });
+
+  it('supports wildcard search across account notes', () => {
+    const rows = buildAccountRows(
+      [
+        {
+          name: 'primary-codex.json',
+          type: 'codex',
+          account: 'primary@example.com',
+          note: 'Production Team Alpha',
+        },
+        {
+          name: 'backup-codex.json',
+          type: 'codex',
+          account: 'backup@example.com',
+          note: 'Standby Team Beta',
+        },
+      ],
+      emptyStores()
+    );
+
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'all',
+        plan: 'all',
+        quotaBand: 'all',
+        search: 'prod*alpha',
+      }).map((row) => row.fileName)
+    ).toEqual(['primary-codex.json']);
   });
 
   it('builds selection keys with auth indexes for shared auth rows', () => {
@@ -505,6 +584,7 @@ describe('accountRows', () => {
     expect(metrics.total).toBe(2);
     expect(metrics.lowQuota).toBe(1);
     expect(metrics.disabled).toBe(1);
+    expect(metrics.available).toBe(0);
     expect(metrics.needsInspectionAction).toBe(1);
     expect(metrics.successRate).toBeCloseTo((9 / 12) * 100);
   });
@@ -618,5 +698,19 @@ describe('accountRows', () => {
     expect(
       sortAccountRows(rows, { key: 'created', direction: 'asc' }).map((row) => row.fileName)
     ).toEqual(['low.json', 'high.json', 'middle.json']);
+  });
+
+  it('sorts the name column by account label instead of credential file name', () => {
+    const rows = buildAccountRows(
+      [
+        { name: 'a-file.json', type: 'codex', account: 'Zulu Account' },
+        { name: 'z-file.json', type: 'codex', account: 'Alpha Account' },
+      ],
+      emptyStores()
+    );
+
+    expect(
+      sortAccountRows(rows, { key: 'name', direction: 'asc' }).map((row) => row.fileName)
+    ).toEqual(['z-file.json', 'a-file.json']);
   });
 });

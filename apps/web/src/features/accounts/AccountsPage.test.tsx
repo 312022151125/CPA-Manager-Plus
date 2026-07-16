@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '@/components/ui/Button';
 import { DropdownMenu } from '@/components/ui/DropdownMenu';
 import type { AuthFileItem } from '@/types';
-import type { UsageHeaderSnapshot } from '@/services/api/usageService';
+import type {
+  CodexInspectionResult,
+  CodexInspectionRun,
+  UsageHeaderSnapshot,
+} from '@/services/api/usageService';
 import { copyToClipboard } from '@/utils/clipboard';
 import { AccountsPage } from './AccountsPage';
 
@@ -195,6 +199,8 @@ const { mocks } = vi.hoisted(() => {
       selectionCount: 0,
       batchFieldsUpdating: false,
       location: { pathname: '/accounts', search: '' },
+      apiBase: 'http://cpa-a.local:8317',
+      managementKey: 'manager-key',
       navigate: vi.fn(),
       showNotification: vi.fn(),
       showConfirmation: vi.fn(),
@@ -212,8 +218,15 @@ const { mocks } = vi.hoisted(() => {
       showModels: vi.fn(async () => undefined),
       loadExcluded: vi.fn(async () => undefined),
       loadModelAlias: vi.fn(async () => undefined),
-      listCodexInspectionRuns: vi.fn(async () => ({ items: [] })),
-      getCodexInspectionRun: vi.fn(async () => ({ run: null, results: [] })),
+      listCodexInspectionRuns: vi.fn(
+        async (): Promise<{ items: CodexInspectionRun[] }> => ({ items: [] })
+      ),
+      getCodexInspectionRun: vi.fn(
+        async (): Promise<{
+          run: CodexInspectionRun | null;
+          results: CodexInspectionResult[];
+        }> => ({ run: null, results: [] })
+      ),
       getActiveQuotaCooldowns: vi.fn(async () => []),
       listAccountActionCandidates: vi.fn(async () => ({ items: [], pendingCount: 0 })),
       getAnalytics: vi.fn(
@@ -274,6 +287,7 @@ const { mocks } = vi.hoisted(() => {
         provider?: string;
         onClose: () => void;
       },
+      localInspection: null as null | Record<string, unknown>,
       quotaState: {
         antigravityQuota: {},
         claudeQuota: {},
@@ -398,6 +412,12 @@ vi.mock('@/features/accounts/hooks/useAccountCredentialSafeSummary', () => ({
   }),
 }));
 
+vi.mock('@/features/monitoring/codexInspection', () => ({
+  createCodexInspectionConnectionFingerprint: (apiBase: string, managementKey: string) =>
+    `${apiBase}:${managementKey}`,
+  loadCodexInspectionLastRun: () => mocks.localInspection,
+}));
+
 vi.mock('@/features/authFiles/components/AuthJsonPasteModal', () => ({
   AuthJsonPasteModal: () => null,
 }));
@@ -488,8 +508,17 @@ vi.mock('@/stores', () => ({
     return selector ? selector(state) : state;
   },
   useAuthStore: (
-    selector: (state: { connectionStatus: 'connected'; managementKey: string }) => unknown
-  ) => selector({ connectionStatus: 'connected', managementKey: 'manager-key' }),
+    selector: (state: {
+      apiBase: string;
+      connectionStatus: 'connected';
+      managementKey: string;
+    }) => unknown
+  ) =>
+    selector({
+      apiBase: mocks.apiBase,
+      connectionStatus: 'connected',
+      managementKey: mocks.managementKey,
+    }),
   useQuotaStore: (
     selector: (state: {
       antigravityQuota: Record<string, never>;
@@ -649,6 +678,8 @@ describe('AccountsPage replacement flows', () => {
     mocks.selectionCount = 0;
     mocks.batchFieldsUpdating = false;
     mocks.location = { pathname: '/accounts', search: '' };
+    mocks.apiBase = 'http://cpa-a.local:8317';
+    mocks.managementKey = 'manager-key';
     mocks.panelFeatureAvailability = {
       checking: false,
       managerServiceBase: 'http://manager.local:18317',
@@ -657,6 +688,7 @@ describe('AccountsPage replacement flows', () => {
     };
     mocks.navigate.mockClear();
     mocks.showNotification.mockClear();
+    mocks.showConfirmation.mockClear();
     mocks.toggleSelect.mockClear();
     mocks.selectAllVisible.mockClear();
     mocks.invertVisibleSelection.mockClear();
@@ -682,16 +714,30 @@ describe('AccountsPage replacement flows', () => {
     mocks.getAccountHistory.mockResolvedValue(makeAccountHistoryResponse([]));
     mocks.getAccountWindowUsage.mockReset();
     mocks.getAccountWindowUsage.mockResolvedValue({ generated_at_ms: 1, items: [] });
+    mocks.listCodexInspectionRuns.mockReset();
+    mocks.listCodexInspectionRuns.mockResolvedValue({ items: [] });
+    mocks.getCodexInspectionRun.mockReset();
+    mocks.getCodexInspectionRun.mockResolvedValue({ run: null, results: [] });
+    mocks.getActiveQuotaCooldowns.mockReset();
+    mocks.getActiveQuotaCooldowns.mockResolvedValue([]);
+    mocks.listAccountActionCandidates.mockReset();
+    mocks.listAccountActionCandidates.mockResolvedValue({ items: [], pendingCount: 0 });
     mocks.quotaState.antigravityQuota = {};
     mocks.quotaState.claudeQuota = {};
     mocks.quotaState.codexQuota = {};
     mocks.quotaState.kimiQuota = {};
     mocks.quotaState.xaiQuota = {};
+    mocks.quotaState.setAntigravityQuota.mockClear();
+    mocks.quotaState.setClaudeQuota.mockClear();
+    mocks.quotaState.setCodexQuota.mockClear();
+    mocks.quotaState.setKimiQuota.mockClear();
+    mocks.quotaState.setXaiQuota.mockClear();
     mocks.loadFiles.mockClear();
     mocks.loadExcluded.mockClear();
     mocks.loadModelAlias.mockClear();
     mocks.lastExcludedEditorProps = null;
     mocks.lastAliasEditorProps = null;
+    mocks.localInspection = null;
   });
 
   it('opens OAuth editors inline instead of navigating to auth-files routes', async () => {
@@ -730,6 +776,172 @@ describe('AccountsPage replacement flows', () => {
 
     expect(treeText(renderer)).toContain('oauth-excluded-add');
     expect(findHostButtonByText(renderer, 'accounts.tab_oauth').props['aria-selected']).toBe(true);
+  });
+
+  it('opens OAuth editors from a deep link', async () => {
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?view=oauth&editor=excluded&editorProvider=codex',
+    };
+
+    const renderer = await renderAccountsPage();
+
+    expect(treeText(renderer)).toContain('oauth-excluded-editor-open');
+    expect(mocks.lastExcludedEditorProps?.provider).toBe('codex');
+  });
+
+  it('restores filters and account detail tabs from the URL', async () => {
+    mocks.files = [
+      makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      {
+        name: 'xai.json',
+        type: 'xai',
+        provider: 'xai',
+        account: 'xai@example.com',
+        disabled: false,
+      } as AuthFileItem,
+    ];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?provider=codex&account=codex.json%00auth-1&tab=quota',
+    };
+
+    const renderer = await renderAccountsPage();
+
+    expect(
+      renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
+    ).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
+      0
+    );
+    expect(findHostButtonByText(renderer, 'accounts.detail_tab_quota').props['aria-selected']).toBe(
+      true
+    );
+  });
+
+  it('removes an account deep link after files load without a matching account', async () => {
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=missing.json%00auth-9&tab=diagnostics',
+    };
+
+    await renderAccountsPage();
+    await flushPromises();
+
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      { pathname: '/accounts', search: '' },
+      { replace: true }
+    );
+  });
+
+  it('resets omitted filters to defaults during later browser navigation', async () => {
+    mocks.location = { pathname: '/accounts', search: '?provider=codex' };
+    mocks.files = [
+      makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      {
+        name: 'xai.json',
+        type: 'xai',
+        provider: 'xai',
+        account: 'xai@example.com',
+        disabled: false,
+      } as AuthFileItem,
+    ];
+    const renderer = await renderAccountsPage();
+
+    expect(
+      renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
+    ).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
+      0
+    );
+
+    mocks.location = { pathname: '/accounts', search: '?provider=xai' };
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    expect(
+      renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
+    ).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
+      1
+    );
+
+    mocks.location = { pathname: '/accounts', search: '' };
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    expect(
+      renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
+    ).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
+      1
+    );
+  });
+
+  it('resets omitted filters when the hash changes outside React Router navigation', async () => {
+    const windowEvents = new EventTarget();
+    const location = { hash: '#/accounts?provider=codex' };
+    const storage = new Map<string, string>();
+    vi.stubGlobal('window', {
+      location,
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+        removeItem: (key: string) => storage.delete(key),
+        clear: () => storage.clear(),
+      },
+      addEventListener: windowEvents.addEventListener.bind(windowEvents),
+      removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+    });
+    mocks.location = { pathname: '/accounts', search: '?provider=codex' };
+    mocks.files = [
+      makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      {
+        name: 'xai.json',
+        type: 'xai',
+        provider: 'xai',
+        account: 'xai@example.com',
+        disabled: false,
+      } as AuthFileItem,
+    ];
+    const renderer = await renderAccountsPage();
+
+    expect(
+      renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
+    ).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
+      0
+    );
+
+    try {
+      await act(async () => {
+        location.hash = '#/accounts';
+        windowEvents.dispatchEvent(new Event('hashchange'));
+        await Promise.resolve();
+      });
+
+      expect(
+        renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
+      ).toHaveLength(1);
+      expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
+        1
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('requests the same automation candidate capacity as the legacy credential page', async () => {
+    await renderAccountsPage();
+
+    expect(mocks.listAccountActionCandidates).toHaveBeenCalledWith(
+      'http://manager.local:18317',
+      'manager-key',
+      'pending',
+      500
+    );
   });
 
   it('updates the accounts view query when switching views', async () => {
@@ -783,6 +995,283 @@ describe('AccountsPage replacement flows', () => {
     });
 
     expect(mocks.batchDelete).not.toHaveBeenCalled();
+  });
+
+  it('passes a file-scoped preview into the single batch delete confirmation', async () => {
+    mocks.selectedFiles = new Set(['codex.json\u0000auth-1']);
+    mocks.selectionCount = 1;
+
+    const renderer = await renderAccountsPage();
+    const deleteItem = findBatchMoreItem(renderer, 'delete');
+
+    await act(async () => {
+      deleteItem.onClick();
+    });
+
+    expect(mocks.batchDelete).toHaveBeenCalledTimes(1);
+    const options = mocks.batchDelete.mock.calls[0]?.[1] as
+      | { message?: unknown; confirmText?: string }
+      | undefined;
+    expect(options?.confirmText).toBe('common.delete');
+    expect(
+      isValidElement<{
+        summary: string;
+        warning: string;
+        fileNames: string[];
+      }>(options?.message)
+    ).toBe(true);
+    if (
+      !isValidElement<{
+        summary: string;
+        warning: string;
+        fileNames: string[];
+      }>(options?.message)
+    ) {
+      throw new Error('Expected batch delete preview element');
+    }
+    expect(options.message.props.summary).toContain('accounts.batch_delete_preview_summary');
+    expect(options.message.props.warning).toContain('accounts.batch_delete_preview_file_scope');
+    expect(options.message.props.fileNames).toContain('codex.json');
+  });
+
+  it('keeps runtime Aistudio model discovery available', async () => {
+    mocks.files = [
+      {
+        name: 'runtime-aistudio.json',
+        type: 'aistudio',
+        provider: 'aistudio',
+        runtimeOnly: true,
+        disabled: false,
+      } as AuthFileItem,
+    ];
+
+    const renderer = await renderAccountsPage();
+    const modelsButton = findAccountCardButtonByAriaLabel(
+      renderer,
+      'runtime-aistudio.json\u0000-',
+      'auth_files.models_button'
+    );
+
+    expect(modelsButton.props.disabled).toBe(false);
+    await act(async () => {
+      modelsButton.props.onClick();
+    });
+    expect(mocks.showModels).toHaveBeenCalledWith(mocks.files[0]);
+  });
+
+  it('renders account cards in the quota workspace', async () => {
+    mocks.location = { pathname: '/accounts', search: '?view=quota' };
+
+    const renderer = await renderAccountsPage();
+
+    expect(
+      renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
+    ).toHaveLength(1);
+    expect(findHostButtonByText(renderer, 'accounts.tab_quota').props['aria-selected']).toBe(true);
+  });
+
+  it('uses the last local inspection when Manager inspection is unavailable', async () => {
+    mocks.location = { pathname: '/accounts', search: '?view=inspection' };
+    mocks.localInspection = {
+      savedAt: 300,
+      logs: [],
+      logsCollapsed: true,
+      actionFilter: 'all',
+      connectionFingerprint: 'http://manager.local:18317:manager-key',
+      result: {
+        settings: {},
+        files: mocks.files,
+        startedAt: 100,
+        finishedAt: 200,
+        summary: {
+          totalFiles: 1,
+          probeSetCount: 1,
+          sampledCount: 1,
+          disabledCount: 0,
+          enabledCount: 0,
+          deleteCount: 0,
+          disableCount: 0,
+          enableCount: 0,
+          reauthCount: 1,
+          keepCount: 0,
+          usedPercentThreshold: 100,
+          sampled: false,
+          plannedActionPreview: [],
+        },
+        results: [
+          {
+            key: 'codex.json\u0000auth-1',
+            fileName: 'codex.json',
+            displayAccount: 'codex@example.com',
+            authIndex: 'auth-1',
+            accountId: null,
+            provider: 'codex',
+            disabled: false,
+            autoRecoverOwned: false,
+            status: 'error',
+            state: 'error',
+            raw: mocks.files[0],
+            action: 'reauth',
+            actionReason: 'expired token',
+            statusCode: 401,
+            usedPercent: null,
+            isQuota: false,
+            autoRecoverEligible: false,
+            error: 'expired token',
+            actionHandled: false,
+          },
+        ],
+      },
+    };
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(treeText(renderer)).toContain('codex@example.com');
+    expect(treeText(renderer)).toContain('expired token');
+    expect(treeText(renderer)).toContain('accounts.action_reauth');
+  });
+
+  it('translates inspection reason keys before rendering them', async () => {
+    const originalT = mocks.t;
+    mocks.t = (key: string, options?: Record<string, unknown>) => {
+      if (key.startsWith('monitoring.')) return `translated:${key}`;
+      return originalT(key, options);
+    };
+    mocks.location = { pathname: '/accounts', search: '?view=inspection' };
+    mocks.localInspection = {
+      savedAt: 300,
+      logs: [],
+      logsCollapsed: true,
+      actionFilter: 'all',
+      connectionFingerprint: 'http://manager.local:18317:manager-key',
+      result: {
+        settings: {},
+        files: mocks.files,
+        startedAt: 100,
+        finishedAt: 200,
+        summary: {
+          totalFiles: 1,
+          probeSetCount: 1,
+          sampledCount: 1,
+          disabledCount: 0,
+          enabledCount: 0,
+          deleteCount: 0,
+          disableCount: 0,
+          enableCount: 0,
+          reauthCount: 0,
+          keepCount: 1,
+          usedPercentThreshold: 100,
+          sampled: false,
+          plannedActionPreview: [],
+        },
+        results: [
+          {
+            key: 'codex.json\u0000auth-1',
+            fileName: 'codex.json',
+            displayAccount: 'codex@example.com',
+            authIndex: 'auth-1',
+            accountId: null,
+            provider: 'codex',
+            disabled: false,
+            autoRecoverOwned: false,
+            status: 'ok',
+            state: 'ok',
+            raw: mocks.files[0],
+            action: 'keep',
+            actionReason: 'monitoring.xai_inspection_reason_billing_healthy',
+            statusCode: 200,
+            usedPercent: null,
+            isQuota: false,
+            autoRecoverEligible: false,
+            error: '',
+            actionHandled: false,
+          },
+        ],
+      },
+    };
+
+    try {
+      const renderer = await renderAccountsPage();
+      await flushPromises();
+
+      expect(treeText(renderer)).toContain(
+        'translated:monitoring.xai_inspection_reason_billing_healthy'
+      );
+    } finally {
+      mocks.t = originalT;
+    }
+  });
+
+  it('ignores stale Manager inspection responses after the CPA connection changes', async () => {
+    mocks.location = { pathname: '/accounts', search: '?view=inspection' };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: false,
+      serverCodexInspectionAvailable: true,
+    };
+    const run: CodexInspectionRun = {
+      id: 7,
+      triggerType: 'manual',
+      status: 'completed',
+      startedAtMs: 100,
+      finishedAtMs: 200,
+      totalFiles: 1,
+      probeSetCount: 1,
+      sampledCount: 1,
+      disabledCount: 0,
+      enabledCount: 0,
+      deleteCount: 0,
+      disableCount: 0,
+      enableCount: 0,
+      reauthCount: 1,
+      keepCount: 0,
+      createdAtMs: 100,
+      updatedAtMs: 200,
+    };
+    const makeInspectionResult = (id: number, account: string): CodexInspectionResult => ({
+      id,
+      runId: 7,
+      accountKey: account,
+      fileName: 'codex.json',
+      displayAccount: account,
+      authIndex: 'auth-1',
+      provider: 'codex',
+      disabled: false,
+      action: 'reauth',
+      actionReason: `${account} reason`,
+      statusCode: 401,
+      isQuota: false,
+      createdAtMs: 200,
+    });
+    const firstDetail = createDeferred<{
+      run: typeof run;
+      results: ReturnType<typeof makeInspectionResult>[];
+    }>();
+    mocks.listCodexInspectionRuns.mockResolvedValue({ items: [run] });
+    mocks.getCodexInspectionRun
+      .mockImplementationOnce(() => firstDetail.promise)
+      .mockResolvedValue({ run, results: [makeInspectionResult(2, 'new-connection@example.com')] });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    expect(mocks.getCodexInspectionRun).toHaveBeenCalledTimes(1);
+
+    mocks.apiBase = 'http://cpa-b.local:8317';
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushPromises();
+    expect(mocks.getCodexInspectionRun).toHaveBeenCalledTimes(2);
+
+    firstDetail.resolve({ run, results: [makeInspectionResult(1, 'old-connection@example.com')] });
+    await flushPromises();
+
+    expect(treeText(renderer)).toContain('new-connection@example.com');
+    expect(treeText(renderer)).not.toContain('old-connection@example.com');
   });
 
   it('uses unique table row keys for shared auth accounts', async () => {
@@ -1231,9 +1720,13 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.handleDelete).toHaveBeenCalledWith('codex.json');
 
     await act(async () => {
-      findAccountCardInputByAriaLabel(renderer, selectionKey, 'accounts.disable').props.onChange({
-        target: { checked: false },
-      });
+      const statusToggle = findAccountCardInputByAriaLabel(
+        renderer,
+        selectionKey,
+        'auth_files.status_toggle_label'
+      );
+      expect(statusToggle.props.checked).toBe(true);
+      statusToggle.props.onChange({ target: { checked: false } });
       await Promise.resolve();
     });
     expect(mocks.batchSetStatus).toHaveBeenCalledWith(['codex.json'], false);

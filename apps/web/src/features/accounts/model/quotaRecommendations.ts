@@ -72,7 +72,7 @@ export const buildAccountRecommendation = (row: AccountRow): AccountRecommendati
     };
   }
 
-  if (row.quota.status === 'error') {
+  if (row.quota.status === 'error' || row.quota.error) {
     return {
       row,
       action: 'refresh',
