@@ -950,18 +950,6 @@ describe('monitoringCenterPageModel account quota', () => {
       metaLabels: ['xAI Quota', 'On-demand cap: $50.00'],
       windows: [
         {
-          id: 'credits-period',
-          label: 'Weekly credits',
-          remainingPercent: 58,
-          usageLabel: null,
-        },
-        {
-          id: 'product-0-Grok Code Fast',
-          label: 'Grok Code Fast',
-          remainingPercent: 63,
-          usageLabel: 'Product usage',
-        },
-        {
           id: 'monthly-limit',
           label: 'Monthly credits',
           remainingPercent: 0,

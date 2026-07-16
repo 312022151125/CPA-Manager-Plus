@@ -3210,7 +3210,13 @@ const buildMonitoringAnalytics = (
       api_key_stats: apiKeyStats,
       channel_share: channelShare,
       model_stats: modelStats,
-      providers: ['codex', 'claude', 'antigravity', 'kimi', 'xai'],
+      providers: Array.from(
+        new Set(
+          accountStats
+            .map((row) => row.auth_provider_snapshot)
+            .filter((provider): provider is string => Boolean(provider))
+        )
+      ).sort(),
       auth_files: getDemoAuthFileItems().map((file) => file.name),
       project_ids: ['demo-antigravity-project'],
       request_types: ['chat', 'responses', 'models'],

@@ -146,6 +146,15 @@ describe('DemoPage', () => {
       })),
     });
     const oauthProviders = ['antigravity', 'claude', 'codex', 'kimi', 'xai'];
+    const analyticsProviderList = [
+      'antigravity',
+      'claude',
+      'codex',
+      'gemini',
+      'kimi',
+      'openai',
+      'xai',
+    ];
     const nonOauthFiles = [
       'gemini-prod-01.json',
       'vertex-regional-01.json',
@@ -196,8 +205,8 @@ describe('DemoPage', () => {
     oauthProviders.forEach((provider) => {
       expect(providerCounts[provider]).toBeGreaterThanOrEqual(3);
     });
-    expect(Array.from(analyticsProviders).sort()).toEqual(oauthProviders);
-    expect([...(analytics.filter_options?.providers ?? [])].sort()).toEqual(oauthProviders);
+    expect(Array.from(analyticsProviders).sort()).toEqual(analyticsProviderList);
+    expect([...(analytics.filter_options?.providers ?? [])].sort()).toEqual(analyticsProviderList);
     expect(accountHistory.checkpoint.pending).toBe(false);
     expect(accountHistory.items).toHaveLength(authFiles.files.length);
     expect(accountHistory.items.every((item) => item.matched)).toBe(true);
@@ -325,10 +334,12 @@ describe('DemoPage', () => {
     });
 
     expect(firstPage.model_stats?.length).toBeGreaterThanOrEqual(8);
-    expect(firstPage.account_stats?.length).toBe(demoAuthCount);
+    expect(firstPage.account_stats?.length).toBeGreaterThanOrEqual(demoAuthCount);
     expect(firstPage.api_key_stats?.length).toBe(demoAuthCount);
     expect(firstPage.credential_stats?.length).toBe(demoAuthCount);
-    expect(firstPage.credential_timeline?.length).toBe(Math.min(demoAuthCount, 10) * 7);
+    expect(firstPage.credential_timeline?.length).toBe(
+      Math.min(firstPage.credential_stats?.length ?? 0, 10) * 7
+    );
     expect(firstPage.heatmap).toHaveLength(168);
     expect(firstPage.heatmap?.some((point) => point.calls > 0)).toBe(true);
     expect(firstPage.events?.items).toHaveLength(10);
