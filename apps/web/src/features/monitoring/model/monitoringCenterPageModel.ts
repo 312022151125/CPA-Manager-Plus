@@ -159,6 +159,7 @@ export const buildMonitoringInitialStateFromQuery = (
   const status = params.get('status')?.trim();
   const provider = params.get('provider')?.trim();
   const authFile = params.get('auth_file')?.trim();
+  const authIndex = params.get('auth_index')?.trim();
   const projectId = params.get('project_id')?.trim();
   const requestType = params.get('request_type')?.trim();
   const searchQuery = params.get('search')?.trim();
@@ -167,7 +168,13 @@ export const buildMonitoringInitialStateFromQuery = (
   const headerTraceId = params.get('header_trace_id')?.trim();
   const hasRange = fromMs !== null && toMs !== null && fromMs < toMs;
   const hasStructuredScopeFilter = Boolean(
-    authFile || projectId || requestType || minLatencyMs || cacheStatus || headerTraceId
+    authFile ||
+    authIndex ||
+    projectId ||
+    requestType ||
+    minLatencyMs ||
+    cacheStatus ||
+    headerTraceId
   );
 
   return {

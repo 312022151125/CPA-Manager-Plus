@@ -89,7 +89,9 @@ const buildSourceKeysFromAnalyticsIdentity = (
     });
   });
 
-  return Array.from(keys).filter((key) => key && key !== 'source:-').sort();
+  return Array.from(keys)
+    .filter((key) => key && key !== 'source:-')
+    .sort();
 };
 
 const normalizeFilterText = (value: string | null | undefined) =>
@@ -326,6 +328,9 @@ export const buildAnalyticsFilters = (
   }
 
   let authIndices: Set<string> | null = null;
+  if (isActiveFilterValue(scopeFilters.authIndex)) {
+    authIndices = addAuthIndexConstraint(authIndices, [scopeFilters.authIndex!.trim()]);
+  }
   if (isActiveFilterValue(scopeFilters.account)) {
     const account = scopeFilters.account!.trim();
     const accountCriteria = parseMonitoringAccountFilterValue(account);

@@ -159,6 +159,7 @@ export function MonitoringCenterPage() {
       const minLatencyMs = Number(params.get('min_latency_ms'));
       return {
         authFile: params.get('auth_file')?.trim() || '',
+        authIndex: params.get('auth_index')?.trim() || '',
         projectId: params.get('project_id')?.trim() || '',
         requestType: params.get('request_type')?.trim() || '',
         minLatencyMs: Number.isFinite(minLatencyMs) && minLatencyMs > 0 ? minLatencyMs : undefined,
@@ -215,6 +216,7 @@ export function MonitoringCenterPage() {
   const [drilldownAuthFile, setDrilldownAuthFile] = useState(
     () => initialMonitoringDrilldownFilters.current.authFile
   );
+  const [drilldownAuthIndex] = useState(() => initialMonitoringDrilldownFilters.current.authIndex);
   const [drilldownProjectId, setDrilldownProjectId] = useState(
     () => initialMonitoringDrilldownFilters.current.projectId
   );
@@ -337,6 +339,7 @@ export function MonitoringCenterPage() {
       account: selectedAccount,
       provider: selectedProvider,
       authFile: drilldownAuthFile || undefined,
+      authIndex: drilldownAuthIndex || undefined,
       projectId: drilldownProjectId || undefined,
       requestType: drilldownRequestType || undefined,
       minLatencyMs: drilldownMinLatencyMs,
@@ -349,6 +352,7 @@ export function MonitoringCenterPage() {
     }),
     [
       drilldownAuthFile,
+      drilldownAuthIndex,
       drilldownCacheStatus,
       drilldownMinLatencyMs,
       drilldownProjectId,
@@ -721,8 +725,7 @@ export function MonitoringCenterPage() {
             )
           )
           .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-        const nextState =
-          mergeObservedAccountQuotaState(state, targets, observedEntries) ?? state;
+        const nextState = mergeObservedAccountQuotaState(state, targets, observedEntries) ?? state;
         changed = changed || nextState !== state;
         return [account, nextState] as const;
       })

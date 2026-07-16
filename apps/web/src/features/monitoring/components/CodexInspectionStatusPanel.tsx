@@ -108,7 +108,7 @@ export function CodexInspectionStatusPanel({
           </div>
 
           <div className={styles.statusActions}>
-            <Link to="/auth-files" className={styles.quickLink}>
+            <Link to="/accounts" className={styles.quickLink}>
               <IconExternalLink size={14} />
               <span>{t('monitoring.codex_inspection_back')}</span>
             </Link>
@@ -151,7 +151,9 @@ export function CodexInspectionStatusPanel({
             </div>
             <div className={styles.progressMeta}>
               <span>{progressLabel}</span>
-              {runStatus === 'paused' ? <strong>{t('monitoring.codex_inspection_paused')}</strong> : null}
+              {runStatus === 'paused' ? (
+                <strong>{t('monitoring.codex_inspection_paused')}</strong>
+              ) : null}
             </div>
           </div>
         ) : null}
