@@ -294,8 +294,16 @@ const buildQuotaDiagnostics = (row: AccountRow): AccountDetailField[] =>
     field('errorCode', 'accounts.detail_header_error_code', row.quota.observedErrorCode),
     field('activeLimit', 'accounts.detail_active_limit', row.quota.activeLimit),
     field('creditsBalance', 'accounts.detail_credits_balance', row.quota.creditsBalance),
-    booleanField('creditsHasCredits', 'accounts.detail_credits_available', row.quota.creditsHasCredits),
-    booleanField('creditsUnlimited', 'accounts.detail_credits_unlimited', row.quota.creditsUnlimited),
+    booleanField(
+      'creditsHasCredits',
+      'accounts.detail_credits_available',
+      row.quota.creditsHasCredits
+    ),
+    booleanField(
+      'creditsUnlimited',
+      'accounts.detail_credits_unlimited',
+      row.quota.creditsUnlimited
+    ),
     booleanField(
       'creditsOverageLimitReached',
       'accounts.detail_credits_overage_reached',
@@ -407,6 +415,8 @@ const buildOverviewMetrics = (
       history?.totalRequests ?? value.requests,
       'number'
     ),
+    field('inputTokens', 'accounts.value_input_tokens', value.inputTokens, 'number'),
+    field('outputTokens', 'accounts.value_output_tokens', value.outputTokens, 'number'),
     field(
       'tokens',
       'usage_analytics.trend_metric_totalTokens',
@@ -414,6 +424,7 @@ const buildOverviewMetrics = (
       'number'
     ),
     field('cost', 'accounts.history_cost', history?.totalCost ?? value.estimatedCost, 'money'),
+    field('lastSeenMs', 'accounts.value_recent', value.lastSeenMs, 'timestamp'),
   ]);
 
 export const buildAccountDetailViewModel = (

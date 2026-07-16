@@ -13,3 +13,11 @@ export { QuotaWindowCard } from './QuotaWindowCard';
 export { AccountQuotaMatrix } from './AccountQuotaMatrix';
 
 export { CopyableText } from './CopyableText';
+
+export {
+  AccountCredentialTab,
+  AccountDiagnosticsTab,
+  AccountModelsTab,
+  AccountOverviewTab,
+  AccountQuotaTab,
+} from './accountDetail';

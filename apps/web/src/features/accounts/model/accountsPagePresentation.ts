@@ -15,7 +15,7 @@ import type { AuthFileCodexInspectionSnapshot } from '@/features/authFiles/model
 import type { MonitoringAccountHistoryItem, MonitoringAnalyticsEventRow } from '@/services/api';
 
 export type AccountsView = 'accounts' | 'quota' | 'inspection' | 'oauth' | 'value';
-export type DetailTab = 'overview' | 'quota' | 'auth' | 'models' | 'strategy' | 'value' | 'events';
+export type DetailTab = 'overview' | 'quota' | 'credential' | 'models' | 'diagnostics';
 export type SortableAccountColumn = Extract<
   AccountRowSortKey,
   'reset' | 'priority' | 'recent' | 'quota' | 'created'

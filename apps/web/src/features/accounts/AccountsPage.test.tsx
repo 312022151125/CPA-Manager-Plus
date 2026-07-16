@@ -24,7 +24,9 @@ type AnalyticsResponseForTest = {
   events?: {
     items: Array<Record<string, unknown>>;
     next_before_ms: number;
+    next_before_id?: number;
     has_more: boolean;
+    total_count?: number;
   };
   account_stats?: unknown[];
   timeline?: unknown[];
@@ -192,6 +194,7 @@ const { mocks } = vi.hoisted(() => {
       selectedFiles: new Set<string>(),
       selectionCount: 0,
       batchFieldsUpdating: false,
+      location: { pathname: '/accounts', search: '' },
       navigate: vi.fn(),
       showNotification: vi.fn(),
       showConfirmation: vi.fn(),
@@ -301,6 +304,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
+  useLocation: () => mocks.location,
 }));
 
 vi.mock('@/hooks/useHeaderRefresh', () => ({
@@ -380,6 +384,17 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor', () => ({
     closePrefixProxyEditor: vi.fn(),
     handlePrefixProxyChange: vi.fn(),
     handlePrefixProxySave: vi.fn(async () => undefined),
+  }),
+}));
+
+vi.mock('@/features/accounts/hooks/useAccountCredentialSafeSummary', () => ({
+  useAccountCredentialSafeSummary: () => ({
+    fileName: '',
+    loading: false,
+    error: '',
+    summary: null,
+    reload: vi.fn(async () => undefined),
+    invalidate: vi.fn(),
   }),
 }));
 
@@ -625,11 +640,15 @@ const flushPromises = async () => {
 
 describe('AccountsPage replacement flows', () => {
   beforeEach(() => {
-    if (typeof window !== 'undefined') window.localStorage.clear();
+    if (typeof window !== 'undefined') {
+      window.localStorage.clear();
+      window.location.hash = '';
+    }
     mocks.files = [makeCodexFile('codex.json', 'auth-1', 'codex@example.com')];
     mocks.selectedFiles = new Set<string>();
     mocks.selectionCount = 0;
     mocks.batchFieldsUpdating = false;
+    mocks.location = { pathname: '/accounts', search: '' };
     mocks.panelFeatureAvailability = {
       checking: false,
       managerServiceBase: 'http://manager.local:18317',
@@ -702,6 +721,28 @@ describe('AccountsPage replacement flows', () => {
     );
     expect(mocks.lastAliasEditorProps?.open).toBe(true);
     expect(mocks.lastAliasEditorProps?.provider).toBe('codex');
+  });
+
+  it('initializes the active view from the accounts view query', async () => {
+    mocks.location = { pathname: '/accounts', search: '?view=oauth' };
+
+    const renderer = await renderAccountsPage();
+
+    expect(treeText(renderer)).toContain('oauth-excluded-add');
+    expect(findHostButtonByText(renderer, 'accounts.tab_oauth').props['aria-selected']).toBe(true);
+  });
+
+  it('updates the accounts view query when switching views', async () => {
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.tab_quota').props.onClick();
+    });
+
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      { pathname: '/accounts', search: '?view=quota' },
+      { replace: false }
+    );
   });
 
   it('patches Codex websockets through auth-index aware batch fields', async () => {
@@ -1509,7 +1550,7 @@ describe('AccountsPage replacement flows', () => {
       detailButton.props.onClick();
     });
     await act(async () => {
-      findHostButtonByText(renderer, 'accounts.detail_tab_events').props.onClick();
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1523,6 +1564,119 @@ describe('AccountsPage replacement flows', () => {
       auth_indices: ['auth-1'],
     });
     expect(eventRequest?.include?.events_page).toMatchObject({ limit: 20 });
+  });
+
+  it('keeps the scoped monitoring link visible when the event list is empty', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        if (!analyticsRequest.include?.events_page) return makeEmptyAnalyticsResponse();
+        return {
+          generated_at_ms: 1,
+          granularity: 'day',
+          events: {
+            items: [],
+            next_before_ms: 0,
+            has_more: false,
+            total_count: 0,
+          },
+        };
+      }
+    );
+
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const monitoringLink = renderer.root
+      .findAll((node) => node.type === 'a')
+      .find((node) => String(node.props.href).startsWith('#/monitoring?'));
+    expect(monitoringLink?.props.href).toBe('#/monitoring?auth_file=codex.json&auth_index=auth-1');
+  });
+
+  it('loads additional detail events with the returned cursor', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        if (!analyticsRequest.include?.events_page) return makeEmptyAnalyticsResponse();
+        const eventsPage = analyticsRequest.include.events_page as {
+          before_ms?: number | null;
+          before_id?: number | null;
+        };
+        if (eventsPage.before_ms === 100 && eventsPage.before_id === 7) {
+          return {
+            generated_at_ms: 1,
+            granularity: 'day',
+            events: {
+              items: [makeAnalyticsEvent({ request_id: 'req-older', event_hash: 'event-older' })],
+              next_before_ms: 0,
+              has_more: false,
+              total_count: 42,
+            },
+          };
+        }
+        return {
+          generated_at_ms: 1,
+          granularity: 'day',
+          events: {
+            items: [makeAnalyticsEvent({ request_id: 'req-latest', event_hash: 'event-latest' })],
+            next_before_ms: 100,
+            next_before_id: 7,
+            has_more: true,
+            total_count: 42,
+          },
+        };
+      }
+    );
+
+    const renderer = await renderAccountsPage();
+    mocks.getAnalytics.mockClear();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(treeText(renderer)).toContain('req-latest');
+
+    await act(async () => {
+      findButtonByText(renderer, 'accounts.detail_event_load_more').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const paginatedRequest = mocks.getAnalytics.mock.calls
+      .map((call) => call[2] as AnalyticsRequestForTest)
+      .find((request) => {
+        const page = request.include?.events_page as
+          | { before_ms?: number | null; before_id?: number | null }
+          | undefined;
+        return page?.before_ms === 100 && page.before_id === 7;
+      });
+    expect(paginatedRequest).toBeDefined();
+    expect(treeText(renderer)).toContain('req-latest');
+    expect(treeText(renderer)).toContain('req-older');
   });
 
   it('ignores stale detail-event responses after switching rows', async () => {
@@ -1559,7 +1713,7 @@ describe('AccountsPage replacement flows', () => {
       findDetailButtonByName(renderer, 'codex-a.json').props.onClick();
     });
     await act(async () => {
-      findHostButtonByText(renderer, 'accounts.detail_tab_events').props.onClick();
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
       await Promise.resolve();
     });
     await act(async () => {
@@ -1567,7 +1721,7 @@ describe('AccountsPage replacement flows', () => {
       await Promise.resolve();
     });
     await act(async () => {
-      findHostButtonByText(renderer, 'accounts.detail_tab_events').props.onClick();
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
       await Promise.resolve();
     });
 
