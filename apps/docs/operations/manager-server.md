@@ -176,6 +176,7 @@ Manager Server 管理：
 |---|---|---|
 | `CPA_MANAGER_CONFIG` | 空 | 可选配置文件路径；原生包默认使用二进制旁边的 `config.json`。 |
 | `HTTP_ADDR` | `0.0.0.0:18317` | Manager Server 监听地址。 |
+| `CPA_MANAGER_PPROF_ADDR` | 空 | 可选 Go pprof 监听地址；仅接受 `localhost`、`127.0.0.1` 或 `::1`。 |
 | `USAGE_DATA_DIR` | Docker: `/data`; native: `./data` | 数据目录。 |
 | `USAGE_DB_PATH` | Docker: `/data/usage.sqlite`; native: `./data/usage.sqlite` | SQLite 路径。 |
 | `CPA_MANAGER_ADMIN_KEY` | 空 | 可选管理员密钥。 |
@@ -192,9 +193,10 @@ Manager Server 管理：
 | `USAGE_BATCH_SIZE` | `100` | 单批最大记录数。 |
 | `USAGE_POLL_INTERVAL_MS` | `500` | 空闲轮询间隔。 |
 | `USAGE_QUERY_LIMIT` | `50000` | 最近 usage events 返回上限。 |
+| `USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED` | `true` | 启用小时汇总 worker，以及 Dashboard 和严格无筛选 Usage Analytics 的 rollup 查询；排查 SQLite 写竞争或汇总异常时可临时设为 `false`，查询会回退 raw events。 |
 | `USAGE_CORS_ORIGINS` | `*` | 兼容接口 CORS origin。 |
 | `USAGE_RESP_TLS_SKIP_VERIFY` | `false` | RESP 跳过 TLS 校验。 |
-| `USAGE_QUOTA_COOLDOWN_ENABLED` | `false` | 启用 Codex usage-limit cooldown worker。 |
+| `USAGE_QUOTA_COOLDOWN_ENABLED` | `false` | 启用多供应商额度冷却 worker，严格处理 Codex usage-limit 和 xAI free-usage-exhausted 信号。 |
 | `USAGE_ACCOUNT_ACTIONS_ENABLED` | `false` | 启用账号处理队列，用于记录需要人工处理的认证问题。 |
 | `USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE` | `false` | 启用认证问题自动禁用；只有账号处理队列启用时才会生效。 |
 | `PANEL_PATH` | 空 | 使用自定义 `management.html`。 |
@@ -205,6 +207,38 @@ Manager Server 管理：
 environment variables > config.json > defaults
 ```
 
+需要诊断 CPU、堆或 goroutine 时，可临时启用仅本机可访问的 pprof 服务：
+
+```bash
+CPA_MANAGER_PPROF_ADDR=127.0.0.1:6060 ./cpa-manager-plus
+go tool pprof http://127.0.0.1:6060/debug/pprof/heap
+```
+
+配置文件中的等价字段是 `pprofAddr`。该服务默认关闭，不应通过 Docker 端口映射或反向代理暴露。
+
+小时汇总默认启用。服务会分批追平历史事件，Dashboard 和严格无筛选的 Usage Analytics 长窗口核心统计会复用完整小时数据；带搜索或维度、状态、延迟、缓存条件的分析仍读取 raw events。如果 checkpoint 尚未追平、目标时区无法由 UTC 小时桶无损表达或 rollup 读取失败，相关查询会自动回退 raw events，并以限频日志记录运行异常。需要临时停止后台汇总时，可设置：
+
+```bash
+USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED=false
+```
+
+关闭后需重启 Manager Server，Dashboard 和 Usage Analytics 将始终读取 raw events。除下述启动时的一次性格式升级外，关闭该运行时开关本身不会删除当前格式的 rollup 数据。该开关不接入 UI。
+
+升级到使用无损 model 编码的版本时，Manager Server 会清空旧的 `usage_dashboard_hourly_rollups` 并重置 `dashboard_hourly` checkpoint。小时汇总启用时，后台 worker 会随后分批重建；禁用时则保持为空，直到重新启用。该格式迁移本身不会修改或删除 `usage_events`，也不会重置 account-history rollup；重建完成前相关长窗口查询会临时回退 raw events。新的编码会区分空 model、字面量 `-` 和包含前后空格的 model，避免合法的 `-` model 使整个查询回退。
+
+升级旧数据库时，Manager Server 在启动阶段执行 schema/metadata 变更和必要的派生 rollup 重置，但不扫描历史 `usage_events`。需要扫描历史事件的 cache accounting 修正会在 HTTP 服务开始监听后，以每批 1000 条的方式在后台执行。每批数据更新和 checkpoint 在同一个事务中提交，进程重启后会从最后成功的 event ID 继续，不会重新处理已经提交的批次。
+
+迁移期间：
+
+- 新采集的事件会按新格式直接写入，不进入旧数据迁移目标范围。
+- account history 和 dashboard hourly rollup 暂停追平，避免基于半迁移数据生成错误汇总。
+- 日志输出迁移进度、完成状态或可重试错误。
+- `GET /status` 的 `dataMigration` 字段可查看 `status`、`lastEventId`、`targetEventId` 和 `processedRows`；该接口不返回底层迁移错误文本。
+
+迁移完成后，response metadata backfill 和两个 rollup worker 会自动继续。不要为了缩短迁移时间同时启动第二个 Manager Server 连接同一 SQLite 或消费同一 CPA 队列。
+
+完整的优化原因、实现阶段和 100k benchmark 数据见 [2026-07-10 性能优化报告](./performance-optimization-2026-07-10.md)。
+
 如果 `USAGE_QUOTA_COOLDOWN_ENABLED`、`USAGE_ACCOUNT_ACTIONS_ENABLED` 或 `USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE` 由环境变量设置，面板中的对应开关会显示为环境变量来源并被锁定。要改成面板可编辑，需要移除环境变量并重启 Manager Server。
 
 ## 运行时接口
@@ -212,7 +246,7 @@ environment variables > config.json > defaults
 | Endpoint | 用途 |
 |---|---|
 | `GET /health` | 健康检查。 |
-| `GET /status` | 采集器、SQLite、事件计数和错误。 |
+| `GET /status` | 采集器、SQLite、事件计数和后台数据迁移进度。 |
 | `GET /usage-service/info` | Manager Server 模式探测。 |
 | `GET /usage-service/config` | 读取 CPAMP Manager Server 配置。 |
 | `PUT /usage-service/config` | 保存 CPAMP 配置，必要时重启采集器。 |
@@ -223,6 +257,7 @@ environment variables > config.json > defaults
 | `GET /v0/management/usage` | 兼容 usage data。 |
 | `GET /v0/management/usage/export` | 导出 JSONL usage events。 |
 | `POST /v0/management/usage/import` | 导入 JSONL 或兼容旧快照。 |
+| `GET /v0/management/model-prices/usage-summary` | 返回模型价格页使用的轻量模型调用汇总。 |
 | `GET /v0/management/model-prices` | 模型价格。 |
 | `PUT /v0/management/model-prices` | 替换保存的模型价格。 |
 | `POST /v0/management/model-prices/sync` | 价格同步。 |

@@ -45,6 +45,15 @@ const readPersistedQuotaState = async () => {
   return persisted?.state ?? {};
 };
 
+const readPersistedQuotaScope = async () => {
+  const { STORAGE_KEY_QUOTA_CACHE } = await import('@/utils/constants');
+  const { obfuscatedStorage } = await import('@/services/storage/secureStorage');
+  const persisted = obfuscatedStorage.getItem<{
+    state?: { cacheScope?: string };
+  }>(STORAGE_KEY_QUOTA_CACHE);
+  return persisted?.state?.cacheScope ?? '';
+};
+
 describe('useQuotaStore persistence', () => {
   let storage: StorageLike;
 
@@ -177,5 +186,45 @@ describe('useQuotaStore persistence', () => {
       kimiQuota: {},
       xaiQuota: {},
     });
+  });
+
+  it('keeps quota for the same connection scope and clears it when the scope changes', async () => {
+    const { useQuotaStore } = await import('./useQuotaStore');
+
+    useQuotaStore.getState().activateQuotaCacheScope('scope-a');
+    useQuotaStore.getState().setCodexQuota({
+      manual: {
+        status: 'success',
+        windows: [],
+        fetchedAtMs: 2_000,
+      },
+    });
+    const generation = useQuotaStore.getState().cacheGeneration;
+
+    useQuotaStore.getState().activateQuotaCacheScope('scope-a');
+    expect(useQuotaStore.getState().cacheGeneration).toBe(generation);
+    expect(Object.keys(useQuotaStore.getState().codexQuota)).toEqual(['manual']);
+
+    useQuotaStore.getState().activateQuotaCacheScope('scope-b');
+    expect(useQuotaStore.getState().cacheGeneration).toBe(generation + 1);
+    expect(useQuotaStore.getState().codexQuota).toEqual({});
+    expect(await readPersistedQuotaScope()).toBe('scope-b');
+  });
+
+  it('rejects stale async commits after the connection scope changes', async () => {
+    const { captureQuotaCacheGeneration, commitIfQuotaCacheCurrent, useQuotaStore } =
+      await import('./useQuotaStore');
+
+    useQuotaStore.getState().activateQuotaCacheScope('scope-a');
+    const staleGeneration = captureQuotaCacheGeneration();
+    useQuotaStore.getState().activateQuotaCacheScope('scope-b');
+
+    let committed = false;
+    expect(
+      commitIfQuotaCacheCurrent(staleGeneration, () => {
+        committed = true;
+      })
+    ).toBe(false);
+    expect(committed).toBe(false);
   });
 });

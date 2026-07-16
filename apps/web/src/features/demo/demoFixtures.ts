@@ -6,6 +6,7 @@ import type {
   CodexInspectionRunsResponse,
   DashboardSummaryResponse,
   ManagerConfigResponse,
+  ModelPriceUsageSummaryResponse,
   ModelPricesResponse,
   MonitoringAccountHistoryRequest,
   MonitoringAccountHistoryResponse,
@@ -121,11 +122,11 @@ const splitTokens = (totalTokens: number) => {
   const cachedTokens = Math.round(totalTokens * 0.13);
   const cacheReadTokens = Math.round(cachedTokens * 0.78);
   const cacheCreationTokens = cachedTokens - cacheReadTokens;
-  const reasoningTokens = Math.max(0, totalTokens - inputTokens - outputTokens - cachedTokens);
+  const reasoningTokens = Math.max(0, totalTokens - inputTokens - outputTokens);
   return {
     input_tokens: inputTokens,
     output_tokens: outputTokens,
-    cached_tokens: cachedTokens,
+    cached_tokens: 0,
     cache_read_tokens: cacheReadTokens,
     cache_creation_tokens: cacheCreationTokens,
     reasoning_tokens: reasoningTokens,
@@ -826,6 +827,18 @@ const demoModelPrices: ModelPricesResponse = {
   },
 };
 
+const demoModelPriceUsageSummary: ModelPriceUsageSummaryResponse = {
+  sampled_events: 1_638,
+  total_events: 1_638,
+  truncated: false,
+  models: [
+    { model: 'gpt-4.1-mini', calls: 520, requested_calls: 520, resolved_calls: 0 },
+    { model: 'claude-sonnet-4-5', calls: 416, requested_calls: 416, resolved_calls: 0 },
+    { model: 'gemini-2.5-pro', calls: 384, requested_calls: 384, resolved_calls: 0 },
+    { model: 'gpt-4.1', calls: 318, requested_calls: 318, resolved_calls: 0 },
+  ],
+};
+
 const demoApiAliases: ApiKeyAlias[] = [
   { apiKeyHash: 'hash_codex_team', alias: 'Codex Team', updatedAtMs: now() - 2 * hour },
   { apiKeyHash: 'hash_automation_pool', alias: 'Automation Pool', updatedAtMs: now() - 4 * hour },
@@ -1267,6 +1280,58 @@ const buildMonitoringAnalytics = (
       ],
     },
     {
+      id: 'acct_gemini_prod',
+      account_snapshot: 'Gemini Production',
+      auth_label_snapshot: 'Gemini Production',
+      auth_provider_snapshot: 'gemini',
+      auth_indices: ['gemini-prod-01', 'vertex-regional-01'],
+      sources: ['gateway', 'regional'],
+      source_hashes: ['src_gemini_prod', 'src_vertex_regional'],
+      calls: 5760,
+      failure_calls: 98,
+      total_tokens: 6_360_000,
+      cost: 153.3,
+      average_latency_ms: 1160,
+      last_seen_ms: analyticsNow - 6 * minute,
+      models: [
+        buildNestedModelRow(
+          'gemini-2.5-pro',
+          3620,
+          74,
+          4_960_000,
+          124.4,
+          analyticsNow - 21 * minute
+        ),
+        buildNestedModelRow(
+          'gemini-2.5-flash',
+          2140,
+          24,
+          1_400_000,
+          28.9,
+          analyticsNow - 6 * minute
+        ),
+      ],
+    },
+    {
+      id: 'acct_openai_gateway',
+      account_snapshot: 'OpenAI Compatible',
+      auth_label_snapshot: 'OpenAI Primary',
+      auth_provider_snapshot: 'openai',
+      auth_indices: ['openai-primary'],
+      sources: ['gateway'],
+      source_hashes: ['src_openai_primary'],
+      calls: 3540,
+      failure_calls: 39,
+      total_tokens: 2_700_000,
+      cost: 45.8,
+      average_latency_ms: 1080,
+      last_seen_ms: analyticsNow - 10 * minute,
+      models: [
+        buildNestedModelRow('gpt-4.1-mini', 2720, 24, 2_040_000, 25.0, analyticsNow - 10 * minute),
+        buildNestedModelRow('gpt-4.1', 820, 15, 660_000, 20.8, analyticsNow - 36 * minute),
+      ],
+    },
+    {
       id: 'acct_automation_pool',
       account_snapshot: 'Automation Pool',
       auth_label_snapshot: 'Fallback Pool',
@@ -1283,6 +1348,25 @@ const buildMonitoringAnalytics = (
       models: [
         buildNestedModelRow('gpt-4.1', 440, 24, 520_000, 22.6, analyticsNow - 18 * minute),
         buildNestedModelRow('gpt-4.1-mini', 1120, 22, 740_000, 9.1, analyticsNow - 28 * minute),
+      ],
+    },
+    {
+      id: 'acct_support_desk',
+      account_snapshot: 'Support Desk',
+      auth_label_snapshot: 'OpenAI Support',
+      auth_provider_snapshot: 'openai',
+      auth_indices: ['openai-support-02'],
+      sources: ['support'],
+      source_hashes: ['src_openai_support'],
+      calls: 2480,
+      failure_calls: 28,
+      total_tokens: 1_920_000,
+      cost: 32.4,
+      average_latency_ms: 980,
+      last_seen_ms: analyticsNow - 11 * minute,
+      models: [
+        buildNestedModelRow('gpt-4.1-mini', 1800, 18, 1_240_000, 15.2, analyticsNow - 11 * minute),
+        buildNestedModelRow('gpt-4.1', 680, 10, 680_000, 17.2, analyticsNow - 32 * minute),
       ],
     },
     {
@@ -1309,6 +1393,32 @@ const buildMonitoringAnalytics = (
           analyticsNow - 19 * minute
         ),
         buildNestedModelRow('claude-haiku-4-5', 820, 12, 860_000, 18.4, analyticsNow - 52 * minute),
+      ],
+    },
+    {
+      id: 'acct_gemini_batch',
+      account_snapshot: 'Gemini Batch',
+      auth_label_snapshot: 'Gemini Batch',
+      auth_provider_snapshot: 'gemini',
+      auth_indices: ['gemini-batch-02'],
+      sources: ['batch'],
+      source_hashes: ['src_gemini_batch'],
+      calls: 1980,
+      failure_calls: 25,
+      total_tokens: 1_840_000,
+      cost: 38.2,
+      average_latency_ms: 1120,
+      last_seen_ms: analyticsNow - 24 * minute,
+      models: [
+        buildNestedModelRow(
+          'gemini-2.5-flash',
+          1380,
+          14,
+          1_020_000,
+          15.8,
+          analyticsNow - 24 * minute
+        ),
+        buildNestedModelRow('gemini-2.5-pro', 600, 11, 820_000, 22.4, analyticsNow - 43 * minute),
       ],
     },
     {
@@ -2715,11 +2825,12 @@ const buildMonitoringAnalytics = (
     const profile = eventProfiles[index % eventProfiles.length];
     const failed = index % 9 === 0 || index % 22 === 0;
     const quotaFailure = failed && index % 2 === 0;
-    const inputTokens = 620 + ((index * 113) % 2600);
+    const uncachedInputTokens = 620 + ((index * 113) % 2600);
     const outputTokens = 210 + ((index * 71) % 980);
     const cachedTokens = index % 3 === 0 ? 180 + ((index * 17) % 520) : 0;
+    const inputTokens = uncachedInputTokens + cachedTokens;
     const reasoningTokens = index % 4 === 0 ? 80 + ((index * 13) % 360) : 0;
-    const totalTokens = inputTokens + outputTokens + cachedTokens + reasoningTokens;
+    const totalTokens = inputTokens + outputTokens + reasoningTokens;
     const timestampMs = analyticsNow - (index * 5 + (index % 4)) * minute;
     return {
       request_id: `demo-request-${String(index + 1).padStart(3, '0')}`,
@@ -2747,7 +2858,7 @@ const buildMonitoringAnalytics = (
       executor_type: profile.executor,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
-      cached_tokens: cachedTokens,
+      cached_tokens: 0,
       cache_read_tokens: Math.round(cachedTokens * 0.78),
       cache_creation_tokens: Math.round(cachedTokens * 0.22),
       reasoning_tokens: reasoningTokens,
@@ -3123,9 +3234,9 @@ const buildMonitoringAnalytics = (
         auth_index: 'codex-team-01',
         models: ['gpt-4.1-mini', 'gpt-4.1'],
         endpoints: ['/v1/chat/completions', '/v1/responses'],
-        input_tokens: 1_260_000,
+        input_tokens: 1_520_000,
         output_tokens: 540_000,
-        cached_tokens: 260_000,
+        cached_tokens: 0,
         cache_read_tokens: 210_000,
         cache_creation_tokens: 50_000,
         total_tokens: 2_060_000,
@@ -3144,9 +3255,9 @@ const buildMonitoringAnalytics = (
         auth_index: 'claude-team-01',
         models: ['claude-sonnet-4-5'],
         endpoints: ['/v1/messages'],
-        input_tokens: 1_480_000,
+        input_tokens: 1_660_000,
         output_tokens: 620_000,
-        cached_tokens: 180_000,
+        cached_tokens: 0,
         cache_read_tokens: 150_000,
         cache_creation_tokens: 30_000,
         total_tokens: 2_280_000,
@@ -3493,6 +3604,7 @@ export const getDemoAccountWindowUsage = (
   });
 };
 export const getDemoModelPrices = () => clone(demoModelPrices);
+export const getDemoModelPriceUsageSummary = () => clone(demoModelPriceUsageSummary);
 export const getDemoUsagePayload = () => {
   const dashboard = dashboardBase();
   return {
@@ -4425,6 +4537,13 @@ export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
           ],
         },
       ],
+      paidTier: {
+        id: 'g1-pro-tier',
+        name: 'Pro',
+        availableCredits: [
+          { creditType: 'monthly', creditAmount: 260, minimumCreditAmountForUsage: 1 },
+        ],
+      },
     };
   }
 

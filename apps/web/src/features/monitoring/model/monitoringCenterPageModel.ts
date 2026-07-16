@@ -56,6 +56,7 @@ import {
   hasUsageHeaderQuotaSignal,
 } from '@/utils/usageHeaderSnapshots';
 import {
+  calculateCacheHitRateFromTotals,
   formatCompactNumber,
   formatDurationMs,
   formatUsd,
@@ -166,12 +167,7 @@ export const buildMonitoringInitialStateFromQuery = (
   const headerTraceId = params.get('header_trace_id')?.trim();
   const hasRange = fromMs !== null && toMs !== null && fromMs < toMs;
   const hasStructuredScopeFilter = Boolean(
-    authFile ||
-    projectId ||
-    requestType ||
-    minLatencyMs ||
-    cacheStatus ||
-    headerTraceId
+    authFile || projectId || requestType || minLatencyMs || cacheStatus || headerTraceId
   );
 
   return {
@@ -636,12 +632,17 @@ export const buildSecondarySummaryCards = (
 ): SummaryCardProps[] => {
   const totalCacheTokens =
     summary.cachedTokens + summary.cacheCreationTokens + summary.cacheReadTokens;
-  const cacheHitTokens = summary.cachedTokens + summary.cacheReadTokens;
-  const inputSideTokens =
+  const fallbackCacheInputTokens =
     Math.max(summary.inputTokens, summary.cachedTokens) +
     summary.cacheReadTokens +
     summary.cacheCreationTokens;
-  const cacheHitRate = inputSideTokens > 0 ? cacheHitTokens / inputSideTokens : 0;
+  const cacheHitRate =
+    summary.cacheHitRate === undefined
+      ? calculateCacheHitRateFromTotals(
+          summary.cachedTokens + summary.cacheReadTokens,
+          fallbackCacheInputTokens
+        )
+      : calculateCacheHitRateFromTotals(summary.cacheHitRate, 1);
 
   return [
     {
@@ -974,7 +975,10 @@ export const mergeObservedAccountQuotaState = (
   observedEntries.forEach((observedEntry) => {
     if (!targetKeys.has(observedEntry.key) || activeKeys.has(observedEntry.key)) return;
 
-    if (state.status === 'error' && !isObservedAccountQuotaNewerThanFailure(state.failedAtMs, observedEntry)) {
+    if (
+      state.status === 'error' &&
+      !isObservedAccountQuotaNewerThanFailure(state.failedAtMs, observedEntry)
+    ) {
       if (!state.error) return;
       entries.push({ ...observedEntry, error: state.error, failedAtMs: state.failedAtMs });
     } else {
@@ -1053,46 +1057,46 @@ const buildXaiAccountQuotaWindows = (
   billing: XaiBillingSummary,
   t: TFunction
 ): AccountQuotaWindow[] => {
+  const remainingCents =
+    billing.monthlyLimitCents !== null && billing.includedUsedCents !== null
+      ? Math.max(0, billing.monthlyLimitCents - billing.includedUsedCents)
+      : null;
   const windows: AccountQuotaWindow[] = [];
+  const hasWeeklyData =
+    billing.periodType === 'weekly' &&
+    (billing.usagePercent !== null ||
+      Boolean(billing.periodEnd) ||
+      billing.productUsage.length > 0);
+  const hasMonthlyData =
+    billing.monthlyLimitCents !== null ||
+    billing.usedCents !== null ||
+    Boolean(billing.billingPeriodEnd);
 
-  if (
-    billing.periodType === 'weekly' ||
-    billing.usagePercent !== null ||
-    billing.periodEnd ||
-    (billing.productUsage?.length ?? 0) > 0
-  ) {
+  if (hasWeeklyData) {
     windows.push({
-      id: 'credits-period',
-      label:
-        billing.periodType === 'weekly'
-          ? t('xai_quota.weekly_credits')
-          : t('xai_quota.monthly_credits'),
+      id: 'weekly-limit',
+      label: t('xai_quota.weekly_limit'),
       remainingPercent: buildRemainingFromUsedPercent(billing.usagePercent),
       resetLabel: billing.periodEnd ? formatQuotaResetTime(billing.periodEnd) : '-',
-      usageLabel: null,
+      usageLabel: t('xai_quota.used_percent', {
+        percent: billing.usagePercent === null ? '--' : `${Math.round(billing.usagePercent)}%`,
+      }),
     });
   }
 
-  billing.productUsage?.forEach((product, index) => {
+  billing.productUsage.forEach((item, index) => {
     windows.push({
-      id: `product-${index}-${product.product}`,
-      label: product.product,
-      remainingPercent: buildRemainingFromUsedPercent(product.usagePercent),
-      resetLabel: billing.periodEnd ? formatQuotaResetTime(billing.periodEnd) : '-',
-      usageLabel: t('xai_quota.product_usage'),
+      id: `product-${index}-${item.product}`,
+      label: t('xai_quota.product_usage', { product: item.product }),
+      remainingPercent: buildRemainingFromUsedPercent(item.usagePercent),
+      resetLabel: '-',
+      usageLabel: t('xai_quota.used_percent', {
+        percent: item.usagePercent === null ? '--' : `${Math.round(item.usagePercent)}%`,
+      }),
     });
   });
 
-  if (
-    billing.usedPercent !== null ||
-    billing.monthlyLimitCents !== null ||
-    billing.includedUsedCents !== null ||
-    billing.billingPeriodEnd
-  ) {
-    const remainingCents =
-      billing.monthlyLimitCents !== null && billing.includedUsedCents !== null
-        ? Math.max(0, billing.monthlyLimitCents - billing.includedUsedCents)
-        : null;
+  if (hasMonthlyData) {
     windows.push({
       id: 'monthly-limit',
       label: t('xai_quota.monthly_credits'),
@@ -1302,10 +1306,24 @@ export const requestAccountQuota = async (
     }
     case 'xai': {
       const billing = await fetchXaiQuota(target.file, t);
-      const metaLabels =
+      const metaLabels: string[] =
         billing.onDemandCapCents !== null
           ? [`${t('xai_quota.on_demand_cap')}: ${formatXaiCurrency(billing.onDemandCapCents)}`]
           : [];
+      if (billing.partial) {
+        metaLabels.push(
+          t('xai_quota.partial_data', {
+            details:
+              billing.diagnostics
+                ?.map((item) =>
+                  item.statusCode
+                    ? `${item.classification} (HTTP ${item.statusCode})`
+                    : item.classification
+                )
+                .join(', ') || t('xai_quota.partial_unknown'),
+          })
+        );
+      }
       return stampAccountQuotaFetchTime({
         ...buildBaseAccountQuotaEntry(target, t, metaLabels),
         windows: buildXaiAccountQuotaWindows(billing, t),

@@ -444,18 +444,19 @@ export interface XaiBillingCent {
 }
 
 export type XaiBillingPeriodType = 'weekly' | 'monthly' | 'unknown';
-
 export interface XaiBillingPeriod {
   type?: string;
   start?: string;
   end?: string;
 }
 
-export interface XaiProductUsage {
+export interface XaiBillingProductUsage {
   product?: string;
   usagePercent?: number | string | null;
   usage_percent?: number | string | null;
 }
+
+export type XaiProductUsage = XaiBillingProductUsage;
 
 export interface XaiProductUsageSummary {
   product: string;
@@ -525,12 +526,23 @@ export interface XaiBillingPayload {
   usage?: XaiBillingUsage | null;
 }
 
+export interface XaiProductUsageSummary {
+  product: string;
+  usagePercent: number | null;
+}
+
+export interface XaiBillingDiagnostic {
+  classification: string;
+  statusCode: number | null;
+  message: string;
+}
+
 export interface XaiBillingSummary {
-  periodType?: XaiBillingPeriodType;
-  usagePercent?: number | null;
+  periodType: XaiBillingPeriodType;
+  usagePercent: number | null;
   periodStart?: string;
   periodEnd?: string;
-  productUsage?: XaiProductUsageSummary[];
+  productUsage: XaiProductUsageSummary[];
   monthlyLimitCents: number | null;
   usedCents: number | null;
   includedUsedCents: number | null;
@@ -540,6 +552,8 @@ export interface XaiBillingSummary {
   billingPeriodStart?: string;
   billingPeriodEnd?: string;
   usedPercent: number | null;
+  partial?: boolean;
+  diagnostics?: XaiBillingDiagnostic[];
 }
 
 export interface XaiQuotaState {

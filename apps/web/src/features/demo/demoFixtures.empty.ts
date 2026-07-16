@@ -24,6 +24,12 @@ export const getDemoAccountWindowUsage = () => ({
   items: [],
 });
 export const getDemoModelPrices = () => ({ prices: {} });
+export const getDemoModelPriceUsageSummary = () => ({
+  sampled_events: 0,
+  total_events: 0,
+  truncated: false,
+  models: [],
+});
 export const getDemoUsagePayload = () => emptyObject;
 export const getDemoUsageServiceInfo = () => emptyObject;
 export const getDemoUsageServiceStatus = () => emptyObject;

@@ -321,6 +321,9 @@ describe('accountRows', () => {
         'xai.json': {
           status: 'success',
           billing: {
+            periodType: 'monthly',
+            usagePercent: null,
+            productUsage: [],
             monthlyLimitCents: 10_000,
             usedCents: 12_500,
             includedUsedCents: 10_000,

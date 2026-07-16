@@ -28,13 +28,19 @@ import {
   ANTIGRAVITY_USER_AGENT,
   CODEX_RATE_LIMIT_RESET_CREDITS_URL,
   CODEX_USAGE_URL,
+  XAI_BILLING_MONTHLY_URL,
+  XAI_BILLING_WEEKLY_URL,
 } from './constants';
 import {
   buildXaiBillingSummary,
+  fetchXaiQuota,
   fetchAntigravityQuota,
   fetchClaudeQuota,
   fetchCodexQuota,
+  mergeXaiBillingSummaries,
+  probeXaiBilling,
 } from './providerRequests';
+import { XaiProbeError } from './xaiErrors';
 
 const t = ((key: string) => key) as TFunction;
 
@@ -335,29 +341,181 @@ describe('buildXaiBillingSummary', () => {
     });
   });
 
-  it('normalizes xAI weekly credits payloads', () => {
+  it('normalizes weekly credit usage and product usage payloads', () => {
     const summary = buildXaiBillingSummary({
-      currentPeriod: {
-        type: 'USAGE_PERIOD_TYPE_WEEKLY',
+      current_period: {
+        type: 'weekly',
         start: '2026-07-01T00:00:00Z',
         end: '2026-07-08T00:00:00Z',
       },
-      creditUsagePercent: '42',
-      productUsage: [
-        { product: 'Grok Code Fast', usagePercent: '37' },
-        { product: 'Grok Code Thinking', usage_percent: 52 },
+      credit_usage_percent: '42.5',
+      product_usage: [
+        { product: 'Grok 4', usage_percent: '30' },
+        { product: '', usagePercent: null },
       ],
     });
 
     expect(summary).toMatchObject({
       periodType: 'weekly',
-      usagePercent: 42,
+      usagePercent: 42.5,
       periodStart: '2026-07-01T00:00:00Z',
       periodEnd: '2026-07-08T00:00:00Z',
       productUsage: [
-        { product: 'Grok Code Fast', usagePercent: 37 },
-        { product: 'Grok Code Thinking', usagePercent: 52 },
+        { product: 'Grok 4', usagePercent: 30 },
+        { product: 'Product 2', usagePercent: null },
       ],
+      monthlyLimitCents: null,
+      usedCents: null,
+    });
+  });
+});
+
+describe('mergeXaiBillingSummaries', () => {
+  it('uses weekly fields from the primary summary and monthly fields from the fallback', () => {
+    const weekly = buildXaiBillingSummary({
+      currentPeriod: {
+        type: 'weekly',
+        start: '2026-07-01T00:00:00Z',
+        end: '2026-07-08T00:00:00Z',
+      },
+      creditUsagePercent: 60,
+      productUsage: [{ product: 'Grok 4', usagePercent: 75 }],
+    });
+    const monthly = buildXaiBillingSummary({
+      monthly_limit: 10000,
+      used: 2500,
+      on_demand_cap: 5000,
+      billing_period_end: '2026-08-01T00:00:00Z',
+    });
+
+    expect(mergeXaiBillingSummaries(weekly, monthly)).toMatchObject({
+      periodType: 'weekly',
+      usagePercent: 60,
+      periodEnd: '2026-07-08T00:00:00Z',
+      productUsage: [{ product: 'Grok 4', usagePercent: 75 }],
+      monthlyLimitCents: 10000,
+      usedCents: 2500,
+      billingPeriodEnd: '2026-08-01T00:00:00Z',
+    });
+  });
+});
+
+describe('fetchXaiQuota', () => {
+  it('requests weekly and monthly billing and merges their summaries', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          config: {
+            current_period: {
+              type: 'weekly',
+              start: '2026-07-01T00:00:00Z',
+              end: '2026-07-08T00:00:00Z',
+            },
+            credit_usage_percent: 40,
+            product_usage: [{ product: 'Grok 4', usage_percent: 25 }],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          config: {
+            monthly_limit: 10000,
+            used: 3000,
+            on_demand_cap: 5000,
+            billing_period_end: '2026-08-01T00:00:00Z',
+          },
+        },
+      });
+
+    const result = await fetchXaiQuota(
+      {
+        name: 'xai.json',
+        type: 'xai',
+        authIndex: 'xai-1',
+        metadata: {
+          user: {
+            id: 'user-123',
+          },
+        },
+      },
+      t
+    );
+
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+    expect(mocks.request.mock.calls[0][0]).toMatchObject({
+      authIndex: 'xai-1',
+      method: 'GET',
+      url: XAI_BILLING_WEEKLY_URL,
+      header: expect.objectContaining({
+        Authorization: 'Bearer $TOKEN$',
+        'x-xai-token-auth': 'xai-grok-cli',
+        'x-userid': 'user-123',
+      }),
+    });
+    expect(mocks.request.mock.calls[1][0]).toMatchObject({
+      authIndex: 'xai-1',
+      method: 'GET',
+      url: XAI_BILLING_MONTHLY_URL,
+      header: expect.objectContaining({
+        'x-userid': 'user-123',
+      }),
+    });
+    expect(result).toMatchObject({
+      periodType: 'weekly',
+      usagePercent: 40,
+      productUsage: [{ product: 'Grok 4', usagePercent: 25 }],
+      monthlyLimitCents: 10000,
+      usedCents: 3000,
+      billingPeriodEnd: '2026-08-01T00:00:00Z',
+    });
+  });
+
+  it('keeps monthly billing data when weekly billing fails', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 500,
+        hasStatusCode: true,
+        header: {},
+        bodyText: 'weekly down',
+        body: null,
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          config: {
+            monthly_limit: 20000,
+            used: 5000,
+          },
+        },
+      });
+
+    const result = await fetchXaiQuota(
+      {
+        name: 'xai.json',
+        type: 'xai',
+        authIndex: 'xai-1',
+      },
+      t
+    );
+
+    expect(result).toMatchObject({
+      periodType: 'monthly',
+      monthlyLimitCents: 20000,
+      usedCents: 5000,
+      usedPercent: 25,
+      partial: true,
+      diagnostics: [expect.objectContaining({ classification: 'upstream_error', statusCode: 500 })],
     });
   });
 
@@ -386,6 +544,212 @@ describe('buildXaiBillingSummary', () => {
       billingPeriodEnd: '2026-06-01T00:00:00Z',
     });
     expect(summary?.usedPercent).toBeCloseTo(12.36, 2);
+  });
+
+  it('marks a one-sided xAI billing response as partial while keeping usable data', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 500,
+        hasStatusCode: true,
+        header: {},
+        bodyText: 'weekly down',
+        body: null,
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { config: { monthly_limit: 20000, used: 5000 } },
+      });
+
+    const result = await probeXaiBilling({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t);
+
+    expect(result).toMatchObject({
+      partial: true,
+      summary: { monthlyLimitCents: 20000, usedCents: 5000 },
+    });
+    expect(result.failures).toHaveLength(1);
+  });
+
+  it('prefers a verified xAI quota signal when both billing requests fail differently', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 500,
+        hasStatusCode: true,
+        header: {},
+        bodyText: 'weekly down',
+        body: null,
+      })
+      .mockResolvedValueOnce({
+        statusCode: 402,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '{"code":"subscription:free-usage-exhausted"}',
+        body: { code: 'subscription:free-usage-exhausted' },
+      });
+
+    await expect(
+      probeXaiBilling({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t)
+    ).rejects.toMatchObject({
+      decision: { classification: 'free_quota_exhausted' },
+    });
+  });
+
+  it('prefers auth invalid over a generic forbidden billing failure', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 403,
+        hasStatusCode: true,
+        header: {},
+        bodyText: 'forbidden',
+        body: { error: 'forbidden' },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 401,
+        hasStatusCode: true,
+        header: {},
+        bodyText: 'invalid credentials',
+        body: { error: 'invalid credentials' },
+      });
+
+    await expect(
+      probeXaiBilling({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t)
+    ).rejects.toMatchObject({
+      decision: { classification: 'auth_invalid', suggestedAction: 'reauth' },
+    });
+  });
+
+  it('throws the upstream error when weekly and monthly billing both fail', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 500,
+        hasStatusCode: true,
+        header: {},
+        bodyText: 'weekly down',
+        body: null,
+      })
+      .mockResolvedValueOnce({
+        statusCode: 503,
+        hasStatusCode: true,
+        header: {},
+        bodyText: 'monthly down',
+        body: null,
+      });
+
+    await expect(
+      fetchXaiQuota(
+        {
+          name: 'xai.json',
+          type: 'xai',
+          authIndex: 'xai-1',
+        },
+        t
+      )
+    ).rejects.toThrow('500 weekly down');
+  });
+
+  it('classifies empty successful xAI billing payloads as protocol changes', async () => {
+    mocks.request.mockResolvedValue({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: { config: {} },
+    });
+
+    await expect(
+      probeXaiBilling({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t)
+    ).rejects.toMatchObject({
+      decision: { classification: 'protocol_changed', suggestedAction: 'keep' },
+    });
+  });
+
+  it.each([402, 429])(
+    'preserves xAI free usage exhaustion under HTTP %i as a structured error',
+    async (statusCode) => {
+      mocks.request.mockResolvedValue({
+        statusCode,
+        hasStatusCode: true,
+        header: { 'retry-after': ['3600'] },
+        bodyText: '{"code":"subscription:free-usage-exhausted"}',
+        body: { code: 'subscription:free-usage-exhausted' },
+      });
+
+      const promise = fetchXaiQuota({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t);
+
+      await expect(promise).rejects.toMatchObject({
+        name: 'XaiProbeError',
+        status: statusCode,
+        decision: {
+          classification: 'free_quota_exhausted',
+          suggestedAction: 'disable',
+          retryAfterSeconds: 3600,
+        },
+      });
+    }
+  );
+
+  it('classifies an xAI spending limit without treating it as invalid auth', async () => {
+    mocks.request.mockResolvedValue({
+      statusCode: 403,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '{"code":"personal-team-blocked:spending-limit"}',
+      body: { code: 'personal-team-blocked:spending-limit' },
+    });
+
+    await expect(
+      fetchXaiQuota({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t)
+    ).rejects.toMatchObject({
+      decision: {
+        classification: 'spending_limit',
+        suggestedAction: 'disable',
+      },
+    });
+  });
+
+  it('keeps generic xAI 403 responses reviewable and non-destructive', async () => {
+    mocks.request.mockResolvedValue({
+      statusCode: 403,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '{"error":"Forbidden"}',
+      body: { error: 'Forbidden' },
+    });
+
+    await expect(
+      fetchXaiQuota({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t)
+    ).rejects.toMatchObject({
+      decision: {
+        classification: 'permission_unknown',
+        suggestedAction: 'keep',
+        needsReview: true,
+      },
+    });
+  });
+
+  it('reports an outdated Grok client without suggesting account mutation', async () => {
+    mocks.request.mockResolvedValue({
+      statusCode: 426,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '{"error":"client version is too old"}',
+      body: { error: 'client version is too old' },
+    });
+
+    try {
+      await fetchXaiQuota({ name: 'xai.json', type: 'xai', authIndex: 'xai-1' }, t);
+      throw new Error('expected fetchXaiQuota to reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(XaiProbeError);
+      expect(error).toMatchObject({
+        decision: {
+          classification: 'client_outdated',
+          suggestedAction: 'keep',
+        },
+      });
+    }
   });
 });
 
