@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import type { AuthFileModelItem } from '@/features/authFiles/constants';
 import { isModelExcluded } from '@/features/authFiles/constants';
+import type { OAuthModelAliasEntry } from '@/types';
 import styles from '@/features/authFiles/AuthFilesPage.module.scss';
 
 export type AuthFileModelsModalProps = {
@@ -14,6 +15,7 @@ export type AuthFileModelsModalProps = {
   error: 'unsupported' | null;
   models: AuthFileModelItem[];
   excluded: Record<string, string[]>;
+  aliases?: Record<string, OAuthModelAliasEntry[]>;
   onClose: () => void;
   onCopyText: (text: string) => void;
 };
@@ -24,12 +26,13 @@ export type AuthFileModelsContentProps = {
   error: 'unsupported' | null;
   models: AuthFileModelItem[];
   excluded: Record<string, string[]>;
+  aliases?: Record<string, OAuthModelAliasEntry[]>;
   onCopyText: (text: string) => void;
 };
 
 export function AuthFileModelsContent(props: AuthFileModelsContentProps) {
   const { t } = useTranslation();
-  const { fileType, loading, error, models, excluded, onCopyText } = props;
+  const { fileType, loading, error, models, excluded, aliases = {}, onCopyText } = props;
 
   if (loading) {
     return (
@@ -63,7 +66,7 @@ export function AuthFileModelsContent(props: AuthFileModelsContentProps) {
             variant="primary"
             size="sm"
             onClick={() => {
-              window.location.hash = '#/demo/ai-providers';
+              window.location.hash = '#/ai-providers';
             }}
           >
             {t('auth_files.models_empty_action', {
@@ -79,6 +82,10 @@ export function AuthFileModelsContent(props: AuthFileModelsContentProps) {
     <div className={styles.modelsList}>
       {models.map((model) => {
         const excludedModel = isModelExcluded(model.id, fileType, excluded);
+        const providerKey = fileType.trim().toLowerCase();
+        const aliasEntry = (aliases[providerKey] ?? []).find(
+          (entry) => entry.name.trim().toLowerCase() === model.id.trim().toLowerCase()
+        );
         return (
           <div
             key={model.id}
@@ -99,6 +106,9 @@ export function AuthFileModelsContent(props: AuthFileModelsContentProps) {
               <span className={styles.modelDisplayName}>{model.display_name}</span>
             )}
             {model.type && <span className={styles.modelType}>{model.type}</span>}
+            {aliasEntry?.alias ? (
+              <span className={styles.modelType}>→ {aliasEntry.alias}</span>
+            ) : null}
             {excludedModel && (
               <span className={styles.modelExcludedBadge}>
                 {t('auth_files.models_excluded_badge', { defaultValue: '已禁用' })}
@@ -113,7 +123,18 @@ export function AuthFileModelsContent(props: AuthFileModelsContentProps) {
 
 export function AuthFileModelsModal(props: AuthFileModelsModalProps) {
   const { t } = useTranslation();
-  const { open, fileName, fileType, loading, error, models, excluded, onClose, onCopyText } = props;
+  const {
+    open,
+    fileName,
+    fileType,
+    loading,
+    error,
+    models,
+    excluded,
+    aliases,
+    onClose,
+    onCopyText,
+  } = props;
 
   return (
     <Modal
@@ -132,6 +153,7 @@ export function AuthFileModelsModal(props: AuthFileModelsModalProps) {
         error={error}
         models={models}
         excluded={excluded}
+        aliases={aliases}
         onCopyText={onCopyText}
       />
     </Modal>
