@@ -75,6 +75,41 @@ function parseStringList(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((item) => String(item ?? '').trim()).filter(Boolean);
 }
+function parseJsonText(raw: unknown): string {
+  return asRecord(raw) ? JSON.stringify(raw, null, 2) : '';
+}
+
+function parseOAuthModelAliases(raw: unknown): Record<string, Array<{ name: string; alias: string; fork?: boolean; forceMapping?: boolean }>> {
+  const result: Record<string, Array<{ name: string; alias: string; fork?: boolean; forceMapping?: boolean }>> = {};
+  const source = asRecord(raw);
+  if (!source) return result;
+  for (const [provider, entries] of Object.entries(source)) {
+    if (!Array.isArray(entries)) continue;
+    result[provider] = entries.flatMap((entry) => {
+      const record = asRecord(entry);
+      if (!record) return [];
+      const name = typeof record.name === 'string' ? record.name : '';
+      const alias = typeof record.alias === 'string' ? record.alias : '';
+      return name || alias
+        ? [{ name, alias, fork: Boolean(record.fork), forceMapping: Boolean(record['force-mapping'] ?? record.forceMapping) }]
+        : [];
+    });
+  }
+  return result;
+}
+function serializeOAuthModelAliases(value: VisualConfigValues['oauthModelAliases']): Record<string, unknown[]> {
+  return Object.fromEntries(
+    Object.entries(value).map(([provider, entries]) => [
+      provider,
+      entries.map((entry) => ({
+        name: entry.name,
+        ...(entry.alias ? { alias: entry.alias } : {}),
+        ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
+        ...(entry.forceMapping !== undefined ? { 'force-mapping': entry.forceMapping } : {}),
+      })),
+    ])
+  );
+}
 
 const PLUGIN_STORE_AUTH_TYPES: PluginStoreAuthType[] = [
   'none',
@@ -463,6 +498,11 @@ function getNextDirtyFields(
       'codexHeaderUserAgent',
       'codexHeaderBetaFeatures',
       'codexIdentityConfuse',
+      'pluginConfigsText',
+      'openaiCompat429KeyRotation',
+      'fastServiceTier',
+      'oauthModelAliases',
+      'oauthExcludedModels',
     ] as Array<keyof VisualConfigValues>
   ).forEach(updateScalarDirty);
 
@@ -740,12 +780,13 @@ export function useVisualConfig() {
       const quotaExceeded = asRecord(parsed['quota-exceeded']);
       const routing = asRecord(parsed.routing);
       const plugins = asRecord(parsed.plugins);
+      const oauthModelAliases = parseOAuthModelAliases(parsed['oauth-model-alias']);
+      const oauthExcludedModels = asRecord(parsed['oauth-excluded-models']);
       const payload = asRecord(parsed.payload);
       const streaming = asRecord(parsed.streaming);
       const claudeHeaderDefaults = asRecord(parsed['claude-header-defaults']);
       const codexHeaderDefaults = asRecord(parsed['codex-header-defaults']);
       const codex = asRecord(parsed.codex);
-
       const newValues: VisualConfigValues = {
         host: typeof parsed.host === 'string' ? parsed.host : '',
         port: String(parsed.port ?? ''),
@@ -777,6 +818,7 @@ export function useVisualConfig() {
           plugins?.['store-sources'] ?? plugins?.storeSources
         ),
         pluginStoreAuth: parsePluginStoreAuthRules(plugins?.['store-auth'] ?? plugins?.storeAuth),
+        pluginConfigsText: parseJsonText(plugins?.configs),
 
         debug: Boolean(parsed.debug),
         pprofEnable: Boolean(pprof?.enable),
@@ -789,9 +831,7 @@ export function useVisualConfig() {
         logsMaxTotalSizeMb: String(parsed['logs-max-total-size-mb'] ?? ''),
         errorLogsMaxFiles: String(parsed['error-logs-max-files'] ?? ''),
         redisUsageQueueRetentionSeconds: String(
-          parsed['redis-usage-queue-retention-seconds'] ??
-            parsed.redisUsageQueueRetentionSeconds ??
-            ''
+          parsed['redis-usage-queue-retention-seconds'] ?? parsed.redisUsageQueueRetentionSeconds ?? ''
         ),
 
         proxyUrl: typeof parsed['proxy-url'] === 'string' ? parsed['proxy-url'] : '',
@@ -800,20 +840,20 @@ export function useVisualConfig() {
         requestRetry: String(parsed['request-retry'] ?? ''),
         maxRetryCredentials: String(parsed['max-retry-credentials'] ?? ''),
         maxRetryInterval: String(parsed['max-retry-interval'] ?? ''),
+        openaiCompat429KeyRotation: Boolean(parsed['openai-compat-429-key-rotation']),
         disableCooling: Boolean(parsed['disable-cooling']),
         saveCooldownStatus: Boolean(parsed['save-cooldown-status']),
         transientErrorCooldownSeconds: String(parsed['transient-error-cooldown-seconds'] ?? ''),
         disableClaudeCloakMode: Boolean(parsed['disable-claude-cloak-mode']),
         disableImageGeneration: parseDisableImageGenerationMode(parsed['disable-image-generation']),
-        gptImage2BaseModel:
-          typeof parsed['gpt-image-2-base-model'] === 'string'
-            ? parsed['gpt-image-2-base-model']
-            : '',
-        videoResultAuthCacheTtl:
-          typeof parsed['video-result-auth-cache-ttl'] === 'string'
-            ? parsed['video-result-auth-cache-ttl']
-            : '',
+        gptImage2BaseModel: typeof parsed['gpt-image-2-base-model'] === 'string' ? parsed['gpt-image-2-base-model'] : '',
+        videoResultAuthCacheTtl: typeof parsed['video-result-auth-cache-ttl'] === 'string' ? parsed['video-result-auth-cache-ttl'] : '',
         authAutoRefreshWorkers: String(parsed['auth-auto-refresh-workers'] ?? ''),
+        fastServiceTier: Boolean(parsed['fast-service-tier']),
+        oauthModelAliases,
+        oauthExcludedModels: Object.fromEntries(
+          Object.entries(oauthExcludedModels ?? {}).map(([key, value]) => [key, parseStringList(value)])
+        ),
         wsAuth: Boolean(parsed['ws-auth'] ?? true),
         antigravitySignatureCacheEnabled: Boolean(
           parsed['antigravity-signature-cache-enabled'] ?? true
@@ -1050,6 +1090,14 @@ export function useVisualConfig() {
               doc.deleteIn(['plugins', 'store-auth']);
             }
           }
+          if (isDirty('pluginConfigsText')) {
+            try {
+              const configs = JSON.parse(values.pluginConfigsText || '{}');
+              if (asRecord(configs)) doc.setIn(['plugins', 'configs'], configs);
+            } catch {
+              // ponytail: invalid JSON stays source-editor-only until corrected.
+            }
+          }
           deleteIfMapEmpty(doc, ['plugins']);
         }
 
@@ -1080,6 +1128,9 @@ export function useVisualConfig() {
         }
         if (isDirty('disableClaudeCloakMode')) {
           setBooleanInDoc(doc, ['disable-claude-cloak-mode'], values.disableClaudeCloakMode);
+        }
+        if (isDirty('openaiCompat429KeyRotation')) {
+          setBooleanInDoc(doc, ['openai-compat-429-key-rotation'], values.openaiCompat429KeyRotation);
         }
         if (isDirty('disableImageGeneration')) {
           setDisableImageGenerationInDoc(
@@ -1112,6 +1163,15 @@ export function useVisualConfig() {
             ['antigravity-signature-bypass-strict'],
             values.antigravitySignatureBypassStrict
           );
+        }
+        if (isDirty('fastServiceTier')) {
+          setBooleanInDoc(doc, ['fast-service-tier'], values.fastServiceTier);
+        }
+        if (isDirty('oauthModelAliases')) {
+          doc.setIn(['oauth-model-alias'], serializeOAuthModelAliases(values.oauthModelAliases));
+        }
+        if (isDirty('oauthExcludedModels')) {
+          doc.setIn(['oauth-excluded-models'], values.oauthExcludedModels);
         }
 
         const claudeHeadersDirty =

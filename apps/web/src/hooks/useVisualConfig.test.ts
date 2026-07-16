@@ -557,4 +557,63 @@ describe('useVisualConfig', () => {
 
     harness.unmount();
   });
+  it('loads and writes fork-only global settings', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = [
+      'openai-compat-429-key-rotation: true',
+      'fast-service-tier: true',
+      'oauth-model-alias:',
+      '  codex:',
+      '    - name: gpt-5',
+      '      alias: g5',
+      '      fork: true',
+      '      force-mapping: true',
+      'oauth-excluded-models:',
+      '  codex:',
+      '    - gpt-5-mini',
+      'plugins:',
+      '  configs:',
+      '    sample:',
+      '      enabled: true',
+      'unknown-fork-key: keep-me',
+      '',
+    ].join('\n');
+
+    let loadResult: { ok: boolean; error?: string } | undefined;
+    act(() => {
+      loadResult = harness.getCurrent().loadVisualValuesFromYaml(yaml);
+    });
+    expect(loadResult?.ok).toBe(true);
+
+    expect(harness.getCurrent().visualValues).toEqual(
+      expect.objectContaining({
+        openaiCompat429KeyRotation: true,
+        fastServiceTier: true,
+        oauthModelAliases: expect.any(Object),
+        oauthExcludedModels: expect.any(Object),
+        pluginConfigsText: expect.any(String),
+      })
+    );
+
+    act(() => {
+      harness.getCurrent().setVisualValues({
+        openaiCompat429KeyRotation: false,
+        fastServiceTier: false,
+      });
+    });
+
+    const parsed = parseYaml(harness.getCurrent().applyVisualChangesToYaml(yaml)) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed['openai-compat-429-key-rotation']).toBe(false);
+    expect(parsed['fast-service-tier']).toBe(false);
+    expect(parsed['unknown-fork-key']).toBe('keep-me');
+    expect(parsed['oauth-model-alias']).toEqual({
+      codex: [{ name: 'gpt-5', alias: 'g5', fork: true, 'force-mapping': true }],
+    });
+    expect(parsed['oauth-excluded-models']).toEqual({ codex: ['gpt-5-mini'] });
+
+    harness.unmount();
+  });
 });

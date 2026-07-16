@@ -88,6 +88,13 @@ export type PluginStoreAuthRule = {
   allowInsecure: boolean;
 };
 
+export type OAuthModelAlias = {
+  name: string;
+  alias: string;
+  fork?: boolean;
+  forceMapping?: boolean;
+};
+
 export type VisualConfigValues = {
   host: string;
   port: string;
@@ -107,6 +114,7 @@ export type VisualConfigValues = {
   pluginsDir: string;
   pluginStoreSourcesText: string;
   pluginStoreAuth: PluginStoreAuthRule[];
+  pluginConfigsText: string;
   debug: boolean;
   pprofEnable: boolean;
   pprofAddr: string;
@@ -122,6 +130,7 @@ export type VisualConfigValues = {
   requestRetry: string;
   maxRetryCredentials: string;
   maxRetryInterval: string;
+  openaiCompat429KeyRotation: boolean;
   disableCooling: boolean;
   saveCooldownStatus: boolean;
   transientErrorCooldownSeconds: string;
@@ -130,6 +139,9 @@ export type VisualConfigValues = {
   gptImage2BaseModel: string;
   videoResultAuthCacheTtl: string;
   authAutoRefreshWorkers: string;
+  fastServiceTier: boolean;
+  oauthModelAliases: Record<string, OAuthModelAlias[]>;
+  oauthExcludedModels: Record<string, string[]>;
   quotaSwitchProject: boolean;
   quotaSwitchPreviewModel: boolean;
   quotaAntigravityCredits: boolean;
@@ -181,6 +193,7 @@ export const DEFAULT_VISUAL_VALUES: VisualConfigValues = {
   pluginsDir: '',
   pluginStoreSourcesText: '',
   pluginStoreAuth: [],
+  pluginConfigsText: '',
   debug: false,
   pprofEnable: false,
   pprofAddr: '127.0.0.1:8316',
@@ -196,6 +209,7 @@ export const DEFAULT_VISUAL_VALUES: VisualConfigValues = {
   requestRetry: '',
   maxRetryCredentials: '',
   maxRetryInterval: '',
+  openaiCompat429KeyRotation: false,
   disableCooling: false,
   saveCooldownStatus: false,
   transientErrorCooldownSeconds: '',
@@ -204,6 +218,9 @@ export const DEFAULT_VISUAL_VALUES: VisualConfigValues = {
   gptImage2BaseModel: '',
   videoResultAuthCacheTtl: '',
   authAutoRefreshWorkers: '',
+  fastServiceTier: false,
+  oauthModelAliases: {},
+  oauthExcludedModels: {},
   quotaSwitchProject: false,
   quotaSwitchPreviewModel: false,
   quotaAntigravityCredits: false,

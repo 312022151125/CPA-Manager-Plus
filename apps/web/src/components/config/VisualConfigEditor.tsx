@@ -834,6 +834,13 @@ export function VisualConfigEditor({
                   onChange={(pluginsEnabled) => onChange({ pluginsEnabled })}
                 />
                 <ToggleRow
+                  title={t('config_management.visual.sections.system.fast_service_tier')}
+                  description={t('config_management.visual.sections.system.fast_service_tier_desc')}
+                  checked={values.fastServiceTier}
+                  disabled={disabled}
+                  onChange={(fastServiceTier) => onChange({ fastServiceTier })}
+                />
+                <ToggleRow
                   title={t('config_management.visual.sections.system.antigravity_signature_cache')}
                   description={t(
                     'config_management.visual.sections.system.antigravity_signature_cache_desc'
@@ -1145,6 +1152,13 @@ export function VisualConfigEditor({
                   checked={values.disableCooling}
                   disabled={disabled}
                   onChange={(disableCooling) => onChange({ disableCooling })}
+                />
+                <ToggleRow
+                  title={t('config_management.visual.sections.network.openai_compat_429_key_rotation')}
+                  description={t('config_management.visual.sections.network.openai_compat_429_key_rotation_desc')}
+                  checked={values.openaiCompat429KeyRotation}
+                  disabled={disabled}
+                  onChange={(openaiCompat429KeyRotation) => onChange({ openaiCompat429KeyRotation })}
                 />
                 <ToggleRow
                   title={t('config_management.visual.sections.network.save_cooldown_status')}
