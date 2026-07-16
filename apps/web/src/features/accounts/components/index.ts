@@ -10,4 +10,6 @@ export type { RelativeTimeMode } from './RelativeTime';
 
 export { QuotaWindowCard } from './QuotaWindowCard';
 
+export { AccountQuotaMatrix } from './AccountQuotaMatrix';
+
 export { CopyableText } from './CopyableText';

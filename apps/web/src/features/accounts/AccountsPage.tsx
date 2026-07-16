@@ -80,8 +80,6 @@ import {
   type AccountQuotaBand,
   type AccountRow,
   type AccountRowSort,
-  type AccountRowSortDirection,
-  type AccountRowSortKey,
   type AccountStatusFilter,
 } from '@/features/accounts/model/accountRows';
 import {
@@ -110,7 +108,6 @@ import {
   buildAccountQuotaDisplayWindows,
   formatQuotaResetInlineLabel,
   getQuotaWindowShortLabel,
-  type AccountQuotaWindowKind,
   type AccountQuotaDisplayWindow,
 } from '@/features/accounts/model/accountQuotaDisplayWindows';
 import {
@@ -118,13 +115,40 @@ import {
   type AccountDetailField,
 } from '@/features/accounts/model/accountDetailViewModel';
 import {
+  ACCOUNT_SORT_DEFAULT_DIRECTIONS,
+  ACCOUNT_SORT_FIELD_OPTIONS,
+  DETAIL_EVENTS_LIMIT,
+  DETAIL_EVENTS_RANGE_MS,
+  PAGE_SIZE_OPTIONS,
+  VALUE_RANGE_OPTIONS,
+  buildAntigravityQuotaMatrix,
+  formatCompactNumber,
+  formatDurationMs,
+  formatHistorySuccessRate,
+  formatMoney,
+  formatPercent,
+  formatTimestamp,
+  getAccountHistoryTitle,
+  getAccountSortFieldOption,
+  getEventFailureReason,
+  getEventStatusText,
+  getProviderLabel,
+  getValueRangeMs,
+  parsePriorityValue,
+  quotaStatusLabelKey,
+  toAuthFileCodexInspectionSnapshot,
+  translateDetailEnum,
+  type AccountSortFieldValue,
+  type AccountsView,
+  type DetailTab,
+} from '@/features/accounts/model/accountsPagePresentation';
+import {
   getAuthFileCodexInspectionKey,
   getAuthFileCodexStatus,
   getAuthFilePatchTarget,
   getAuthFileSelectionKey,
   getAuthFileScopedCodexQuota,
   hasPartialSharedAuthFileSelection,
-  type AuthFileCodexInspectionSnapshot,
 } from '@/features/authFiles/model/authFilesPageModel';
 import {
   buildUsageValueRowsFromMonitoring,
@@ -138,6 +162,7 @@ import {
 import { buildOAuthRulePreviewRows } from '@/features/accounts/model/oauthRulePreview';
 import {
   AccountHealthBadge,
+  AccountQuotaMatrix,
   CopyableText,
   QuotaWindowCard,
   RelativeTime,
@@ -178,212 +203,8 @@ import {
 } from '@/utils/usageHeaderSnapshots';
 import styles from './AccountsPage.module.scss';
 
-type AccountsView = 'accounts' | 'quota' | 'inspection' | 'oauth' | 'value';
-type DetailTab = 'overview' | 'quota' | 'auth' | 'models' | 'strategy' | 'value' | 'events';
-type SortableAccountColumn = Extract<
-  AccountRowSortKey,
-  'reset' | 'priority' | 'recent' | 'quota' | 'created'
->;
-type AccountSortFieldValue = 'default' | SortableAccountColumn;
 type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
-type AntigravityQuotaMatrixWindowKind = Extract<AccountQuotaWindowKind, 'five_hour' | 'weekly'>;
-
-interface AntigravityQuotaMatrixCell {
-  groupLabel: string;
-  displayLabel: string;
-  window: AccountQuotaDisplayWindow;
-}
-
-interface AntigravityQuotaMatrixRow {
-  key: AntigravityQuotaMatrixWindowKind;
-  label: string;
-  cells: AntigravityQuotaMatrixCell[];
-}
-
-interface AntigravityQuotaMatrix {
-  rows: AntigravityQuotaMatrixRow[];
-  windowKeys: Set<string>;
-}
-
-const PAGE_SIZE_OPTIONS = [
-  { value: '10', label: '10' },
-  { value: '20', label: '20' },
-  { value: '50', label: '50' },
-];
-
-const VALUE_RANGE_OPTIONS: Array<{ value: UsageValueRange; labelKey: string; hours: number }> = [
-  { value: '24h', labelKey: 'accounts.range_24h', hours: 24 },
-  { value: '7d', labelKey: 'accounts.range_7d', hours: 24 * 7 },
-  { value: '30d', labelKey: 'accounts.range_30d', hours: 24 * 30 },
-];
-const DETAIL_EVENTS_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
-const DETAIL_EVENTS_LIMIT = 20;
-
-const ACCOUNT_SORT_DEFAULT_DIRECTIONS: Record<SortableAccountColumn, AccountRowSortDirection> = {
-  reset: 'asc',
-  priority: 'desc',
-  recent: 'desc',
-  quota: 'desc',
-  created: 'desc',
-};
-
-const DEFAULT_ACCOUNT_SORT_FIELD_OPTION = {
-  value: 'default',
-  labelKey: 'accounts.sort_default',
-} as const;
-
-const ACCOUNT_SORT_FIELD_OPTIONS: Array<{
-  value: AccountSortFieldValue;
-  labelKey: string;
-}> = [
-  DEFAULT_ACCOUNT_SORT_FIELD_OPTION,
-  {
-    value: 'reset',
-    labelKey: 'accounts.col_reset',
-  },
-  {
-    value: 'quota',
-    labelKey: 'accounts.col_quota',
-  },
-  {
-    value: 'priority',
-    labelKey: 'accounts.col_priority',
-  },
-  {
-    value: 'recent',
-    labelKey: 'accounts.col_recent',
-  },
-  {
-    value: 'created',
-    labelKey: 'accounts.col_created',
-  },
-];
-
-const getAccountSortFieldOption = (value: AccountSortFieldValue) =>
-  ACCOUNT_SORT_FIELD_OPTIONS.find((option) => option.value === value) ??
-  DEFAULT_ACCOUNT_SORT_FIELD_OPTION;
-
-const getProviderLabel = (provider: string, t: TFunction) => {
-  const key = `auth_files.filter_${provider}`;
-  const translated = t(key);
-  if (translated !== key) return translated;
-  if (provider === 'all') return t('accounts.filter_all');
-  if (provider === 'iflow') return 'iFlow';
-  if (provider === 'xai') return 'xAI';
-  return provider.charAt(0).toUpperCase() + provider.slice(1);
-};
-
-const formatPercent = (value: number | null, digits = 0) =>
-  value === null ? '-' : `${value.toFixed(digits)}%`;
-
-const formatMoney = (value: number) => `$${value.toFixed(2)}`;
-
-const formatCompactNumber = (value: number) => {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-  return String(value);
-};
-
-const formatHistorySuccessRate = (value: number | null | undefined) =>
-  typeof value === 'number' && Number.isFinite(value) ? formatPercent(value * 100, 1) : '-';
-
-const getAccountHistoryTitle = (
-  t: TFunction,
-  item: MonitoringAccountHistoryItem | null,
-  loading: boolean,
-  error: string
-) => {
-  if (error) return t('accounts.history_unavailable');
-  if (loading && !item) return t('accounts.history_loading');
-  if (!item || !item.matched) return t('accounts.history_empty');
-  if (item.sync_status === 'pending') return t('accounts.history_pending_title');
-  return t('accounts.history_title', {
-    requests: formatCompactNumber(item.total_requests),
-    tokens: formatCompactNumber(item.total_tokens),
-    cost: formatMoney(item.total_cost),
-    rate: formatHistorySuccessRate(item.success_rate),
-  });
-};
-
-const parsePriorityValue = (value: string) => {
-  const trimmed = value.trim();
-  if (!/^-?\d+$/.test(trimmed)) return null;
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) ? parsed : null;
-};
-
-const formatTimestamp = (value: number | null, locale: string) => {
-  if (!value) return '-';
-  return new Intl.DateTimeFormat(locale, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
-};
-
-const normalizeDetailToken = (value: string | number | null | undefined) =>
-  String(value ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-
-const translateDetailEnum = (
-  t: TFunction,
-  prefix: string,
-  value: string | number | null | undefined
-) => {
-  const raw = String(value ?? '').trim();
-  if (!raw) return '-';
-  const token = normalizeDetailToken(raw);
-  if (!token) return raw;
-  return t(`${prefix}${token}`, { defaultValue: raw });
-};
-
-const formatDurationMs = (value: number | null | undefined) => {
-  if (value === null || value === undefined) return '-';
-  return `${Math.round(value)} ms`;
-};
-
-const getEventFailureReason = (event: MonitoringAnalyticsEventRow) =>
-  event.fail_summary ||
-  event.header_error_code ||
-  event.header_error_kind ||
-  event.header_trace_id ||
-  '';
-
-const getEventStatusText = (event: MonitoringAnalyticsEventRow, t: TFunction) => {
-  if (!event.failed) return t('accounts.detail_event_success');
-  if (event.fail_status_code) {
-    return t('accounts.detail_event_failed_with_code', {
-      code: event.fail_status_code,
-      defaultValue: `${t('accounts.detail_event_failed')} ${event.fail_status_code}`,
-    });
-  }
-  return t('accounts.detail_event_failed');
-};
-
-const quotaStatusLabelKey = (status: AccountRow['quota']['status']) => {
-  switch (status) {
-    case 'ok':
-      return 'accounts.quota_status_ok';
-    case 'low':
-      return 'accounts.quota_status_low';
-    case 'exhausted':
-      return 'accounts.quota_status_exhausted';
-    case 'error':
-      return 'accounts.quota_status_error';
-    case 'loading':
-      return 'accounts.quota_status_loading';
-    case 'disabled':
-      return 'accounts.quota_status_disabled';
-    case 'unknown':
-    default:
-      return 'accounts.quota_status_unknown';
-  }
-};
 
 const getQuotaStatusClass = (status: AccountRow['quota']['status']) => {
   switch (status) {
@@ -432,116 +253,12 @@ const getRemainingBarClass = (row: AccountRow) => {
   return styles.quotaBarNeutral;
 };
 
-const getRemainingPercentBarClass = (remainingPercent: number | null) => {
-  if (remainingPercent === null) return styles.quotaBarNeutral;
-  if (remainingPercent <= 0) return styles.quotaBarBad;
-  if (remainingPercent < 20) return styles.quotaBarWarn;
-  return styles.quotaBarGood;
-};
-
-const getAntigravityGroupRank = (label: string) => {
-  const normalized = label.toLowerCase();
-  if (normalized.includes('claude') || normalized.includes('gpt')) return 0;
-  if (normalized.includes('gemini')) return 1;
-  return 2;
-};
-
-const getAntigravityMatrixGroupDisplayLabel = (label: string) => {
-  const normalized = label.toLowerCase();
-  if (normalized.includes('claude') || normalized.includes('gpt')) return 'Claude';
-  if (normalized.includes('gemini')) return 'Gemini';
-  return label;
-};
-
-const buildAntigravityQuotaMatrix = (
-  row: AccountRow,
-  windows: AccountQuotaDisplayWindow[]
-): AntigravityQuotaMatrix | null => {
-  if (row.provider !== ANTIGRAVITY_CONFIG.type) return null;
-
-  const matrixWindows = windows.filter(
-    (window) =>
-      window.source === 'antigravity' &&
-      Boolean(window.groupLabel) &&
-      (window.kind === 'five_hour' || window.kind === 'weekly')
-  );
-  const groupOrder = new Map<string, number>();
-  matrixWindows.forEach((window) => {
-    const groupLabel = window.groupLabel ?? '';
-    if (groupLabel && !groupOrder.has(groupLabel)) {
-      groupOrder.set(groupLabel, groupOrder.size);
-    }
-  });
-
-  const selectedGroupLabels = [...groupOrder.keys()]
-    .sort((first, second) => {
-      const rankDiff = getAntigravityGroupRank(first) - getAntigravityGroupRank(second);
-      if (rankDiff !== 0) return rankDiff;
-      return (groupOrder.get(first) ?? 0) - (groupOrder.get(second) ?? 0);
-    })
-    .slice(0, 2);
-  if (selectedGroupLabels.length < 2) return null;
-
-  const windowsByKindAndGroup = new Map<string, AccountQuotaDisplayWindow>();
-  matrixWindows.forEach((window) => {
-    if (!window.kind || !window.groupLabel) return;
-    windowsByKindAndGroup.set(`${window.kind}\u0000${window.groupLabel}`, window);
-  });
-
-  const windowKeys = new Set<string>();
-  const rows: AntigravityQuotaMatrixRow[] = [];
-  for (const kind of (['five_hour', 'weekly'] satisfies AntigravityQuotaMatrixWindowKind[])) {
-    const cells = selectedGroupLabels.map((groupLabel) => {
-      const window = windowsByKindAndGroup.get(`${kind}\u0000${groupLabel}`);
-      return window
-        ? {
-            groupLabel,
-            displayLabel: getAntigravityMatrixGroupDisplayLabel(groupLabel),
-            window,
-          }
-        : null;
-    });
-    if (cells.some((cell) => cell === null)) continue;
-    cells.forEach((cell) => {
-      if (cell) windowKeys.add(cell.window.key);
-    });
-    rows.push({
-      key: kind,
-      label: getQuotaWindowShortLabel(cells[0]!.window),
-      cells: cells as AntigravityQuotaMatrixCell[],
-    });
-  }
-
-  if (rows.length === 0) return null;
-  return { rows, windowKeys };
-};
-
 const getRecommendationPriorityClass = (priority: AccountRecommendationPriority) => {
   if (priority === 'critical') return styles.badgeBad;
   if (priority === 'high') return styles.badgeWarn;
   if (priority === 'medium') return styles.badgeInfo;
   return styles.badgeNeutral;
 };
-
-const toAuthFileCodexInspectionSnapshot = (
-  row: AccountRow
-): AuthFileCodexInspectionSnapshot | undefined => {
-  if (!row.inspection) return undefined;
-  return {
-    fileName: row.fileName,
-    authIndex: row.authIndex || null,
-    statusCode: row.inspection.statusCode,
-    action: row.inspection.action,
-    usedPercent: row.inspection.usedPercent,
-    isQuota:
-      row.inspection.isQuota ??
-      (row.inspection.usedPercent !== null || row.inspection.action === 'disable' ? true : null),
-    inspectionAtMs: row.inspection.createdAtMs,
-  };
-};
-
-const getValueRangeMs = (range: UsageValueRange) =>
-  (VALUE_RANGE_OPTIONS.find((option) => option.value === range)?.hours ?? 24 * 7) * 60 * 60 * 1000;
 
 async function refreshQuotaWithConfig<TState, TData>({
   config,
@@ -2854,64 +2571,10 @@ export function AccountsPage() {
                     title={quotaWindowTitle}
                   >
                     {antigravityQuotaMatrix ? (
-                      <div
-                        className={styles.quotaMatrix}
-                        data-account-quota-matrix={row.selectionKey}
-                      >
-                        {antigravityQuotaMatrix.rows.map((matrixRow) => (
-                          <div
-                            key={matrixRow.key}
-                            className={styles.quotaMatrixRow}
-                            data-account-quota-matrix-row={matrixRow.key}
-                          >
-                            <span className={styles.quotaMatrixWindowLabel}>
-                              {matrixRow.label}
-                            </span>
-                            <div className={styles.quotaMatrixCells}>
-                              {matrixRow.cells.map((cell) => {
-                                const windowRemaining = cell.window.remainingPercent;
-                                const windowWidth = Math.max(
-                                  0,
-                                  Math.min(100, windowRemaining ?? 0)
-                                );
-                                return (
-                                  <div
-                                    key={cell.window.key}
-                                    className={styles.quotaMatrixCell}
-                                    data-account-quota-matrix-cell={`${matrixRow.key}:${cell.groupLabel}`}
-                                    title={`${cell.groupLabel} ${cell.window.label}: ${formatPercent(
-                                      windowRemaining
-                                    )}`}
-                                  >
-                                    <span
-                                      className={styles.quotaMatrixGroupLabel}
-                                      title={cell.groupLabel}
-                                    >
-                                      {cell.displayLabel}
-                                    </span>
-                                    <div
-                                      className={`${styles.quotaTrack} ${styles.quotaMatrixTrack}`}
-                                      aria-hidden="true"
-                                    >
-                                      <span
-                                        className={`${styles.quotaBar} ${getRemainingPercentBarClass(
-                                          windowRemaining
-                                        )}`}
-                                        style={{ width: `${windowWidth}%` }}
-                                      />
-                                    </div>
-                                    <strong className={styles.quotaMatrixPercent}>
-                                      {windowRemaining !== null
-                                        ? formatPercent(windowRemaining)
-                                        : '-'}
-                                    </strong>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                      <AccountQuotaMatrix
+                        accountKey={row.selectionKey}
+                        matrix={antigravityQuotaMatrix}
+                      />
                     ) : (
                       displayQuotaWindows.map((window) => {
                         const windowRemaining = window.remainingPercent;
