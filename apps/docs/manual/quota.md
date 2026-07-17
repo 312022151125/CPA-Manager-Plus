@@ -25,6 +25,14 @@
 
 不同提供商能返回的信息不一样。未知状态只代表 CPAMP 没拿到足够信息，不代表账号一定无限可用。
 
+### xAI 付费 OAuth
+
+xAI 的免费 Grok Build OAuth 可以通过 CLI billing 接口返回周额度和月度账单数据。面向官方 `api.x.ai` 的 OAuth 凭证可能无法访问这些接口，并返回 `403 Access denied`，同时也没有可供 CPAMP 查询的公开付费额度接口。
+
+当两个 CLI billing 请求都只返回通用的 `403 Access denied`，且没有更明确的订阅、权限或额度信号时，CPAMP 会使用只读的 `GET https://api.x.ai/v1/me` 检查官方 API 身份。成功时页面显示“官方 API”健康状态，但不会伪造额度、费用或剩余百分比，也不会发送模型请求。该状态只证明 OAuth 身份可访问，不代表聊天路由或模型权限已经验证。
+
+付费 xAI OAuth 通过 CPA 调用官方 API 时，认证 JSON 通常需要设置 `using_api: true`，并使用 `base_url: https://api.x.ai/v1`。否则 OAuth 默认可能继续路由到 Grok CLI chat proxy。真实费用和剩余额度仍需在 xAI 控制台查看。
+
 ## 页面操作
 
 - 使用搜索框按文件名、账号、备注或索引快速定位账号。

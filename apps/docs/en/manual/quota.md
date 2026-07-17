@@ -25,6 +25,14 @@ Quota clues may come from:
 
 Different providers return different data. Unknown means CPAMP did not get enough information. It does not mean the account is unlimited.
 
+### Paid xAI OAuth
+
+Free Grok Build OAuth credentials can return weekly and monthly data through the CLI billing endpoints. OAuth credentials intended for the official `api.x.ai` API may receive `403 Access denied` from those endpoints, and there is currently no public paid-quota endpoint that CPAMP can query for this credential type.
+
+When both CLI billing requests return a generic `403 Access denied` without a more specific subscription, entitlement, or quota signal, CPAMP uses the read-only `GET https://api.x.ai/v1/me` endpoint to check the official API identity. A successful response is shown as an “Official API” health state. CPAMP does not synthesize quota, cost, or remaining percentages and does not invoke a model. This state proves only that the OAuth identity is reachable; it does not verify chat routing or model access.
+
+To route paid xAI OAuth requests through the official API in CPA, the auth JSON normally needs `using_api: true` together with `base_url: https://api.x.ai/v1`. Otherwise OAuth may continue using the Grok CLI chat proxy by default. Check the xAI console for actual cost and remaining quota.
+
 ## Page Actions
 
 - Search by file name, account, note, or index.
