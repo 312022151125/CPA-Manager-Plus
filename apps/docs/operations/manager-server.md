@@ -2,19 +2,30 @@
 
 Manager Server 是完整 CPAMP 体验的后端。它托管 `management.html`，保存本地 SQLite，用采集器消费 CPA 用量队列，并用 CPAMP 管理员密钥保护管理能力。
 
+普通用户通常不需要从头阅读本页。根据目标直接进入对应文档：
+
+| 目标                | 推荐文档                                                 |
+| ------------------- | -------------------------------------------------------- |
+| 第一次安装完整模式  | [快速开始](../guide/getting-started.md)                  |
+| 修改 CPA 连接或监控 | [配置中心](../manual/configuration.md)                   |
+| 请求监控没有数据    | [请求监控为空](../troubleshooting/request-monitoring.md) |
+| 更新或备份          | [更新 CPAMP](./update.md)、[备份与恢复](./backup.md)     |
+
+本页主要面向需要环境变量、自定义采集网络、运行时接口或数据目录的高级部署。
+
 当你打开下面入口时，使用的是 Manager Server 模式：
 
 ```text
 http://<host>:18317/management.html
 ```
 
-当 CPA 自己托管下面入口时，属于 CPA 托管面板兼容模式：
+当 CPA 自己托管下面入口时，属于 CPAMP 轻量面板：
 
 ```text
 http://<cpa-host>:8317/management.html
 ```
 
-CPA 托管面板不会读取 Manager Server SQLite，也没有完整的历史请求监控、模型价格、API 密钥别名、导入导出和服务端巡检历史。
+CPAMP 轻量面板不会连接或读取 Manager Server SQLite，也没有完整的历史请求监控、模型价格、API 密钥别名、导入导出和服务端巡检历史。
 
 ## Manager Server 负责什么
 
@@ -26,6 +37,8 @@ CPA 托管面板不会读取 Manager Server SQLite，也没有完整的历史请
 - 消费 CPA 用量事件。
 - 将用量事件持久化到 SQLite。
 - 提供仪表盘、请求监控、用量分析、模型价格、API 密钥别名、用量导入导出和服务端 Codex 账号巡检 API。
+
+::: details 高级：架构和数据流
 
 ## 架构
 
@@ -47,6 +60,8 @@ Browser
 ```
 
 CPA 仍然需要单独运行，CPAMP 不包含 CPA 本体。
+
+:::
 
 ## 首次 setup 与登录
 
@@ -103,7 +118,7 @@ CPA Management API 必须启用：
 
 ```yaml
 remote-management:
-  secret-key: "your CPA Management Key"
+  secret-key: 'your CPA Management Key'
   allow-remote: true
 ```
 
@@ -135,12 +150,12 @@ auto
 auto -> RESP Pub/Sub -> HTTP 用量队列 -> RESP pop fallback
 ```
 
-| 模式 | 适用场景 |
-|---|---|
-| `auto` | 推荐默认值。 |
+| 模式        | 适用场景                                                 |
+| ----------- | -------------------------------------------------------- |
+| `auto`      | 推荐默认值。                                             |
 | `subscribe` | 强制 RESP Pub/Sub，适合能直连 CPA API 端口的低延迟采集。 |
-| `http` | 强制 HTTP 用量队列，适合普通 HTTP 反向代理。 |
-| `resp` | 强制旧 RESP pop，必须直连 CPA API 端口。 |
+| `http`      | 强制 HTTP 用量队列，适合普通 HTTP 反向代理。             |
+| `resp`      | 强制旧 RESP pop，必须直连 CPA API 端口。                 |
 
 RESP 传输不能穿过普通 HTTP 反向代理。如果看到 `unsupported RESP prefix 'H'`，通常是 RESP 客户端连到了 HTTP 地址。
 
@@ -193,7 +208,7 @@ Manager Server 管理：
 | `USAGE_BATCH_SIZE` | `100` | 单批最大记录数。 |
 | `USAGE_POLL_INTERVAL_MS` | `500` | 空闲轮询间隔。 |
 | `USAGE_QUERY_LIMIT` | `50000` | 最近 usage events 返回上限。 |
-| `USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED` | `true` | 启用 Dashboard 小时汇总 worker 和 rollup 查询；排查 SQLite 写竞争或汇总异常时可临时设为 `false`，Dashboard 会回退 raw events。 |
+| `USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED` | `true` | 启用小时汇总 worker，以及 Dashboard 和严格无筛选 Usage Analytics 的 rollup 查询；排查 SQLite 写竞争或汇总异常时可临时设为 `false`，查询会回退 raw events。 |
 | `USAGE_CORS_ORIGINS` | `*` | 兼容接口 CORS origin。 |
 | `USAGE_RESP_TLS_SKIP_VERIFY` | `false` | RESP 跳过 TLS 校验。 |
 | `USAGE_QUOTA_COOLDOWN_ENABLED` | `false` | 启用 Codex usage-limit cooldown worker（`usage_limit_reached`）。 |
@@ -240,43 +255,47 @@ USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED=false
 
 如果 `USAGE_QUOTA_COOLDOWN_ENABLED`、`USAGE_GROK_QUOTA_COOLDOWN_ENABLED`、`USAGE_ACCOUNT_ACTIONS_ENABLED` 或 `USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE` 由环境变量设置，面板中的对应开关会显示为环境变量来源并被锁定。要改成面板可编辑，需要移除环境变量并重启 Manager Server。
 
+::: details 高级：运行时接口
+
 ## 运行时接口
 
-| Endpoint | 用途 |
-|---|---|
-| `GET /health` | 健康检查。 |
-| `GET /status` | 采集器、SQLite、事件计数和后台数据迁移进度。 |
-| `GET /usage-service/info` | Manager Server 模式探测。 |
-| `GET /usage-service/config` | 读取 CPAMP Manager Server 配置。 |
-| `PUT /usage-service/config` | 保存 CPAMP 配置，必要时重启采集器。 |
-| `GET /usage-service/account-processing-policy` | 读取配额冷却、账号处理队列和自动禁用策略。 |
-| `PATCH /usage-service/account-processing-policy` | 更新账号处理策略；被环境变量锁定的字段不能通过接口修改。 |
-| `GET /usage-service/quota-cooldowns` | 读取当前活跃的配额冷却，用于认证文件页面展示恢复提示。 |
-| `POST /setup` | 首次 setup。 |
-| `GET /v0/management/usage` | 兼容 usage data。 |
-| `GET /v0/management/usage/export` | 导出 JSONL usage events。 |
-| `POST /v0/management/usage/import` | 导入 JSONL 或兼容旧快照。 |
-| `GET /v0/management/model-prices/usage-summary` | 返回模型价格页使用的轻量模型调用汇总。 |
-| `GET /v0/management/model-prices` | 模型价格。 |
-| `PUT /v0/management/model-prices` | 替换保存的模型价格。 |
-| `POST /v0/management/model-prices/sync` | 价格同步。 |
-| `GET /v0/management/api-key-aliases` | API 密钥别名。 |
-| `GET /v0/management/account-action-candidates` | 认证问题处理队列。 |
-| `POST /v0/management/account-action-candidates/{id}/ignore` | 忽略账号处理候选项。 |
-| `POST /v0/management/account-action-candidates/{id}/resolve` | 标记账号处理候选项已处理。 |
-| `POST /v0/management/account-action-candidates/{id}/enable` | 重新启用候选项关联的认证文件。 |
-| `DELETE /v0/management/account-action-candidates/{id}/auth-file` | 删除候选项关联的认证文件。 |
-| `GET /v0/management/dashboard/*` | 仪表盘数据。 |
-| `GET /v0/management/monitoring/*` | 请求监控数据。 |
-| `GET /v0/management/codex-inspection/*` | 服务端 Codex 巡检。 |
-| `GET /models`, `GET /v1/models` | setup 后代理 model-list 请求到 CPA。 |
-| `/v0/management/*` | CPAMP 未处理的路径代理到 CPA。 |
+| Endpoint                                                         | 用途                                                     |
+| ---------------------------------------------------------------- | -------------------------------------------------------- |
+| `GET /health`                                                    | 健康检查。                                               |
+| `GET /status`                                                    | 采集器、SQLite、事件计数和后台数据迁移进度。             |
+| `GET /usage-service/info`                                        | Manager Server 模式探测。                                |
+| `GET /usage-service/config`                                      | 读取 CPAMP Manager Server 配置。                         |
+| `PUT /usage-service/config`                                      | 保存 CPAMP 配置，必要时重启采集器。                      |
+| `GET /usage-service/account-processing-policy`                   | 读取配额冷却、账号处理队列和自动禁用策略。               |
+| `PATCH /usage-service/account-processing-policy`                 | 更新账号处理策略；被环境变量锁定的字段不能通过接口修改。 |
+| `GET /usage-service/quota-cooldowns`                             | 读取当前活跃的配额冷却，用于认证文件页面展示恢复提示。   |
+| `POST /setup`                                                    | 首次 setup。                                             |
+| `GET /v0/management/usage`                                       | 兼容 usage data。                                        |
+| `GET /v0/management/usage/export`                                | 导出 JSONL usage events。                                |
+| `POST /v0/management/usage/import`                               | 导入 JSONL 或兼容旧快照。                                |
+| `GET /v0/management/model-prices/usage-summary`                  | 返回模型价格页使用的轻量模型调用汇总。                   |
+| `GET /v0/management/model-prices`                                | 模型价格。                                               |
+| `PUT /v0/management/model-prices`                                | 替换保存的模型价格。                                     |
+| `POST /v0/management/model-prices/sync`                          | 价格同步。                                               |
+| `GET /v0/management/api-key-aliases`                             | API 密钥别名。                                           |
+| `GET /v0/management/account-action-candidates`                   | 认证问题处理队列。                                       |
+| `POST /v0/management/account-action-candidates/{id}/ignore`      | 忽略账号处理候选项。                                     |
+| `POST /v0/management/account-action-candidates/{id}/resolve`     | 标记账号处理候选项已处理。                               |
+| `POST /v0/management/account-action-candidates/{id}/enable`      | 重新启用候选项关联的认证文件。                           |
+| `DELETE /v0/management/account-action-candidates/{id}/auth-file` | 删除候选项关联的认证文件。                               |
+| `GET /v0/management/dashboard/*`                                 | 仪表盘数据。                                             |
+| `GET /v0/management/monitoring/*`                                | 请求监控数据。                                           |
+| `GET /v0/management/codex-inspection/*`                          | 服务端 Codex 巡检。                                      |
+| `GET /models`, `GET /v1/models`                                  | setup 后代理 model-list 请求到 CPA。                     |
+| `/v0/management/*`                                               | CPAMP 未处理的路径代理到 CPA。                           |
 
 setup 后，Manager Server 管理接口需要：
 
 ```text
 Authorization: Bearer <CPAMP_ADMIN_KEY>
 ```
+
+:::
 
 ## 数据和安全
 
