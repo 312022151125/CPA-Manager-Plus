@@ -256,6 +256,17 @@ const initialRawConfig: Record<string, unknown> = {
       models: [{ name: 'gpt-5-codex', alias: 'Codex Team' }],
     },
   ],
+  'xai-api-key': [
+    {
+      'api-key': 'xai-demo-team-key',
+      'auth-index': 'xai-api-team-01',
+      prefix: 'xai-team',
+      'base-url': 'https://api.x.ai/v1',
+      priority: 9,
+      websockets: true,
+      models: [{ name: 'grok-4.5', alias: 'Grok Team' }],
+    },
+  ],
   'claude-api-key': [
     {
       'api-key': 'claude-demo-team-key',
@@ -4346,6 +4357,7 @@ export const getDemoConfigYaml = () =>
 
 export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
   const requestUrl = String(payload.url || '');
+  const authIndex = String(payload.authIndex || '');
   let body: unknown = { data: demoProviderModels.map((model) => ({ id: model.name })) };
 
   if (requestUrl.includes('/wham/usage')) {
@@ -4423,38 +4435,91 @@ export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
       ],
     };
   } else if (requestUrl.includes('anthropic.com/api/oauth/profile')) {
-    body = { email: 'research@example.com', organization_name: 'Research Team' };
+    body =
+      authIndex === 'claude-team-01'
+        ? { account: { has_claude_max: true } }
+        : authIndex === 'claude-research-02'
+          ? { account: { has_claude_pro: true } }
+          : { email: 'research@example.com', organization_name: 'Research Team' };
   } else if (requestUrl.includes('anthropic.com/api/oauth/usage')) {
-    body = {
-      five_hour: { utilization: 44, resets_at: new Date(now() + 2 * hour).toISOString() },
-      seven_day: { utilization: 31, resets_at: new Date(now() + 3 * day).toISOString() },
-      seven_day_sonnet: null,
-      seven_day_opus: null,
-      limits: [
-        {
-          kind: 'session',
-          percent: 44,
-          resets_at: new Date(now() + 2 * hour).toISOString(),
-        },
-        {
-          kind: 'weekly_all',
-          percent: 31,
-          resets_at: new Date(now() + 3 * day).toISOString(),
-        },
-        {
-          kind: 'weekly_scoped',
-          percent: 74,
-          resets_at: new Date(now() + 2 * day + 9 * hour).toISOString(),
-          scope: { model: { display_name: 'Sonnet' } },
-        },
-      ],
-      extra_usage: {
-        is_enabled: true,
-        monthly_limit: 20_000,
-        used_credits: 4_200,
-        utilization: 21,
-      },
+    const fiveHour = {
+      utilization: authIndex === 'claude-team-01' ? 44 : 18,
+      resets_at: new Date(now() + 2 * hour).toISOString(),
     };
+    const sevenDay = {
+      utilization: authIndex === 'claude-team-01' ? 31 : 22,
+      resets_at: new Date(now() + 3 * day).toISOString(),
+    };
+    body =
+      authIndex === 'claude-team-01'
+        ? {
+            limits: [
+              {
+                kind: 'session',
+                group: 'session',
+                percent: fiveHour.utilization,
+                resets_at: fiveHour.resets_at,
+                scope: null,
+                is_active: true,
+              },
+              {
+                kind: 'weekly_all',
+                group: 'weekly',
+                percent: sevenDay.utilization,
+                resets_at: sevenDay.resets_at,
+                scope: null,
+                is_active: true,
+              },
+              {
+                kind: 'weekly_scoped',
+                group: 'weekly',
+                percent: 78,
+                resets_at: new Date(now() + 4 * day).toISOString(),
+                scope: { model: { display_name: 'Demo Model A' } },
+                is_active: true,
+              },
+              {
+                kind: 'model_scoped',
+                group: 'weekly',
+                percent: 12,
+                resets_at: new Date(now() + 4 * day).toISOString(),
+                scope: { model: { displayName: 'Demo Model B' } },
+                is_active: false,
+              },
+              {
+                kind: 'model_scoped',
+                group: 'weekly',
+                percent: 42,
+                resets_at: new Date(now() + 5 * day).toISOString(),
+                scope: { model: { displayName: 'Demo Model B' } },
+                is_active: false,
+              },
+            ],
+          }
+        : authIndex === 'claude-research-02'
+          ? {
+              five_hour: fiveHour,
+              seven_day: sevenDay,
+              seven_day_sonnet: {
+                utilization: 74,
+                resets_at: new Date(now() + 2 * day + 9 * hour).toISOString(),
+              },
+            }
+          : authIndex === 'claude-extra-usage-03'
+            ? {
+                five_hour: fiveHour,
+                seven_day: sevenDay,
+                extra_usage: {
+                  is_enabled: true,
+                  monthly_limit: 20_000,
+                  used_credits: 4_200,
+                  utilization: 21,
+                },
+              }
+            : {
+                five_hour: fiveHour,
+                seven_day: sevenDay,
+              };
   } else if (requestUrl.includes('api.kimi.com')) {
     body = {
       usage: {

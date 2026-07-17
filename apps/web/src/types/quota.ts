@@ -220,26 +220,25 @@ export interface ClaudeUsageWindow {
   resets_at: string;
 }
 
-export interface ClaudeStructuredLimit {
-  kind?: string;
-  percent?: number | string | null;
-  utilization?: number | string | null;
-  resets_at?: string;
-  reset_at?: string;
-  scope?: {
-    model?: {
-      display_name?: string;
-      displayName?: string;
-      name?: string;
-    } | null;
-  } | null;
-}
-
 export interface ClaudeExtraUsage {
   is_enabled: boolean;
   monthly_limit: number;
   used_credits: number;
   utilization: number | null;
+}
+
+export interface ClaudeUsageLimit {
+  kind?: unknown;
+  group?: unknown;
+  percent?: unknown;
+  utilization?: unknown;
+  resets_at?: unknown;
+  resetsAt?: unknown;
+  reset_at?: unknown;
+  resetAt?: unknown;
+  scope?: unknown;
+  is_active?: unknown;
+  isActive?: unknown;
 }
 
 export interface ClaudeUsagePayload {
@@ -250,7 +249,7 @@ export interface ClaudeUsagePayload {
   seven_day_sonnet?: ClaudeUsageWindow | null;
   seven_day_cowork?: ClaudeUsageWindow | null;
   iguana_necktie?: ClaudeUsageWindow | null;
-  limits?: ClaudeStructuredLimit[] | null;
+  limits?: ClaudeUsageLimit[] | null;
   extra_usage?: ClaudeExtraUsage | null;
 }
 
@@ -537,6 +536,13 @@ export interface XaiBillingDiagnostic {
   message: string;
 }
 
+export interface XaiOfficialApiHealth {
+  source: 'api.x.ai/v1/me';
+  userId: string | null;
+  teamId: string | null;
+  teamBlocked: boolean | null;
+}
+
 export interface XaiBillingSummary {
   periodType: XaiBillingPeriodType;
   usagePercent: number | null;
@@ -552,6 +558,7 @@ export interface XaiBillingSummary {
   billingPeriodStart?: string;
   billingPeriodEnd?: string;
   usedPercent: number | null;
+  officialApiHealth?: XaiOfficialApiHealth;
   partial?: boolean;
   diagnostics?: XaiBillingDiagnostic[];
 }

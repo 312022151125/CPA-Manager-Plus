@@ -331,4 +331,42 @@ describe('accountQuotaDisplayWindows', () => {
       source: 'xai',
     });
   });
+
+  it('does not render billing windows for official API identity health', () => {
+    const stores = {
+      ...emptyStores(),
+      xaiQuota: {
+        'paid-xai.json': {
+          status: 'success',
+          billing: {
+            periodType: 'unknown',
+            usagePercent: null,
+            productUsage: [],
+            monthlyLimitCents: null,
+            usedCents: null,
+            includedUsedCents: null,
+            onDemandCapCents: null,
+            onDemandUsedCents: null,
+            onDemandUsedPercent: null,
+            usedPercent: null,
+            officialApiHealth: {
+              source: 'api.x.ai/v1/me',
+              userId: 'user-1',
+              teamId: 'team-1',
+              teamBlocked: false,
+            },
+          },
+        },
+      },
+    } satisfies AccountQuotaStores;
+    const row = buildRow({ name: 'paid-xai.json', type: 'xai' }, stores);
+
+    expect(
+      buildAccountQuotaDisplayWindows(row, {
+        stores,
+        translateQuotaWindowLabel,
+        t,
+      })
+    ).toEqual([]);
+  });
 });

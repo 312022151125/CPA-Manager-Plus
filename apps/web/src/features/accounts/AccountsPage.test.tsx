@@ -361,9 +361,9 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
 vi.mock('@/features/authFiles/hooks/useAuthFilesOauth', () => ({
   useAuthFilesOauth: () => ({
     excluded: {},
-    excludedError: null,
+    excludedError: 'ready',
     modelAlias: {},
-    modelAliasError: null,
+    modelAliasError: 'ready',
     allProviderModels: {},
     providerList: ['codex'],
     loadExcluded: mocks.loadExcluded,

@@ -3961,8 +3961,9 @@ export function AccountsPage() {
       <div className={styles.oauthCardStack}>
         <OAuthExcludedCard
           disableControls={disableControls}
-          excludedError={oauthState.excludedError}
+          loadState={oauthState.excludedError}
           excluded={oauthState.excluded}
+          onRetry={loadOauthExcluded}
           onAdd={() => openOauthExcludedEditor()}
           onEdit={openOauthExcludedEditor}
           onDelete={oauthState.deleteExcluded}
@@ -3974,8 +3975,9 @@ export function AccountsPage() {
           onAdd={() => openOauthModelAliasEditor()}
           onEditProvider={openOauthModelAliasEditor}
           onDeleteProvider={oauthState.deleteModelAlias}
-          modelAliasError={oauthState.modelAliasError}
+          loadState={oauthState.modelAliasError}
           modelAlias={oauthState.modelAlias}
+          onRetry={loadOauthModelAlias}
           allProviderModels={oauthState.allProviderModels}
           onUpdate={oauthState.handleMappingUpdate}
           onDeleteLink={oauthState.handleDeleteLink}

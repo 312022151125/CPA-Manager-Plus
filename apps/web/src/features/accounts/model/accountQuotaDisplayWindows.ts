@@ -472,7 +472,7 @@ const buildXaiQuotaDisplayWindows = (
   options: BuildAccountQuotaDisplayWindowsOptions
 ): AccountQuotaDisplayWindow[] => {
   const billing = options.stores.xaiQuota[row.fileName]?.billing;
-  if (!billing) return [];
+  if (!billing || billing.officialApiHealth) return [];
 
   const resetLabel = billing.billingPeriodEnd
     ? formatDisplayResetTime(billing.billingPeriodEnd)

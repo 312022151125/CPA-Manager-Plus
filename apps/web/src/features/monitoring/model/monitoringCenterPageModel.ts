@@ -55,6 +55,7 @@ import {
   getHeaderSnapshotUsedPercent,
   hasUsageHeaderQuotaSignal,
 } from '@/utils/usageHeaderSnapshots';
+import { formatXaiBillingDiagnostics } from '@/utils/quota/xaiPresentation';
 import {
   calculateCacheHitRateFromTotals,
   formatCompactNumber,
@@ -1313,27 +1314,24 @@ export const requestAccountQuota = async (
     }
     case 'xai': {
       const billing = await fetchXaiQuota(target.file, t);
-      const metaLabels: string[] =
-        billing.onDemandCapCents !== null
-          ? [`${t('xai_quota.on_demand_cap')}: ${formatXaiCurrency(billing.onDemandCapCents)}`]
-          : [];
+      const metaLabels: string[] = [];
+      if (billing.officialApiHealth) {
+        metaLabels.push(t('xai_quota.official_api_health'));
+      } else if (billing.onDemandCapCents !== null) {
+        metaLabels.push(
+          `${t('xai_quota.on_demand_cap')}: ${formatXaiCurrency(billing.onDemandCapCents)}`
+        );
+      }
       if (billing.partial) {
         metaLabels.push(
           t('xai_quota.partial_data', {
-            details:
-              billing.diagnostics
-                ?.map((item) =>
-                  item.statusCode
-                    ? `${item.classification} (HTTP ${item.statusCode})`
-                    : item.classification
-                )
-                .join(', ') || t('xai_quota.partial_unknown'),
+            details: formatXaiBillingDiagnostics(billing.diagnostics, t),
           })
         );
       }
       return stampAccountQuotaFetchTime({
         ...buildBaseAccountQuotaEntry(target, t, metaLabels),
-        windows: buildXaiAccountQuotaWindows(billing, t),
+        windows: billing.officialApiHealth ? [] : buildXaiAccountQuotaWindows(billing, t),
       });
     }
     case 'codex':

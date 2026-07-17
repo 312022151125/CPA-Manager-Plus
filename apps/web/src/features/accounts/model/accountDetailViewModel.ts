@@ -365,6 +365,12 @@ const buildQuotaDiagnostics = (
     ),
     field('error', 'common.error', row.quota.error),
     field('errorGuidance', 'accounts.detail_quota_error_guidance', quotaErrorGuidance, 'i18n'),
+    field(
+      'xaiOfficialApiHealth',
+      'xai_quota.official_api_plan',
+      xaiBilling?.officialApiHealth ? 'xai_quota.official_api_health' : null,
+      'i18n'
+    ),
     booleanField('xaiPartial', 'accounts.detail_xai_partial', xaiBilling?.partial),
     ...(xaiBilling?.diagnostics ?? []).map((diagnostic, index) =>
       field(

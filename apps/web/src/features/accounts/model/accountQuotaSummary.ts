@@ -248,6 +248,9 @@ const quotaFromXaiBilling = (
   if (!billing) {
     return quotaFromRemainingWindows([{ remainingPercent: null }], planType);
   }
+  if (billing.officialApiHealth) {
+    return quotaFromRemainingWindows([{ remainingPercent: null }], planType);
+  }
 
   const resetLabel = billing.billingPeriodEnd ?? '-';
   const periodResetLabel = billing.periodEnd ?? resetLabel;

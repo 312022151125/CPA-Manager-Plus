@@ -422,6 +422,43 @@ describe('accountRows', () => {
     expect(rows[0].quota.status).toBe('low');
   });
 
+  it('keeps an official-API-only xAI credential available without inventing quota', () => {
+    const rows = buildAccountRows([{ name: 'paid-xai.json', type: 'xai' }], {
+      ...emptyStores(),
+      xaiQuota: {
+        'paid-xai.json': {
+          status: 'success',
+          billing: {
+            periodType: 'unknown',
+            usagePercent: null,
+            productUsage: [],
+            monthlyLimitCents: null,
+            usedCents: null,
+            includedUsedCents: null,
+            onDemandCapCents: null,
+            onDemandUsedCents: null,
+            onDemandUsedPercent: null,
+            usedPercent: null,
+            officialApiHealth: {
+              source: 'api.x.ai/v1/me',
+              userId: 'user-1',
+              teamId: 'team-1',
+              teamBlocked: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(rows[0].quota).toMatchObject({
+      status: 'unknown',
+      remainingPercent: null,
+      usedPercent: null,
+    });
+    expect(rows[0].quota).not.toHaveProperty('error');
+    expect(buildAccountMetrics(rows).available).toBe(1);
+  });
+
   it('uses xAI weekly credits when they are the tightest quota window', () => {
     const rows = buildAccountRows([{ name: 'xai.json', type: 'xai' }], {
       ...emptyStores(),

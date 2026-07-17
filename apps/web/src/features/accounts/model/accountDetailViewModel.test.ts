@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AuthFileItem, CodexQuotaState } from '@/types';
+import type { AuthFileItem, CodexQuotaState, XaiQuotaState } from '@/types';
 import type {
   AccountActionCandidate,
   MonitoringAccountHistoryItem,
@@ -197,6 +197,42 @@ describe('accountDetailViewModel', () => {
     expect(viewModel.strategy.actionCandidates[0]).toMatchObject({
       id: 4,
       reason: 'file-level fallback',
+    });
+  });
+
+  it('exposes xAI official API reachability without billing details', () => {
+    const xaiQuota: XaiQuotaState = {
+      status: 'success',
+      billing: {
+        periodType: 'unknown',
+        usagePercent: null,
+        productUsage: [],
+        monthlyLimitCents: null,
+        usedCents: null,
+        includedUsedCents: null,
+        onDemandCapCents: null,
+        onDemandUsedCents: null,
+        onDemandUsedPercent: null,
+        usedPercent: null,
+        officialApiHealth: {
+          source: 'api.x.ai/v1/me',
+          userId: 'user-1',
+          teamId: 'team-1',
+          teamBlocked: false,
+        },
+      },
+    };
+
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({ provider: 'xai', fileName: 'paid-xai.json' }),
+      { xaiQuota }
+    );
+
+    expect(viewModel.quota.diagnostics).toContainEqual({
+      key: 'xaiOfficialApiHealth',
+      labelKey: 'xai_quota.official_api_plan',
+      value: 'xai_quota.official_api_health',
+      valueKind: 'i18n',
     });
   });
 
