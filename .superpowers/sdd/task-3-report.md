@@ -18,7 +18,7 @@ Generic `/quota` UI now offers `expiry-asc` / `expiry-desc` sort modes. `QuotaSe
 Mirrors plan-tier known-first pattern:
 
 1. Call `config.getPlanExpiryAtMs?.(file, getDisplayQuota(file))`.
-2. Known = non-null finite number from accessor.
+2. Known = `Number.isFinite(expiry)` only (`null` / `undefined` / `NaN` / `±Infinity` are missing).
 3. Missing always after known (both directions).
 4. `expiry-asc`: earliest first; `expiry-desc`: latest first.
 5. Equal known / all missing → `compareFileName`.
@@ -83,6 +83,8 @@ In `apps/web/src/components/quota/QuotaSection.test.tsx`:
    - late > mid-a > mid-b > early > zebra(missing)
 4. **`falls back to filename order when config lacks getPlanExpiryAtMs`**
    - pure `compareFileName` under expiry mode
+5. **`treats non-finite accessor results as missing in both directions`**
+   - accessor returns `NaN` / `Infinity`; both sort after sole finite, then filename
 
 In `apps/web/src/features/quota/quotaPageUiState.test.ts`:
 
@@ -114,3 +116,28 @@ In `apps/web/src/features/quota/quotaPageUiState.test.ts`:
 
 - `quota_management.sort_expiry_asc` / `sort_expiry_desc` keys will show raw i18n keys until locale files updated.
 - Plan-branch early `return` is a tiny structural tweak beyond the minimum expiry branch; equivalent for existing modes.
+
+## Review fix (post-commit findings)
+
+Findings addressed before further work:
+
+1. **Known-expiry guard**: committed comparator used `!== null && !== undefined`. Worktree now uses `Number.isFinite(...)` so `NaN` / `±Infinity` are missing. Regression test: `treats non-finite accessor results as missing in both directions`.
+2. **QuotaPage `defaultValue`**: temporary unrequested i18n fallback labels removed. Sort options remain plain `t('quota_management.sort_expiry_*')` only; localization keys stay Task 6.
+
+### Focused tests after fix
+
+Command:
+
+```sh
+cd apps/web && bunx vitest run src/components/quota/QuotaSection.test.tsx src/features/quota/quotaPageUiState.test.ts
+```
+
+Result:
+
+```text
+ Test Files  2 passed (2)
+      Tests  19 passed (19)
+   Duration  1.48s
+```
+
+Preserved: known-first, direction, filename fallback, existing sort modes, plan-tier ordering.

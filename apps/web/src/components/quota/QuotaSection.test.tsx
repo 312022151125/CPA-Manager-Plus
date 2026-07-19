@@ -638,4 +638,39 @@ describe('QuotaSection expiry sorting', () => {
       'zebra.json',
     ]);
   });
+
+  it('treats non-finite accessor results as missing in both directions', () => {
+    const files: AuthFileItem[] = [
+      { name: 'zeta.json', type: 'codex' },
+      { name: 'finite.json', type: 'codex' },
+      { name: 'alpha.json', type: 'codex' },
+    ];
+    const nonFiniteConfig: QuotaConfig<TestQuotaState, TestQuotaData> = {
+      ...testConfig,
+      getPlanExpiryAtMs: (file) => {
+        if (file.name === 'finite.json') return midMs;
+        if (file.name === 'alpha.json') return Number.NaN;
+        if (file.name === 'zeta.json') return Number.POSITIVE_INFINITY;
+        return null;
+      },
+    };
+
+    const asc = renderSection({
+      config: nonFiniteConfig,
+      files,
+      sortMode: 'expiry-asc',
+      accountDisplayMode: 'full',
+      viewMode: 'all',
+    });
+    expect(getCardFileNames(asc)).toEqual(['finite.json', 'alpha.json', 'zeta.json']);
+
+    const desc = renderSection({
+      config: nonFiniteConfig,
+      files,
+      sortMode: 'expiry-desc',
+      accountDisplayMode: 'full',
+      viewMode: 'all',
+    });
+    expect(getCardFileNames(desc)).toEqual(['finite.json', 'alpha.json', 'zeta.json']);
+  });
 });

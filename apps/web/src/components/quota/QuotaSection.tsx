@@ -276,14 +276,16 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
       sortedFiles.sort((left, right) => {
         const leftExpiry = config.getPlanExpiryAtMs?.(left, getDisplayQuota(left));
         const rightExpiry = config.getPlanExpiryAtMs?.(right, getDisplayQuota(right));
-        const leftKnown = leftExpiry !== null && leftExpiry !== undefined;
-        const rightKnown = rightExpiry !== null && rightExpiry !== undefined;
+        const leftKnown = Number.isFinite(leftExpiry);
+        const rightKnown = Number.isFinite(rightExpiry);
 
         if (leftKnown || rightKnown) {
           if (!leftKnown) return 1;
           if (!rightKnown) return -1;
-          const expiryDiff =
-            sortMode === 'expiry-desc' ? rightExpiry - leftExpiry : leftExpiry - rightExpiry;
+          // Number.isFinite narrows for runtime, not TS optional chaining.
+          const leftMs = leftExpiry as number;
+          const rightMs = rightExpiry as number;
+          const expiryDiff = sortMode === 'expiry-desc' ? rightMs - leftMs : leftMs - rightMs;
           if (expiryDiff !== 0) return expiryDiff;
         }
 
