@@ -54,6 +54,8 @@ describe('quotaPageUiState', () => {
 
   it('normalizes enum-like fields', () => {
     expect(normalizeQuotaSortMode('plan-desc')).toBe('plan-desc');
+    expect(normalizeQuotaSortMode('expiry-asc')).toBe('expiry-asc');
+    expect(normalizeQuotaSortMode('expiry-desc')).toBe('expiry-desc');
     expect(normalizeQuotaSortMode('unknown')).toBe('default');
     expect(normalizeQuotaSectionViewMode('all')).toBe('all');
     expect(normalizeQuotaSectionViewMode('bad')).toBe('paged');
@@ -61,6 +63,33 @@ describe('quotaPageUiState', () => {
     expect(normalizeQuotaAccountDisplayMode('visible')).toBe('full');
     expect(normalizeQuotaSectionType('xai')).toBe('xai');
     expect(normalizeQuotaSectionType('bad')).toBeNull();
+  });
+
+  it('persists valid expiry sort modes and rejects unknown', () => {
+    expect(
+      normalizeQuotaPageUiState({
+        searchQuery: 'soon',
+        sortMode: 'expiry-asc',
+        sectionViewModes: {},
+        accountDisplayModes: {},
+      }).sortMode
+    ).toBe('expiry-asc');
+    expect(
+      normalizeQuotaPageUiState({
+        searchQuery: 'late',
+        sortMode: 'expiry-desc',
+        sectionViewModes: {},
+        accountDisplayModes: {},
+      }).sortMode
+    ).toBe('expiry-desc');
+    expect(
+      normalizeQuotaPageUiState({
+        searchQuery: '',
+        sortMode: 'expiry-soonest',
+        sectionViewModes: {},
+        accountDisplayModes: {},
+      }).sortMode
+    ).toBe('default');
   });
 
   it('normalizes page state and drops unknown sections', () => {

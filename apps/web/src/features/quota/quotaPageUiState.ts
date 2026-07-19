@@ -24,6 +24,8 @@ const QUOTA_SORT_MODE_SET = new Set<QuotaSortMode>([
   'name-asc',
   'plan-desc',
   'plan-asc',
+  'expiry-asc',
+  'expiry-desc',
 ]);
 const QUOTA_SECTION_TYPE_SET = new Set<QuotaSectionType>([
   'antigravity',

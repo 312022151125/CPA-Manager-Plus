@@ -269,6 +269,26 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
 
         return compareFileName(left, right);
       });
+      return sortedFiles;
+    }
+
+    if (sortMode === 'expiry-asc' || sortMode === 'expiry-desc') {
+      sortedFiles.sort((left, right) => {
+        const leftExpiry = config.getPlanExpiryAtMs?.(left, getDisplayQuota(left));
+        const rightExpiry = config.getPlanExpiryAtMs?.(right, getDisplayQuota(right));
+        const leftKnown = leftExpiry !== null && leftExpiry !== undefined;
+        const rightKnown = rightExpiry !== null && rightExpiry !== undefined;
+
+        if (leftKnown || rightKnown) {
+          if (!leftKnown) return 1;
+          if (!rightKnown) return -1;
+          const expiryDiff =
+            sortMode === 'expiry-desc' ? rightExpiry - leftExpiry : leftExpiry - rightExpiry;
+          if (expiryDiff !== 0) return expiryDiff;
+        }
+
+        return compareFileName(left, right);
+      });
     }
 
     return sortedFiles;

@@ -69,7 +69,9 @@ export function QuotaPage() {
       { value: 'default', label: t('quota_management.sort_default') },
       { value: 'name-asc', label: t('quota_management.sort_name_asc') },
       { value: 'plan-desc', label: t('quota_management.sort_plan_desc') },
-      { value: 'plan-asc', label: t('quota_management.sort_plan_asc') }
+      { value: 'plan-asc', label: t('quota_management.sort_plan_asc') },
+      { value: 'expiry-asc', label: t('quota_management.sort_expiry_asc') },
+      { value: 'expiry-desc', label: t('quota_management.sort_expiry_desc') },
     ],
     [t]
   );

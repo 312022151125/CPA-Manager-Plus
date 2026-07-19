@@ -2,7 +2,8 @@ import { act, useEffect } from 'react';
 import { create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthFileItem } from '@/types';
-import type { QuotaConfig } from './quotaConfigs';
+import type { QuotaConfig, QuotaSortMode } from './quotaConfigs';
+import { QuotaCard } from './QuotaCard';
 import { QuotaSection } from './QuotaSection';
 import { useQuotaLoader } from './useQuotaLoader';
 
@@ -13,6 +14,7 @@ type TestQuotaState = {
   errorStatus?: number;
   failedAtMs?: number;
   rateLimitResetCreditsAvailableCount?: number | null;
+  planExpiresAtMs?: number | null;
   authFileKey?: string;
 };
 
@@ -167,6 +169,9 @@ const renderSection = (
   options: {
     config?: QuotaConfig<TestQuotaState, TestQuotaData>;
     files?: AuthFileItem[];
+    sortMode?: QuotaSortMode;
+    accountDisplayMode?: 'masked' | 'full';
+    viewMode?: 'paged' | 'all';
   } = {}
 ) => {
   let renderer!: ReactTestRenderer;
@@ -177,12 +182,17 @@ const renderSection = (
         files={options.files ?? [testFile]}
         loading={false}
         disabled={false}
-        accountDisplayMode="masked"
+        sortMode={options.sortMode}
+        viewMode={options.viewMode}
+        accountDisplayMode={options.accountDisplayMode ?? 'masked'}
       />
     );
   });
   return renderer;
 };
+
+const getCardFileNames = (renderer: ReactTestRenderer): string[] =>
+  renderer.root.findAllByType(QuotaCard).map((card) => (card.props.item as AuthFileItem).name);
 
 const findButtonByText = (renderer: ReactTestRenderer, text: string) => {
   const button = renderer.root.findAllByType('button').find((node) => getText(node).includes(text));
@@ -536,5 +546,96 @@ describe('QuotaSection account display mode', () => {
     act(() => {
       renderer.unmount();
     });
+  });
+});
+
+describe('QuotaSection expiry sorting', () => {
+  const earlyMs = Date.parse('2026-01-01T00:00:00.000Z');
+  const midMs = Date.parse('2026-06-01T00:00:00.000Z');
+  const lateMs = Date.parse('2026-12-01T00:00:00.000Z');
+
+  const expiryFiles: AuthFileItem[] = [
+    { name: 'zebra.json', type: 'codex' },
+    { name: 'mid-b.json', type: 'codex' },
+    { name: 'late.json', type: 'codex' },
+    { name: 'early.json', type: 'codex' },
+    { name: 'mid-a.json', type: 'codex' },
+  ];
+
+  const expiryConfig: QuotaConfig<TestQuotaState, TestQuotaData> = {
+    ...testConfig,
+    getPlanExpiryAtMs: (_file, quota) => {
+      const ms = quota?.planExpiresAtMs;
+      return typeof ms === 'number' && Number.isFinite(ms) ? ms : null;
+    },
+  };
+
+  beforeEach(() => {
+    mocks.fetchQuota.mockReset();
+    mocks.resetQuota.mockReset();
+    mocks.showConfirmation.mockReset();
+    mocks.showNotification.mockReset();
+    mocks.quotaStoreState.codexQuota = {
+      'zebra.json': { ...successQuota },
+      'mid-b.json': { ...successQuota, planExpiresAtMs: midMs },
+      'late.json': { ...successQuota, planExpiresAtMs: lateMs },
+      'early.json': { ...successQuota, planExpiresAtMs: earlyMs },
+      'mid-a.json': { ...successQuota, planExpiresAtMs: midMs },
+    };
+    (mocks.quotaStoreState.setCodexQuota as ReturnType<typeof vi.fn>).mockClear();
+  });
+
+  it('sorts known expiries ascending with missing last and filename ties', () => {
+    const renderer = renderSection({
+      config: expiryConfig,
+      files: expiryFiles,
+      sortMode: 'expiry-asc',
+      accountDisplayMode: 'full',
+      viewMode: 'all',
+    });
+
+    expect(getCardFileNames(renderer)).toEqual([
+      'early.json',
+      'mid-a.json',
+      'mid-b.json',
+      'late.json',
+      'zebra.json',
+    ]);
+  });
+
+  it('sorts known expiries descending with missing last and filename ties', () => {
+    const renderer = renderSection({
+      config: expiryConfig,
+      files: expiryFiles,
+      sortMode: 'expiry-desc',
+      accountDisplayMode: 'full',
+      viewMode: 'all',
+    });
+
+    expect(getCardFileNames(renderer)).toEqual([
+      'late.json',
+      'mid-a.json',
+      'mid-b.json',
+      'early.json',
+      'zebra.json',
+    ]);
+  });
+
+  it('falls back to filename order when config lacks getPlanExpiryAtMs', () => {
+    const renderer = renderSection({
+      config: testConfig,
+      files: expiryFiles,
+      sortMode: 'expiry-asc',
+      accountDisplayMode: 'full',
+      viewMode: 'all',
+    });
+
+    expect(getCardFileNames(renderer)).toEqual([
+      'early.json',
+      'late.json',
+      'mid-a.json',
+      'mid-b.json',
+      'zebra.json',
+    ]);
   });
 });
