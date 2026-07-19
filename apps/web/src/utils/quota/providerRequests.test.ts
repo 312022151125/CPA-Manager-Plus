@@ -198,6 +198,44 @@ describe('fetchCodexQuota', () => {
     expect(result.rateLimitResetCredits).toEqual([]);
     expect(result.rateLimitResetCreditsError).toBe('codex_quota.reset_credits_invalid_payload');
   });
+
+  it.each([
+    ['subscription_active_until', { subscription_active_until: '  2026-08-01T12:34:56.000Z  ' }],
+    ['subscriptionActiveUntil', { subscriptionActiveUntil: '  2026-08-01T12:34:56.000Z  ' }],
+  ] as const)('maps %s payload alias to subscriptionActiveUntil', async (_alias, field) => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          plan_type: 'plus',
+          ...field,
+        },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          available_count: 0,
+          credits: [],
+        },
+      });
+
+    const result = await fetchCodexQuota(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    expect(result.subscriptionActiveUntil).toBe('2026-08-01T12:34:56.000Z');
+  });
 });
 
 describe('fetchClaudeQuota', () => {
