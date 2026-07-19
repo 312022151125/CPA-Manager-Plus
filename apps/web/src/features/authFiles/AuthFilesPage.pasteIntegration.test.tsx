@@ -212,15 +212,30 @@ vi.mock('@/features/monitoring/codexInspection', () => ({
   loadCodexInspectionLastRun: () => mocks.lastCodexInspectionLastRun,
 }));
 
-vi.mock('@/features/authFiles/uiState', () => ({
-  normalizeAuthFilesSortMode: (value: string) => (value === 'default' ? 'default' : null),
-  normalizeAuthFilesViewMode: (value: string) =>
-    value === 'diagram' || value === 'list' ? value : null,
-  readAuthFilesUiState: () => null,
-  readPersistedAuthFilesCompactMode: () => null,
-  writeAuthFilesUiState: vi.fn(),
-  writePersistedAuthFilesCompactMode: vi.fn(),
-}));
+vi.mock('@/features/authFiles/uiState', () => {
+  const AUTH_FILES_SORT_MODES = new Set([
+    'default',
+    'name-asc',
+    'note-asc',
+    'note-desc',
+    'priority-desc',
+    'priority-asc',
+    'plan-desc',
+    'plan-asc',
+    'expiry-asc',
+    'expiry-desc',
+  ]);
+  return {
+    normalizeAuthFilesSortMode: (value: string) =>
+      AUTH_FILES_SORT_MODES.has(value) ? value : null,
+    normalizeAuthFilesViewMode: (value: string) =>
+      value === 'diagram' || value === 'list' ? value : null,
+    readAuthFilesUiState: () => null,
+    readPersistedAuthFilesCompactMode: () => null,
+    writeAuthFilesUiState: vi.fn(),
+    writePersistedAuthFilesCompactMode: vi.fn(),
+  };
+});
 
 vi.mock('@/features/authFiles/components/AuthFileCard', () => ({
   AuthFileCard: (props: {
@@ -731,6 +746,90 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
       );
       expect(renderedCards.map((node) => node.props['data-auth-card'])).toEqual([
         'team-codex.json::team',
+      ]);
+    });
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
+  it('orders Codex rows by plan expiry with missing last in both directions', async () => {
+    mocks.list.mockResolvedValue({
+      files: [
+        { name: 'zebra-codex.json', type: 'codex', authIndex: 'z' },
+        { name: 'early-codex.json', type: 'codex', authIndex: 'e' },
+        { name: 'late-codex.json', type: 'codex', authIndex: 'l' },
+        { name: 'alpha-qwen.json', type: 'qwen' },
+      ],
+    });
+    mocks.codexQuota = {
+      'early-codex.json::e': {
+        status: 'success',
+        windows: [],
+        subscriptionActiveUntil: '2026-03-01T00:00:00.000Z',
+        authFileKey: 'early-codex.json::e',
+      },
+      'late-codex.json::l': {
+        status: 'success',
+        windows: [],
+        subscriptionActiveUntil: '2026-09-01T00:00:00.000Z',
+        authFileKey: 'late-codex.json::l',
+      },
+      'zebra-codex.json::z': {
+        status: 'success',
+        windows: [],
+        subscriptionActiveUntil: null,
+        authFileKey: 'zebra-codex.json::z',
+      },
+    };
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      const renderedCards = renderer!.root.findAll(
+        (node) => typeof node.props['data-auth-card'] === 'string'
+      );
+      expect(renderedCards).toHaveLength(4);
+    });
+
+    const sortSelect = renderer!.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'auth_files.sort_label');
+    if (!sortSelect) throw new Error('Auth Files sort select not found');
+
+    act(() => {
+      sortSelect.props.onChange('expiry-asc');
+    });
+
+    await vi.waitFor(() => {
+      const renderedCards = renderer!.root.findAll(
+        (node) => typeof node.props['data-auth-card'] === 'string'
+      );
+      expect(renderedCards.map((node) => node.props['data-auth-card'])).toEqual([
+        'early-codex.json::e',
+        'late-codex.json::l',
+        'alpha-qwen.json::-',
+        'zebra-codex.json::z',
+      ]);
+    });
+
+    act(() => {
+      sortSelect.props.onChange('expiry-desc');
+    });
+
+    await vi.waitFor(() => {
+      const renderedCards = renderer!.root.findAll(
+        (node) => typeof node.props['data-auth-card'] === 'string'
+      );
+      expect(renderedCards.map((node) => node.props['data-auth-card'])).toEqual([
+        'late-codex.json::l',
+        'early-codex.json::e',
+        'alpha-qwen.json::-',
+        'zebra-codex.json::z',
       ]);
     });
 

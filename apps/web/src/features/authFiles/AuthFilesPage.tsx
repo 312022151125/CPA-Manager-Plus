@@ -1247,6 +1247,8 @@ export function AuthFilesPage() {
       { value: 'priority-asc', label: t('auth_files.sort_priority_asc') },
       { value: 'plan-desc', label: t('auth_files.sort_plan_desc') },
       { value: 'plan-asc', label: t('auth_files.sort_plan_asc') },
+      { value: 'expiry-asc', label: t('auth_files.sort_expiry_asc') },
+      { value: 'expiry-desc', label: t('auth_files.sort_expiry_desc') },
     ],
     [t]
   );
@@ -1387,6 +1389,25 @@ export function AuthFilesPage() {
           if (!rightKnown) return -1;
           const rankDiff = sortMode === 'plan-desc' ? rightRank - leftRank : leftRank - rightRank;
           if (rankDiff !== 0) return rankDiff;
+        }
+
+        return compareAuthFileName(a, b);
+      });
+    } else if (sortMode === 'expiry-asc' || sortMode === 'expiry-desc') {
+      copy.sort((a, b) => {
+        const leftExpiry = CODEX_CONFIG.getPlanExpiryAtMs?.(a, getDisplayCodexQuota(a));
+        const rightExpiry = CODEX_CONFIG.getPlanExpiryAtMs?.(b, getDisplayCodexQuota(b));
+        const leftKnown = Number.isFinite(leftExpiry);
+        const rightKnown = Number.isFinite(rightExpiry);
+
+        if (leftKnown || rightKnown) {
+          if (!leftKnown) return 1;
+          if (!rightKnown) return -1;
+          // Number.isFinite narrows for runtime, not TS optional chaining.
+          const leftMs = leftExpiry as number;
+          const rightMs = rightExpiry as number;
+          const expiryDiff = sortMode === 'expiry-desc' ? rightMs - leftMs : leftMs - rightMs;
+          if (expiryDiff !== 0) return expiryDiff;
         }
 
         return compareAuthFileName(a, b);
