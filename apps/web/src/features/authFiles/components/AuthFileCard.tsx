@@ -40,6 +40,7 @@ import { getAccountAutomationPresentation } from '@/features/authFiles/model/acc
 import { getQuotaCooldownPresentation } from '@/features/authFiles/model/quotaCooldownPresentation';
 import type { AccountActionCandidate, QuotaCooldownInfo } from '@/services/api/usageService';
 import { AuthFileQuotaSection } from '@/features/authFiles/components/AuthFileQuotaSection';
+import { CODEX_CONFIG } from '@/components/quota/quotaConfigs';
 import styles from '@/features/authFiles/AuthFilesPage.module.scss';
 
 const HEALTHY_STATUS_MESSAGES = new Set(['ok', 'healthy', 'ready', 'success', 'available']);
@@ -218,6 +219,20 @@ export function AuthFileCard(props: AuthFileCardProps) {
       : hasStatusWarning
         ? styles.stateBadgeWarning
         : styles.stateBadgeActive;
+  const codexSubscriptionExpiryAtMs =
+    resolvedProvider === 'codex'
+      ? (CODEX_CONFIG.getPlanExpiryAtMs?.(file, codexDisplayQuota) ?? null)
+      : null;
+  const codexSubscriptionExpiryLabel =
+    codexSubscriptionExpiryAtMs === null
+      ? ''
+      : new Intl.DateTimeFormat(undefined, {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+        }).format(codexSubscriptionExpiryAtMs);
+  const codexSubscriptionExpiryTitle =
+    codexSubscriptionExpiryAtMs === null ? '' : formatUnixTimestamp(codexSubscriptionExpiryAtMs);
   const codexStatusBadgeClassByTone = {
     danger: styles.codexStatusBadgeDanger,
     warning: styles.codexStatusBadgeWarning,
@@ -254,6 +269,20 @@ export function AuthFileCard(props: AuthFileCardProps) {
                 >
                   {typeLabel}
                 </span>
+                {codexSubscriptionExpiryLabel && (
+                  <span
+                    className={`${styles.codexStatusBadge} ${styles.codexStatusBadgeInfo}`}
+                    title={t('auth_files.codex_subscription_expiry_title', {
+                      defaultValue: `Codex subscription expires ${codexSubscriptionExpiryTitle}`,
+                      date: codexSubscriptionExpiryTitle,
+                    })}
+                  >
+                    {t('auth_files.codex_subscription_enabled_day', {
+                      defaultValue: `Expires ${codexSubscriptionExpiryLabel}`,
+                      date: codexSubscriptionExpiryLabel,
+                    })}
+                  </span>
+                )}
                 <span className={`${styles.stateBadge} ${stateBadgeClass}`}>{stateLabel}</span>
                 {subscriptionBadgeLabel && (
                   <span

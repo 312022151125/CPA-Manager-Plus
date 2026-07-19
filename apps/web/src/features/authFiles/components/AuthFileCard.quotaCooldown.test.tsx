@@ -2,7 +2,8 @@ import { act } from 'react';
 import { create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import type { QuotaCooldownInfo } from '@/services/api/usageService';
-import type { AuthFileItem } from '@/types';
+import { formatUnixTimestamp } from '@/utils/format';
+import type { AuthFileItem, CodexQuotaState } from '@/types';
 import { AuthFileCard } from './AuthFileCard';
 
 vi.mock('react-i18next', () => ({
@@ -45,6 +46,47 @@ const renderCard = (quotaCooldown: QuotaCooldownInfo): ReactTestRenderer => {
     );
   });
   return renderer;
+};
+const renderCodexCard = (codexDisplayQuota: CodexQuotaState): ReactTestRenderer => {
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(
+      <AuthFileCard
+        file={{ name: 'codex-auth.json', type: 'codex', disabled: false }}
+        compact
+        selected={false}
+        resolvedTheme="dark"
+        disableControls={false}
+        deleting={null}
+        statusUpdating={{}}
+        statusBarCache={new Map()}
+        codexDisplayQuota={codexDisplayQuota}
+        onShowModels={vi.fn()}
+        onDownload={vi.fn()}
+        onOpenPrefixProxyEditor={vi.fn()}
+        onDelete={vi.fn()}
+        onToggleStatus={vi.fn()}
+        onToggleSelect={vi.fn()}
+      />
+    );
+  });
+  return renderer;
+};
+
+const findCodexExpiryBadge = (renderer: ReactTestRenderer): ReactTestInstance | undefined =>
+  renderer.root.findAllByType('span').find((node) => {
+    const title = node.props.title;
+    return (
+      typeof title === 'string' && title.startsWith('auth_files.codex_subscription_expiry_title')
+    );
+  });
+const findCodexBadgeRow = (renderer: ReactTestRenderer): ReactTestInstance => {
+  const row = renderer.root.findAllByType('div').find((node) => {
+    const className = node.props.className;
+    return typeof className === 'string' && className.includes('cardBadgeRow');
+  });
+  if (!row) throw new Error('Codex badge row not found');
+  return row;
 };
 
 const findCooldownBadge = (renderer: ReactTestRenderer): ReactTestInstance => {
@@ -105,4 +147,40 @@ describe('AuthFileCard quota cooldown presentation', () => {
 
     expect(badge.props.title).toContain('"disabledAt":"Not set"');
   });
+
+  it('renders Codex expiry beside the Codex badge when expiry is valid', () => {
+    const renderer = renderCodexCard({
+      status: 'success',
+      windows: [],
+      subscriptionActiveUntil: '2026-08-01T12:34:56.000Z',
+    });
+    const badge = findCodexExpiryBadge(renderer);
+    const rowBadges = findCodexBadgeRow(renderer).findAllByType('span');
+    const shortDate = new Intl.DateTimeFormat(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    }).format(Date.parse('2026-08-01T12:34:56.000Z'));
+
+    expect(badge).toBeDefined();
+    expect(rowBadges[0].props.className).toContain('typeBadge');
+    expect(rowBadges[1]).toBe(badge);
+    expect(rowBadges[1].props.className).toContain('codexStatusBadgeInfo');
+    expect(textContent(badge!)).toContain(`Expires ${shortDate}`);
+    expect(badge!.props.title).toContain(
+      formatUnixTimestamp(Date.parse('2026-08-01T12:34:56.000Z'))
+    );
+    expect(rowBadges[2].props.className).toContain('stateBadge');
+  });
+
+  it.each([null, 'not-a-date'] as const)(
+    'omits Codex expiry for %s expiry',
+    (subscriptionActiveUntil) => {
+      const badge = findCodexExpiryBadge(
+        renderCodexCard({ status: 'success', windows: [], subscriptionActiveUntil })
+      );
+
+      expect(badge).toBeUndefined();
+    }
+  );
 });

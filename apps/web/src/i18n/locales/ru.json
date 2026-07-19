@@ -796,6 +796,8 @@
     "health_status_healthy": "Нормально",
     "health_status_warning": "Предупреждение",
     "health_status_disabled": "Отключено",
+    "codex_subscription_enabled_day": "Истекает: {{date}}",
+    "codex_subscription_expiry_title": "Срок подписки Codex истекает: {{date}}",
     "health_status_unknown": "Неизвестно",
     "health_status_no_message": "Нет сообщения о статусе",
     "last_refresh_label": "Последнее обновление",
