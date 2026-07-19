@@ -60,9 +60,12 @@ const filterPersistableCodexQuota = (
   if (!quota) return {};
 
   return Object.fromEntries(
-    Object.entries(quota).filter(([, item]) => {
-      return item?.status === 'success' && item.observedFromUsageHeaders !== true;
-    })
+    Object.entries(quota)
+      .filter(([, item]) => item?.status === 'success' && item.observedFromUsageHeaders !== true)
+      .map(([key, item]) => {
+        const { subscriptionActiveUntil: _omit, ...persistable } = item;
+        return [key, persistable];
+      })
   );
 };
 
