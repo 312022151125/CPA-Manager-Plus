@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyCodexRateLimitWindows,
   deriveCodexRateLimitUsedPercent,
+  getCodexSubscriptionActiveUntilMs,
   isCodexRateLimitReached,
   buildCodexQuotaWindowInfos,
 } from './codexQuota';
@@ -207,5 +208,32 @@ describe('buildCodexQuotaWindowInfos', () => {
     expect(classified.weeklyWindow?.used_percent).toBe(65);
     expect(deriveCodexRateLimitUsedPercent(rateLimit)).toBe(100);
     expect(isCodexRateLimitReached(rateLimit)).toBe(true);
+  });
+});
+
+describe('getCodexSubscriptionActiveUntilMs', () => {
+  it('returns finite Date.parse milliseconds for valid ISO timestamps', () => {
+    expect(getCodexSubscriptionActiveUntilMs('2026-08-01T12:34:56.000Z')).toBe(
+      Date.parse('2026-08-01T12:34:56.000Z')
+    );
+  });
+
+  it('keeps valid past dates as known sortable timestamps', () => {
+    const past = '2020-01-15T00:00:00.000Z';
+    expect(getCodexSubscriptionActiveUntilMs(past)).toBe(Date.parse(past));
+  });
+
+  it('treats null, blank, and whitespace-only values as missing', () => {
+    expect(getCodexSubscriptionActiveUntilMs(null)).toBeNull();
+    expect(getCodexSubscriptionActiveUntilMs(undefined)).toBeNull();
+    expect(getCodexSubscriptionActiveUntilMs('')).toBeNull();
+    expect(getCodexSubscriptionActiveUntilMs('   ')).toBeNull();
+  });
+
+  it('treats malformed and non-finite values as missing', () => {
+    expect(getCodexSubscriptionActiveUntilMs('not-a-date')).toBeNull();
+    expect(getCodexSubscriptionActiveUntilMs('2026-13-40')).toBeNull();
+    expect(getCodexSubscriptionActiveUntilMs(Number.NaN)).toBeNull();
+    expect(getCodexSubscriptionActiveUntilMs(Number.POSITIVE_INFINITY)).toBeNull();
   });
 });

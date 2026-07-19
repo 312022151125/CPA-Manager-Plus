@@ -7,6 +7,14 @@ import type {
 import { formatCodexResetLabel } from './formatters';
 import { normalizeNumberValue, normalizePlanType, normalizeStringValue } from './parsers';
 
+/** Finite Date.parse ms for Codex subscription expiry; null when missing/malformed. Past dates stay known. */
+export const getCodexSubscriptionActiveUntilMs = (value: unknown): number | null => {
+  const normalized = normalizeStringValue(value);
+  if (!normalized) return null;
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? ms : null;
+};
+
 const FIVE_HOUR_SECONDS = 18_000;
 const WEEK_SECONDS = 604_800;
 const MONTH_SECONDS = 2_592_000;

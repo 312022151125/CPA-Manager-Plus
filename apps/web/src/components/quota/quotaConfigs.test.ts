@@ -2,10 +2,11 @@ import React from 'react';
 import type { TFunction } from 'i18next';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it } from 'vitest';
-import type { ClaudeQuotaState, CodexQuotaState, XaiQuotaState } from '@/types';
+import type { AuthFileItem, ClaudeQuotaState, CodexQuotaState, XaiQuotaState } from '@/types';
 import type { QuotaRenderHelpers } from './QuotaCard';
 import {
   CLAUDE_CONFIG,
+  CODEX_CONFIG,
   getSortedCodexResetCreditExpiries,
   resolveQuotaDisplayState,
   XAI_CONFIG,
@@ -495,5 +496,170 @@ describe('resolveQuotaDisplayState', () => {
       usedPercent: 30,
       resetLabel: '07/01 01:00',
     });
+  });
+});
+
+const makeCodexRenderHelpers = (): QuotaRenderHelpers => ({
+  styles: new Proxy(
+    {},
+    {
+      get: (_target, property) => String(property),
+    }
+  ) as QuotaRenderHelpers['styles'],
+  QuotaProgressBar: ({ percent }) =>
+    React.createElement('div', { className: 'progress', 'data-percent': percent }),
+});
+
+describe('CODEX_CONFIG subscription expiry', () => {
+  const identityT = ((key: string) => key) as TFunction;
+
+  it('renders a valid subscription expiry label and value with the plan row', () => {
+    const expiry = '2026-08-01T12:34:56.000Z';
+    const quota: CodexQuotaState = {
+      status: 'success',
+      windows: [],
+      planType: 'pro',
+      subscriptionActiveUntil: expiry,
+    };
+    let renderer!: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(
+        React.createElement(
+          React.Fragment,
+          null,
+          CODEX_CONFIG.renderQuotaItems(quota, identityT, makeCodexRenderHelpers())
+        )
+      );
+    });
+
+    const output = JSON.stringify(renderer.toJSON());
+    expect(output).toContain('codex_quota.subscription_expiry_label');
+    expect(output).toContain(
+      new Date(expiry).toLocaleString(undefined, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      })
+    );
+  });
+
+  it('renders subscription expiry even when plan type is absent', () => {
+    const expiry = '2026-09-15T08:00:00.000Z';
+    const quota: CodexQuotaState = {
+      status: 'success',
+      windows: [],
+      subscriptionActiveUntil: expiry,
+    };
+    let renderer!: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(
+        React.createElement(
+          React.Fragment,
+          null,
+          CODEX_CONFIG.renderQuotaItems(quota, identityT, makeCodexRenderHelpers())
+        )
+      );
+    });
+
+    const output = JSON.stringify(renderer.toJSON());
+    expect(output).toContain('codex_quota.subscription_expiry_label');
+    expect(output).not.toContain('codex_quota.plan_label');
+  });
+
+  it('omits subscription expiry for missing or malformed values', () => {
+    for (const subscriptionActiveUntil of [null, undefined, '', 'not-a-date'] as const) {
+      const quota: CodexQuotaState = {
+        status: 'success',
+        windows: [],
+        planType: 'pro',
+        subscriptionActiveUntil: subscriptionActiveUntil as string | null | undefined,
+      };
+      let renderer!: ReactTestRenderer;
+
+      act(() => {
+        renderer = create(
+          React.createElement(
+            React.Fragment,
+            null,
+            CODEX_CONFIG.renderQuotaItems(quota, identityT, makeCodexRenderHelpers())
+          )
+        );
+      });
+
+      const output = JSON.stringify(renderer.toJSON());
+      expect(output).not.toContain('codex_quota.subscription_expiry_label');
+    }
+  });
+
+  it('stores null subscription expiry when a successful payload is missing or malformed', () => {
+    const priorValid = CODEX_CONFIG.buildSuccessState({
+      planType: 'pro',
+      windows: [],
+      subscriptionActiveUntil: '2026-08-01T12:34:56.000Z',
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      rateLimitResetCreditsError: null,
+    });
+    expect(priorValid.subscriptionActiveUntil).toBe('2026-08-01T12:34:56.000Z');
+
+    // Successful replacement path: loader assigns this state wholesale, clearing any prior expiry.
+    const malformed = CODEX_CONFIG.buildSuccessState({
+      planType: 'pro',
+      windows: [],
+      subscriptionActiveUntil: 'not-a-date',
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      rateLimitResetCreditsError: null,
+    });
+    expect(malformed.subscriptionActiveUntil).toBeNull();
+
+    const missing = CODEX_CONFIG.buildSuccessState({
+      planType: 'pro',
+      windows: [],
+      subscriptionActiveUntil: null,
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      rateLimitResetCreditsError: null,
+    });
+    expect(missing.subscriptionActiveUntil).toBeNull();
+  });
+
+  it('preserves raw subscription expiry only when the parser accepts it', () => {
+    const expiry = '2026-08-01T12:34:56.000Z';
+    const success = CODEX_CONFIG.buildSuccessState({
+      planType: 'plus',
+      windows: [],
+      subscriptionActiveUntil: expiry,
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      rateLimitResetCreditsError: null,
+    });
+    expect(success.subscriptionActiveUntil).toBe(expiry);
+  });
+
+  it('exposes getPlanExpiryAtMs from CODEX_CONFIG only for finite timestamps', () => {
+    expect(CODEX_CONFIG.getPlanExpiryAtMs).toBeTypeOf('function');
+
+    const file = { name: 'codex.json', type: 'codex' } as AuthFileItem;
+    expect(
+      CODEX_CONFIG.getPlanExpiryAtMs?.(file, {
+        status: 'success',
+        windows: [],
+        subscriptionActiveUntil: '2026-08-01T12:34:56.000Z',
+      })
+    ).toBe(Date.parse('2026-08-01T12:34:56.000Z'));
+    expect(
+      CODEX_CONFIG.getPlanExpiryAtMs?.(file, {
+        status: 'success',
+        windows: [],
+        subscriptionActiveUntil: 'bad',
+      })
+    ).toBeNull();
+    expect(CODEX_CONFIG.getPlanExpiryAtMs?.(file, undefined)).toBeNull();
   });
 });

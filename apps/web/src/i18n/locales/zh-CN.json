@@ -1143,6 +1143,7 @@
     "window_usage": "已用 {{used}} / {{total}} 小时",
     "window_usage_duration": "已用 {{used}} / {{total}}",
     "plan_label": "套餐",
+    "subscription_expiry_label": "套餐到期",
     "plan_plus": "Plus",
     "plan_team": "Team",
     "plan_free": "Free",

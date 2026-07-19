@@ -1143,6 +1143,7 @@
     "window_usage_duration": "已用 {{used}} / {{total}}",
     "observed_window": "最近用量 Header",
     "plan_label": "方案",
+    "subscription_expiry_label": "方案到期",
     "plan_plus": "Plus",
     "plan_team": "Team",
     "plan_free": "Free",

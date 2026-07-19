@@ -1143,6 +1143,7 @@
     "window_usage_duration": "Использовано {{used}} / {{total}}",
     "observed_window": "Последний ответ сервиса",
     "plan_label": "Тариф",
+    "subscription_expiry_label": "Срок тарифа",
     "plan_plus": "Plus",
     "plan_team": "Team",
     "plan_free": "Free",

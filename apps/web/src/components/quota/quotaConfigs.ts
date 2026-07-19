@@ -36,6 +36,7 @@ import {
   fetchKimiQuota,
   fetchXaiQuota,
   buildCodexQuotaWindows,
+  getCodexSubscriptionActiveUntilMs,
   isAntigravityFile,
   isClaudeFile,
   isCodexFile,
@@ -61,7 +62,7 @@ import styles from '@/features/quota/QuotaPage.module.scss';
 type QuotaUpdater<T> = T | ((prev: T) => T);
 
 type QuotaType = 'antigravity' | 'claude' | 'codex' | 'kimi' | 'xai';
-export type QuotaSortMode = 'default' | 'name-asc' | 'plan-desc' | 'plan-asc';
+export type QuotaSortMode = 'default' | 'name-asc' | 'plan-desc' | 'plan-asc' | 'expiry-asc' | 'expiry-desc';
 
 const QUOTA_PROGRESS_HIGH_THRESHOLD = 70;
 const QUOTA_PROGRESS_MEDIUM_THRESHOLD = 30;
@@ -106,6 +107,7 @@ export interface QuotaConfig<TState, TData> {
   gridClassName: string;
   getSearchText?: (file: AuthFileItem, quota: TState | undefined, t: TFunction) => unknown[];
   getPlanSortRank?: (file: AuthFileItem, quota: TState | undefined) => number | null;
+  getPlanExpiryAtMs?: (file: AuthFileItem, quota: TState | undefined) => number | null;
   buildObservedState?: (
     file: AuthFileItem,
     snapshot: UsageHeaderSnapshot | undefined,
@@ -679,10 +681,10 @@ export const getSortedCodexResetCreditExpiries = (
     .filter((credit): credit is CodexResetCreditExpiryInfo => Boolean(credit))
     .sort((left, right) => left.expiresAtMs - right.expiresAtMs || left.id.localeCompare(right.id));
 
-const formatCodexResetCreditExpiryTime = (expiresAt: string): string => {
-  const expiresAtMs = new Date(expiresAt).getTime();
-  if (!Number.isFinite(expiresAtMs)) return '-';
-  return new Date(expiresAtMs).toLocaleString(undefined, {
+const formatCodexDateTime = (value: string): string => {
+  const ms = getCodexSubscriptionActiveUntilMs(value);
+  if (ms === null) return '-';
+  return new Date(ms).toLocaleString(undefined, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -701,11 +703,11 @@ const renderCodexResetCreditExpiryInfo = (
   if (creditExpiries.length === 0) return null;
 
   const { createElement: h, Fragment } = React;
-  const earliestExpiryLabel = formatCodexResetCreditExpiryTime(creditExpiries[0].expiresAt);
+  const earliestExpiryLabel = formatCodexDateTime(creditExpiries[0].expiresAt);
   const rows = creditExpiries.map((credit, index) => ({
     key: `${credit.id}-${credit.expiresAt}`,
     label: t('codex_quota.reset_credit_expiry_item', { index: index + 1 }),
-    value: formatCodexResetCreditExpiryTime(credit.expiresAt),
+    value: formatCodexDateTime(credit.expiresAt),
   }));
 
   return h(
@@ -824,12 +826,22 @@ const renderCodexItems = (
   const planType = quota.planType ?? null;
   const planLabel = getCodexPlanLabel(planType, t);
   const isPremiumPlan = PREMIUM_CODEX_PLAN_TYPES.has(normalizePlanType(planType) ?? '');
+  const subscriptionExpiryMs = getCodexSubscriptionActiveUntilMs(quota.subscriptionActiveUntil);
+  const subscriptionExpiryLabel =
+    subscriptionExpiryMs === null
+      ? null
+      : formatCodexDateTime(quota.subscriptionActiveUntil ?? '');
   const resetCreditsAvailableCount = quota.rateLimitResetCreditsAvailableCount;
   const hasResetCreditsAvailableCount =
     typeof resetCreditsAvailableCount === 'number' && Number.isFinite(resetCreditsAvailableCount);
   const nodes: ReactNode[] = [];
 
-  if (planLabel || hasResetCreditsAvailableCount || quota.observedResetCreditsUnknown) {
+  if (
+    planLabel ||
+    subscriptionExpiryLabel ||
+    hasResetCreditsAvailableCount ||
+    quota.observedResetCreditsUnknown
+  ) {
     const valueClass = isPremiumPlan ? styleMap.premiumPlanValue : styleMap.codexPlanValue;
     const planNodes: ReactNode[] = [];
 
@@ -841,6 +853,22 @@ const renderCodexItems = (
           t('codex_quota.plan_label')
         ),
         h('span', { key: 'plan-value', className: valueClass }, planLabel)
+      );
+    }
+
+    if (subscriptionExpiryLabel) {
+      if (planNodes.length > 0) {
+        planNodes.push(
+          h('span', { key: 'expiry-separator', className: styleMap.codexPlanLabel }, '|')
+        );
+      }
+      planNodes.push(
+        h(
+          'span',
+          { key: 'expiry-label', className: styleMap.codexPlanLabel },
+          t('codex_quota.subscription_expiry_label')
+        ),
+        h('span', { key: 'expiry-value', className: styleMap.codexPlanValue }, subscriptionExpiryLabel)
       );
     }
 
@@ -1079,7 +1107,10 @@ export const CODEX_CONFIG: QuotaConfig<CodexQuotaState, CodexQuotaData> = {
     status: 'success',
     windows: data.windows,
     planType: data.planType,
-    subscriptionActiveUntil: data.subscriptionActiveUntil,
+    subscriptionActiveUntil:
+      getCodexSubscriptionActiveUntilMs(data.subscriptionActiveUntil) === null
+        ? null
+        : data.subscriptionActiveUntil,
     rateLimitResetCreditsAvailableCount: data.rateLimitResetCreditsAvailableCount,
     rateLimitResetCredits: data.rateLimitResetCredits,
     rateLimitResetCreditsError: data.rateLimitResetCreditsError,
@@ -1102,6 +1133,8 @@ export const CODEX_CONFIG: QuotaConfig<CodexQuotaState, CodexQuotaData> = {
   gridClassName: styles.codexGrid,
   getSearchText: getCodexSearchText,
   getPlanSortRank: getCodexPlanSortRank,
+  getPlanExpiryAtMs: (_file, quota) =>
+    getCodexSubscriptionActiveUntilMs(quota?.subscriptionActiveUntil),
   buildObservedState: buildObservedCodexQuotaState,
   resetQuota: resetCodexQuota,
   canResetQuota: (_file, quota) =>
