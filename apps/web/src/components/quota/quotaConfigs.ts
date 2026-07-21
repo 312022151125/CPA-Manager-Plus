@@ -681,7 +681,7 @@ export const getSortedCodexResetCreditExpiries = (
     .filter((credit): credit is CodexResetCreditExpiryInfo => Boolean(credit))
     .sort((left, right) => left.expiresAtMs - right.expiresAtMs || left.id.localeCompare(right.id));
 
-const formatCodexResetCreditExpiryTime = (
+const formatCodexDateTime = (
   expiresAt: string,
   options?: { compact?: boolean }
 ): string => {
@@ -716,10 +716,10 @@ const renderCodexResetCreditExpiryInfo = (
   if (creditExpiries.length === 0) return null;
 
   const { createElement: h, Fragment } = React;
-  const earliestExpiryCompact = formatCodexResetCreditExpiryTime(creditExpiries[0].expiresAt, {
+  const earliestExpiryCompact = formatCodexDateTime(creditExpiries[0].expiresAt, {
     compact: true,
   });
-  const earliestExpiryFull = formatCodexResetCreditExpiryTime(creditExpiries[0].expiresAt);
+  const earliestExpiryFull = formatCodexDateTime(creditExpiries[0].expiresAt);
   const earliestExpirySummary = t('codex_quota.reset_credits_earliest_expiry', {
     time: earliestExpiryCompact,
   });
