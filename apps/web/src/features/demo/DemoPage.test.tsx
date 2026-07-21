@@ -150,6 +150,7 @@ describe('DemoPage', () => {
       'antigravity',
       'claude',
       'codex',
+      'deepseek',
       'gemini',
       'kimi',
       'openai',
@@ -161,6 +162,9 @@ describe('DemoPage', () => {
       'openai-support-02.json',
       'gemini-batch-02.json',
       'deepseek-ops-01.json',
+      'kuai-auth-1.json',
+      'kuai-auth-2.json',
+      'anyrouter-auth-1.json',
     ];
     const visibleAccountText = authFiles.files
       .map((file) =>
@@ -189,7 +193,7 @@ describe('DemoPage', () => {
     );
 
     expect(authFiles.total).toBe(authFiles.files.length);
-    expect(authFiles.files.length).toBe(17);
+    expect(authFiles.files.length).toBe(20);
     expect(visibleAccountText).not.toMatch(/\bui[-.]/i);
     expect(
       authFiles.files.every((file) =>
@@ -237,12 +241,15 @@ describe('DemoPage', () => {
         'claude-extra-usage-03.json',
         'claude-research-02.json',
         'claude-team-01.json',
+        'codex-email-user.json',
         'codex-expired-oauth-03.json',
         'codex-fallback-02.json',
+        'codex-pro-20x-01.json',
         'codex-team-01.json',
         'kimi-coding.json',
         'kimi-exhausted.json',
         'kimi-healthy.json',
+        'xai-email-user.json',
         'xai-ops.json',
         'xai-payg-buffer.json',
         'xai-payg-cap.json',
