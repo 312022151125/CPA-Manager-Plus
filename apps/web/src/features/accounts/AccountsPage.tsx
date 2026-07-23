@@ -406,6 +406,7 @@ export function AccountsPage() {
     uploading,
     authJsonPasteSaving,
     deleting,
+    credentialRefreshing = {},
     batchFieldsUpdating,
     fileInputRef,
     loadFiles,
@@ -414,6 +415,7 @@ export function AccountsPage() {
     savePastedAuthJson,
     handleDelete,
     handleDownload,
+    handleCredentialRefresh,
     toggleSelect,
     selectAllVisible,
     invertVisibleSelection,
@@ -4252,9 +4254,14 @@ export function AccountsPage() {
         editor={prefixProxyEditor}
         updatedText={prefixProxyUpdatedText}
         dirty={prefixProxyDirty}
+        credentialRefreshing={Boolean(
+          prefixProxyEditor?.authFile &&
+          credentialRefreshing[getAuthFileSelectionKey(prefixProxyEditor.authFile)] === true
+        )}
         onClose={closePrefixProxyEditor}
         onCopyText={copyTextWithNotification}
         onSave={handlePrefixProxySave}
+        onRefreshCredential={handleCredentialRefresh}
         onChange={handlePrefixProxyChange}
       />
       <OAuthExcludedEditorModal

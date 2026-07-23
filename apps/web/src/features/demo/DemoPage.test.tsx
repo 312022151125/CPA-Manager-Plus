@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAppRoutes } from '@/app/appRoutes';
+import { CODEX_INSPECTION_LAST_RUN_STORAGE_KEY } from '@/features/monitoring/model/codexInspectionStorage';
+import { CODEX_INSPECTION_SETTINGS_STORAGE_KEY } from '@/features/monitoring/model/codexInspectionSettings';
 import {
   getDemoAccountHistory,
   getDemoAuthFiles,
@@ -27,6 +29,21 @@ import {
   setDemoMode,
   stripRouteBase,
 } from './demoMode';
+import { installDemoInspectionState } from './DemoPage';
+
+const createMemoryStorage = () => {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+    removeItem: (key: string) => values.delete(key),
+    clear: () => values.clear(),
+    key: (index: number) => Array.from(values.keys())[index] ?? null,
+    get length() {
+      return values.size;
+    },
+  };
+};
 
 describe('DemoPage', () => {
   afterEach(() => {
@@ -159,7 +176,6 @@ describe('DemoPage', () => {
     const nonOauthFiles = [
       'gemini-prod-01.json',
       'vertex-regional-01.json',
-      'openai-support-02.json',
       'gemini-batch-02.json',
       'deepseek-ops-01.json',
       'kuai-auth-1.json',
@@ -193,7 +209,7 @@ describe('DemoPage', () => {
     );
 
     expect(authFiles.total).toBe(authFiles.files.length);
-    expect(authFiles.files.length).toBe(20);
+    expect(authFiles.files.length).toBe(23);
     expect(visibleAccountText).not.toMatch(/\bui[-.]/i);
     expect(
       authFiles.files.every((file) =>
@@ -205,10 +221,11 @@ describe('DemoPage', () => {
         (file.recent_requests ?? []).some((bucket) => bucket.success + bucket.failed > 0)
       )
     ).toBe(true);
-    expect(Array.from(providers).sort()).toEqual(oauthProviders);
+    expect(Array.from(providers).sort()).toEqual([...oauthProviders, 'openai'].sort());
     oauthProviders.forEach((provider) => {
       expect(providerCounts[provider]).toBeGreaterThanOrEqual(3);
     });
+    expect(providerCounts.openai).toBe(1);
     expect(Array.from(analyticsProviders).sort()).toEqual(analyticsProviderList);
     expect([...(analytics.filter_options?.providers ?? [])].sort()).toEqual(analyticsProviderList);
     expect(accountHistory.checkpoint.pending).toBe(false);
@@ -246,10 +263,13 @@ describe('DemoPage', () => {
         'codex-fallback-02.json',
         'codex-pro-20x-01.json',
         'codex-team-01.json',
+        'codex-upgrade-demo.json',
         'kimi-coding.json',
         'kimi-exhausted.json',
         'kimi-healthy.json',
+        'openai-support-02.json',
         'xai-email-user.json',
+        'xai-expired.json',
         'xai-ops.json',
         'xai-payg-buffer.json',
         'xai-payg-cap.json',
@@ -306,7 +326,11 @@ describe('DemoPage', () => {
     );
     expect(headerFiles).toContain('codex-fallback-02.json');
     expect(Array.from(inspectionFiles)).toEqual(
-      expect.arrayContaining(['codex-fallback-02.json', 'codex-expired-oauth-03.json'])
+      expect.arrayContaining([
+        'codex-fallback-02.json',
+        'codex-email-user.json',
+        'xai-expired.json',
+      ])
     );
   });
 
@@ -370,6 +394,119 @@ describe('DemoPage', () => {
     );
   });
 
+  it('returns exact API key trend fixtures for selected client keys', () => {
+    const page = getDemoMonitoringAnalytics({
+      from_ms: 1,
+      to_ms: Date.now(),
+      filters: {
+        api_key_hashes: ['hash_research_shared', 'hash_codex_team'],
+      },
+      include: {
+        api_key_timeline: true,
+      },
+    });
+    const timeline = page.timeline;
+    const apiKeyTimeline = page.api_key_timeline;
+    if (!timeline || !apiKeyTimeline) throw new Error('missing demo API key timeline');
+    const firstBucket = timeline[0];
+    const missingCodexBucket = timeline[3];
+    if (!firstBucket || !missingCodexBucket) throw new Error('missing demo timeline buckets');
+
+    expect([...new Set(apiKeyTimeline.map((point) => point.api_key_hash))].sort()).toEqual([
+      'hash_codex_team',
+      'hash_research_shared',
+    ]);
+    expect(apiKeyTimeline).toHaveLength(timeline.length * 2 - 2);
+
+    const firstResearchPoint = apiKeyTimeline.find(
+      (point) =>
+        point.api_key_hash === 'hash_research_shared' && point.bucket_ms === firstBucket.bucket_ms
+    );
+    if (!firstResearchPoint) throw new Error('missing first research API key bucket');
+    expect(firstResearchPoint).toMatchObject({
+      calls: Math.round(firstBucket.calls * 0.36),
+      total_tokens: Math.round(firstBucket.tokens * 0.39),
+    });
+    expect(firstResearchPoint.success + firstResearchPoint.failure).toBe(firstResearchPoint.calls);
+    expect(
+      apiKeyTimeline.some(
+        (point) =>
+          point.api_key_hash === 'hash_codex_team' &&
+          point.bucket_ms === missingCodexBucket.bucket_ms
+      )
+    ).toBe(false);
+  });
+
+  it('provides xAI quota exhaustion, successful rate-limit, and cooldown fixtures for UI acceptance', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-21T10:25:05.000+08:00'));
+
+    const analytics = getDemoMonitoringAnalytics({
+      from_ms: 0,
+      to_ms: Date.now(),
+      include: { events_page: { limit: 10 } },
+    });
+    const exhausted = analytics.events?.items.find(
+      (event) => event.event_hash === 'demo-event-xai-free-usage-exhausted'
+    );
+    const successfulRateLimit = analytics.events?.items.find(
+      (event) => event.event_hash === 'demo-event-xai-rate-limit-success'
+    );
+    const xaiCooldown = getDemoQuotaCooldowns().find(
+      (cooldown) => cooldown.authFileName === 'xai-ops.json'
+    );
+    const xaiAuthFile = getDemoAuthFiles().files.find((file) => file.name === 'xai-ops.json');
+    const xaiSnapshots = getDemoHeaderSnapshots().items.filter((snapshot) =>
+      snapshot.event_hash.startsWith('demo-event-xai-')
+    );
+
+    expect(exhausted).toMatchObject({
+      failed: true,
+      fail_status_code: 429,
+      auth_file_snapshot: 'xai-ops.json',
+      auth_provider_snapshot: 'xai',
+      header_error_code: 'subscription:free-usage-exhausted',
+      response_metadata: {
+        errors: { should_retry: true },
+        provider_usage: {
+          provider: 'xai',
+          state: 'exhausted',
+          actual: 1_024_413,
+          limit: 1_000_000,
+          overage: 24_413,
+          window_kind: 'rolling_24h',
+          recover_at_estimated: true,
+        },
+        data_policy: { retention_mode: 'zdr', zero_retention: true },
+      },
+    });
+    expect(successfulRateLimit).toMatchObject({
+      failed: false,
+      auth_file_snapshot: 'xai-email-user.json',
+      response_metadata: {
+        rate_limit: { requests: { limit: 21, remaining: 18 } },
+        data_policy: { retention_mode: 'zdr', zero_retention: true },
+      },
+    });
+    expect(xaiCooldown).toMatchObject({
+      provider: 'xai',
+      owner: 'cpamp_xai_free_usage',
+      reasonCode: 'xai_free_usage_exhausted',
+      windowKind: 'rolling_24h',
+      evidence: {
+        actual: 1_024_413,
+        limit: 1_000_000,
+        recover_at_estimated: true,
+      },
+    });
+    expect(xaiCooldown?.evidence?.recover_at_ms).toBe(xaiCooldown?.recoverAtMs);
+    expect(xaiAuthFile).toMatchObject({ disabled: true, status: 'cooldown' });
+    expect(xaiSnapshots.map((snapshot) => snapshot.event_hash)).toEqual([
+      'demo-event-xai-free-usage-exhausted',
+      'demo-event-xai-rate-limit-success',
+    ]);
+  });
+
   it('keeps visible demo dates relative to the current day', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-29T10:00:00+08:00'));
@@ -395,5 +532,41 @@ describe('DemoPage', () => {
     expect(new Date(getDemoManagerLatestRelease().published_at).getTime()).toBe(
       new Date(2026, 5, 30).getTime()
     );
+  });
+
+  it('installs inspection demo state and restores the existing local state on exit', () => {
+    const storage = createMemoryStorage();
+    storage.setItem(CODEX_INSPECTION_LAST_RUN_STORAGE_KEY, 'real-last-run');
+    storage.setItem(CODEX_INSPECTION_SETTINGS_STORAGE_KEY, 'real-settings');
+    vi.stubGlobal('localStorage', storage);
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      location: { hash: '#/demo/codex-inspection', pathname: '/' },
+    });
+
+    const restore = installDemoInspectionState();
+    const lastRun = JSON.parse(
+      storage.getItem(CODEX_INSPECTION_LAST_RUN_STORAGE_KEY) ?? '{}'
+    ) as Record<string, unknown>;
+    const settings = JSON.parse(
+      storage.getItem(CODEX_INSPECTION_SETTINGS_STORAGE_KEY) ?? '{}'
+    ) as Record<string, unknown>;
+
+    expect(lastRun).toMatchObject({
+      version: 1,
+      actionFilter: 'all',
+      result: { results: expect.arrayContaining([expect.objectContaining({ provider: 'xai' })]) },
+    });
+    expect(settings).toMatchObject({
+      targetTypes: ['codex', 'xai'],
+      xaiInferenceEnabled: true,
+      autoActionMode: 'disable',
+      autoRecoverEnabled: true,
+    });
+
+    restore();
+
+    expect(storage.getItem(CODEX_INSPECTION_LAST_RUN_STORAGE_KEY)).toBe('real-last-run');
+    expect(storage.getItem(CODEX_INSPECTION_SETTINGS_STORAGE_KEY)).toBe('real-settings');
   });
 });

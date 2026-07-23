@@ -33,6 +33,7 @@ export type PrefixProxyEditorField =
 export type PrefixProxyEditorFieldValue = string | boolean;
 
 export type PrefixProxyEditorState = {
+  authFile: AuthFileItem;
   fileName: string;
   fileInfoText: string;
   loading: boolean;
@@ -378,6 +379,7 @@ export function useAuthFilesPrefixProxyEditor(
     }
 
     setPrefixProxyEditor({
+      authFile: file,
       fileName: name,
       fileInfoText: JSON.stringify(file, null, 2),
       loading: true,
