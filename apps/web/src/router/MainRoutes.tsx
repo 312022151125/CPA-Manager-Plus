@@ -44,12 +44,13 @@ function LegacyAccountsRedirect({
   view,
   editor,
 }: {
-  view?: 'quota' | 'oauth';
+  view?: 'accounts' | 'oauth';
   editor?: 'excluded' | 'alias';
 }) {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
-  if (view) params.set('view', view);
+  if (view === 'accounts') params.delete('view');
+  else if (view) params.set('view', view);
   if (editor) {
     params.set('editor', editor);
     const provider = params.get('provider');
@@ -224,7 +225,7 @@ const mainRoutes: RouteObject[] = [
     element: <LegacyAccountsRedirect view="oauth" editor="alias" />,
   },
   { path: '/oauth', element: <OAuthPage /> },
-  { path: '/quota', element: <LegacyAccountsRedirect view="quota" /> },
+  { path: '/quota', element: <LegacyAccountsRedirect view="accounts" /> },
   {
     path: '/usage-analytics',
     element: (

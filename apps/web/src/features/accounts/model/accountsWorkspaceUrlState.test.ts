@@ -35,9 +35,8 @@ describe('accountsWorkspaceUrlState', () => {
       '?keep=1&view=value',
       {
         ...DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE,
-        view: 'quota',
+        view: 'inspection',
         search: 'shared',
-        quotaFocused: true,
         account: 'shared.json',
         detailTab: 'quota',
         editor: null,
@@ -46,7 +45,7 @@ describe('accountsWorkspaceUrlState', () => {
       DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
     );
 
-    expect(search).toBe('?keep=1&view=quota&search=shared&account=shared.json&tab=quota');
+    expect(search).toBe('?keep=1&view=inspection&search=shared&account=shared.json&tab=quota');
   });
 
   it('falls back safely for unsupported query values', () => {
@@ -64,14 +63,13 @@ describe('accountsWorkspaceUrlState', () => {
     expect(state.editor).toBeNull();
   });
 
-  it('restores the persisted quota workspace when the URL does not choose a view', () => {
-    const state = readAccountsWorkspaceUrlState('', {
-      ...DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE,
-      quotaFocused: true,
-    });
-
-    expect(state.view).toBe('quota');
-    expect(state.quotaFocused).toBe(true);
+  it('falls legacy quota and contribution views back to the credential list', () => {
+    expect(
+      readAccountsWorkspaceUrlState('?view=quota', DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE).view
+    ).toBe('accounts');
+    expect(
+      readAccountsWorkspaceUrlState('?view=value', DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE).view
+    ).toBe('accounts');
   });
 
   it('round-trips the sort direction independently of local preferences', () => {

@@ -948,11 +948,11 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
 
     await act(async () => {
-      findHostButtonByText(renderer, 'accounts.tab_quota').props.onClick();
+      findHostButtonByText(renderer, 'accounts.tab_inspection').props.onClick();
     });
 
     expect(mocks.navigate).toHaveBeenCalledWith(
-      { pathname: '/accounts', search: '?view=quota' },
+      { pathname: '/accounts', search: '?view=inspection' },
       { replace: false }
     );
   });
@@ -1059,7 +1059,7 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.showModels).toHaveBeenCalledWith(mocks.files[0]);
   });
 
-  it('renders account cards in the quota workspace', async () => {
+  it('falls the removed quota workspace back to the credential list', async () => {
     mocks.location = { pathname: '/accounts', search: '?view=quota' };
 
     const renderer = await renderAccountsPage();
@@ -1067,7 +1067,15 @@ describe('AccountsPage replacement flows', () => {
     expect(
       renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
     ).toHaveLength(1);
-    expect(findHostButtonByText(renderer, 'accounts.tab_quota').props['aria-selected']).toBe(true);
+    expect(findHostButtonByText(renderer, 'accounts.tab_accounts').props['aria-selected']).toBe(
+      true
+    );
+    expect(treeText(renderer)).not.toContain('accounts.tab_quota');
+    expect(treeText(renderer)).not.toContain('accounts.tab_value');
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      { pathname: '/accounts', search: '' },
+      { replace: true }
+    );
   });
 
   it('uses the last local inspection when Manager inspection is unavailable', async () => {

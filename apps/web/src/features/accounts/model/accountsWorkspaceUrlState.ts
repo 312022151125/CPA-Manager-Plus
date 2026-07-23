@@ -11,7 +11,7 @@ export interface AccountsWorkspaceUrlState extends AccountsWorkspaceUiState {
   editorProvider: string;
 }
 
-const VIEW_SET = new Set<AccountsView>(['accounts', 'quota', 'inspection', 'oauth', 'value']);
+const VIEW_SET = new Set<AccountsView>(['accounts', 'inspection', 'oauth']);
 const DETAIL_TAB_SET = new Set<DetailTab>([
   'overview',
   'quota',
@@ -92,8 +92,7 @@ export const readAccountsWorkspaceUrlState = (
   fallback: AccountsWorkspaceUiState
 ): AccountsWorkspaceUrlState => {
   const params = new URLSearchParams(search);
-  const fallbackView: AccountsView = fallback.quotaFocused ? 'quota' : 'accounts';
-  const view = readEnum(params, 'view', VIEW_SET, fallbackView);
+  const view = readEnum(params, 'view', VIEW_SET, 'accounts');
   const pageSizeValue = Number(params.get('pageSize'));
   const editorValue = params.get('editor');
   const editor = editorValue === 'excluded' || editorValue === 'alias' ? editorValue : null;
@@ -128,7 +127,6 @@ export const readAccountsWorkspaceUrlState = (
         : params.get('display') === 'full'
           ? 'full'
           : fallback.accountDisplayMode,
-    quotaFocused: view === 'quota',
     account: params.get('account') || null,
     detailTab: readEnum(params, 'tab', DETAIL_TAB_SET, 'overview'),
     editor,

@@ -279,8 +279,8 @@ export const executeCodexInspectionActions = async ({
     const response = await authFilesApi.list();
     refreshedFiles = Array.isArray(response.files) ? response.files : previousFiles;
   } catch (error) {
-    refreshError = error instanceof Error ? error.message : String(error || '刷新账号列表失败');
-    onLog?.('warning', `执行后刷新账号列表失败，已回退旧快照：${refreshError}`);
+    refreshError = error instanceof Error ? error.message : String(error || '刷新凭证列表失败');
+    onLog?.('warning', `执行后刷新凭证列表失败，已回退旧快照：${refreshError}`);
   }
 
   return {

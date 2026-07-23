@@ -51,6 +51,7 @@ describe('accountsWorkspaceUiState', () => {
         operationalFilter: 'unknown',
         accountSort: { key: 'bad', direction: 'sideways' },
         pageSize: 999,
+        quotaFocused: true,
       })
     ).toEqual(DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE);
   });

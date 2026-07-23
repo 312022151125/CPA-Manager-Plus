@@ -3,7 +3,6 @@ import {
   buildAntigravityQuotaMatrix,
   formatCompactNumber,
   formatHistorySuccessRate,
-  getValueRangeMs,
   parsePriorityValue,
   quotaStatusLabelKey,
 } from './accountsPagePresentation';
@@ -18,7 +17,6 @@ describe('accountsPagePresentation', () => {
     expect(formatCompactNumber(12_500)).toBe('12.5K');
     expect(formatHistorySuccessRate(0.975)).toBe('97.5%');
     expect(quotaStatusLabelKey('exhausted')).toBe('accounts.quota_status_exhausted');
-    expect(getValueRangeMs('7d')).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
   it('builds the two-provider-group Antigravity quota matrix in stable order', () => {

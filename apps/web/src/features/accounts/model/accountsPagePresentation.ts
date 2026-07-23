@@ -10,11 +10,10 @@ import type {
   AccountRowSortDirection,
   AccountRowSortKey,
 } from '@/features/accounts/model/accountRows';
-import type { UsageValueRange } from '@/features/accounts/model/usageValueRows';
 import type { AuthFileCodexInspectionSnapshot } from '@/features/authFiles/model/authFilesPageModel';
 import type { MonitoringAccountHistoryItem, MonitoringAnalyticsEventRow } from '@/services/api';
 
-export type AccountsView = 'accounts' | 'quota' | 'inspection' | 'oauth' | 'value';
+export type AccountsView = 'accounts' | 'inspection' | 'oauth';
 export type DetailTab = 'overview' | 'quota' | 'credential' | 'models' | 'diagnostics';
 export type SortableAccountColumn = Extract<
   AccountRowSortKey,
@@ -44,16 +43,6 @@ export const PAGE_SIZE_OPTIONS = [
   { value: '10', label: '10' },
   { value: '20', label: '20' },
   { value: '50', label: '50' },
-];
-
-export const VALUE_RANGE_OPTIONS: Array<{
-  value: UsageValueRange;
-  labelKey: string;
-  hours: number;
-}> = [
-  { value: '24h', labelKey: 'accounts.range_24h', hours: 24 },
-  { value: '7d', labelKey: 'accounts.range_7d', hours: 24 * 7 },
-  { value: '30d', labelKey: 'accounts.range_30d', hours: 24 * 30 },
 ];
 
 export const DETAIL_EVENTS_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -311,6 +300,3 @@ export const toAuthFileCodexInspectionSnapshot = (
     inspectionAtMs: row.inspection.createdAtMs,
   };
 };
-
-export const getValueRangeMs = (range: UsageValueRange) =>
-  (VALUE_RANGE_OPTIONS.find((option) => option.value === range)?.hours ?? 24 * 7) * 60 * 60 * 1000;

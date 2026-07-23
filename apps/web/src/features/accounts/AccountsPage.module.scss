@@ -209,8 +209,7 @@
 }
 
 .loadingPanel,
-.tablePanel,
-.valuePanel {
+.tablePanel {
   border: 1px solid var(--glass-border);
   border-radius: $radius-md;
   background: var(--glass-bg);
@@ -353,14 +352,6 @@
   &:hover {
     border-color: color-mix(in srgb, var(--primary-color) 24%, var(--border-color));
     background: color-mix(in srgb, var(--primary-color) 4%, var(--bg-primary));
-  }
-}
-
-.accountCardQuotaFocused {
-  min-height: 154px;
-
-  .quotaWindowGrid {
-    align-content: start;
   }
 }
 
@@ -2288,61 +2279,6 @@
   }
 }
 
-.valuePanel {
-  padding: 0;
-}
-
-.trendChart {
-  display: flex;
-  align-items: end;
-  gap: 6px;
-  height: 160px;
-  margin: 16px;
-  padding: 14px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--app-radius-md);
-  background: var(--surface-subtle);
-
-  span {
-    flex: 1 1 0;
-    min-width: 8px;
-    border-radius: 999px 999px 0 0;
-    background: color-mix(in srgb, var(--primary-color) 72%, var(--app-surface-strong));
-  }
-
-  small {
-    margin: auto;
-    color: var(--text-secondary);
-    font-size: 13px;
-  }
-}
-
-.valueHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px;
-  border-bottom: 1px solid var(--border-color);
-
-  h2 {
-    margin: 0;
-    color: var(--text-primary);
-    font-size: 17px;
-  }
-
-  p {
-    margin: 4px 0 0;
-    color: var(--text-secondary);
-    font-size: 13px;
-  }
-
-  > strong {
-    color: var(--text-primary);
-    font-size: 22px;
-  }
-}
-
 /* Refreshed workspace layout, aligned with Usage Analytics. */
 .container {
   @include accounts-theme-vars;
@@ -2355,7 +2291,6 @@
 .controlsPanel,
 .tablePanel,
 .loadingPanel,
-.valuePanel,
 .rulePanel {
   border: 1px solid var(--accounts-border);
   border-radius: 14px;
@@ -2869,8 +2804,7 @@
   }
 }
 
-.tablePanel,
-.valuePanel {
+.tablePanel {
   min-width: 0;
   overflow: hidden;
 }
@@ -3029,12 +2963,6 @@
 .drawerSection {
   border-radius: 10px;
   background: color-mix(in srgb, var(--accounts-muted-surface) 36%, var(--accounts-surface));
-}
-
-.trendChart {
-  margin: 16px;
-  border-color: var(--accounts-border);
-  background: color-mix(in srgb, var(--accounts-muted-surface) 62%, var(--accounts-surface));
 }
 
 @include tablet {

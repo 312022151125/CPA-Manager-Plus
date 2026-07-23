@@ -36,7 +36,6 @@ import {
   IconShield,
   IconSlidersHorizontal,
   IconTrash2,
-  IconTrendingUp,
   IconX,
 } from '@/components/ui/icons';
 import {
@@ -86,14 +85,11 @@ import {
 } from '@/features/accounts/model/accountRows';
 import {
   buildAccountRecommendations,
-  getRecommendationRank,
-  type AccountRecommendation,
   type AccountRecommendationPriority,
 } from '@/features/accounts/model/quotaRecommendations';
 import {
   buildAccountListItem,
   buildRecommendationBySelectionKey,
-  getRecommendationActionLabelKey,
   type AccountListHealthStatusKey,
 } from '@/features/accounts/model/accountListPresentation';
 import {
@@ -119,7 +115,6 @@ import {
   DETAIL_EVENTS_LIMIT,
   DETAIL_EVENTS_RANGE_MS,
   PAGE_SIZE_OPTIONS,
-  VALUE_RANGE_OPTIONS,
   buildAntigravityQuotaMatrix,
   formatCompactNumber,
   formatHistorySuccessRate,
@@ -129,7 +124,6 @@ import {
   getAccountHistoryTitle,
   getAccountSortFieldOption,
   getProviderLabel,
-  getValueRangeMs,
   parsePriorityValue,
   toAuthFileCodexInspectionSnapshot,
   type AccountSortFieldValue,
@@ -148,8 +142,6 @@ import {
   buildUsageValueRowsFromMonitoring,
   buildUsageValueRowsFromRecent,
   buildUsageValueSummary,
-  filterUsageValueRows,
-  type UsageValueRange,
   type UsageValueRow,
   type UsageValueSource,
 } from '@/features/accounts/model/usageValueRows';
@@ -188,7 +180,6 @@ import {
   type CodexInspectionResult,
   type MonitoringAnalyticsAccountStatRow,
   type MonitoringAnalyticsEventRow,
-  type MonitoringAnalyticsTimelinePoint,
   type MonitoringAccountHistoryItem,
   type MonitoringAccountWindowUsageItem,
   type QuotaCooldownInfo,
@@ -227,6 +218,8 @@ import styles from './AccountsPage.module.scss';
 
 type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
+
+const ACCOUNTS_USAGE_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const readAccountsSearchFromHash = (hash: string): string => {
   const queryIndex = hash.indexOf('?');
@@ -490,14 +483,8 @@ export function AccountsPage() {
   const [batchPriorityValue, setBatchPriorityValue] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(() => initialWorkspaceUrlState.current.pageSize);
-  const [valueRange, setValueRange] = useState<UsageValueRange>('7d');
-  const [valueProvider, setValueProvider] = useState('all');
-  const [valueSearch, setValueSearch] = useState('');
   const [usageRows, setUsageRows] = useState<UsageValueRow[]>([]);
-  const [usageTimeline, setUsageTimeline] = useState<MonitoringAnalyticsTimelinePoint[]>([]);
   const [usageSource, setUsageSource] = useState<UsageValueSource>('recent');
-  const [usageLoading, setUsageLoading] = useState(false);
-  const [usageError, setUsageError] = useState('');
   const [accountHistoryByRowKey, setAccountHistoryByRowKey] = useState<
     Map<string, MonitoringAccountHistoryItem>
   >(() => new Map());
@@ -526,7 +513,6 @@ export function AccountsPage() {
         ? initialWorkspaceUrlState.current.editorProvider
         : null
   );
-  const [executingRecommendations, setExecutingRecommendations] = useState(false);
   const [authJsonPasteOpen, setAuthJsonPasteOpen] = useState(false);
   const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
   const [detailEventsRowKey, setDetailEventsRowKey] = useState<string | null>(null);
@@ -1116,14 +1102,6 @@ export function AccountsPage() {
     () => buildUsageValueSummary(usageRows, usageSource),
     [usageRows, usageSource]
   );
-  const filteredUsageRows = useMemo(
-    () => filterUsageValueRows(usageRows, { provider: valueProvider, search: valueSearch }),
-    [usageRows, valueProvider, valueSearch]
-  );
-  const valueProviderOptions = useMemo(
-    () => Array.from(new Set(usageRows.map((row) => row.provider))).sort(),
-    [usageRows]
-  );
   const latestRun = inspectionRuns[0] ?? null;
   const getDisplayText = useCallback(
     (value: string) => (accountDisplayMode === 'full' ? value : maskQuotaAccountText(value)),
@@ -1227,12 +1205,10 @@ export function AccountsPage() {
       accountSort,
       pageSize,
       accountDisplayMode,
-      quotaFocused: activeView === 'quota',
     });
   }, [
     accountDisplayMode,
     accountSort,
-    activeView,
     operationalFilter,
     pageSize,
     planFilter,
@@ -1253,7 +1229,6 @@ export function AccountsPage() {
       accountSort,
       pageSize,
       accountDisplayMode,
-      quotaFocused: activeView === 'quota',
       view: activeView,
       account: selectedRowKey,
       detailTab,
@@ -1286,7 +1261,8 @@ export function AccountsPage() {
   const applyWorkspaceUrlState = useCallback(
     (searchValue: string, fallback: AccountsWorkspaceUiState) => {
       const next = readAccountsWorkspaceUrlState(searchValue, fallback);
-      syncingWorkspaceLocationRef.current = true;
+      const requestedView = new URLSearchParams(searchValue).get('view');
+      syncingWorkspaceLocationRef.current = !requestedView || requestedView === next.view;
       lastWorkspaceNavigationRef.current = null;
       setActiveView(next.view);
       setSearch(next.search);
@@ -1350,7 +1326,7 @@ export function AccountsPage() {
       setActiveView(view);
       const searchValue = writeAccountsWorkspaceUrlSearch(
         location.search,
-        { ...workspaceUrlState, view, quotaFocused: view === 'quota' },
+        { ...workspaceUrlState, view },
         DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
       );
       lastWorkspaceNavigationRef.current = searchValue;
@@ -1435,7 +1411,6 @@ export function AccountsPage() {
     const fallback = () => {
       const fallbackRows = buildUsageValueRowsFromRecent(rows);
       setUsageRows(fallbackRows);
-      setUsageTimeline([]);
       setUsageSource('recent');
     };
 
@@ -1446,26 +1421,21 @@ export function AccountsPage() {
       !managementKey
     ) {
       fallback();
-      setUsageError('');
       return;
     }
 
-    setUsageLoading(true);
-    setUsageError('');
     try {
       const toMs = Date.now();
       const response = await monitoringAnalyticsApi.getAnalytics(
         featureAvailability.managerServiceBase,
         managementKey,
         {
-          from_ms: toMs - getValueRangeMs(valueRange),
+          from_ms: toMs - ACCOUNTS_USAGE_RANGE_MS,
           to_ms: toMs,
           now_ms: toMs,
           include: {
             summary: true,
-            timeline: true,
             account_stats: true,
-            granularity: valueRange === '24h' ? 'hour' : 'day',
           },
         }
       );
@@ -1475,13 +1445,9 @@ export function AccountsPage() {
         return;
       }
       setUsageRows(buildUsageValueRowsFromMonitoring(rows, stats));
-      setUsageTimeline(response.timeline ?? []);
       setUsageSource('monitoring');
-    } catch (err: unknown) {
+    } catch {
       fallback();
-      setUsageError(err instanceof Error ? err.message : t('notification.load_failed'));
-    } finally {
-      setUsageLoading(false);
     }
   }, [
     featureAvailability.checking,
@@ -1489,8 +1455,6 @@ export function AccountsPage() {
     featureAvailability.requestMonitoringAvailable,
     managementKey,
     rows,
-    t,
-    valueRange,
   ]);
 
   useEffect(() => {
@@ -1967,67 +1931,6 @@ export function AccountsPage() {
     [batchPatchFields, showNotification, t]
   );
 
-  const executeRecommendation = useCallback(
-    async (item: AccountRecommendation) => {
-      if (item.action === 'refresh') {
-        await refreshQuotaRows([item.row]);
-      } else if (item.action === 'disable') {
-        await handleBatchStatus(false, [item.row]);
-      } else if (item.action === 'enable') {
-        await handleBatchStatus(true, [item.row]);
-      } else if (item.action === 'restore-default') {
-        await patchPriorityRows([item.row], 0);
-      } else if (item.action === 'reauth') {
-        handleReauthAccount(item.row.raw);
-      } else {
-        setSelectedRowKey(item.row.selectionKey);
-        setDetailTab('diagnostics');
-      }
-    },
-    [handleBatchStatus, handleReauthAccount, patchPriorityRows, refreshQuotaRows]
-  );
-
-  const executeRecommendedActions = () => {
-    const executable = recommendations.filter((item) =>
-      ['refresh', 'disable', 'enable', 'restore-default'].includes(item.action)
-    );
-    if (executable.length === 0) {
-      showNotification(t('accounts.no_executable_recommendations'), 'info');
-      return;
-    }
-    showConfirmation({
-      title: t('accounts.execute_recommendations'),
-      message: t('accounts.execute_recommendations_confirm', { count: executable.length }),
-      confirmText: t('common.confirm'),
-      onConfirm: async () => {
-        setExecutingRecommendations(true);
-        try {
-          for (const item of executable) {
-            await executeRecommendation(item);
-          }
-        } finally {
-          setExecutingRecommendations(false);
-        }
-      },
-    });
-  };
-
-  const openUsageValueDetail = (row: UsageValueRow) => {
-    const targetRow =
-      (row.row ? rows.find((item) => item.selectionKey === row.row?.selectionKey) : null) ??
-      rows.find(
-        (item) =>
-          item.fileName === row.fileName &&
-          (!row.row || String(item.authIndex ?? '') === String(row.row.authIndex ?? ''))
-      );
-    if (!targetRow) {
-      showNotification(t('accounts.value_unmatched_detail'), 'info');
-      return;
-    }
-    setSelectedRowKey(targetRow.selectionKey);
-    setDetailTab('overview');
-  };
-
   const handleExportInspection = async () => {
     const payload = JSON.stringify(
       {
@@ -2289,14 +2192,12 @@ export function AccountsPage() {
   const renderViewTabs = () => {
     const tabs: Array<SegmentedTabItem<AccountsView> & { badge?: number }> = [
       { id: 'accounts', label: t('accounts.tab_accounts') },
-      { id: 'quota', label: t('accounts.tab_quota'), badge: recommendations.length },
       {
         id: 'inspection',
         label: t('accounts.tab_inspection'),
         badge: metrics.needsInspectionAction,
       },
       { id: 'oauth', label: t('accounts.tab_oauth') },
-      { id: 'value', label: t('accounts.tab_value') },
     ];
     return (
       <SegmentedTabs
@@ -2957,7 +2858,7 @@ export function AccountsPage() {
     />
   );
 
-  const renderAccountCards = (rowsToRender = pageRows, paged = true, quotaFocused = false) => (
+  const renderAccountCards = (rowsToRender = pageRows, paged = true) => (
     <section className={styles.tablePanel}>
       {paged ? renderBatchBar() : null}
       {rowsToRender.length > 0 ? (
@@ -2986,7 +2887,7 @@ export function AccountsPage() {
             const antigravityQuotaMatrix = buildAntigravityQuotaMatrix(row, quotaWindows);
             const displayQuotaWindows =
               !antigravityQuotaMatrix && quotaWindows.length > 0
-                ? quotaWindows.slice(0, quotaFocused ? 4 : 2)
+                ? quotaWindows.slice(0, 2)
                 : antigravityQuotaMatrix
                   ? []
                   : [
@@ -3000,9 +2901,7 @@ export function AccountsPage() {
                     ];
             const displayedQuotaWindowCount = antigravityQuotaMatrix
               ? antigravityQuotaMatrix.windowKeys.size
-              : quotaFocused
-                ? 4
-                : 2;
+              : 2;
             const hiddenQuotaWindowCount = Math.max(
               0,
               quotaWindows.length - displayedQuotaWindowCount
@@ -3058,7 +2957,6 @@ export function AccountsPage() {
                 aria-selected={selectedFiles.has(row.selectionKey)}
                 className={[
                   styles.accountCard,
-                  quotaFocused ? styles.accountCardQuotaFocused : '',
                   selectedRowKey === row.selectionKey ? styles.accountCardSelected : '',
                   selectedFiles.has(row.selectionKey) ? styles.accountCardBulkSelected : '',
                   isSelectionMode ? styles.accountCardSelectionMode : '',
@@ -3631,172 +3529,6 @@ export function AccountsPage() {
     </>
   );
 
-  const renderQuotaView = () => {
-    const lowRows = filteredRows.filter((row) => row.quota.status === 'low');
-    const exhaustedRows = filteredRows.filter((row) => row.quota.status === 'exhausted');
-    const pendingRows = filteredRows.filter(
-      (row) => row.quota.status === 'unknown' || row.quota.status === 'loading'
-    );
-    const visibleSelectionKeys = new Set(filteredRows.map((row) => row.selectionKey));
-    const visibleRecommendations = recommendations.filter((item) =>
-      visibleSelectionKeys.has(item.row.selectionKey)
-    );
-    const criticalRecommendations = visibleRecommendations.filter(
-      (item) => getRecommendationRank(item.priority) >= getRecommendationRank('high')
-    );
-    const executableRecommendations = visibleRecommendations.filter((item) =>
-      ['refresh', 'disable', 'enable', 'restore-default'].includes(item.action)
-    );
-
-    return (
-      <>
-        <section className={styles.metricsGrid}>
-          {renderMetricCard(
-            'low-quota',
-            t('accounts.metric_low'),
-            lowRows.length,
-            t('accounts.metric_low_meta'),
-            <IconShield size={24} />,
-            'amber'
-          )}
-          {renderMetricCard(
-            'exhausted',
-            t('accounts.quota_metric_exhausted'),
-            exhaustedRows.length,
-            t('accounts.quota_metric_exhausted_meta'),
-            <IconX size={24} />,
-            'red'
-          )}
-          {renderMetricCard(
-            'pending',
-            t('accounts.quota_metric_pending'),
-            pendingRows.length,
-            t('accounts.quota_metric_pending_meta'),
-            <IconRefreshCw size={24} />,
-            'blue'
-          )}
-          {renderMetricCard(
-            'recommend',
-            t('accounts.quota_metric_recommend'),
-            criticalRecommendations.length,
-            t('accounts.quota_metric_recommend_meta'),
-            <IconTrendingUp size={24} />,
-            'green'
-          )}
-        </section>
-        {renderAccountCards(pageRows, true, true)}
-        <section className={styles.splitGrid}>
-          <div className={styles.tablePanel}>
-            <div className={styles.panelHeader}>
-              <div>
-                <h2>{t('accounts.quota_recommendations_title')}</h2>
-                <p>{t('accounts.quota_recommendations_desc')}</p>
-              </div>
-              <div className={styles.headerActions}>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => refreshQuotaRows(filteredRows)}
-                  loading={quotaRefreshing}
-                >
-                  {!quotaRefreshing ? <IconRefreshCw size={15} /> : null}
-                  {t('accounts.refresh_quota')}
-                </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={executeRecommendedActions}
-                  loading={executingRecommendations}
-                  disabled={executableRecommendations.length === 0}
-                  title={
-                    executableRecommendations.length === 0
-                      ? t('accounts.no_executable_recommendations')
-                      : undefined
-                  }
-                >
-                  {t('accounts.execute_recommendations')}
-                </Button>
-              </div>
-            </div>
-            <div className={styles.tableScroller}>
-              <table className={styles.compactTable}>
-                <thead>
-                  <tr>
-                    <th>{t('accounts.col_account')}</th>
-                    <th>{t('accounts.col_quota')}</th>
-                    <th>{t('accounts.recommend_action')}</th>
-                    <th>{t('accounts.recommend_priority')}</th>
-                    <th>{t('accounts.detail_reason')}</th>
-                    <th>{t('accounts.col_actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleRecommendations.map((item) => (
-                    <tr key={`${item.row.fileName}:${item.action}`}>
-                      <td>
-                        <div className={styles.accountCell}>
-                          <strong title={item.row.accountLabel}>
-                            {getDisplayAccount(item.row)}
-                          </strong>
-                          <span title={item.row.fileName}>
-                            {getDisplayFileName(item.row.fileName)}
-                          </span>
-                        </div>
-                      </td>
-                      <td>{formatPercent(item.row.quota.remainingPercent)}</td>
-                      <td>{t(getRecommendationActionLabelKey(item.action))}</td>
-                      <td>
-                        <span
-                          className={`${styles.badge} ${getRecommendationPriorityClass(item.priority)}`}
-                        >
-                          {t(`accounts.recommend_priority_${item.priority}`)}
-                        </span>
-                      </td>
-                      <td>{t(item.reasonKey)}</td>
-                      <td>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => void executeRecommendation(item)}
-                        >
-                          {t('common.execute')}
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {visibleRecommendations.length === 0 ? (
-              <EmptyState
-                title={t('accounts.quota_no_recommendations')}
-                description={t('accounts.quota_no_recommendations_desc')}
-              />
-            ) : null}
-          </div>
-          <aside className={styles.rulePanel}>
-            <h2>{t('accounts.quota_rules_title')}</h2>
-            <div className={styles.ruleList}>
-              <div>
-                <strong>{t('accounts.quota_rule_low_title')}</strong>
-                <p>{t('accounts.quota_rule_low_desc')}</p>
-              </div>
-              <div>
-                <strong>{t('accounts.quota_rule_exhausted_title')}</strong>
-                <p>{t('accounts.quota_rule_exhausted_desc')}</p>
-              </div>
-              <div>
-                <strong>{t('accounts.quota_rule_recovery_title')}</strong>
-                <p>{t('accounts.quota_rule_recovery_desc')}</p>
-              </div>
-            </div>
-          </aside>
-        </section>
-        {renderDetailDrawer()}
-      </>
-    );
-  };
-
   const renderInspectionView = () => (
     <>
       <section className={styles.metricsGrid}>
@@ -4009,178 +3741,6 @@ export function AccountsPage() {
     </section>
   );
 
-  const renderUsageTrend = () => {
-    const points = usageTimeline.length > 0 ? usageTimeline : [];
-    const maxCalls = Math.max(1, ...points.map((point) => point.calls));
-    return (
-      <div className={styles.trendChart} aria-label={t('accounts.value_trend')}>
-        {points.length > 0 ? (
-          points.map((point) => (
-            <span
-              key={`${point.bucket_ms}:${point.label}`}
-              style={{ height: `${Math.max(8, (point.calls / maxCalls) * 100)}%` }}
-              title={`${point.label}: ${point.calls}`}
-            />
-          ))
-        ) : (
-          <small>{t('accounts.value_trend_unavailable')}</small>
-        )}
-      </div>
-    );
-  };
-
-  const renderValueView = () => (
-    <>
-      <section className={styles.metricsGrid}>
-        {renderMetricCard(
-          'weekly-value',
-          t('accounts.value_weekly'),
-          formatMoney(valueSummary.weeklyValue),
-          t(`accounts.value_source_${valueSummary.source}`),
-          <IconDollarSign size={24} />,
-          'violet'
-        )}
-        {renderMetricCard(
-          'historical-value',
-          t('accounts.value_historical'),
-          formatMoney(valueSummary.historicalValue),
-          t('accounts.value_historical_meta'),
-          <IconTrendingUp size={24} />,
-          'blue'
-        )}
-        {renderMetricCard(
-          'high-value',
-          t('accounts.value_high_accounts'),
-          valueSummary.highValueAccounts,
-          t('accounts.value_high_accounts_meta'),
-          <IconCheck size={24} />,
-          'green'
-        )}
-        {renderMetricCard(
-          'low-activity',
-          t('accounts.value_low_accounts'),
-          valueSummary.lowActivityAccounts,
-          t('accounts.value_low_accounts_meta'),
-          <IconShield size={24} />,
-          'amber'
-        )}
-        {renderMetricCard(
-          'avg-success',
-          t('accounts.value_avg_success'),
-          formatPercent(valueSummary.averageSuccessRate, 1),
-          t('accounts.value_avg_success_meta'),
-          <IconEye size={24} />,
-          'blue'
-        )}
-      </section>
-      <section className={styles.valuePanel}>
-        <div className={styles.panelHeader}>
-          <div>
-            <h2>{t('accounts.value_title')}</h2>
-            <p>{usageError ? t('accounts.value_fallback_desc') : t('accounts.value_desc')}</p>
-          </div>
-          <div className={styles.headerActions}>
-            <Select
-              value={valueRange}
-              options={VALUE_RANGE_OPTIONS.map((option) => ({
-                value: option.value,
-                label: t(option.labelKey),
-              }))}
-              onChange={(value) => setValueRange(value as UsageValueRange)}
-              ariaLabel={t('accounts.value_range')}
-            />
-            <Select
-              value={valueProvider}
-              options={[
-                { value: 'all', label: t('accounts.filter_all') },
-                ...valueProviderOptions.map((provider) => ({
-                  value: provider,
-                  label: getProviderLabel(provider, t),
-                })),
-              ]}
-              onChange={setValueProvider}
-              ariaLabel={t('accounts.provider_filter')}
-            />
-            <div className={styles.searchField}>
-              <Input
-                value={valueSearch}
-                onChange={(event) => setValueSearch(event.target.value)}
-                placeholder={t('accounts.search_placeholder')}
-                rightElement={<IconSearch size={16} />}
-                aria-label={t('accounts.search_label')}
-              />
-            </div>
-          </div>
-        </div>
-        {usageLoading ? (
-          <div className={styles.loadingPanel}>
-            <LoadingSpinner />
-          </div>
-        ) : (
-          <>
-            {renderUsageTrend()}
-            <div className={styles.tableScroller}>
-              <table className={styles.compactTable}>
-                <thead>
-                  <tr>
-                    <th>{t('accounts.col_account')}</th>
-                    <th>{t('accounts.col_provider')}</th>
-                    <th>{t('accounts.value_requests')}</th>
-                    <th>{t('accounts.value_success_rate')}</th>
-                    <th>{t('accounts.value_input_tokens')}</th>
-                    <th>{t('accounts.value_output_tokens')}</th>
-                    <th>{t('accounts.value_estimated')}</th>
-                    <th>{t('accounts.value_recent')}</th>
-                    <th>{t('accounts.value_rating')}</th>
-                    <th>{t('accounts.col_actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredUsageRows.map((row) => (
-                    <tr key={row.key}>
-                      <td>
-                        <div className={styles.accountCell}>
-                          <strong title={row.accountLabel}>
-                            {getDisplayText(row.accountLabel)}
-                          </strong>
-                          <span title={row.fileName}>{getDisplayFileName(row.fileName)}</span>
-                        </div>
-                      </td>
-                      <td>{getProviderLabel(row.provider, t)}</td>
-                      <td>{formatCompactNumber(row.requests)}</td>
-                      <td>{formatPercent(row.successRate, 1)}</td>
-                      <td>{formatCompactNumber(row.inputTokens)}</td>
-                      <td>{formatCompactNumber(row.outputTokens)}</td>
-                      <td>{formatMoney(row.estimatedCost)}</td>
-                      <td>{formatTimestamp(row.lastSeenMs, i18n.language)}</td>
-                      <td>{t(`accounts.value_rating_${row.rating}`)}</td>
-                      <td>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => openUsageValueDetail(row)}
-                          title={!row.row ? t('accounts.value_unmatched_detail') : undefined}
-                          aria-label={
-                            row.row
-                              ? t('accounts.open_detail', { name: row.fileName })
-                              : t('accounts.value_unmatched_detail')
-                          }
-                        >
-                          {t('accounts.open_detail_short')}
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </section>
-      {renderDetailDrawer()}
-    </>
-  );
-
   const renderPageActions = () => (
     <div className={styles.headerActions}>
       <Button variant="secondary" size="sm" onClick={() => void handleRefresh()} disabled={loading}>
@@ -4219,10 +3779,8 @@ export function AccountsPage() {
   );
 
   const renderActiveView = () => {
-    if (activeView === 'quota') return renderQuotaView();
     if (activeView === 'inspection') return renderInspectionView();
     if (activeView === 'oauth') return renderOAuthView();
-    if (activeView === 'value') return renderValueView();
     return renderAccountsOverview();
   };
 
@@ -4233,7 +3791,7 @@ export function AccountsPage() {
           {renderViewTabs()}
           {renderPageActions()}
         </div>
-        {activeView === 'accounts' || activeView === 'quota' ? (
+        {activeView === 'accounts' ? (
           <div className={styles.controlsFilterSection}>{renderToolbar()}</div>
         ) : null}
       </section>
