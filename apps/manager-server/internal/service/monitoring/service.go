@@ -596,6 +596,9 @@ type FilterOptions struct {
 	APIKeyHashes     []string          `json:"api_key_hashes,omitempty"`
 	Providers        []string          `json:"providers,omitempty"`
 	AuthFiles        []string          `json:"auth_files,omitempty"`
+	Accounts         []string          `json:"accounts,omitempty"`
+	AccountCount     int               `json:"account_count,omitempty"`
+	APIKeyCount      int               `json:"api_key_count,omitempty"`
 	ProjectIDs       []string          `json:"project_ids,omitempty"`
 	RequestTypes     []string          `json:"request_types,omitempty"`
 	HeaderErrorKinds []string          `json:"header_error_kinds,omitempty"`
@@ -1465,12 +1468,83 @@ func (s *Service) filterSelectors(ctx context.Context, filter store.AnalyticsFil
 	if err != nil {
 		return nil, err
 	}
+	accountStats := buildAccountSelectorStats(values)
 	return &FilterOptions{
 		Models:       values.Models,
 		APIKeyHashes: values.APIKeyHashes,
 		Providers:    values.Providers,
 		AuthFiles:    values.AuthFiles,
+		Accounts:     values.Accounts,
+		AccountStats: accountStats,
+		AccountCount: len(accountStats),
+		APIKeyCount:  countAPIKeySelectors(values),
 	}, nil
+}
+
+func countAPIKeySelectors(values store.FilterSelectorValues) int {
+	groups := make(map[string]struct{}, len(values.APIKeySelectors))
+	for _, selector := range values.APIKeySelectors {
+		groups[apiKeyGroupKey(
+			selector.APIKeyHash,
+			selector.SourceHash,
+			selector.AuthIndex,
+			selector.Source,
+			selector.AuthProviderSnapshot,
+		)] = struct{}{}
+	}
+	return len(groups)
+}
+
+func buildAccountSelectorStats(values store.FilterSelectorValues) []AccountStatRow {
+	grouped := map[string]*accountStatAccumulator{}
+	for _, selector := range values.AccountSelectors {
+		id := accountGroupKey(
+			selector.AccountSnapshot,
+			selector.AuthLabelSnapshot,
+			selector.Source,
+			selector.AuthIndex,
+		)
+		if id == "-" && strings.TrimSpace(selector.SourceHash) == "" {
+			continue
+		}
+		entry := grouped[id]
+		if entry == nil {
+			entry = &accountStatAccumulator{
+				row: AccountStatRow{
+					ID:                   id,
+					AccountSnapshot:      selector.AccountSnapshot,
+					AuthLabelSnapshot:    selector.AuthLabelSnapshot,
+					AuthProviderSnapshot: selector.AuthProviderSnapshot,
+					SuccessRate:          1,
+				},
+				authIndices:  map[string]struct{}{},
+				sources:      map[string]struct{}{},
+				sourceHashes: map[string]struct{}{},
+			}
+			grouped[id] = entry
+		}
+		fillAccountStatSnapshots(
+			&entry.row,
+			selector.AccountSnapshot,
+			selector.AuthLabelSnapshot,
+			selector.AuthProviderSnapshot,
+		)
+		addSetValue(entry.authIndices, selector.AuthIndex)
+		addSetValue(entry.sources, selector.Source)
+		addSetValue(entry.sourceHashes, selector.SourceHash)
+	}
+
+	result := make([]AccountStatRow, 0, len(grouped))
+	for _, entry := range grouped {
+		entry.row.AuthIndices = sortedSetValues(entry.authIndices)
+		entry.row.Sources = sortedSetValues(entry.sources)
+		entry.row.SourceHashes = sortedSetValues(entry.sourceHashes)
+		result = append(result, entry.row)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
+	return result
 }
 
 func filterOptionsBaseFilter(filter store.AnalyticsFilter) store.AnalyticsFilter {

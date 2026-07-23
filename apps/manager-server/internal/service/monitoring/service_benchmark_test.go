@@ -73,6 +73,26 @@ func BenchmarkUsageAnalyticsIncludeProfiles(b *testing.B) {
 	monitoringFullWithoutFilterOptions.Include.FilterOptions = false
 	monitoringFullFiltered := monitoringFull
 	monitoringFullFiltered.Filters.Models = []string{"gpt-00"}
+	monitoringAccountsCompact := request(Include{
+		Summary:        true,
+		SummaryProfile: "compact",
+		AccountStats:   true,
+		EventsPage:     &EventsPage{Limit: 500},
+		Granularity:    "day",
+	})
+	monitoringAPIKeysCompact := request(Include{
+		Summary:        true,
+		SummaryProfile: "compact",
+		APIKeyStats:    true,
+		EventsPage:     &EventsPage{Limit: 500},
+		Granularity:    "day",
+	})
+	monitoringRealtimeCompact := request(Include{
+		Summary:        true,
+		SummaryProfile: "compact",
+		EventsPage:     &EventsPage{Limit: 500},
+		Granularity:    "day",
+	})
 	profiles := []struct {
 		name     string
 		service  *Service
@@ -100,6 +120,9 @@ func BenchmarkUsageAnalyticsIncludeProfiles(b *testing.B) {
 		{name: "monitoring_curl_scope", service: rollupService, requests: []Request{monitoringCurlScope}},
 		{name: "monitoring_full_without_filter_options", service: rollupService, requests: []Request{monitoringFullWithoutFilterOptions}},
 		{name: "monitoring_full_filtered", service: rollupService, requests: []Request{monitoringFullFiltered}},
+		{name: "monitoring_accounts_compact", service: rollupService, requests: []Request{monitoringAccountsCompact}},
+		{name: "monitoring_api_keys_compact", service: rollupService, requests: []Request{monitoringAPIKeysCompact}},
+		{name: "monitoring_realtime_compact", service: rollupService, requests: []Request{monitoringRealtimeCompact}},
 		{name: "filter_options_only", service: rollupService, requests: []Request{request(Include{FilterOptions: true})}},
 		{
 			name:    "overview_initial",

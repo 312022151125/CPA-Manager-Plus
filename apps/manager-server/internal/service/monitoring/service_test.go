@@ -1525,7 +1525,7 @@ func TestAnalyticsFilterOptionsIgnoreActiveScopeFilters(t *testing.T) {
 	}
 }
 
-func TestAnalyticsFilterSelectorsReturnOnlyUsageAnalyticsOptions(t *testing.T) {
+func TestAnalyticsFilterSelectorsReturnLightweightOptions(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()
 	fromMS := int64(1_778_350_000_000)
@@ -1541,8 +1541,29 @@ func TestAnalyticsFilterSelectorsReturnOnlyUsageAnalyticsOptions(t *testing.T) {
 	bob.AuthProviderSnapshot = "gemini"
 	bob.AuthFileSnapshot = "bob.json"
 	bob.APIKeyHash = "key-bob"
+	sourceOnly := monitoringEvent("selector-source-only", fromMS+3_000, "gpt-a", "", "source-only", false, 10, 5, 0, 0, 15, nil)
+	sourceOnly.AccountSnapshot = ""
+	sourceOnly.AuthLabelSnapshot = ""
+	sourceOnly.AuthProviderSnapshot = "openai"
+	sourceOnly.AuthFileSnapshot = ""
+	sourceOnly.APIKeyHash = ""
+	sourceOnly.Source = "k:upstream-key"
+	sourceOnlyRotated := monitoringEvent("selector-source-only-rotated", fromMS+4_000, "gpt-b", "", "source-only", false, 10, 5, 0, 0, 15, nil)
+	sourceOnlyRotated.AccountSnapshot = ""
+	sourceOnlyRotated.AuthLabelSnapshot = ""
+	sourceOnlyRotated.AuthProviderSnapshot = "openai"
+	sourceOnlyRotated.AuthFileSnapshot = ""
+	sourceOnlyRotated.APIKeyHash = ""
+	sourceOnlyRotated.Source = "k:z-upstream-key"
+	sourceHashOnly := monitoringEvent("selector-source-hash-only", fromMS+5_000, "gpt-a", "", "source-hash-only", false, 10, 5, 0, 0, 15, nil)
+	sourceHashOnly.AccountSnapshot = ""
+	sourceHashOnly.AuthLabelSnapshot = ""
+	sourceHashOnly.AuthProviderSnapshot = "openai"
+	sourceHashOnly.AuthFileSnapshot = ""
+	sourceHashOnly.APIKeyHash = ""
+	sourceHashOnly.Source = ""
 
-	if _, err := db.InsertEvents(ctx, []usage.Event{alice, bob}); err != nil {
+	if _, err := db.InsertEvents(ctx, []usage.Event{alice, bob, sourceOnly, sourceOnlyRotated, sourceHashOnly}); err != nil {
 		t.Fatalf("insert events: %v", err)
 	}
 
@@ -1567,14 +1588,51 @@ func TestAnalyticsFilterSelectorsReturnOnlyUsageAnalyticsOptions(t *testing.T) {
 	if !slices.Equal(resp.FilterOptions.APIKeyHashes, []string{"key-alice", "key-bob"}) {
 		t.Fatalf("api key hashes = %#v", resp.FilterOptions.APIKeyHashes)
 	}
-	if !slices.Equal(resp.FilterOptions.Providers, []string{"codex", "gemini"}) {
+	if !slices.Equal(resp.FilterOptions.Providers, []string{"codex", "gemini", "openai"}) {
 		t.Fatalf("providers = %#v", resp.FilterOptions.Providers)
 	}
 	if !slices.Equal(resp.FilterOptions.AuthFiles, []string{"alice.json", "bob.json"}) {
 		t.Fatalf("auth files = %#v", resp.FilterOptions.AuthFiles)
 	}
-	if len(resp.FilterOptions.AccountStats) != 0 || len(resp.FilterOptions.APIKeyStats) != 0 ||
-		len(resp.FilterOptions.ChannelShare) != 0 || len(resp.FilterOptions.ModelStats) != 0 {
+	if !slices.Equal(resp.FilterOptions.Accounts, []string{"alice@example.com", "bob@example.com"}) {
+		t.Fatalf("accounts = %#v", resp.FilterOptions.Accounts)
+	}
+	if resp.FilterOptions.AccountCount != 4 || resp.FilterOptions.APIKeyCount != 4 {
+		t.Fatalf(
+			"selector counts account=%d api_key=%d",
+			resp.FilterOptions.AccountCount,
+			resp.FilterOptions.APIKeyCount,
+		)
+	}
+	if len(resp.FilterOptions.AccountStats) != 4 {
+		t.Fatalf("account identity selectors = %#v", resp.FilterOptions.AccountStats)
+	}
+	var sourceOnlySelector *AccountStatRow
+	for i := range resp.FilterOptions.AccountStats {
+		row := &resp.FilterOptions.AccountStats[i]
+		if slices.Contains(row.SourceHashes, "source-only") {
+			sourceOnlySelector = row
+			break
+		}
+	}
+	if sourceOnlySelector == nil || !slices.Equal(sourceOnlySelector.Sources, []string{"k:z-upstream-key"}) {
+		t.Fatalf("missing source-only selector: %#v", resp.FilterOptions.AccountStats)
+	}
+	if sourceOnlySelector.Calls != 0 || len(sourceOnlySelector.Models) != 0 {
+		t.Fatalf("selector unexpectedly returned aggregate metrics: %#v", sourceOnlySelector)
+	}
+	var sourceHashOnlySelector *AccountStatRow
+	for i := range resp.FilterOptions.AccountStats {
+		row := &resp.FilterOptions.AccountStats[i]
+		if slices.Contains(row.SourceHashes, "source-hash-only") {
+			sourceHashOnlySelector = row
+			break
+		}
+	}
+	if sourceHashOnlySelector == nil || len(sourceHashOnlySelector.Sources) != 0 {
+		t.Fatalf("missing source-hash-only selector: %#v", resp.FilterOptions.AccountStats)
+	}
+	if len(resp.FilterOptions.APIKeyStats) != 0 || len(resp.FilterOptions.ChannelShare) != 0 || len(resp.FilterOptions.ModelStats) != 0 {
 		t.Fatalf("filter selectors returned full stats: %#v", resp.FilterOptions)
 	}
 }
