@@ -504,10 +504,6 @@ export function GrokInspectionPage() {
     executeItemsRef.current = executeItems;
   }, [executeItems]);
 
-  const suggestedResults = useMemo(
-    () => (result ? result.results.filter(isSuggestedAction) : []),
-    [result]
-  );
 
   const displayResults = useMemo(() => (result ? result.results : []), [result]);
 
@@ -919,7 +915,6 @@ export function GrokInspectionPage() {
 
   const panelResult = asCodexCompatibleRunResult(result);
   const panelFilteredResults = asCodexCompatibleResults(resultPagination.pageItems);
-  const panelSuggestedResults = asCodexCompatibleResults(suggestedResults);
 
   return (
     <div className={styles.page}>
@@ -955,7 +950,6 @@ export function GrokInspectionPage() {
       <CodexInspectionResultsPanel
         result={panelResult as never}
         filteredResults={panelFilteredResults as never}
-        suggestedResults={panelSuggestedResults as never}
         pendingActionCount={pendingActionCount}
         manualActionCount={filterCounts.reauth}
         reauthActionCount={reauthResults.length}
@@ -973,7 +967,6 @@ export function GrokInspectionPage() {
         isInspectionInFlight={isInspectionInFlight}
         t={t}
         title={t('monitoring.grok_inspection_results_title')}
-        subtitle={t('monitoring.grok_inspection_results_desc')}
         onActionFilterChange={setActionFilter}
         onHandlingFilterChange={setHandlingFilter}
         onPageChange={setResultPage}
