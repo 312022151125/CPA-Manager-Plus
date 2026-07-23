@@ -763,8 +763,7 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 	if rollupEligible && needsHourlyCore {
 		hourlySnapshot, hourlySnapshotAvailable = s.hourlyReader.LoadAnalytics(
 			ctx,
-			req.FromMS,
-			req.ToMS,
+			filter,
 			granularity,
 			location,
 			hourlyTimelineRepresentable,
@@ -1009,8 +1008,7 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 				if rollupEligible {
 					prevSnapshot, prevSnapshotAvailable = s.hourlyReader.LoadAnalytics(
 						ctx,
-						prevFrom,
-						req.FromMS,
+						prevFilter,
 						granularity,
 						location,
 						false,
@@ -1342,26 +1340,7 @@ func buildFilter(req Request) store.AnalyticsFilter {
 }
 
 func analyticsHourlyRollupEligible(filter store.AnalyticsFilter) bool {
-	return strings.TrimSpace(filter.SearchQuery) == "" &&
-		strings.TrimSpace(filter.SearchAPIKeyHash) == "" &&
-		len(filter.Models) == 0 &&
-		len(filter.Providers) == 0 &&
-		len(filter.Accounts) == 0 &&
-		len(filter.CredentialIDs) == 0 &&
-		len(filter.AuthFiles) == 0 &&
-		len(filter.AuthIndices) == 0 &&
-		len(filter.APIKeyHashes) == 0 &&
-		len(filter.SourceHashes) == 0 &&
-		len(filter.ProjectIDs) == 0 &&
-		len(filter.RequestTypes) == 0 &&
-		len(filter.HeaderErrorKinds) == 0 &&
-		len(filter.HeaderErrorCodes) == 0 &&
-		len(filter.HeaderQuotaPlans) == 0 &&
-		len(filter.HeaderTraceIDs) == 0 &&
-		filter.IncludeFailed &&
-		!filter.FailedOnly &&
-		filter.MinLatencyMS == 0 &&
-		strings.TrimSpace(filter.CacheStatus) == ""
+	return usagehourly.SupportsAnalyticsFilter(filter)
 }
 
 type filterOptionStats struct {

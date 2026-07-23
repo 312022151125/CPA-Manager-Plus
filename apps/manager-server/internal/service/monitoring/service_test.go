@@ -2122,6 +2122,69 @@ func TestAnalyticsHourlyRollupMatchesRawCoreComparisonAndTimeline(t *testing.T) 
 	}
 }
 
+func TestAnalyticsHourlyRollupMatchesRawForModelAndOutcomeFilters(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_800_000_000_000) + 15*time.Minute.Milliseconds()
+	toMS := fromMS + 4*time.Hour.Milliseconds() + 20*time.Minute.Milliseconds()
+	latency := int64(125)
+	events := []usage.Event{
+		monitoringEvent("filtered-edge-success-a", fromMS+time.Minute.Milliseconds(), "model-a", "auth-a", "source-a", false, 10, 1, 0, 0, 11, &latency),
+		monitoringEvent("filtered-full-failed-a", fromMS+time.Hour.Milliseconds(), "model-a", "auth-a", "source-a", true, 20, 2, 0, 0, 22, &latency),
+		monitoringEvent("filtered-full-success-b", fromMS+2*time.Hour.Milliseconds(), "model-b", "auth-b", "source-b", false, 30, 3, 0, 0, 33, &latency),
+		monitoringEvent("filtered-edge-failed-b", toMS-time.Minute.Milliseconds(), "model-b", "auth-b", "source-b", true, 40, 4, 0, 0, 44, &latency),
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	catchUpMonitoringHourlyRollup(t, ctx, db)
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		monitoringEvent("filtered-late-success-a", fromMS+90*time.Minute.Milliseconds(), "model-a", "auth-a", "source-a", false, 50, 5, 0, 0, 55, &latency),
+	}); err != nil {
+		t.Fatalf("insert late event: %v", err)
+	}
+
+	includeFailed := false
+	tests := []struct {
+		name    string
+		filters Filters
+	}{
+		{name: "model", filters: Filters{Models: []string{"model-a"}}},
+		{name: "success only", filters: Filters{IncludeFailed: &includeFailed}},
+		{name: "failed only", filters: Filters{FailedOnly: true}},
+		{name: "model and failed", filters: Filters{Models: []string{"model-b"}, FailedOnly: true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := Request{
+				FromMS:   fromMS,
+				ToMS:     toMS,
+				NowMS:    toMS,
+				TimeZone: "UTC",
+				Filters:  test.filters,
+				Include: Include{
+					Summary:     true,
+					Timeline:    true,
+					ModelStats:  true,
+					Granularity: "hour",
+				},
+			}
+			raw, err := New(db, false).Analytics(ctx, req)
+			if err != nil {
+				t.Fatalf("raw analytics: %v", err)
+			}
+			rolled, err := New(db, true).Analytics(ctx, req)
+			if err != nil {
+				t.Fatalf("rollup analytics: %v", err)
+			}
+			raw.GeneratedAtMS = rolled.GeneratedAtMS
+			if !reflect.DeepEqual(rolled, raw) {
+				t.Fatalf("filtered analytics mismatch\nrollup=%#v\nraw=%#v", rolled, raw)
+			}
+		})
+	}
+}
+
 func TestAnalyticsHourlyRollupTimelineMatchesRawAcrossDST(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()
@@ -2243,7 +2306,6 @@ func TestAnalyticsHourlyRollupEligibilityIsStrict(t *testing.T) {
 	}{
 		{name: "search", mutate: func(filter *store.AnalyticsFilter) { filter.SearchQuery = "model" }},
 		{name: "search api key", mutate: func(filter *store.AnalyticsFilter) { filter.SearchAPIKeyHash = "key" }},
-		{name: "models", mutate: func(filter *store.AnalyticsFilter) { filter.Models = []string{"model-a"} }},
 		{name: "providers", mutate: func(filter *store.AnalyticsFilter) { filter.Providers = []string{"codex"} }},
 		{name: "accounts", mutate: func(filter *store.AnalyticsFilter) { filter.Accounts = []string{"account"} }},
 		{name: "credential ids", mutate: func(filter *store.AnalyticsFilter) { filter.CredentialIDs = []string{"credential"} }},
@@ -2257,8 +2319,6 @@ func TestAnalyticsHourlyRollupEligibilityIsStrict(t *testing.T) {
 		{name: "header error codes", mutate: func(filter *store.AnalyticsFilter) { filter.HeaderErrorCodes = []string{"429"} }},
 		{name: "header quota plans", mutate: func(filter *store.AnalyticsFilter) { filter.HeaderQuotaPlans = []string{"pro"} }},
 		{name: "header trace ids", mutate: func(filter *store.AnalyticsFilter) { filter.HeaderTraceIDs = []string{"trace"} }},
-		{name: "exclude failed", mutate: func(filter *store.AnalyticsFilter) { filter.IncludeFailed = false }},
-		{name: "failed only", mutate: func(filter *store.AnalyticsFilter) { filter.FailedOnly = true }},
 		{name: "minimum latency", mutate: func(filter *store.AnalyticsFilter) { filter.MinLatencyMS = 100 }},
 		{name: "cache status", mutate: func(filter *store.AnalyticsFilter) { filter.CacheStatus = "hit" }},
 	}
@@ -2271,12 +2331,22 @@ func TestAnalyticsHourlyRollupEligibilityIsStrict(t *testing.T) {
 			}
 		})
 	}
+
+	for _, supported := range []store.AnalyticsFilter{
+		{IncludeFailed: true, Models: []string{"model-a"}},
+		{IncludeFailed: false},
+		{IncludeFailed: true, FailedOnly: true},
+	} {
+		if !analyticsHourlyRollupEligible(supported) {
+			t.Fatalf("supported filter unexpectedly ineligible: %#v", supported)
+		}
+	}
 }
 
 func catchUpMonitoringHourlyRollup(t *testing.T, ctx context.Context, db *store.Store) {
 	t.Helper()
 	for {
-		result, err := db.CatchUpDashboardHourlyRollups(ctx, 100, time.Now().UnixMilli())
+		result, err := db.CatchUpUsageHourlyAggregate(ctx, 100, time.Now().UnixMilli())
 		if err != nil {
 			t.Fatalf("catch up hourly rollup: %v", err)
 		}
