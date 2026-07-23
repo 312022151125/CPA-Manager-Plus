@@ -92,6 +92,7 @@ describe('accountListPresentation', () => {
         source: 'cache',
       },
       inspection: {
+        source: 'server',
         action: 'reauth',
         actionReason: 'expired',
         actionStatus: 'pending',

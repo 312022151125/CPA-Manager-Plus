@@ -23,34 +23,33 @@ import { UsageAnalyticsPage } from '@/pages/UsageAnalyticsPage';
 import { MonitoringCenterPage } from '@/pages/MonitoringCenterPage';
 import { AccountActionCandidatesPage } from '@/pages/AccountActionCandidatesPage';
 import { ModelPricesPage } from '@/pages/ModelPricesPage';
-import { CodexInspectionPage } from '@/pages/CodexInspectionPage';
-import { ServerCodexInspectionPage } from '@/pages/ServerCodexInspectionPage';
 import { ConfigPage } from '@/pages/ConfigPage';
 import { LogsPage } from '@/pages/LogsPage';
 import { PluginResourcePage } from '@/pages/PluginResourcePage';
 import { PluginsPage } from '@/pages/PluginsPage';
 import { SystemPage } from '@/pages/SystemPage';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
-import { CodexInspectionModeTabs } from '@/features/monitoring/components/CodexInspectionModeTabs';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { isLogsRouteAvailable } from '@/features/logs/logFeatureAvailability';
 import { ensureRouteBasePathname, isDemoMode } from '@/features/demo/demoMode';
 import { useAuthStore, useConfigStore } from '@/stores';
-import codexInspectionStyles from '@/features/monitoring/CodexInspectionPage.module.scss';
 
-type FeatureKey = 'requestMonitoring' | 'modelPrices' | 'serverCodexInspection';
+type FeatureKey = 'requestMonitoring' | 'modelPrices';
 
 function LegacyAccountsRedirect({
   view,
+  healthMode,
   editor,
 }: {
-  view?: 'accounts' | 'oauth';
+  view?: 'accounts' | 'health' | 'oauth';
+  healthMode?: 'local' | 'server';
   editor?: 'excluded' | 'alias';
 }) {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   if (view === 'accounts') params.delete('view');
   else if (view) params.set('view', view);
+  if (view === 'health') params.set('healthMode', healthMode ?? 'local');
   if (editor) {
     params.set('editor', editor);
     const provider = params.get('provider');
@@ -87,9 +86,7 @@ function FeatureGate({
   const enabled =
     feature === 'requestMonitoring'
       ? availability.requestMonitoringAvailable
-      : feature === 'modelPrices'
-        ? availability.modelPricesAvailable
-        : availability.serverCodexInspectionAvailable;
+      : availability.modelPricesAvailable;
 
   if (availability.checking) {
     return fallback ?? <LoadingSpinner />;
@@ -100,49 +97,6 @@ function FeatureGate({
   }
 
   return children;
-}
-
-function ServerCodexInspectionRouteFallback() {
-  return (
-    <div className={codexInspectionStyles.page} aria-busy="true">
-      <CodexInspectionModeTabs activeMode="server" />
-      <section
-        className={[
-          codexInspectionStyles.panel,
-          codexInspectionStyles.statusPanel,
-          codexInspectionStyles.routeSkeletonPanel,
-        ]
-          .filter(Boolean)
-          .join(' ')}
-      >
-        <div className={codexInspectionStyles.routeSkeletonHeader}>
-          <span
-            className={[
-              codexInspectionStyles.routeSkeletonLine,
-              codexInspectionStyles.routeSkeletonLineTitle,
-            ]
-              .filter(Boolean)
-              .join(' ')}
-          />
-          <span className={codexInspectionStyles.routeSkeletonPill} />
-        </div>
-        <div className={codexInspectionStyles.routeSkeletonMeta}>
-          <span className={codexInspectionStyles.routeSkeletonPill} />
-          <span className={codexInspectionStyles.routeSkeletonPill} />
-          <span className={codexInspectionStyles.routeSkeletonPillWide} />
-        </div>
-        <div className={codexInspectionStyles.routeSkeletonGrid}>
-          {Array.from({ length: 6 }).map((_, index) => (
-            <span key={index} className={codexInspectionStyles.routeSkeletonCard} />
-          ))}
-        </div>
-      </section>
-      <section className={codexInspectionStyles.routeSkeletonDetailGrid}>
-        <span className={codexInspectionStyles.routeSkeletonBlock} />
-        <span className={codexInspectionStyles.routeSkeletonBlockTall} />
-      </section>
-    </div>
-  );
 }
 
 function LogsGate({ children }: { children: ReactElement }) {
@@ -234,17 +188,13 @@ const mainRoutes: RouteObject[] = [
       </FeatureGate>
     ),
   },
-  { path: '/codex-inspection', element: <CodexInspectionPage /> },
+  {
+    path: '/codex-inspection',
+    element: <LegacyAccountsRedirect view="health" healthMode="local" />,
+  },
   {
     path: '/codex-inspection/server',
-    element: (
-      <FeatureGate
-        feature="serverCodexInspection"
-        fallback={<ServerCodexInspectionRouteFallback />}
-      >
-        <ServerCodexInspectionPage />
-      </FeatureGate>
-    ),
+    element: <LegacyAccountsRedirect view="health" healthMode="server" />,
   },
   {
     path: '/model-prices',
@@ -278,14 +228,13 @@ const mainRoutes: RouteObject[] = [
       </FeatureGate>
     ),
   },
-  { path: '/monitoring/codex-inspection', element: <Navigate to="/codex-inspection" replace /> },
+  {
+    path: '/monitoring/codex-inspection',
+    element: <LegacyAccountsRedirect view="health" healthMode="local" />,
+  },
   {
     path: '/monitoring/codex-inspection/server',
-    element: (
-      <FeatureGate feature="serverCodexInspection">
-        <Navigate to="/codex-inspection/server" replace />
-      </FeatureGate>
-    ),
+    element: <LegacyAccountsRedirect view="health" healthMode="server" />,
   },
   {
     path: '/plugins',

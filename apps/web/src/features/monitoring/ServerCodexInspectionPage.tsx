@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/Input';
 import { Select, type SelectOption } from '@/components/ui/Select';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { CodexInspectionConfigOverview } from '@/features/monitoring/components/CodexInspectionConfigOverview';
-import { CodexInspectionModeTabs } from '@/features/monitoring/components/CodexInspectionModeTabs';
 import { Panel } from '@/features/monitoring/components/CodexInspectionPanels';
 import { CodexInspectionResultsPanel } from '@/features/monitoring/components/CodexInspectionResultsPanel';
 import { InspectionConfigDrawer } from '@/features/monitoring/components/InspectionConfigDrawer';
@@ -46,6 +45,11 @@ import {
   validateInspectionConfigDraft,
   validateInspectionConfigFields,
 } from '@/features/monitoring/model/codexInspectionPresentation';
+import {
+  createServerCredentialInspectionSnapshot,
+  type CredentialInspectionSnapshot,
+  type CredentialInspectionTarget,
+} from '@/features/monitoring/model/credentialInspectionSnapshot';
 import {
   DEFAULT_CODEX_INSPECTION_SETTINGS,
   codexInspectionTargetTypesToSelection,
@@ -674,7 +678,21 @@ function formatServiceHost(base: string): string {
   }
 }
 
-export function ServerCodexInspectionPage() {
+interface ServerCodexInspectionPageProps {
+  embedded?: boolean;
+  modeControl?: ReactNode;
+  onSnapshotChange?: (snapshot: CredentialInspectionSnapshot) => void;
+  onCredentialsChanged?: () => void | Promise<void>;
+  onOpenCredential?: (target: CredentialInspectionTarget) => void;
+}
+
+export function ServerCodexInspectionPage({
+  embedded = false,
+  modeControl,
+  onSnapshotChange,
+  onCredentialsChanged,
+  onOpenCredential,
+}: ServerCodexInspectionPageProps = {}) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const managementKey = useAuthStore((state) => state.managementKey);
@@ -710,6 +728,11 @@ export function ServerCodexInspectionPage() {
   const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
   const refreshInFlightRef = useRef(false);
   const actionInFlightRef = useRef(false);
+
+  useEffect(() => {
+    if (!detail || !onSnapshotChange) return;
+    onSnapshotChange(createServerCredentialInspectionSnapshot(detail, runs));
+  }, [detail, onSnapshotChange, runs]);
 
   const loadRunDetail = useCallback(
     async (base: string, id: number) => {
@@ -1116,6 +1139,7 @@ export function ServerCodexInspectionPage() {
           RUNS_LIMIT
         );
         setRuns(runsResponse.items);
+        void onCredentialsChanged?.();
 
         const failed = response.outcomes.filter((item) => !item.success);
         if (failed.length > 0) {
@@ -1140,7 +1164,7 @@ export function ServerCodexInspectionPage() {
         setExecutingAllActions(false);
       }
     },
-    [detail, managementKey, serviceBase, showNotification, t]
+    [detail, managementKey, onCredentialsChanged, serviceBase, showNotification, t]
   );
 
   const handleExecuteServerActions = useCallback(
@@ -1223,8 +1247,9 @@ export function ServerCodexInspectionPage() {
 
   const handleCodexReauthSuccess = useCallback(async () => {
     await refreshRuns({ silent: true });
+    await onCredentialsChanged?.();
     showNotification(t('codex_reauth.rerun_hint'), 'success');
-  }, [refreshRuns, showNotification, t]);
+  }, [onCredentialsChanged, refreshRuns, showNotification, t]);
 
   const handleSelectRun = async (runID: number) => {
     if (!serviceBase || runID === selectedRunId) return;
@@ -1316,6 +1341,8 @@ export function ServerCodexInspectionPage() {
             </Button>
           </div>
         </div>
+
+        {modeControl ? <div className={styles.statusModeRow}>{modeControl}</div> : null}
 
         <CodexInspectionConfigOverview
           title={t('monitoring.codex_inspection_config_overview_title')}
@@ -1834,6 +1861,15 @@ export function ServerCodexInspectionPage() {
             ? () => handleDeleteServerReauth(reauthResults, 'bulk')
             : undefined
         }
+        onOpenCredential={
+          onOpenCredential
+            ? (item) =>
+                onOpenCredential({
+                  fileName: item.fileName,
+                  authIndex: item.authIndex ?? null,
+                })
+            : undefined
+        }
         filterLabel={filterLabel}
         handlingFilterLabel={handlingFilterLabel}
         renderOperation={renderOperation}
@@ -1983,9 +2019,7 @@ export function ServerCodexInspectionPage() {
   };
 
   return (
-    <div className={styles.page}>
-      <CodexInspectionModeTabs activeMode="server" />
-
+    <div className={styles.page} data-embedded={embedded || undefined}>
       {error ? (
         <div className={styles.topErrorBar} role="alert" aria-live="polite">
           <span>{error}</span>

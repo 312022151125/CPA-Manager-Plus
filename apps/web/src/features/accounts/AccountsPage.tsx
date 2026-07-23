@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { TFunction } from 'i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -19,7 +19,6 @@ import {
   IconCheck,
   IconArrowDownWideNarrow,
   IconArrowUpNarrowWide,
-  IconChevronRight,
   IconCopy,
   IconDollarSign,
   IconDownload,
@@ -56,7 +55,9 @@ import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth'
 import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
 import { useAccountCredentialSafeSummary } from '@/features/accounts/hooks/useAccountCredentialSafeSummary';
+import { useCredentialInspectionSnapshot } from '@/features/accounts/hooks/useCredentialInspectionSnapshot';
 import { PaginationControls } from '@/features/monitoring/components/MonitoringShared';
+import { CredentialHealthInspectionWorkspace } from '@/features/monitoring/components/CredentialHealthInspectionWorkspace';
 import { AuthJsonPasteModal } from '@/features/authFiles/components/AuthJsonPasteModal';
 import { AuthFilesPrefixProxyEditorModal } from '@/features/authFiles/components/AuthFilesPrefixProxyEditorModal';
 import { OAuthExcludedCard } from '@/features/authFiles/components/OAuthExcludedCard';
@@ -73,6 +74,7 @@ import {
 import {
   buildAccountMetrics,
   buildAccountRows,
+  findAccountRowForInspectionTarget,
   filterAccountRows,
   getPlanOptions,
   getProviderOptions,
@@ -120,7 +122,6 @@ import {
   formatHistorySuccessRate,
   formatMoney,
   formatPercent,
-  formatTimestamp,
   getAccountHistoryTitle,
   getAccountSortFieldOption,
   getProviderLabel,
@@ -141,9 +142,7 @@ import {
 import {
   buildUsageValueRowsFromMonitoring,
   buildUsageValueRowsFromRecent,
-  buildUsageValueSummary,
   type UsageValueRow,
-  type UsageValueSource,
 } from '@/features/accounts/model/usageValueRows';
 import { buildOAuthRulePreviewRows } from '@/features/accounts/model/oauthRulePreview';
 import { resolveAccountReauthAction } from '@/features/accounts/model/accountReauth';
@@ -166,6 +165,7 @@ import {
 import {
   AccountCredentialTab,
   AccountDiagnosticsTab,
+  AccountMetricsGrid,
   AccountModelsTab,
   AccountOverviewTab,
   AccountQuotaMatrix,
@@ -176,8 +176,6 @@ import {
   monitoringAnalyticsApi,
   usageServiceApi,
   type AccountActionCandidate,
-  type CodexInspectionRun,
-  type CodexInspectionResult,
   type MonitoringAnalyticsAccountStatRow,
   type MonitoringAnalyticsEventRow,
   type MonitoringAccountHistoryItem,
@@ -208,12 +206,11 @@ import {
   getHighConfidenceUsageHeaderSnapshotForAuthFile,
   isUsageHeaderQuotaSnapshotExpired,
 } from '@/utils/usageHeaderSnapshots';
-import {
-  createCodexInspectionConnectionFingerprint,
-  loadCodexInspectionLastRun,
-  type CodexInspectionLastRunState,
-  type CodexInspectionResultItem,
-} from '@/features/monitoring/codexInspection';
+import { createCodexInspectionConnectionFingerprint } from '@/features/monitoring/codexInspection';
+import type {
+  CredentialHealthInspectionMode,
+  CredentialInspectionTarget,
+} from '@/features/monitoring/model/credentialInspectionSnapshot';
 import styles from './AccountsPage.module.scss';
 
 type QuotaUpdater<T> = T | ((prev: T) => T);
@@ -317,60 +314,6 @@ async function refreshQuotaWithConfig<TState, TData>({
   }
 }
 
-const toLocalInspectionResult = (
-  item: CodexInspectionResultItem,
-  index: number,
-  createdAtMs: number
-): CodexInspectionResult => ({
-  id: -(index + 1),
-  runId: 0,
-  accountKey: item.key,
-  fileName: item.fileName,
-  displayAccount: item.displayAccount,
-  authIndex: item.authIndex ?? undefined,
-  accountId: item.accountId ?? undefined,
-  provider: item.provider,
-  disabled: item.disabled,
-  status: item.status,
-  state: item.state,
-  action: item.action,
-  actionReason: item.actionReason,
-  actionStatus: item.actionHandled ? 'executed' : 'pending',
-  statusCode: item.statusCode ?? undefined,
-  usedPercent: item.usedPercent ?? undefined,
-  isQuota: item.isQuota,
-  autoRecoverEligible: item.autoRecoverEligible,
-  error: item.error,
-  planType: item.planType,
-  quotaWindows: item.quotaWindows,
-  errorKind: item.errorKind,
-  errorDetail: item.errorDetail,
-  createdAtMs,
-});
-
-const toLocalInspectionRun = (state: CodexInspectionLastRunState): CodexInspectionRun => {
-  const result = state.result;
-  return {
-    id: 0,
-    triggerType: 'browser',
-    status: 'completed',
-    startedAtMs: result.startedAt,
-    finishedAtMs: result.finishedAt,
-    totalFiles: result.summary.totalFiles,
-    probeSetCount: result.summary.probeSetCount,
-    sampledCount: result.summary.sampledCount,
-    disabledCount: result.summary.disabledCount,
-    enabledCount: result.summary.enabledCount,
-    deleteCount: result.summary.deleteCount,
-    disableCount: result.summary.disableCount,
-    enableCount: result.summary.enableCount,
-    reauthCount: result.summary.reauthCount,
-    keepCount: result.summary.keepCount,
-    createdAtMs: state.savedAt,
-    updatedAtMs: state.savedAt,
-  };
-};
-
 export function AccountsPage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -447,9 +390,21 @@ export function AccountsPage() {
   const [activeView, setActiveView] = useState<AccountsView>(
     () => initialWorkspaceUrlState.current.view
   );
-  const [inspectionResults, setInspectionResults] = useState<CodexInspectionResult[]>([]);
-  const [inspectionRuns, setInspectionRuns] = useState<CodexInspectionRun[]>([]);
-  const [inspectionLoading, setInspectionLoading] = useState(false);
+  const [healthMode, setHealthMode] = useState<CredentialHealthInspectionMode>(
+    () => initialWorkspaceUrlState.current.healthMode
+  );
+  const {
+    results: inspectionResults,
+    loading: inspectionLoading,
+    refresh: loadInspectionSummary,
+    applySnapshot: applyInspectionSnapshot,
+  } = useCredentialInspectionSnapshot({
+    connectionFingerprint,
+    checking: featureAvailability.checking,
+    serverAvailable: featureAvailability.serverCodexInspectionAvailable,
+    managerServiceBase: featureAvailability.managerServiceBase ?? '',
+    managementKey,
+  });
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(
@@ -484,7 +439,6 @@ export function AccountsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(() => initialWorkspaceUrlState.current.pageSize);
   const [usageRows, setUsageRows] = useState<UsageValueRow[]>([]);
-  const [usageSource, setUsageSource] = useState<UsageValueSource>('recent');
   const [accountHistoryByRowKey, setAccountHistoryByRowKey] = useState<
     Map<string, MonitoringAccountHistoryItem>
   >(() => new Map());
@@ -534,7 +488,6 @@ export function AccountsPage() {
   );
   const [copiedIdentityKey, setCopiedIdentityKey] = useState<string | null>(null);
   const detailEventsRequestIdRef = useRef(0);
-  const inspectionRequestIdRef = useRef(0);
   const quotaCooldownRequestIdRef = useRef(0);
   const headerSnapshotReqIdRef = useRef(0);
   const accountHistoryReqIdRef = useRef(0);
@@ -544,7 +497,6 @@ export function AccountsPage() {
   const lastWorkspaceNavigationRef = useRef<string | null>(null);
   const syncingWorkspaceLocationRef = useRef(false);
   const hasProcessedInitialWorkspaceLocationRef = useRef(false);
-  const inspectionContextRef = useRef(connectionFingerprint);
   const previousQuotaCooldownsRef = useRef<Map<string, QuotaCooldownInfo>>(new Map());
   const autoRefreshingQuotaRef = useRef<Set<string>>(new Set());
   const quotaRequestVersionsRef = useRef<Map<string, number>>(new Map());
@@ -559,76 +511,6 @@ export function AccountsPage() {
     managerServiceBase: featureAvailability.managerServiceBase,
     managementKey,
   });
-
-  const loadInspectionSummary = useCallback(async () => {
-    const requestId = inspectionRequestIdRef.current + 1;
-    inspectionRequestIdRef.current = requestId;
-    const localRun = connectionFingerprint
-      ? loadCodexInspectionLastRun(connectionFingerprint)
-      : null;
-    const applyLocalRun = () => {
-      if (inspectionRequestIdRef.current !== requestId) return;
-      setInspectionLoading(false);
-      if (!localRun) {
-        setInspectionResults([]);
-        setInspectionRuns([]);
-        return;
-      }
-      const createdAtMs =
-        localRun.result.finishedAt || localRun.result.startedAt || localRun.savedAt;
-      setInspectionResults(
-        localRun.result.results.map((item, index) =>
-          toLocalInspectionResult(item, index, createdAtMs)
-        )
-      );
-      setInspectionRuns([toLocalInspectionRun(localRun)]);
-    };
-
-    if (
-      featureAvailability.checking ||
-      !featureAvailability.serverCodexInspectionAvailable ||
-      !featureAvailability.managerServiceBase ||
-      !managementKey
-    ) {
-      applyLocalRun();
-      return;
-    }
-
-    setInspectionLoading(true);
-    try {
-      const runs = await usageServiceApi.listCodexInspectionRuns(
-        featureAvailability.managerServiceBase,
-        managementKey,
-        10
-      );
-      if (inspectionRequestIdRef.current !== requestId) return;
-      const latestRunId = runs.items[0]?.id;
-      if (!latestRunId) {
-        applyLocalRun();
-        return;
-      }
-      const detail = await usageServiceApi.getCodexInspectionRun(
-        featureAvailability.managerServiceBase,
-        managementKey,
-        latestRunId
-      );
-      if (inspectionRequestIdRef.current !== requestId) return;
-      setInspectionRuns(runs.items);
-      setInspectionResults(detail.results);
-    } catch {
-      applyLocalRun();
-    } finally {
-      if (inspectionRequestIdRef.current === requestId) {
-        setInspectionLoading(false);
-      }
-    }
-  }, [
-    connectionFingerprint,
-    featureAvailability.checking,
-    featureAvailability.managerServiceBase,
-    featureAvailability.serverCodexInspectionAvailable,
-    managementKey,
-  ]);
 
   const loadQuotaCooldowns = useCallback(async () => {
     const requestId = quotaCooldownRequestIdRef.current + 1;
@@ -772,15 +654,6 @@ export function AccountsPage() {
     setHeaderSnapshots((current) => (current.length === 0 ? current : []));
     setHeaderSnapshotGeneratedAtMs(0);
   }, [featureAvailability.managerServiceBase, managementKey]);
-
-  useLayoutEffect(() => {
-    if (inspectionContextRef.current === connectionFingerprint) return;
-    inspectionContextRef.current = connectionFingerprint;
-    inspectionRequestIdRef.current += 1;
-    setInspectionResults([]);
-    setInspectionRuns([]);
-    setInspectionLoading(false);
-  }, [connectionFingerprint]);
 
   const loadOauthExcluded = oauthState.loadExcluded;
   const loadOauthModelAlias = oauthState.loadModelAlias;
@@ -942,7 +815,6 @@ export function AccountsPage() {
     () => buildAccountRows(files, baseQuotaStores, inspectionResults, accountQuotaOverrides),
     [accountQuotaOverrides, baseQuotaStores, files, inspectionResults]
   );
-  const metrics = useMemo(() => buildAccountMetrics(rows), [rows]);
   const accountOperationalScopeKeysByRowKey = useMemo(
     () => buildAccountOperationalScopeKeys(rows),
     [rows]
@@ -964,6 +836,14 @@ export function AccountsPage() {
         Array.from(quotaCooldowns.values())
       ),
     [quotaCooldowns, rows]
+  );
+  const metrics = useMemo(
+    () =>
+      buildAccountMetrics(rows, {
+        pendingActionsByRowKey: actionCandidatesByRowKey,
+        quotaCooldownsByRowKey,
+      }),
+    [actionCandidatesByRowKey, quotaCooldownsByRowKey, rows]
   );
   const providerOptions = useMemo(() => getProviderOptions(rows), [rows]);
   const planOptions = useMemo(() => getPlanOptions(rows), [rows]);
@@ -1098,11 +978,6 @@ export function AccountsPage() {
     deselectAll();
     setIsSelectionMode(false);
   }, [deselectAll]);
-  const valueSummary = useMemo(
-    () => buildUsageValueSummary(usageRows, usageSource),
-    [usageRows, usageSource]
-  );
-  const latestRun = inspectionRuns[0] ?? null;
   const getDisplayText = useCallback(
     (value: string) => (accountDisplayMode === 'full' ? value : maskQuotaAccountText(value)),
     [accountDisplayMode]
@@ -1230,6 +1105,7 @@ export function AccountsPage() {
       pageSize,
       accountDisplayMode,
       view: activeView,
+      healthMode,
       account: selectedRowKey,
       detailTab,
       editor:
@@ -1245,6 +1121,7 @@ export function AccountsPage() {
       accountSort,
       activeView,
       detailTab,
+      healthMode,
       oauthExcludedEditorProvider,
       oauthModelAliasEditorProvider,
       operationalFilter,
@@ -1265,6 +1142,7 @@ export function AccountsPage() {
       syncingWorkspaceLocationRef.current = !requestedView || requestedView === next.view;
       lastWorkspaceNavigationRef.current = null;
       setActiveView(next.view);
+      setHealthMode(next.healthMode);
       setSearch(next.search);
       setProviderFilter(next.providerFilter);
       setStatusFilter(next.statusFilter);
@@ -1341,6 +1219,56 @@ export function AccountsPage() {
     [location.pathname, location.search, navigate, workspaceUrlState]
   );
 
+  const changeHealthMode = useCallback(
+    (mode: CredentialHealthInspectionMode) => {
+      setHealthMode(mode);
+      const searchValue = writeAccountsWorkspaceUrlSearch(
+        location.search,
+        { ...workspaceUrlState, healthMode: mode },
+        DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
+      );
+      lastWorkspaceNavigationRef.current = searchValue;
+      navigate({ pathname: location.pathname, search: searchValue }, { replace: true });
+    },
+    [location.pathname, location.search, navigate, workspaceUrlState]
+  );
+
+  const handleInspectionCredentialsChanged = useCallback(async () => {
+    await Promise.all([
+      loadFiles(),
+      loadQuotaCooldowns(),
+      loadHeaderSnapshots(),
+      loadAccountActionCandidates(),
+    ]);
+  }, [loadAccountActionCandidates, loadFiles, loadHeaderSnapshots, loadQuotaCooldowns]);
+
+  const handleOpenInspectionCredential = useCallback(
+    (target: CredentialInspectionTarget) => {
+      const targetRow = findAccountRowForInspectionTarget(rows, target);
+      if (!targetRow) {
+        showNotification(t('accounts.inspection_credential_not_found'), 'warning');
+        return;
+      }
+
+      setActiveView('accounts');
+      setSelectedRowKey(targetRow.selectionKey);
+      setDetailTab('diagnostics');
+      const searchValue = writeAccountsWorkspaceUrlSearch(
+        location.search,
+        {
+          ...workspaceUrlState,
+          view: 'accounts',
+          account: targetRow.selectionKey,
+          detailTab: 'diagnostics',
+        },
+        DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
+      );
+      lastWorkspaceNavigationRef.current = searchValue;
+      navigate({ pathname: location.pathname, search: searchValue }, { replace: false });
+    },
+    [location.pathname, location.search, navigate, rows, showNotification, t, workspaceUrlState]
+  );
+
   useEffect(() => {
     if (!selectedRowKey) {
       setDetailTab('overview');
@@ -1411,7 +1339,6 @@ export function AccountsPage() {
     const fallback = () => {
       const fallbackRows = buildUsageValueRowsFromRecent(rows);
       setUsageRows(fallbackRows);
-      setUsageSource('recent');
     };
 
     if (
@@ -1445,7 +1372,6 @@ export function AccountsPage() {
         return;
       }
       setUsageRows(buildUsageValueRowsFromMonitoring(rows, stats));
-      setUsageSource('monitoring');
     } catch {
       fallback();
     }
@@ -1931,22 +1857,6 @@ export function AccountsPage() {
     [batchPatchFields, showNotification, t]
   );
 
-  const handleExportInspection = async () => {
-    const payload = JSON.stringify(
-      {
-        run: latestRun,
-        results: inspectionResults,
-      },
-      null,
-      2
-    );
-    const copied = await copyToClipboard(payload);
-    showNotification(
-      copied ? t('accounts.export_copied') : t('notification.copy_failed'),
-      copied ? 'success' : 'error'
-    );
-  };
-
   const copyTextWithNotification = useCallback(
     async (text: string) => {
       const copied = await copyToClipboard(text);
@@ -2003,8 +1913,6 @@ export function AccountsPage() {
   const reloadOauthRules = useCallback(async () => {
     await Promise.all([loadOauthExcluded(), loadOauthModelAlias()]);
   }, [loadOauthExcluded, loadOauthModelAlias]);
-
-  const estimatedWeeklyValue = valueSummary.weeklyValue;
 
   const selectedAccountSortIndex = ACCOUNT_SORT_FIELD_OPTIONS.findIndex(
     (option) => option.value === accountSort.key
@@ -2171,30 +2079,12 @@ export function AccountsPage() {
     }
   };
 
-  const renderMetricCard = (
-    key: string,
-    label: string,
-    value: string | number,
-    meta: string,
-    icon: ReactNode,
-    tone: 'blue' | 'green' | 'amber' | 'red' | 'violet' = 'blue'
-  ) => (
-    <section key={key} className={`${styles.metricCard} ${styles[`metricCard${tone}`]}`}>
-      <div className={`${styles.metricIcon} ${styles[`metricIcon${tone}`]}`}>{icon}</div>
-      <div className={styles.metricBody}>
-        <span>{label}</span>
-        <strong>{value}</strong>
-        <small>{meta}</small>
-      </div>
-    </section>
-  );
-
   const renderViewTabs = () => {
     const tabs: Array<SegmentedTabItem<AccountsView> & { badge?: number }> = [
       { id: 'accounts', label: t('accounts.tab_accounts') },
       {
-        id: 'inspection',
-        label: t('accounts.tab_inspection'),
+        id: 'health',
+        label: t('accounts.tab_health'),
         badge: metrics.needsInspectionAction,
       },
       { id: 'oauth', label: t('accounts.tab_oauth') },
@@ -3467,56 +3357,9 @@ export function AccountsPage() {
     );
   };
 
-  const renderMetrics = () => (
-    <section className={styles.metricsGrid}>
-      {renderMetricCard(
-        'total',
-        t('accounts.metric_total'),
-        metrics.total,
-        t('accounts.metric_total_meta'),
-        <IconSlidersHorizontal size={24} />,
-        'blue'
-      )}
-      {renderMetricCard(
-        'available',
-        t('accounts.metric_available'),
-        metrics.available,
-        t('accounts.metric_available_meta'),
-        <IconCheck size={24} />,
-        'green'
-      )}
-      {renderMetricCard(
-        'low',
-        t('accounts.metric_low'),
-        metrics.lowQuota,
-        t('accounts.metric_low_meta'),
-        <IconShield size={24} />,
-        'amber'
-      )}
-      {renderMetricCard(
-        'disabled',
-        t('accounts.metric_disabled'),
-        metrics.disabled,
-        t('accounts.metric_disabled_meta'),
-        <IconX size={24} />,
-        'red'
-      )}
-      {renderMetricCard(
-        'value',
-        t('accounts.metric_value'),
-        formatMoney(estimatedWeeklyValue),
-        t('accounts.metric_value_meta', {
-          rate: formatPercent(metrics.successRate, 1),
-        }),
-        <IconDollarSign size={24} />,
-        'violet'
-      )}
-    </section>
-  );
-
   const renderAccountsOverview = () => (
     <>
-      {renderMetrics()}
+      <AccountMetricsGrid metrics={metrics} />
       {error ? <div className={styles.errorBox}>{error}</div> : null}
       {loading ? (
         <div className={styles.loadingPanel}>
@@ -3529,165 +3372,14 @@ export function AccountsPage() {
     </>
   );
 
-  const renderInspectionView = () => (
-    <>
-      <section className={styles.metricsGrid}>
-        {renderMetricCard(
-          'last-run',
-          t('accounts.inspection_metric_last'),
-          latestRun ? `#${latestRun.id}` : '-',
-          latestRun
-            ? formatTimestamp(latestRun.startedAtMs, i18n.language)
-            : t('accounts.detail_no_inspection'),
-          <IconEye size={24} />,
-          'blue'
-        )}
-        {renderMetricCard(
-          'disable',
-          t('accounts.inspection_metric_disable'),
-          inspectionResults.filter((item) => item.action === 'disable').length,
-          t('accounts.inspection_metric_disable_meta'),
-          <IconX size={24} />,
-          'red'
-        )}
-        {renderMetricCard(
-          'enable',
-          t('accounts.inspection_metric_enable'),
-          inspectionResults.filter((item) => item.action === 'enable').length,
-          t('accounts.inspection_metric_enable_meta'),
-          <IconCheck size={24} />,
-          'green'
-        )}
-        {renderMetricCard(
-          'reauth',
-          t('accounts.inspection_metric_reauth'),
-          inspectionResults.filter((item) => item.action === 'reauth').length,
-          t('accounts.inspection_metric_reauth_meta'),
-          <IconShield size={24} />,
-          'amber'
-        )}
-      </section>
-      <section className={styles.tablePanel}>
-        <div className={styles.panelHeader}>
-          <div>
-            <h2>{t('accounts.inspection_latest_title')}</h2>
-            <p>
-              {featureAvailability.serverCodexInspectionAvailable
-                ? t('accounts.inspection_latest_desc')
-                : t('accounts.inspection_unavailable_desc')}
-            </p>
-          </div>
-          <div className={styles.headerActions}>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => navigate('/codex-inspection/server')}
-            >
-              <IconChevronRight size={15} />
-              {t('accounts.open_server_inspection')}
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => navigate('/codex-inspection')}>
-              {t('accounts.open_local_inspection')}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={handleExportInspection}
-              disabled={inspectionResults.length === 0}
-            >
-              <IconDownload size={15} />
-              {t('accounts.export_results')}
-            </Button>
-          </div>
-        </div>
-        {inspectionLoading ? (
-          <div className={styles.loadingPanel}>
-            <LoadingSpinner />
-          </div>
-        ) : inspectionResults.length > 0 ? (
-          <div className={styles.tableScroller}>
-            <table className={styles.compactTable}>
-              <thead>
-                <tr>
-                  <th>{t('accounts.col_account')}</th>
-                  <th>{t('accounts.col_status')}</th>
-                  <th>HTTP</th>
-                  <th>{t('accounts.recommend_action')}</th>
-                  <th>{t('accounts.detail_reason')}</th>
-                  <th>{t('accounts.col_actions')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {inspectionResults.map((item) => (
-                  <tr key={item.id}>
-                    <td>
-                      <div className={styles.accountCell}>
-                        <strong title={item.displayAccount || item.fileName}>
-                          {getDisplayText(item.displayAccount || item.fileName)}
-                        </strong>
-                        <span title={item.fileName}>{getDisplayFileName(item.fileName)}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className={styles.statusStack}>
-                        <span
-                          className={`${styles.badge} ${item.disabled ? styles.badgeMuted : styles.badgeGood}`}
-                        >
-                          {item.disabled
-                            ? t('accounts.status_disabled')
-                            : t('accounts.status_available')}
-                        </span>
-                        <small>HTTP {item.statusCode ?? '-'}</small>
-                        {item.action !== 'keep' ? (
-                          <small className={styles.inspectionHint}>
-                            {t(`accounts.action_${item.action}`, { defaultValue: item.action })}
-                          </small>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td>{item.statusCode ?? '-'}</td>
-                    <td>{t(`accounts.action_${item.action}`, { defaultValue: item.action })}</td>
-                    <td>
-                      {item.actionReason?.startsWith('monitoring.')
-                        ? t(item.actionReason)
-                        : item.actionReason || '-'}
-                    </td>
-                    <td>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => {
-                          const targetRow =
-                            rows.find(
-                              (row) =>
-                                row.fileName === item.fileName &&
-                                String(row.authIndex ?? '') === String(item.authIndex ?? '')
-                            ) ?? rows.find((row) => row.fileName === item.fileName);
-                          setSelectedRowKey(targetRow?.selectionKey ?? null);
-                          setDetailTab('diagnostics');
-                        }}
-                      >
-                        {t('accounts.open_detail_short')}
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <EmptyState
-            title={
-              featureAvailability.serverCodexInspectionAvailable
-                ? t('accounts.detail_no_inspection')
-                : t('accounts.inspection_unavailable_title')
-            }
-            description={t('accounts.inspection_unavailable_desc')}
-          />
-        )}
-      </section>
-      {renderDetailDrawer()}
-    </>
+  const renderHealthView = () => (
+    <CredentialHealthInspectionWorkspace
+      mode={healthMode}
+      onModeChange={changeHealthMode}
+      onSnapshotChange={applyInspectionSnapshot}
+      onCredentialsChanged={handleInspectionCredentialsChanged}
+      onOpenCredential={handleOpenInspectionCredential}
+    />
   );
 
   const renderOAuthView = () => (
@@ -3779,7 +3471,7 @@ export function AccountsPage() {
   );
 
   const renderActiveView = () => {
-    if (activeView === 'inspection') return renderInspectionView();
+    if (activeView === 'health') return renderHealthView();
     if (activeView === 'oauth') return renderOAuthView();
     return renderAccountsOverview();
   };
@@ -3791,10 +3483,10 @@ export function AccountsPage() {
           {renderViewTabs()}
           {renderPageActions()}
         </div>
-        {activeView === 'accounts' ? (
-          <div className={styles.controlsFilterSection}>{renderToolbar()}</div>
-        ) : null}
       </section>
+      {activeView === 'accounts' ? (
+        <section className={styles.controlsFilterPanel}>{renderToolbar()}</section>
+      ) : null}
       {renderActiveView()}
       {renderMobileFilterPanel()}
       {renderFloatingBatchActions()}

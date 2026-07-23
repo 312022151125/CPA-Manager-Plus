@@ -1,17 +1,20 @@
 import type { DetailTab, AccountsView } from './accountsPagePresentation';
 import type { AccountsWorkspaceUiState } from './accountsWorkspaceUiState';
+import type { CredentialHealthInspectionMode } from '@/features/monitoring/model/credentialInspectionSnapshot';
 
 export type AccountsOAuthEditor = 'excluded' | 'alias';
 
 export interface AccountsWorkspaceUrlState extends AccountsWorkspaceUiState {
   view: AccountsView;
+  healthMode: CredentialHealthInspectionMode;
   account: string | null;
   detailTab: DetailTab;
   editor: AccountsOAuthEditor | null;
   editorProvider: string;
 }
 
-const VIEW_SET = new Set<AccountsView>(['accounts', 'inspection', 'oauth']);
+const VIEW_SET = new Set<AccountsView>(['accounts', 'health', 'oauth']);
+const HEALTH_MODE_SET = new Set<CredentialHealthInspectionMode>(['local', 'server']);
 const DETAIL_TAB_SET = new Set<DetailTab>([
   'overview',
   'quota',
@@ -56,6 +59,7 @@ const SORT_KEY_SET: ReadonlySet<AccountsWorkspaceUiState['accountSort']['key']> 
 const PAGE_SIZE_SET = new Set([10, 20, 50]);
 const MANAGED_QUERY_KEYS = [
   'view',
+  'healthMode',
   'search',
   'provider',
   'status',
@@ -92,7 +96,9 @@ export const readAccountsWorkspaceUrlState = (
   fallback: AccountsWorkspaceUiState
 ): AccountsWorkspaceUrlState => {
   const params = new URLSearchParams(search);
-  const view = readEnum(params, 'view', VIEW_SET, 'accounts');
+  const requestedView = params.get('view');
+  const view =
+    requestedView === 'inspection' ? 'health' : readEnum(params, 'view', VIEW_SET, 'accounts');
   const pageSizeValue = Number(params.get('pageSize'));
   const editorValue = params.get('editor');
   const editor = editorValue === 'excluded' || editorValue === 'alias' ? editorValue : null;
@@ -100,6 +106,7 @@ export const readAccountsWorkspaceUrlState = (
   return {
     ...fallback,
     view,
+    healthMode: readEnum(params, 'healthMode', HEALTH_MODE_SET, 'local'),
     search: params.get('search') ?? fallback.search,
     providerFilter: readNonEmpty(params, 'provider', fallback.providerFilter),
     statusFilter: readEnum(params, 'status', STATUS_FILTER_SET, fallback.statusFilter),
@@ -152,6 +159,7 @@ export const writeAccountsWorkspaceUrlSearch = (
   MANAGED_QUERY_KEYS.forEach((key) => params.delete(key));
 
   setNonDefault(params, 'view', state.view, 'accounts');
+  if (state.view === 'health') params.set('healthMode', state.healthMode);
   setNonDefault(params, 'search', state.search, '');
   setNonDefault(params, 'provider', state.providerFilter, defaults.providerFilter);
   setNonDefault(params, 'status', state.statusFilter, defaults.statusFilter);

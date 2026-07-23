@@ -12,6 +12,7 @@ export { QuotaWindowCard } from './QuotaWindowCard';
 
 export { AccountQuotaMatrix } from './AccountQuotaMatrix';
 export { AccountsBatchDeletePreview } from './AccountsBatchDeletePreview';
+export { AccountMetricsGrid } from './AccountMetricsGrid';
 
 export { CopyableText } from './CopyableText';
 

@@ -429,9 +429,20 @@ const buildAuthFields = (row: AccountRow): AccountDetailField[] =>
 const buildInspectionFields = (row: AccountRow): AccountDetailField[] => {
   if (!row.inspection) return [];
   return compactFields([
+    field(
+      'source',
+      'accounts.detail_inspection_source',
+      `accounts.inspection_source_${row.inspection.source}`,
+      'i18n'
+    ),
     field('action', 'common.action', `accounts.action_${row.inspection.action}`, 'i18n'),
     field('httpStatus', 'accounts.detail_http_status', row.inspection.statusCode ?? '-'),
-    field('reason', 'accounts.detail_reason', row.inspection.actionReason || '-'),
+    field(
+      'reason',
+      'accounts.detail_reason',
+      row.inspection.actionReason || '-',
+      row.inspection.actionReason.startsWith('monitoring.') ? 'i18n' : 'text'
+    ),
     field('actionStatus', 'accounts.detail_action_status', row.inspection.actionStatus || '-'),
     field('usedPercent', 'accounts.detail_used', row.inspection.usedPercent, 'percent'),
     field('createdAtMs', 'accounts.detail_observed_at', row.inspection.createdAtMs, 'timestamp'),

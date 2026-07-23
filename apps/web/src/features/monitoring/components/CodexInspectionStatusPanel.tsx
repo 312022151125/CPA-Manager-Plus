@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -34,6 +35,8 @@ type CodexInspectionStatusPanelProps = {
   configOverviewItems: ConfigOverviewItem[];
   configOverviewTitle: string;
   configOverviewEditLabel: string;
+  modeControl?: ReactNode;
+  showBackLink?: boolean;
   t: TFunction;
   onEditConfig: (field?: string) => void;
   onRunInspection: () => void;
@@ -58,6 +61,8 @@ export function CodexInspectionStatusPanel({
   configOverviewItems,
   configOverviewTitle,
   configOverviewEditLabel,
+  modeControl,
+  showBackLink = true,
   t,
   onEditConfig,
   onRunInspection,
@@ -84,10 +89,12 @@ export function CodexInspectionStatusPanel({
           </div>
 
           <div className={styles.statusActions}>
-            <Link to="/accounts" className={styles.quickLink}>
-              <IconExternalLink size={14} />
-              <span>{t('monitoring.codex_inspection_back')}</span>
-            </Link>
+            {showBackLink ? (
+              <Link to="/accounts" className={styles.quickLink}>
+                <IconExternalLink size={14} />
+                <span>{t('monitoring.codex_inspection_back')}</span>
+              </Link>
+            ) : null}
             <Button
               variant="primary"
               size="sm"
@@ -114,6 +121,8 @@ export function CodexInspectionStatusPanel({
             ) : null}
           </div>
         </div>
+
+        {modeControl ? <div className={styles.statusModeRow}>{modeControl}</div> : null}
 
         {showProgressBar ? (
           <div className={styles.progressSection}>

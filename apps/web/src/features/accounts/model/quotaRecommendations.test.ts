@@ -134,6 +134,7 @@ describe('quotaRecommendations', () => {
           source: 'cache',
         },
         inspection: {
+          source: 'server',
           action: 'reauth',
           actionReason: 'expired',
           actionStatus: 'pending',

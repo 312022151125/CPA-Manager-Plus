@@ -13,7 +13,7 @@ import type {
 import type { AuthFileCodexInspectionSnapshot } from '@/features/authFiles/model/authFilesPageModel';
 import type { MonitoringAccountHistoryItem, MonitoringAnalyticsEventRow } from '@/services/api';
 
-export type AccountsView = 'accounts' | 'inspection' | 'oauth';
+export type AccountsView = 'accounts' | 'health' | 'oauth';
 export type DetailTab = 'overview' | 'quota' | 'credential' | 'models' | 'diagnostics';
 export type SortableAccountColumn = Extract<
   AccountRowSortKey,

@@ -54,15 +54,15 @@
 
 .metricsGrid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(160px, 1fr));
+  grid-template-columns: repeat(6, minmax(160px, 1fr));
   gap: 12px;
 
   @include tablet {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   @include mobile {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -112,6 +112,11 @@
 .metricIconviolet {
   background: color-mix(in srgb, var(--accounts-brand-active) 13%, transparent);
   color: var(--accounts-brand-active);
+}
+
+.metricIconneutral {
+  background: color-mix(in srgb, var(--accounts-neutral) 13%, transparent);
+  color: var(--accounts-neutral);
 }
 
 .metricBody {
@@ -2289,6 +2294,7 @@
 }
 
 .controlsPanel,
+.controlsFilterPanel,
 .tablePanel,
 .loadingPanel,
 .rulePanel {
@@ -2313,7 +2319,6 @@
   min-width: 0;
   padding: 14px 16px;
   overflow: hidden;
-  border-bottom: 1px solid color-mix(in srgb, var(--accounts-border) 72%, transparent);
   scrollbar-width: thin;
 }
 
@@ -2349,10 +2354,11 @@
   line-height: 1.2;
 }
 
-.controlsFilterSection {
+.controlsFilterPanel {
   display: grid;
   gap: 12px;
   min-width: 0;
+  overflow: visible;
   padding: 14px 16px 16px;
   background: color-mix(in srgb, var(--accounts-muted-surface) 34%, var(--accounts-surface));
 }
@@ -2680,7 +2686,7 @@
 }
 
 .metricsGrid {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -2726,6 +2732,10 @@
 
 .metricCardviolet {
   --metric-accent: var(--accounts-brand-active);
+}
+
+.metricCardneutral {
+  --metric-accent: var(--accounts-neutral);
 }
 
 .metricIcon {
@@ -2971,7 +2981,7 @@
   }
 
   .metricsGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .splitGrid,
@@ -2986,7 +2996,7 @@
   }
 
   .controlsTabsRow,
-  .controlsFilterSection {
+  .controlsFilterPanel {
     padding-inline: 12px;
   }
 
@@ -3058,10 +3068,6 @@
     gap: 8px;
     padding: 10px;
     border-radius: 12px;
-  }
-
-  .metricCard:last-child {
-    grid-column: 1 / -1;
   }
 
   .metricIcon {

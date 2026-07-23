@@ -8,12 +8,13 @@ import {
 describe('accountsWorkspaceUrlState', () => {
   it('reads validated workspace filters, detail deep links and OAuth editors', () => {
     const state = readAccountsWorkspaceUrlState(
-      '?view=oauth&search=team%2A&provider=codex&status=problem&plan=pro&quota=lt20&operation=reauth&sort=name&direction=asc&pageSize=20&display=masked&account=file.json%00auth-1&tab=diagnostics&editor=alias&editorProvider=codex',
+      '?view=oauth&healthMode=server&search=team%2A&provider=codex&status=problem&plan=pro&quota=lt20&operation=reauth&sort=name&direction=asc&pageSize=20&display=masked&account=file.json%00auth-1&tab=diagnostics&editor=alias&editorProvider=codex',
       DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
     );
 
     expect(state).toMatchObject({
       view: 'oauth',
+      healthMode: 'server',
       search: 'team*',
       providerFilter: 'codex',
       statusFilter: 'problem',
@@ -35,7 +36,8 @@ describe('accountsWorkspaceUrlState', () => {
       '?keep=1&view=value',
       {
         ...DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE,
-        view: 'inspection',
+        view: 'health',
+        healthMode: 'server',
         search: 'shared',
         account: 'shared.json',
         detailTab: 'quota',
@@ -45,16 +47,19 @@ describe('accountsWorkspaceUrlState', () => {
       DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
     );
 
-    expect(search).toBe('?keep=1&view=inspection&search=shared&account=shared.json&tab=quota');
+    expect(search).toBe(
+      '?keep=1&view=health&healthMode=server&search=shared&account=shared.json&tab=quota'
+    );
   });
 
   it('falls back safely for unsupported query values', () => {
     const state = readAccountsWorkspaceUrlState(
-      '?view=invalid&status=nope&quota=bad&sort=unknown&pageSize=999&tab=nope&editor=bad',
+      '?view=invalid&healthMode=remote&status=nope&quota=bad&sort=unknown&pageSize=999&tab=nope&editor=bad',
       DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
     );
 
     expect(state.view).toBe('accounts');
+    expect(state.healthMode).toBe('local');
     expect(state.statusFilter).toBe('all');
     expect(state.quotaBandFilter).toBe('all');
     expect(state.accountSort).toEqual({ key: 'recent', direction: 'desc' });
@@ -70,6 +75,9 @@ describe('accountsWorkspaceUrlState', () => {
     expect(
       readAccountsWorkspaceUrlState('?view=value', DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE).view
     ).toBe('accounts');
+    expect(
+      readAccountsWorkspaceUrlState('?view=inspection', DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE)
+    ).toMatchObject({ view: 'health', healthMode: 'local' });
   });
 
   it('round-trips the sort direction independently of local preferences', () => {
@@ -78,6 +86,7 @@ describe('accountsWorkspaceUrlState', () => {
       {
         ...DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE,
         view: 'accounts',
+        healthMode: 'local',
         account: null,
         detailTab: 'overview',
         editor: null,

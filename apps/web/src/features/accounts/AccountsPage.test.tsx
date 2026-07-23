@@ -1,4 +1,4 @@
-import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { isValidElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '@/components/ui/Button';
@@ -288,6 +288,11 @@ const { mocks } = vi.hoisted(() => {
         onClose: () => void;
       },
       localInspection: null as null | Record<string, unknown>,
+      lastHealthWorkspaceProps: null as null | {
+        mode: 'local' | 'server';
+        onModeChange: (mode: 'local' | 'server') => void;
+        onOpenCredential: (target: { fileName: string; authIndex: string | null }) => void;
+      },
       quotaState: {
         antigravityQuota: {},
         claudeQuota: {},
@@ -410,6 +415,17 @@ vi.mock('@/features/accounts/hooks/useAccountCredentialSafeSummary', () => ({
     reload: vi.fn(async () => undefined),
     invalidate: vi.fn(),
   }),
+}));
+
+vi.mock('@/features/monitoring/components/CredentialHealthInspectionWorkspace', () => ({
+  CredentialHealthInspectionWorkspace: (props: {
+    mode: 'local' | 'server';
+    onModeChange: (mode: 'local' | 'server') => void;
+    onOpenCredential: (target: { fileName: string; authIndex: string | null }) => void;
+  }) => {
+    mocks.lastHealthWorkspaceProps = props;
+    return <div data-testid="credential-health-workspace">credential-health:{props.mode}</div>;
+  },
 }));
 
 vi.mock('@/features/monitoring/codexInspection', () => ({
@@ -652,6 +668,15 @@ const getAccountListItemTexts = (renderer: ReactTestRenderer) => {
 
 const treeText = (renderer: ReactTestRenderer) => readText(renderer.toJSON());
 
+const findAncestorByType = (node: ReactTestInstance, type: string): ReactTestInstance => {
+  let current = node.parent;
+  while (current) {
+    if (current.type === type) return current;
+    current = current.parent;
+  }
+  throw new Error(`Ancestor not found: ${type}`);
+};
+
 const createDeferred = <T,>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((nextResolve) => {
@@ -737,6 +762,7 @@ describe('AccountsPage replacement flows', () => {
     mocks.loadModelAlias.mockClear();
     mocks.lastExcludedEditorProps = null;
     mocks.lastAliasEditorProps = null;
+    mocks.lastHealthWorkspaceProps = null;
     mocks.localInspection = null;
   });
 
@@ -948,13 +974,154 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
 
     await act(async () => {
-      findHostButtonByText(renderer, 'accounts.tab_inspection').props.onClick();
+      findHostButtonByText(renderer, 'accounts.tab_health').props.onClick();
     });
 
     expect(mocks.navigate).toHaveBeenCalledWith(
-      { pathname: '/accounts', search: '?view=inspection' },
+      { pathname: '/accounts', search: '?view=health&healthMode=local' },
       { replace: false }
     );
+  });
+
+  it('keeps credential list filters outside the workspace navigation panel', async () => {
+    const renderer = await renderAccountsPage();
+    const tabs = renderer.root.find((node) => node.props['aria-label'] === 'accounts.tabs_label');
+    const navigationPanel = findAncestorByType(tabs, 'section');
+
+    expect(
+      navigationPanel.findAll(
+        (node) => node.type === 'input' && node.props['aria-label'] === 'accounts.search_label'
+      )
+    ).toHaveLength(0);
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === 'input' && node.props['aria-label'] === 'accounts.search_label'
+      )
+    ).toHaveLength(1);
+  });
+
+  it('keeps the credential health mode in the Accounts URL', async () => {
+    mocks.location = { pathname: '/accounts', search: '?view=health&healthMode=local' };
+    await renderAccountsPage();
+
+    expect(mocks.lastHealthWorkspaceProps?.mode).toBe('local');
+    mocks.navigate.mockClear();
+
+    await act(async () => {
+      mocks.lastHealthWorkspaceProps?.onModeChange('server');
+      await Promise.resolve();
+    });
+
+    expect(mocks.lastHealthWorkspaceProps?.mode).toBe('server');
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      { pathname: '/accounts', search: '?view=health&healthMode=server' },
+      { replace: true }
+    );
+  });
+
+  it('keeps syncing health mode after React Router and hashchange apply the same URL', async () => {
+    const windowEvents = new EventTarget();
+    const location = { hash: '#/accounts?view=health&healthMode=local' };
+    const storage = new Map<string, string>();
+    vi.stubGlobal('window', {
+      location,
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+        removeItem: (key: string) => storage.delete(key),
+        clear: () => storage.clear(),
+      },
+      addEventListener: windowEvents.addEventListener.bind(windowEvents),
+      removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+    });
+    mocks.location = { pathname: '/accounts', search: '?view=health&healthMode=local' };
+    const renderer = await renderAccountsPage();
+
+    try {
+      await act(async () => {
+        mocks.lastHealthWorkspaceProps?.onModeChange('server');
+        await Promise.resolve();
+      });
+
+      mocks.location = { pathname: '/accounts', search: '?view=health&healthMode=server' };
+      location.hash = '#/accounts?view=health&healthMode=server';
+      await act(async () => {
+        renderer.update(<AccountsPage />);
+        await Promise.resolve();
+      });
+      await act(async () => {
+        windowEvents.dispatchEvent(new Event('hashchange'));
+        await Promise.resolve();
+      });
+      mocks.navigate.mockClear();
+
+      await act(async () => {
+        mocks.lastHealthWorkspaceProps?.onModeChange('local');
+        await Promise.resolve();
+      });
+
+      expect(mocks.navigate).toHaveBeenCalledWith(
+        { pathname: '/accounts', search: '?view=health&healthMode=local' },
+        { replace: true }
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('opens the exact shared credential from an inspection result', async () => {
+    mocks.files = [
+      makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com'),
+      makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com'),
+    ];
+    mocks.location = { pathname: '/accounts', search: '?view=health&healthMode=local' };
+    await renderAccountsPage();
+    const healthWorkspace = mocks.lastHealthWorkspaceProps;
+    mocks.navigate.mockClear();
+
+    await act(async () => {
+      healthWorkspace?.onOpenCredential({
+        fileName: 'shared-codex.json',
+        authIndex: 'auth-2',
+      });
+      await Promise.resolve();
+    });
+
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      {
+        pathname: '/accounts',
+        search: '?account=shared-codex.json%00auth-2&tab=diagnostics',
+      },
+      { replace: false }
+    );
+    expect(mocks.showNotification).not.toHaveBeenCalledWith(
+      'accounts.inspection_credential_not_found',
+      'warning'
+    );
+  });
+
+  it('does not guess between shared credentials when inspection identity is incomplete', async () => {
+    mocks.files = [
+      makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com'),
+      makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com'),
+    ];
+    mocks.location = { pathname: '/accounts', search: '?view=health&healthMode=local' };
+    await renderAccountsPage();
+    mocks.navigate.mockClear();
+
+    await act(async () => {
+      mocks.lastHealthWorkspaceProps?.onOpenCredential({
+        fileName: 'shared-codex.json',
+        authIndex: null,
+      });
+      await Promise.resolve();
+    });
+
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'accounts.inspection_credential_not_found',
+      'warning'
+    );
+    expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
   it('patches Codex websockets through auth-index aware batch fields', async () => {
@@ -1078,8 +1245,8 @@ describe('AccountsPage replacement flows', () => {
     );
   });
 
-  it('uses the last local inspection when Manager inspection is unavailable', async () => {
-    mocks.location = { pathname: '/accounts', search: '?view=inspection' };
+  it('links the last local inspection into credential diagnostics', async () => {
+    mocks.location = { pathname: '/accounts', search: '' };
     mocks.localInspection = {
       savedAt: 300,
       logs: [],
@@ -1135,9 +1302,16 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
     await flushPromises();
 
-    expect(treeText(renderer)).toContain('codex@example.com');
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+    });
+
     expect(treeText(renderer)).toContain('expired token');
     expect(treeText(renderer)).toContain('accounts.action_reauth');
+    expect(treeText(renderer)).toContain('accounts.inspection_source_local');
   });
 
   it('translates inspection reason keys before rendering them', async () => {
@@ -1146,7 +1320,7 @@ describe('AccountsPage replacement flows', () => {
       if (key.startsWith('monitoring.')) return `translated:${key}`;
       return originalT(key, options);
     };
-    mocks.location = { pathname: '/accounts', search: '?view=inspection' };
+    mocks.location = { pathname: '/accounts', search: '' };
     mocks.localInspection = {
       savedAt: 300,
       logs: [],
@@ -1203,6 +1377,13 @@ describe('AccountsPage replacement flows', () => {
       const renderer = await renderAccountsPage();
       await flushPromises();
 
+      await act(async () => {
+        findDetailButtonByName(renderer, 'codex.json').props.onClick();
+      });
+      await act(async () => {
+        findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+      });
+
       expect(treeText(renderer)).toContain(
         'translated:monitoring.xai_inspection_reason_billing_healthy'
       );
@@ -1212,7 +1393,7 @@ describe('AccountsPage replacement flows', () => {
   });
 
   it('ignores stale Manager inspection responses after the CPA connection changes', async () => {
-    mocks.location = { pathname: '/accounts', search: '?view=inspection' };
+    mocks.location = { pathname: '/accounts', search: '' };
     mocks.panelFeatureAvailability = {
       checking: false,
       managerServiceBase: 'http://manager.local:18317',
@@ -1278,8 +1459,15 @@ describe('AccountsPage replacement flows', () => {
     firstDetail.resolve({ run, results: [makeInspectionResult(1, 'old-connection@example.com')] });
     await flushPromises();
 
-    expect(treeText(renderer)).toContain('new-connection@example.com');
-    expect(treeText(renderer)).not.toContain('old-connection@example.com');
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+    });
+
+    expect(treeText(renderer)).toContain('new-connection@example.com reason');
+    expect(treeText(renderer)).not.toContain('old-connection@example.com reason');
   });
 
   it('uses unique table row keys for shared auth accounts', async () => {

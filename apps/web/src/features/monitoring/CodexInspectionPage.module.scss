@@ -41,26 +41,6 @@
   min-width: 0;
 }
 
-.modeSwitchPanel {
-  display: flex;
-  align-items: stretch;
-  justify-content: flex-start;
-  gap: 14px;
-  padding: 8px 10px;
-  border: 1px solid var(--inspect-line);
-  border-radius: 18px;
-  background: var(--inspect-surface);
-  box-shadow: var(--shadow-md);
-}
-
-.modeSwitchMain {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  width: 100%;
-  min-width: 0;
-}
-
 .panel {
   position: relative;
   border: 1px solid var(--inspect-line);
@@ -143,6 +123,23 @@
   flex-wrap: wrap;
   margin-left: auto;
   justify-content: flex-end;
+}
+
+.statusModeRow {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  min-height: 38px;
+}
+
+.credentialHealthModeControl {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.credentialHealthModeTabs {
+  min-width: 232px;
 }
 
 .statusBadge {
@@ -338,84 +335,6 @@
 
 .progressMeta strong {
   color: var(--inspect-amber);
-}
-
-.routeSkeletonPanel {
-  overflow: hidden;
-}
-
-.routeSkeletonHeader,
-.routeSkeletonMeta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.routeSkeletonHeader {
-  justify-content: space-between;
-}
-
-.routeSkeletonLine,
-.routeSkeletonPill,
-.routeSkeletonPillWide,
-.routeSkeletonCard,
-.routeSkeletonBlock,
-.routeSkeletonBlockTall {
-  display: block;
-  border: 1px solid color-mix(in srgb, var(--inspect-line) 62%, transparent);
-  background: color-mix(in srgb, var(--inspect-surface-muted) 64%, var(--inspect-surface));
-}
-
-.routeSkeletonLine {
-  width: min(260px, 54%);
-  height: 22px;
-  border-radius: 10px;
-}
-
-.routeSkeletonLineTitle {
-  height: 24px;
-}
-
-.routeSkeletonPill,
-.routeSkeletonPillWide {
-  width: 112px;
-  height: 30px;
-  border-radius: 999px;
-}
-
-.routeSkeletonPillWide {
-  width: min(220px, 100%);
-}
-
-.routeSkeletonGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
-  gap: 10px;
-}
-
-.routeSkeletonCard {
-  min-height: 96px;
-  border-radius: var(--app-radius-md);
-}
-
-.routeSkeletonDetailGrid {
-  display: grid;
-  grid-template-columns: minmax(240px, 0.55fr) minmax(0, 1fr);
-  gap: 16px;
-  align-items: stretch;
-}
-
-.routeSkeletonBlock,
-.routeSkeletonBlockTall {
-  min-height: 150px;
-  border-radius: 24px;
-  background: var(--inspect-surface);
-  box-shadow: var(--shadow-lg);
-}
-
-.routeSkeletonBlockTall {
-  min-height: 260px;
 }
 
 .summaryGrid {
@@ -2530,12 +2449,6 @@
 }
 
 @container codex-inspection-page (max-width: 960px) {
-  .modeSwitchPanel,
-  .modeSwitchMain {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
   .statusBar {
     flex-direction: column;
     align-items: stretch;
@@ -2614,10 +2527,6 @@
 }
 
 @container codex-inspection-page (max-width: 640px) {
-  .modeSwitchPanel {
-    border-radius: 16px;
-  }
-
   .panel {
     border-radius: 20px;
   }
@@ -2628,6 +2537,11 @@
 
   .summaryGrid {
     grid-template-columns: 1fr;
+  }
+
+  .credentialHealthModeControl,
+  .credentialHealthModeTabs {
+    width: 100%;
   }
 
   .resultsToolbar {

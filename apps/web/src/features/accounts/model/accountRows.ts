@@ -61,6 +61,7 @@ export interface AccountRowSort {
 }
 
 export interface AccountInspectionSummary {
+  source: 'local' | 'server';
   action: string;
   actionReason: string;
   actionStatus: string;
@@ -71,6 +72,10 @@ export interface AccountInspectionSummary {
   resultId: number;
   createdAtMs: number;
 }
+
+export type AccountInspectionResult = CodexInspectionResult & {
+  inspectionSource?: 'local' | 'server';
+};
 
 export interface AccountUsageSummary {
   success: number;
@@ -100,14 +105,24 @@ export interface AccountRow {
   raw: AuthFileItem;
 }
 
+export interface AccountInspectionTarget {
+  fileName: string;
+  authIndex?: string | null;
+}
+
 export interface AccountMetrics {
   total: number;
   available: number;
-  lowQuota: number;
-  exhausted: number;
+  needsAttention: number;
+  quotaRisk: number;
   disabled: number;
+  unconfirmed: number;
   needsInspectionAction: number;
-  successRate: number | null;
+}
+
+export interface AccountMetricOperationalContext {
+  pendingActionsByRowKey?: ReadonlyMap<string, readonly unknown[]>;
+  quotaCooldownsByRowKey?: ReadonlyMap<string, readonly unknown[]>;
 }
 
 export interface AccountRowFilters {
@@ -166,7 +181,7 @@ const resolveStatusMessage = (file: AuthFileItem): string =>
   readString(file.statusMessage ?? file['status_message']);
 
 const buildInspectionMap = (
-  results: CodexInspectionResult[] | undefined
+  results: AccountInspectionResult[] | undefined
 ): Map<string, AccountInspectionSummary> => {
   const map = new Map<string, AccountInspectionSummary>();
   if (!results) return map;
@@ -178,6 +193,7 @@ const buildInspectionMap = (
     const current = map.get(key);
     if (current && current.createdAtMs >= result.createdAtMs) return;
     map.set(key, {
+      source: result.inspectionSource ?? 'server',
       action: result.action || 'keep',
       actionReason: result.actionReason || '',
       actionStatus: result.actionStatus || 'none',
@@ -207,10 +223,14 @@ const buildUsageSummary = (file: AuthFileItem): AccountUsageSummary => {
 export const buildAccountRows = (
   files: AuthFileItem[],
   stores: AccountQuotaStores,
-  inspectionResults?: CodexInspectionResult[],
+  inspectionResults?: AccountInspectionResult[],
   overrides?: AccountQuotaOverrides
 ): AccountRow[] => {
   const inspectionByFile = buildInspectionMap(inspectionResults);
+  const fileNameCounts = files.reduce((counts, file) => {
+    counts.set(file.name, (counts.get(file.name) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>());
   return files.map((file) => {
     const provider = normalizeAccountProvider(file);
     const authIndex = readAuthIndex(file);
@@ -234,35 +254,102 @@ export const buildAccountRows = (
       createdAtMs: readAuthFileCreatedAtMs(file),
       quota,
       usage: buildUsageSummary(file),
-      inspection: inspectionByFile.get(getAuthFileCodexInspectionKey(file.name, authIndex)) ?? null,
+      inspection:
+        inspectionByFile.get(getAuthFileCodexInspectionKey(file.name, authIndex)) ??
+        (fileNameCounts.get(file.name) === 1
+          ? inspectionByFile.get(getAuthFileCodexInspectionKey(file.name, null))
+          : undefined) ??
+        null,
       raw: file,
     };
   });
 };
 
-export const buildAccountMetrics = (rows: AccountRow[]): AccountMetrics => {
-  const totals = rows.reduce(
-    (acc, row) => {
-      acc.success += row.usage.success;
-      acc.failure += row.usage.failure;
-      return acc;
-    },
-    { success: 0, failure: 0 }
+export const findAccountRowForInspectionTarget = (
+  rows: AccountRow[],
+  target: AccountInspectionTarget
+): AccountRow | null => {
+  const matchingFileRows = rows.filter((row) => row.fileName === target.fileName);
+  const authIndex = String(target.authIndex ?? '').trim();
+  if (authIndex) {
+    return matchingFileRows.find((row) => row.authIndex === authIndex) ?? null;
+  }
+  return matchingFileRows.length === 1 ? matchingFileRows[0] : null;
+};
+
+type AccountMetricStatus =
+  | 'available'
+  | 'needsAttention'
+  | 'quotaRisk'
+  | 'disabled'
+  | 'unconfirmed';
+
+const hasOperationalItems = (
+  itemsByRowKey: ReadonlyMap<string, readonly unknown[]> | undefined,
+  rowKey: string
+): boolean => (itemsByRowKey?.get(rowKey)?.length ?? 0) > 0;
+
+const needsAccountAttention = (
+  row: AccountRow,
+  context: AccountMetricOperationalContext
+): boolean =>
+  Boolean(
+    row.statusMessage ||
+    row.quota.status === 'error' ||
+    row.quota.error ||
+    (row.inspection && row.inspection.action !== 'keep') ||
+    hasOperationalItems(context.pendingActionsByRowKey, row.selectionKey)
   );
-  const totalRequests = totals.success + totals.failure;
-  return {
+
+const hasAccountQuotaRisk = (row: AccountRow, context: AccountMetricOperationalContext): boolean =>
+  row.quota.status === 'low' ||
+  row.quota.status === 'exhausted' ||
+  hasOperationalItems(context.quotaCooldownsByRowKey, row.selectionKey);
+
+const hasConfirmedAvailableEvidence = (row: AccountRow): boolean =>
+  row.quota.status === 'ok' || row.inspection?.action === 'keep';
+
+const hasAccountDiagnosticException = (row: AccountRow): boolean =>
+  Boolean(row.quota.observedErrorKind || row.quota.observedErrorCode);
+
+const classifyAccountMetricStatus = (
+  row: AccountRow,
+  context: AccountMetricOperationalContext
+): AccountMetricStatus => {
+  if (row.disabled || row.quota.status === 'disabled') return 'disabled';
+  if (needsAccountAttention(row, context)) return 'needsAttention';
+  if (hasAccountQuotaRisk(row, context)) return 'quotaRisk';
+  if (hasAccountDiagnosticException(row)) return 'needsAttention';
+  if (!hasConfirmedAvailableEvidence(row)) return 'unconfirmed';
+  return 'available';
+};
+
+export const buildAccountMetrics = (
+  rows: AccountRow[],
+  context: AccountMetricOperationalContext = {}
+): AccountMetrics => {
+  const metrics: AccountMetrics = {
     total: rows.length,
-    available: rows.filter(isAccountRowAvailable).length,
-    lowQuota: rows.filter((row) => row.quota.status === 'low').length,
-    exhausted: rows.filter((row) => row.quota.status === 'exhausted').length,
-    disabled: rows.filter((row) => row.disabled).length,
-    needsInspectionAction: rows.filter((row) =>
-      row.inspection
-        ? ['delete', 'disable', 'enable', 'reauth'].includes(row.inspection.action)
-        : false
-    ).length,
-    successRate: totalRequests > 0 ? (totals.success / totalRequests) * 100 : null,
+    available: 0,
+    needsAttention: 0,
+    quotaRisk: 0,
+    disabled: 0,
+    unconfirmed: 0,
+    needsInspectionAction: 0,
   };
+
+  rows.forEach((row) => {
+    const status = classifyAccountMetricStatus(row, context);
+    metrics[status] += 1;
+    if (
+      row.inspection &&
+      ['delete', 'disable', 'enable', 'reauth'].includes(row.inspection.action)
+    ) {
+      metrics.needsInspectionAction += 1;
+    }
+  });
+
+  return metrics;
 };
 
 const isAccountRowAvailable = (row: AccountRow): boolean =>

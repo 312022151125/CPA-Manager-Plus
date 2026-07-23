@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { AuthFileItem, CodexQuotaState } from '@/types';
-import type { CodexInspectionResult, UsageHeaderSnapshot } from '@/services/api/usageService';
+import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import {
   buildAccountMetrics,
   buildAccountRows,
+  findAccountRowForInspectionTarget,
   filterAccountRows,
   sortAccountRows,
+  type AccountInspectionResult,
   type AccountQuotaStores,
 } from './accountRows';
 
@@ -241,8 +243,41 @@ describe('accountRows', () => {
     expect(rows[1].quota.observedTraceId).toBe('trace-auth-index-1');
   });
 
+  it('finds inspection targets exactly and only falls back for unique file names', () => {
+    const sharedRows = buildAccountRows(
+      [
+        { name: 'shared.codex.json', type: 'codex', authIndex: '0' },
+        { name: 'shared.codex.json', type: 'codex', authIndex: '1' },
+      ],
+      emptyStores()
+    );
+    const uniqueRows = buildAccountRows(
+      [{ name: 'unique.codex.json', type: 'codex', authIndex: '2' }],
+      emptyStores()
+    );
+
+    expect(
+      findAccountRowForInspectionTarget(sharedRows, {
+        fileName: 'shared.codex.json',
+        authIndex: '1',
+      })?.selectionKey
+    ).toBe('shared.codex.json\u00001');
+    expect(
+      findAccountRowForInspectionTarget(sharedRows, {
+        fileName: 'shared.codex.json',
+        authIndex: null,
+      })
+    ).toBeNull();
+    expect(
+      findAccountRowForInspectionTarget(uniqueRows, {
+        fileName: 'unique.codex.json',
+        authIndex: null,
+      })?.selectionKey
+    ).toBe('unique.codex.json\u00002');
+  });
+
   it('matches Codex inspection results by auth index for shared auth rows', () => {
-    const inspection: CodexInspectionResult = {
+    const inspection: AccountInspectionResult = {
       id: 10,
       runId: 1,
       accountKey: 'second',
@@ -256,6 +291,7 @@ describe('accountRows', () => {
       statusCode: 401,
       isQuota: false,
       createdAtMs: 1000,
+      inspectionSource: 'server',
     };
     const rows = buildAccountRows(
       [
@@ -269,6 +305,42 @@ describe('accountRows', () => {
     expect(rows[0].inspection).toBeNull();
     expect(rows[1].inspection?.action).toBe('reauth');
     expect(rows[1].inspection?.statusCode).toBe(401);
+    expect(rows[1].inspection?.source).toBe('server');
+  });
+
+  it('uses missing-auth-index inspection results only for unique file names', () => {
+    const inspection: AccountInspectionResult = {
+      id: -1,
+      runId: 0,
+      accountKey: 'local-only',
+      fileName: 'shared.codex.json',
+      displayAccount: 'local@example.com',
+      provider: 'codex',
+      disabled: false,
+      action: 'disable',
+      actionReason: 'local reason',
+      statusCode: 429,
+      isQuota: true,
+      createdAtMs: 1000,
+      inspectionSource: 'local',
+    };
+    const uniqueRows = buildAccountRows(
+      [{ name: 'shared.codex.json', type: 'codex', authIndex: '0' }],
+      emptyStores(),
+      [inspection]
+    );
+    const sharedRows = buildAccountRows(
+      [
+        { name: 'shared.codex.json', type: 'codex', authIndex: '0' },
+        { name: 'shared.codex.json', type: 'codex', authIndex: '1' },
+      ],
+      emptyStores(),
+      [inspection]
+    );
+
+    expect(uniqueRows[0].inspection).toMatchObject({ action: 'disable', source: 'local' });
+    expect(sharedRows[0].inspection).toBeNull();
+    expect(sharedRows[1].inspection).toBeNull();
   });
 
   it('surfaces diagnostic-only Codex header snapshots without quota cache', () => {
@@ -456,7 +528,7 @@ describe('accountRows', () => {
       usedPercent: null,
     });
     expect(rows[0].quota).not.toHaveProperty('error');
-    expect(buildAccountMetrics(rows).available).toBe(1);
+    expect(buildAccountMetrics(rows)).toMatchObject({ available: 0, unconfirmed: 1 });
   });
 
   it('uses xAI weekly credits when they are the tightest quota window', () => {
@@ -581,7 +653,7 @@ describe('accountRows', () => {
         recent_requests: [{ success: 0, failed: 2 }],
       },
     ];
-    const inspection: CodexInspectionResult[] = [
+    const inspection: AccountInspectionResult[] = [
       {
         id: 10,
         runId: 1,
@@ -597,6 +669,7 @@ describe('accountRows', () => {
         usedPercent: 96,
         isQuota: true,
         createdAtMs: 1000,
+        inspectionSource: 'server',
       },
     ];
 
@@ -619,11 +692,70 @@ describe('accountRows', () => {
 
     const metrics = buildAccountMetrics(rows);
     expect(metrics.total).toBe(2);
-    expect(metrics.lowQuota).toBe(1);
+    expect(metrics.needsAttention).toBe(1);
+    expect(metrics.quotaRisk).toBe(0);
     expect(metrics.disabled).toBe(1);
+    expect(metrics.unconfirmed).toBe(0);
     expect(metrics.available).toBe(0);
     expect(metrics.needsInspectionAction).toBe(1);
-    expect(metrics.successRate).toBeCloseTo((9 / 12) * 100);
+  });
+
+  it('builds an exclusive six-card status summary with operational context', () => {
+    const rows = buildAccountRows(
+      [
+        { name: 'available.json', type: 'codex', authIndex: 'available' },
+        { name: 'attention.json', type: 'codex', authIndex: 'attention' },
+        { name: 'low.json', type: 'codex', authIndex: 'low' },
+        { name: 'cooldown.json', type: 'codex', authIndex: 'cooldown' },
+        { name: 'disabled.json', type: 'codex', authIndex: 'disabled', disabled: true },
+        { name: 'unconfirmed.json', type: 'gemini', authIndex: 'unconfirmed' },
+      ],
+      {
+        ...emptyStores(),
+        codexQuota: {
+          'available.json': {
+            status: 'success',
+            windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 25, resetLabel: 'Mon' }],
+          },
+          'low.json': {
+            status: 'success',
+            windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 90, resetLabel: 'Mon' }],
+          },
+        },
+      }
+    );
+    const byName = new Map(rows.map((row) => [row.fileName, row]));
+    const attentionKey = byName.get('attention.json')?.selectionKey ?? '';
+    const cooldownKey = byName.get('cooldown.json')?.selectionKey ?? '';
+    const disabledKey = byName.get('disabled.json')?.selectionKey ?? '';
+
+    const metrics = buildAccountMetrics(rows, {
+      pendingActionsByRowKey: new Map([
+        [attentionKey, [{ id: 1 }]],
+        [disabledKey, [{ id: 2 }]],
+      ]),
+      quotaCooldownsByRowKey: new Map([
+        [cooldownKey, [{ id: 3 }]],
+        [disabledKey, [{ id: 4 }]],
+      ]),
+    });
+
+    expect(metrics).toEqual({
+      total: 6,
+      available: 1,
+      needsAttention: 1,
+      quotaRisk: 2,
+      disabled: 1,
+      unconfirmed: 1,
+      needsInspectionAction: 0,
+    });
+    expect(
+      metrics.available +
+        metrics.needsAttention +
+        metrics.quotaRisk +
+        metrics.disabled +
+        metrics.unconfirmed
+    ).toBe(metrics.total);
   });
 
   it('filters rows by quota band and search text', () => {

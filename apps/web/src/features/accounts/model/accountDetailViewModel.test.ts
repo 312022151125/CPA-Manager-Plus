@@ -200,6 +200,42 @@ describe('accountDetailViewModel', () => {
     });
   });
 
+  it('exposes inspection source and localizes keyed inspection reasons', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        inspection: {
+          source: 'local',
+          action: 'reauth',
+          actionReason: 'monitoring.codex_inspection_reason_reauth',
+          actionStatus: 'pending',
+          statusCode: 401,
+          usedPercent: null,
+          isQuota: false,
+          runId: 0,
+          resultId: -1,
+          createdAtMs: 1000,
+        },
+      })
+    );
+
+    expect(viewModel.strategy.inspectionFields).toEqual(
+      expect.arrayContaining([
+        {
+          key: 'source',
+          labelKey: 'accounts.detail_inspection_source',
+          value: 'accounts.inspection_source_local',
+          valueKind: 'i18n',
+        },
+        {
+          key: 'reason',
+          labelKey: 'accounts.detail_reason',
+          value: 'monitoring.codex_inspection_reason_reauth',
+          valueKind: 'i18n',
+        },
+      ])
+    );
+  });
+
   it('exposes xAI official API reachability without billing details', () => {
     const xaiQuota: XaiQuotaState = {
       status: 'success',
