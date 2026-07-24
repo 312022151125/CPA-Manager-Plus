@@ -232,6 +232,36 @@ describe('DemoPage', () => {
     expect(accountHistory.items).toHaveLength(authFiles.files.length);
     expect(accountHistory.items.every((item) => item.matched)).toBe(true);
     expect(
+      accountHistory.items.every((item) => {
+        const recentRequests = item.recent_requests ?? [];
+        return (
+          recentRequests.length > 0 &&
+          recentRequests.length <= 10 &&
+          JSON.stringify(item.latest_request) === JSON.stringify(recentRequests[0]) &&
+          recentRequests.every(
+            (request, index) =>
+              index === 0 || recentRequests[index - 1].timestamp_ms > request.timestamp_ms
+          )
+        );
+      })
+    ).toBe(true);
+    const recentRequestLengths = new Set(
+      accountHistory.items.map((item) => item.recent_requests?.length ?? 0)
+    );
+    expect(Array.from(recentRequestLengths)).toEqual(expect.arrayContaining([1, 2, 3, 5, 10]));
+    const recentRequests = accountHistory.items.flatMap((item) => item.recent_requests ?? []);
+    expect(recentRequests.some((request) => !request.failed)).toBe(true);
+    expect(recentRequests.some((request) => request.failed)).toBe(true);
+    expect(
+      Array.from(
+        new Set(
+          recentRequests
+            .filter((request) => request.failed)
+            .map((request) => request.fail_status_code)
+        )
+      )
+    ).toEqual(expect.arrayContaining([401, 429, 500, 503]));
+    expect(
       accountHistory.items.every(
         (item) =>
           item.total_requests > 0 &&

@@ -723,6 +723,7 @@ export interface MonitoringAccountHistoryItem {
   first_seen_ms: number | null;
   last_seen_ms: number | null;
   latest_request?: MonitoringAccountLatestRequest | null;
+  recent_requests?: MonitoringAccountLatestRequest[];
   sync_status: 'ready' | 'pending' | 'empty' | string;
 }
 

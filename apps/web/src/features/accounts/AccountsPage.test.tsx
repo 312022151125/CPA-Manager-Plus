@@ -71,6 +71,15 @@ type AccountHistoryResponseForTest = {
       header_error_code?: string;
       header_trace_id?: string;
     } | null;
+    recent_requests?: Array<{
+      timestamp_ms: number;
+      failed: boolean;
+      fail_status_code?: number | null;
+      fail_summary?: string;
+      header_error_kind?: string;
+      header_error_code?: string;
+      header_trace_id?: string;
+    }>;
     sync_status: string;
   }>;
 };
@@ -1909,6 +1918,20 @@ describe('AccountsPage replacement flows', () => {
     expect(() => findHostButtonByText(renderer, 'accounts.view_mode_table')).toThrow();
   });
 
+  it('renders the six localized credential list headers', async () => {
+    const renderer = await renderAccountsPage();
+    const header = renderer.root.findByProps({ 'data-account-list-header': 'true' });
+
+    expect(header.findAllByType('span').map((node) => readText(node))).toEqual([
+      'accounts.list_header_credential',
+      'accounts.list_header_availability',
+      'accounts.list_header_latest_status',
+      'accounts.list_header_historical_usage',
+      'accounts.list_header_quota',
+      'accounts.list_header_actions',
+    ]);
+  });
+
   it('selects account cards by row click while selection mode is active', async () => {
     const renderer = await renderAccountsPage();
 
@@ -2216,6 +2239,18 @@ describe('AccountsPage replacement flows', () => {
             header_error_kind: 'rate_limit',
             header_error_code: 'quota_exceeded',
           },
+          recent_requests: [
+            {
+              timestamp_ms: 1_700_000_000_000,
+              failed: true,
+              fail_status_code: 429,
+              fail_summary: 'rate limit exceeded',
+              header_error_kind: 'rate_limit',
+              header_error_code: 'quota_exceeded',
+            },
+            { timestamp_ms: 1_699_999_999_000, failed: false },
+            { timestamp_ms: 1_699_999_998_000, failed: true },
+          ],
           sync_status: 'ready',
         },
       ])
@@ -2224,8 +2259,14 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
     await flushPromises();
 
-    const cardText = getAccountListItemTexts(renderer).join('\n');
-    expect(cardText).toContain('monitoring.fail_status_code_short 429');
+    const statusTrack = renderer.root.findByProps({
+      'data-account-request-status-track': 'true',
+    });
+    const renderedStatuses = statusTrack
+      .findAll((node) => typeof node.props['data-request-status'] === 'string')
+      .map((node) => node.props['data-request-status']);
+    expect(renderedStatuses.slice(-3)).toEqual(['failed', 'success', 'failed']);
+    expect(renderedStatuses.slice(0, -3).every((status) => status === 'empty')).toBe(true);
     const settledHistoryCallCount = mocks.getAccountHistory.mock.calls.length;
     expect(settledHistoryCallCount).toBeGreaterThan(0);
 

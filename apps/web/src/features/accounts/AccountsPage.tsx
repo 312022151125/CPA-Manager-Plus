@@ -609,12 +609,7 @@ export function AccountsPage() {
         setAccountActionCandidatesLoading(false);
       }
     }
-  }, [
-    featureAvailability.checking,
-    featureAvailability.managerServiceBase,
-    managementKey,
-    t,
-  ]);
+  }, [featureAvailability.checking, featureAvailability.managerServiceBase, managementKey, t]);
 
   useLayoutEffect(() => {
     const prev = headerSnapshotContextRef.current;
@@ -920,8 +915,7 @@ export function AccountsPage() {
   useEffect(() => {
     const needsCooldowns =
       activeView === 'accounts' &&
-      (operationalFilter === 'cooldown' ||
-        (Boolean(selectedRowKey) && detailTab === 'quota'));
+      (operationalFilter === 'cooldown' || (Boolean(selectedRowKey) && detailTab === 'quota'));
     if (!needsCooldowns) return;
     void loadQuotaCooldowns();
   }, [
@@ -940,13 +934,7 @@ export function AccountsPage() {
         (Boolean(selectedRowKey) && detailTab === 'diagnostics'));
     if (!needsActionCandidates) return;
     void loadAccountActionCandidates();
-  }, [
-    activeView,
-    detailTab,
-    loadAccountActionCandidates,
-    operationalFilter,
-    selectedRowKey,
-  ]);
+  }, [activeView, detailTab, loadAccountActionCandidates, operationalFilter, selectedRowKey]);
 
   useEffect(() => {
     if (
@@ -1049,7 +1037,8 @@ export function AccountsPage() {
     const windowsByRowKey = new Map<string, AccountQuotaDisplayWindow[]>();
     windowsByRowKey.set(
       selectedRow.selectionKey,
-      quotaDisplayWindowsByRowKey.get(selectedRow.selectionKey) ?? buildQuotaDisplayWindows(selectedRow)
+      quotaDisplayWindowsByRowKey.get(selectedRow.selectionKey) ??
+        buildQuotaDisplayWindows(selectedRow)
     );
     return buildAccountWindowUsageTargetEntries([selectedRow], windowsByRowKey);
   }, [buildQuotaDisplayWindows, quotaDisplayWindowsByRowKey, selectedRow]);
@@ -2727,6 +2716,14 @@ export function AccountsPage() {
       {paged ? renderBatchBar() : null}
       {rowsToRender.length > 0 ? (
         <div className={styles.accountCardList}>
+          <div className={styles.accountCardHeader} data-account-list-header="true">
+            <span>{t('accounts.list_header_credential')}</span>
+            <span>{t('accounts.list_header_availability')}</span>
+            <span>{t('accounts.list_header_latest_status')}</span>
+            <span>{t('accounts.list_header_historical_usage')}</span>
+            <span>{t('accounts.list_header_quota')}</span>
+            <span>{t('accounts.list_header_actions')}</span>
+          </div>
           {rowsToRender.map((row) => {
             const recommendation = recommendationBySelectionKey.get(row.selectionKey) ?? null;
             const quotaWindows =
@@ -2910,6 +2907,7 @@ export function AccountsPage() {
                 <div className={styles.accountCardLatestRequest}>
                   <AccountLatestRequest
                     latestRequest={accountHistory?.latest_request}
+                    recentRequests={accountHistory?.recent_requests}
                     loading={accountHistoryLoading && !accountHistory}
                     unavailable={Boolean(accountHistoryError)}
                     locale={i18n.language}

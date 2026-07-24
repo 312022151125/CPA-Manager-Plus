@@ -85,4 +85,49 @@ describe('accounts workspace wiring', () => {
     expect(locale.nav).not.toHaveProperty('codex_inspection_short');
     expect(locale.nav).not.toHaveProperty('server_codex_inspection');
   });
+
+  it.each([
+    [en, 'Health Inspection'],
+    [ru, 'Проверка состояния'],
+    [zhCN, '健康巡检'],
+    [zhTW, '健康巡檢'],
+  ])('localizes the health inspection tab', (locale, expectedLabel) => {
+    expect(locale.accounts.tab_health).toBe(expectedLabel);
+  });
+
+  it.each([
+    [
+      en,
+      [
+        'Credential / Account',
+        'Availability',
+        'Latest Status',
+        'Historical Usage',
+        'Quota Details',
+        'Actions',
+      ],
+    ],
+    [
+      ru,
+      [
+        'Учётные данные / аккаунт',
+        'Доступность',
+        'Последний статус',
+        'История использования',
+        'Сведения о квоте',
+        'Действия',
+      ],
+    ],
+    [zhCN, ['凭证/账号', '可用状态', '最近状态', '历史用量', '额度信息', '操作']],
+    [zhTW, ['憑證/帳號', '可用狀態', '最近狀態', '歷史用量', '額度資訊', '操作']],
+  ])('localizes the six credential list headers', (locale, expectedHeaders) => {
+    expect([
+      locale.accounts.list_header_credential,
+      locale.accounts.list_header_availability,
+      locale.accounts.list_header_latest_status,
+      locale.accounts.list_header_historical_usage,
+      locale.accounts.list_header_quota,
+      locale.accounts.list_header_actions,
+    ]).toEqual(expectedHeaders);
+  });
 });

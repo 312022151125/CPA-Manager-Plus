@@ -4574,6 +4574,7 @@ const demoAccountCandidates: AccountActionCandidate[] = [
 
 type DemoAccountHistoryTarget = MonitoringAccountHistoryRequest['accounts'][number];
 type DemoAccountHistoryItem = MonitoringAccountHistoryResponse['items'][number];
+type DemoAccountLatestRequest = NonNullable<DemoAccountHistoryItem['latest_request']>;
 type DemoAccountWindowUsageTarget = MonitoringAccountWindowUsageRequest['windows'][number];
 
 const readDemoAccountHistoryKey = (value: unknown): string => {
@@ -4621,17 +4622,101 @@ const readDemoRequestCount = (value: unknown): number => {
   return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
 };
 
+const DEMO_RECENT_REQUEST_SCENARIOS = [
+  { count: 1, failedIndexes: [] },
+  { count: 2, failedIndexes: [0] },
+  { count: 3, failedIndexes: [1] },
+  { count: 5, failedIndexes: [0, 2] },
+  { count: 5, failedIndexes: [0, 1, 2, 3, 4] },
+  { count: 10, failedIndexes: [2, 7] },
+] as const;
+
+const DEMO_FAILURE_PROFILES = [
+  {
+    statusCode: 401,
+    summary: 'Access token expired for the recent request.',
+    kind: 'authentication',
+    code: 'invalid_token',
+  },
+  {
+    statusCode: 429,
+    summary: 'Rate limit exceeded for the recent request.',
+    kind: 'rate_limit',
+    code: 'quota_exceeded',
+  },
+  {
+    statusCode: 500,
+    summary: 'The upstream provider returned an internal error.',
+    kind: 'upstream',
+    code: 'internal_error',
+  },
+  {
+    statusCode: 503,
+    summary: 'The upstream provider is temporarily unavailable.',
+    kind: 'upstream',
+    code: 'service_unavailable',
+  },
+] as const;
+
+const buildDemoRecentAccountRequests = (
+  timestampMS: number,
+  totalRequests: number,
+  scenarioIndex: number,
+  tracePrefix: string
+): { latestRequest: DemoAccountLatestRequest; recentRequests: DemoAccountLatestRequest[] } => {
+  const availableRequests = readDemoRequestCount(totalRequests);
+  if (availableRequests <= 0) {
+    const emptyRequest = { timestamp_ms: timestampMS, failed: false };
+    return { latestRequest: emptyRequest, recentRequests: [] };
+  }
+
+  const scenario =
+    DEMO_RECENT_REQUEST_SCENARIOS[scenarioIndex % DEMO_RECENT_REQUEST_SCENARIOS.length];
+  const requestCount = Math.min(10, availableRequests, scenario.count);
+  const failedIndexes = new Set<number>(
+    scenario.failedIndexes.filter((index) => index < requestCount)
+  );
+  const recentRequests = Array.from({ length: requestCount }, (_, index) => {
+    const requestTimestamp = timestampMS - index * minute;
+    if (!failedIndexes.has(index)) {
+      return { timestamp_ms: requestTimestamp, failed: false };
+    }
+
+    const profile = DEMO_FAILURE_PROFILES[(scenarioIndex + index) % DEMO_FAILURE_PROFILES.length];
+    return {
+      timestamp_ms: requestTimestamp,
+      failed: true,
+      fail_status_code: profile.statusCode,
+      fail_summary: profile.summary,
+      header_error_kind: profile.kind,
+      header_error_code: profile.code,
+      header_trace_id: `${tracePrefix}-${index}`,
+    };
+  });
+
+  return {
+    latestRequest: recentRequests[0]!,
+    recentRequests,
+  };
+};
+
 const buildDemoAccountHistoryIndex = (baseNow = now()): Map<string, DemoAccountHistoryItem> => {
   const analytics = buildMonitoringAnalytics(baseNow);
   const rows = analytics.credential_stats ?? [];
   const result = new Map<string, DemoAccountHistoryItem>();
 
-  rows.forEach((row) => {
+  rows.forEach((row, index) => {
     const accountKey = demoAccountHistoryRowKey(row);
     if (!accountKey) return;
     const totalRequests = row.calls;
     const successCalls = row.success_calls;
     const failureCalls = row.failure_calls;
+    const recentRequestData = buildDemoRecentAccountRequests(
+      row.last_seen_ms,
+      totalRequests,
+      index,
+      `demo-${row.id}`
+    );
 
     result.set(accountKey, {
       account_key: accountKey,
@@ -4644,32 +4729,25 @@ const buildDemoAccountHistoryIndex = (baseNow = now()): Map<string, DemoAccountH
       success_rate: totalRequests > 0 ? successCalls / totalRequests : null,
       first_seen_ms: baseNow - 30 * day,
       last_seen_ms: row.last_seen_ms,
-      latest_request:
-        failureCalls > 0
-          ? {
-              timestamp_ms: row.last_seen_ms,
-              failed: true,
-              fail_status_code: 429,
-              fail_summary: 'Rate limit exceeded for the most recent request.',
-              header_error_kind: 'rate_limit',
-              header_error_code: 'quota_exceeded',
-              header_trace_id: `demo-${row.id}`,
-            }
-          : {
-              timestamp_ms: row.last_seen_ms,
-              failed: false,
-            },
+      latest_request: recentRequestData.latestRequest,
+      recent_requests: recentRequestData.recentRequests,
       sync_status: 'ready',
     });
   });
 
-  getDemoAuthFileItems().forEach((file) => {
+  getDemoAuthFileItems().forEach((file, index) => {
     const accountKey = demoAccountHistoryFileKey(file);
     if (!accountKey || result.has(accountKey)) return;
     const successCalls = readDemoRequestCount(file.success);
     const failureCalls = readDemoRequestCount(file.failed);
     const totalRequests = successCalls + failureCalls;
     if (totalRequests <= 0) return;
+    const recentRequestData = buildDemoRecentAccountRequests(
+      file.modified ?? baseNow,
+      totalRequests,
+      100 + index,
+      `demo-${file.name}`
+    );
 
     result.set(accountKey, {
       account_key: accountKey,
@@ -4682,21 +4760,8 @@ const buildDemoAccountHistoryIndex = (baseNow = now()): Map<string, DemoAccountH
       success_rate: successCalls / totalRequests,
       first_seen_ms: baseNow - 7 * day,
       last_seen_ms: file.modified ?? baseNow,
-      latest_request:
-        failureCalls > 0
-          ? {
-              timestamp_ms: file.modified ?? baseNow,
-              failed: true,
-              fail_status_code: 429,
-              fail_summary: 'Rate limit exceeded for the most recent request.',
-              header_error_kind: 'rate_limit',
-              header_error_code: 'quota_exceeded',
-              header_trace_id: `demo-${file.name}`,
-            }
-          : {
-              timestamp_ms: file.modified ?? baseNow,
-              failed: false,
-            },
+      latest_request: recentRequestData.latestRequest,
+      recent_requests: recentRequestData.recentRequests,
       sync_status: 'ready',
     });
   });

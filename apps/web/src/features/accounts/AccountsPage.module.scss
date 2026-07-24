@@ -330,8 +330,8 @@
   padding: 10px 12px;
 }
 
+.accountCardHeader,
 .accountCard {
-  position: relative;
   display: grid;
   grid-template-columns:
     minmax(140px, 180px)
@@ -340,10 +340,44 @@
     196px
     minmax(190px, 1fr)
     124px;
-  align-items: stretch;
   column-gap: clamp(10px, 0.8vw, 14px);
-  row-gap: 10px;
   min-width: 0;
+}
+
+.accountCardHeader {
+  align-items: center;
+  min-height: 34px;
+  padding: 2px 13px 0;
+  color: var(--accounts-muted);
+  font-size: 12px;
+  font-weight: 700;
+
+  > span {
+    min-width: 0;
+    padding-right: 6px;
+    line-height: 1.25;
+  }
+
+  > span:not(:first-child) {
+    padding-left: 11px;
+  }
+
+  > span:nth-child(2),
+  > span:nth-child(3),
+  > span:nth-child(4),
+  > span:last-child {
+    text-align: center;
+  }
+
+  > span:last-child {
+    padding-right: 0;
+  }
+}
+
+.accountCard {
+  position: relative;
+  align-items: stretch;
+  row-gap: 10px;
   min-height: 116px;
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
@@ -362,16 +396,31 @@
 }
 
 @media (min-width: 1360px) {
+  .accountCardHeader,
   .accountCard {
     grid-template-columns:
-      minmax(160px, 200px)
+      minmax(180px, 1.15fr)
       104px
       150px
-      206px
-      minmax(300px, 1fr)
-      124px;
+      196px
+      minmax(268px, 2fr)
+      144px;
     justify-content: space-between;
     column-gap: clamp(16px, 1.15vw, 22px);
+  }
+}
+
+@media (max-width: $breakpoint-tablet) {
+  .accountCardHeader {
+    display: none;
+  }
+
+  .accountCardHealth::before,
+  .accountCardLatestRequest::before,
+  .accountCardEvidence::before,
+  .accountCardBusiness::before,
+  .accountCardRecommendation::before {
+    display: none;
   }
 }
 
@@ -419,8 +468,30 @@
 .accountCardEvidence,
 .accountCardBusiness,
 .accountCardRecommendation {
+  position: relative;
   padding-left: 10px;
-  border-left: 1px solid color-mix(in srgb, var(--border-color) 18%, transparent);
+}
+
+.accountCardHealth::before,
+.accountCardLatestRequest::before,
+.accountCardEvidence::before,
+.accountCardBusiness::before,
+.accountCardRecommendation::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 1px;
+  border-radius: $radius-full;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    color-mix(in srgb, var(--accounts-strong-border) 68%, transparent),
+    transparent
+  );
+  content: '';
+  opacity: 0.68;
+  pointer-events: none;
 }
 
 .accountCardIdentity {

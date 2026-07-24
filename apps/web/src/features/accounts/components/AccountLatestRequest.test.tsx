@@ -19,7 +19,7 @@ vi.mock('react-i18next', () => ({
         'monitoring.header_error': 'Header error',
         'monitoring.header_trace': 'Trace',
         'accounts.latest_request_copy_details': 'Copy error details',
-        'accounts.latest_request_time_title': 'Last real request time',
+        'accounts.latest_request_time_title': 'Most recent request time',
         'accounts.latest_request_loading': 'Loading request',
         'accounts.latest_request_unavailable': 'Request record unavailable',
         'accounts.latest_request_empty': 'No request yet',
@@ -41,10 +41,20 @@ const readText = (value: unknown): string => {
   return '';
 };
 
-const renderLatestRequest = (props: Partial<ComponentProps<typeof AccountLatestRequest>> = {}) => {
+const renderLatestRequest = (
+  props: Partial<ComponentProps<typeof AccountLatestRequest>> = {},
+  timeWidth?: number
+) => {
   let renderer: ReactTestRenderer;
   act(() => {
-    renderer = create(<AccountLatestRequest onCopy={vi.fn()} {...props} />);
+    renderer = create(<AccountLatestRequest onCopy={vi.fn()} {...props} />, {
+      createNodeMock: (element) =>
+        element.type === 'time' && typeof timeWidth === 'number'
+          ? {
+              getBoundingClientRect: () => ({ width: timeWidth }),
+            }
+          : null,
+    });
   });
   return renderer!;
 };
@@ -53,20 +63,31 @@ const containsText = (renderer: ReactTestRenderer, text: string) =>
   renderer.root.findAll((node) => readText(node.props.children).includes(text)).length > 0;
 
 describe('AccountLatestRequest', () => {
-  it('shows a failed latest request with a copyable, masked diagnostic tooltip', () => {
+  it('shows recent statuses from oldest to newest with a copyable failure tooltip', () => {
     const onCopy = vi.fn();
     const renderer = renderLatestRequest({
       onCopy,
-      latestRequest: {
-        timestamp_ms: 1_700_000_000_000,
-        failed: true,
-        fail_status_code: 429,
-        fail_summary: 'Authorization: Bearer private-request-token',
-        header_error_kind: 'rate_limit',
-        header_error_code: 'quota_exceeded',
-        header_trace_id: 'trace-123',
-      },
+      recentRequests: [
+        {
+          timestamp_ms: 1_700_000_003_000,
+          failed: true,
+          fail_status_code: 429,
+          fail_summary: 'Authorization: Bearer private-request-token',
+          header_error_kind: 'rate_limit',
+          header_error_code: 'quota_exceeded',
+          header_trace_id: 'trace-123',
+        },
+        { timestamp_ms: 1_700_000_002_000, failed: false },
+        { timestamp_ms: 1_700_000_001_000, failed: true },
+      ],
     });
+
+    expect(
+      renderer.root
+        .findAll((node) => typeof node.props['data-request-status'] === 'string')
+        .map((node) => node.props['data-request-status'])
+    ).toEqual(['empty', 'empty', 'failed', 'success', 'failed']);
+    expect(containsText(renderer, 'Status')).toBe(false);
 
     const trigger = renderer.root.findByProps({
       'aria-label': 'Failed · HTTP 429 · Authorization: [redacted] · rate_limit',
@@ -82,13 +103,87 @@ describe('AccountLatestRequest', () => {
     );
   });
 
-  it('distinguishes successful and missing request records', () => {
+  it('uses the rendered time width to choose up to ten status slots', () => {
+    const renderer = renderLatestRequest(
+      {
+        recentRequests: Array.from({ length: 10 }, (_, index) => ({
+          timestamp_ms: 1_700_000_010_000 - index * 1_000,
+          failed: index % 2 === 0,
+        })),
+      },
+      95
+    );
+    const statusTrack = renderer.root.findByProps({
+      'data-account-request-status-track': 'true',
+    });
+
+    expect(statusTrack.props['data-account-request-status-slot-count']).toBe(10);
+    expect(
+      statusTrack.findAll((node) => typeof node.props['data-request-status'] === 'string')
+    ).toHaveLength(10);
+  });
+
+  it('falls back to the legacy latest request and uses neutral slots when no history exists', () => {
     const success = renderLatestRequest({
       latestRequest: { timestamp_ms: 1_700_000_000_000, failed: false },
     });
-    expect(containsText(success, 'Success')).toBe(true);
+    expect(
+      success.root
+        .findAll((node) => typeof node.props['data-request-status'] === 'string')
+        .map((node) => node.props['data-request-status'])
+    ).toEqual(['empty', 'empty', 'empty', 'empty', 'success']);
+    expect(success.root.findAllByType('svg')).toHaveLength(0);
 
     const empty = renderLatestRequest();
-    expect(containsText(empty, 'No request yet')).toBe(true);
+    expect(
+      empty.root
+        .findAll((node) => typeof node.props['data-request-status'] === 'string')
+        .map((node) => node.props['data-request-status'])
+    ).toEqual(['empty', 'empty', 'empty', 'empty', 'empty']);
+    expect(
+      empty.root.findByProps({ 'data-account-request-status-track': 'true' }).props['aria-label']
+    ).toBe('No request yet');
+
+    const unavailable = renderLatestRequest({
+      recentRequests: [{ timestamp_ms: 1_700_000_000_000, failed: false }],
+      unavailable: true,
+    });
+    expect(
+      unavailable.root
+        .findAll((node) => typeof node.props['data-request-status'] === 'string')
+        .map((node) => node.props['data-request-status'])
+    ).toEqual(['empty', 'empty', 'empty', 'empty', 'empty']);
+    expect(
+      unavailable.root.findByProps({ 'data-account-request-status-track': 'true' }).props[
+        'aria-label'
+      ]
+    ).toBe('Request record unavailable');
+  });
+
+  it('shows seconds and exposes the complete timestamp in an immediate two-line tooltip', () => {
+    const timestamp = new Date(2026, 6, 24, 12, 55, 42).getTime();
+    const renderer = renderLatestRequest({
+      latestRequest: { timestamp_ms: timestamp, failed: false },
+    });
+    const time = renderer.root.findByProps({ 'data-account-request-time': 'true' });
+    const tooltipTrigger = renderer.root.findByProps({
+      'data-account-request-time-tooltip': 'true',
+    });
+    const tooltipLabel = renderer.root.findByProps({
+      'data-account-request-time-tooltip-label': 'true',
+    });
+    const tooltipValue = renderer.root.findByProps({
+      'data-account-request-time-tooltip-value': 'true',
+    });
+
+    expect(readText(time)).toBe('07/24 12:55:42');
+    expect(time.props.title).toBeUndefined();
+    expect(time.props.dateTime).toBe(new Date(timestamp).toISOString());
+    expect(readText(tooltipLabel)).toBe('Most recent request time');
+    expect(readText(tooltipValue)).toBe('2026/07/24 12:55:42');
+    expect(tooltipTrigger.props['aria-describedby']).toBeUndefined();
+
+    act(() => tooltipTrigger.props.onMouseEnter());
+    expect(tooltipTrigger.props['aria-describedby']).toEqual(expect.any(String));
   });
 });
