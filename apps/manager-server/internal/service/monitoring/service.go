@@ -241,17 +241,31 @@ type AccountHistoryCheckpointState struct {
 }
 
 type AccountHistoryItem struct {
-	AccountKey    string   `json:"account_key"`
-	Matched       bool     `json:"matched"`
-	TotalRequests int64    `json:"total_requests"`
-	SuccessCalls  int64    `json:"success_calls"`
-	FailureCalls  int64    `json:"failure_calls"`
-	TotalTokens   int64    `json:"total_tokens"`
-	TotalCost     float64  `json:"total_cost"`
-	SuccessRate   *float64 `json:"success_rate"`
-	FirstSeenMS   *int64   `json:"first_seen_ms"`
-	LastSeenMS    *int64   `json:"last_seen_ms"`
-	SyncStatus    string   `json:"sync_status"`
+	AccountKey    string                `json:"account_key"`
+	Matched       bool                  `json:"matched"`
+	TotalRequests int64                 `json:"total_requests"`
+	SuccessCalls  int64                 `json:"success_calls"`
+	FailureCalls  int64                 `json:"failure_calls"`
+	TotalTokens   int64                 `json:"total_tokens"`
+	TotalCost     float64               `json:"total_cost"`
+	SuccessRate   *float64              `json:"success_rate"`
+	FirstSeenMS   *int64                `json:"first_seen_ms"`
+	LastSeenMS    *int64                `json:"last_seen_ms"`
+	LatestRequest *AccountLatestRequest `json:"latest_request,omitempty"`
+	SyncStatus    string                `json:"sync_status"`
+}
+
+// AccountLatestRequest is the most recent persisted request for an auth file.
+// It intentionally exposes only the already-sanitized diagnostic summary and
+// selected response-header metadata, never raw response bodies.
+type AccountLatestRequest struct {
+	TimestampMS     int64  `json:"timestamp_ms"`
+	Failed          bool   `json:"failed"`
+	FailStatusCode  *int   `json:"fail_status_code,omitempty"`
+	FailSummary     string `json:"fail_summary,omitempty"`
+	HeaderErrorKind string `json:"header_error_kind,omitempty"`
+	HeaderErrorCode string `json:"header_error_code,omitempty"`
+	HeaderTraceID   string `json:"header_trace_id,omitempty"`
 }
 
 type AccountWindowUsageRequest struct {
@@ -1245,6 +1259,7 @@ func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest)
 	keys := make([]string, 0, len(req.Accounts))
 	targetKeys := make([]string, len(req.Accounts))
 	validTargets := make([]bool, len(req.Accounts))
+	latestRequestTargets := make([]store.LatestAccountRequestQuery, 0, len(req.Accounts))
 	for index, account := range req.Accounts {
 		key, valid := accountHistoryTargetKey(account)
 		targetKeys[index] = key
@@ -1252,8 +1267,19 @@ func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest)
 		if valid {
 			keys = append(keys, key)
 		}
+		if latestAccountRequestTargetValid(account) {
+			latestRequestTargets = append(latestRequestTargets, store.LatestAccountRequestQuery{
+				RequestIndex:     index,
+				AuthFileSnapshot: account.Source,
+				AuthIndex:        account.AuthIndex,
+			})
+		}
 	}
 	rows, err := s.store.AccountHistoryRollupRows(ctx, keys)
+	if err != nil {
+		return AccountHistoryResponse{}, err
+	}
+	latestRequests, err := s.store.LatestAccountRequests(ctx, latestRequestTargets)
 	if err != nil {
 		return AccountHistoryResponse{}, err
 	}
@@ -1262,24 +1288,31 @@ func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest)
 		return AccountHistoryResponse{}, err
 	}
 	totals := buildAccountHistoryTotals(rows, prices)
+	latestRequestByTargetIndex := make(map[int]*AccountLatestRequest, len(latestRequests))
+	for _, request := range latestRequests {
+		latestRequestByTargetIndex[request.RequestIndex] = accountLatestRequestFromStore(request)
+	}
 	pending := latestID > checkpoint.LastEventID
 	items := make([]AccountHistoryItem, 0, len(req.Accounts))
 	for index := range req.Accounts {
 		key := targetKeys[index]
+		latestRequest := latestRequestByTargetIndex[index]
 		if !validTargets[index] {
 			items = append(items, AccountHistoryItem{
-				AccountKey: key,
-				Matched:    false,
-				SyncStatus: accountHistorySyncStatus(false, false),
+				AccountKey:    key,
+				Matched:       false,
+				LatestRequest: latestRequest,
+				SyncStatus:    accountHistorySyncStatus(false, false),
 			})
 			continue
 		}
 		total := totals[key]
 		if total == nil {
 			items = append(items, AccountHistoryItem{
-				AccountKey: key,
-				Matched:    false,
-				SyncStatus: accountHistorySyncStatus(false, pending),
+				AccountKey:    key,
+				Matched:       false,
+				LatestRequest: latestRequest,
+				SyncStatus:    accountHistorySyncStatus(false, pending),
 			})
 			continue
 		}
@@ -1299,6 +1332,7 @@ func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest)
 			SuccessRate:   successRate,
 			FirstSeenMS:   nullableMSPointer(total.firstSeenMS),
 			LastSeenMS:    nullableMSPointer(total.lastSeenMS),
+			LatestRequest: latestRequest,
 			SyncStatus:    accountHistorySyncStatus(true, pending),
 		})
 	}
@@ -3041,6 +3075,30 @@ func accountHistoryTargetKey(target AccountHistoryTarget) (string, bool) {
 		target.Source,
 		target.AuthIndex,
 	), true
+}
+
+func latestAccountRequestTargetValid(target AccountHistoryTarget) bool {
+	return strings.TrimSpace(target.Source) != ""
+}
+
+func accountLatestRequestFromStore(request store.LatestAccountRequest) *AccountLatestRequest {
+	if request.TimestampMS <= 0 {
+		return nil
+	}
+	var failStatusCode *int
+	if request.FailStatusCode.Valid && request.FailStatusCode.Int64 > 0 {
+		value := int(request.FailStatusCode.Int64)
+		failStatusCode = &value
+	}
+	return &AccountLatestRequest{
+		TimestampMS:     request.TimestampMS,
+		Failed:          request.Failed,
+		FailStatusCode:  failStatusCode,
+		FailSummary:     request.FailSummary,
+		HeaderErrorKind: request.HeaderErrorKind,
+		HeaderErrorCode: request.HeaderErrorCode,
+		HeaderTraceID:   request.HeaderTraceID,
+	}
 }
 
 func buildAccountHistoryTotals(rows []store.AccountHistoryRollupRow, prices map[string]store.ModelPrice) map[string]*accountHistoryTotal {

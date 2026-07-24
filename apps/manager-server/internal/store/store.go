@@ -78,6 +78,8 @@ type EventsPage = usageevent.EventsPage
 type HeaderSnapshot = usageevent.HeaderSnapshot
 type AccountWindowUsageQuery = usageevent.AccountWindowUsageQuery
 type AccountWindowModelStat = usageevent.AccountWindowModelStat
+type LatestAccountRequestQuery = usageevent.LatestAccountRequestQuery
+type LatestAccountRequest = usageevent.LatestAccountRequest
 type UsageRollupCheckpoint = usagerollup.Checkpoint
 type UsageRollupCatchUpResult = usagerollup.CatchUpResult
 type AccountHistoryRollupRow = usagerollup.AccountHistoryRow
@@ -367,6 +369,10 @@ func (s *Store) LatestUsageEventID(ctx context.Context) (int64, error) {
 
 func (s *Store) AccountHistoryRollupRows(ctx context.Context, accountKeys []string) ([]AccountHistoryRollupRow, error) {
 	return s.UsageRollups.AccountHistoryRows(ctx, accountKeys)
+}
+
+func (s *Store) LatestAccountRequests(ctx context.Context, targets []LatestAccountRequestQuery) ([]LatestAccountRequest, error) {
+	return s.UsageEvents.LatestAccountRequests(ctx, targets)
 }
 
 func (s *Store) DashboardHourlyRollupRows(ctx context.Context, fromMS, toMS int64) ([]DashboardHourlyRollupRow, error) {

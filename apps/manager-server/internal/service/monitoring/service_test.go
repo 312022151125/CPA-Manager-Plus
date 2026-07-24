@@ -2,12 +2,14 @@ package monitoring
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1978,6 +1980,59 @@ func TestAccountHistoryEmptyTargetDoesNotMatchAnonymousBucket(t *testing.T) {
 	}
 	if resp.Items[0].Matched || resp.Items[0].AccountKey != "" || resp.Items[0].SyncStatus != "empty" {
 		t.Fatalf("empty target matched anonymous bucket: %#v", resp.Items[0])
+	}
+}
+
+func TestAccountHistoryIncludesLatestCredentialRequestWithoutExposingRawFailureData(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_700_000_000_000)
+	matched := monitoringEvent("history-latest-match", baseMS+1_000, "gpt-a", "auth-1", "source-match", true, 0, 0, 0, 0, 0, nil)
+	matched.AuthFileSnapshot = "credential-a.json"
+	matched.AccountSnapshot = "alice@example.com"
+	matched.FailStatusCode = 429
+	matched.FailBody = "Authorization: Bearer should-never-leak"
+	matched.HeaderErrorKind = "rate_limit"
+	matched.HeaderErrorCode = "quota_exceeded"
+	matched.HeaderTraceID = "trace-history-latest"
+	otherCredential := monitoringEvent("history-latest-other", baseMS+2_000, "gpt-a", "auth-1", "source-other", false, 0, 0, 0, 0, 0, nil)
+	otherCredential.AuthFileSnapshot = "credential-b.json"
+	otherCredential.AccountSnapshot = "alice@example.com"
+
+	if _, err := db.InsertEvents(ctx, []usage.Event{matched, otherCredential}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).AccountHistory(ctx, AccountHistoryRequest{
+		Accounts: []AccountHistoryTarget{{
+			AccountSnapshot: "alice@example.com",
+			Source:          "credential-a.json",
+			AuthIndex:       "auth-1",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("account history: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].LatestRequest == nil {
+		t.Fatalf("history response = %#v", resp)
+	}
+	latest := resp.Items[0].LatestRequest
+	if latest.TimestampMS != matched.TimestampMS || !latest.Failed || latest.FailStatusCode == nil || *latest.FailStatusCode != 429 {
+		t.Fatalf("latest request = %#v", latest)
+	}
+	if latest.HeaderErrorKind != "rate_limit" || latest.HeaderErrorCode != "quota_exceeded" || latest.HeaderTraceID != "trace-history-latest" {
+		t.Fatalf("latest diagnostics = %#v", latest)
+	}
+	encoded, err := json.Marshal(resp.Items[0])
+	if err != nil {
+		t.Fatalf("marshal history item: %v", err)
+	}
+	encodedText := string(encoded)
+	if strings.Contains(encodedText, "should-never-leak") || strings.Contains(encodedText, "fail_body") || strings.Contains(encodedText, "raw_json") {
+		t.Fatalf("history response exposed sensitive data: %s", encodedText)
+	}
+	if !strings.Contains(encodedText, "[redacted]") {
+		t.Fatalf("history response did not retain sanitized diagnostics: %s", encodedText)
 	}
 }
 
