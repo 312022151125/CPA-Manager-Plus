@@ -29,16 +29,17 @@ type LatestAccountRequest struct {
 	HeaderTraceID   string
 }
 
-func (r *repository) LatestAccountRequests(
+func (r *repository) RecentAccountRequests(
 	ctx context.Context,
 	targets []LatestAccountRequestQuery,
+	limit int,
 ) ([]LatestAccountRequest, error) {
-	if len(targets) == 0 {
+	if len(targets) == 0 || limit <= 0 {
 		return []LatestAccountRequest{}, nil
 	}
 
 	values := make([]string, 0, len(targets))
-	args := make([]any, 0, len(targets)*3)
+	args := make([]any, 0, len(targets)*3+1)
 	for _, target := range targets {
 		authFileSnapshot := strings.TrimSpace(target.AuthFileSnapshot)
 		if authFileSnapshot == "" {
@@ -55,6 +56,7 @@ func (r *repository) LatestAccountRequests(
 	if len(values) == 0 {
 		return []LatestAccountRequest{}, nil
 	}
+	args = append(args, limit)
 
 	rows, err := r.db.QueryContext(ctx, `with credential_targets(
 	request_index, auth_file_snapshot, auth_index
@@ -121,14 +123,14 @@ select
 	header_error_code,
 	header_trace_id
 from ranked
-where row_number = 1
-order by request_index`, args...)
+where row_number <= ?
+order by request_index, row_number`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	requests := make([]LatestAccountRequest, 0, len(values))
+	requests := make([]LatestAccountRequest, 0, len(values)*limit)
 	for rows.Next() {
 		var request LatestAccountRequest
 		var failed int

@@ -371,8 +371,8 @@ func (s *Store) AccountHistoryRollupRows(ctx context.Context, accountKeys []stri
 	return s.UsageRollups.AccountHistoryRows(ctx, accountKeys)
 }
 
-func (s *Store) LatestAccountRequests(ctx context.Context, targets []LatestAccountRequestQuery) ([]LatestAccountRequest, error) {
-	return s.UsageEvents.LatestAccountRequests(ctx, targets)
+func (s *Store) RecentAccountRequests(ctx context.Context, targets []LatestAccountRequestQuery, limit int) ([]LatestAccountRequest, error) {
+	return s.UsageEvents.RecentAccountRequests(ctx, targets, limit)
 }
 
 func (s *Store) DashboardHourlyRollupRows(ctx context.Context, fromMS, toMS int64) ([]DashboardHourlyRollupRow, error) {

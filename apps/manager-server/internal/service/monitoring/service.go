@@ -27,6 +27,7 @@ const (
 	maxAccountHistoryTargets   = 200
 	maxAccountWindowUsageItems = 400
 	accountHistoryCatchUpLimit = 5000
+	accountRecentRequestLimit  = 10
 	recentWindowMS             = 30 * 60 * 1000
 	// analyticsPrefetchConcurrency limits background analytics reads. The
 	// foreground summary/task path may hold one additional SQLite connection.
@@ -241,18 +242,19 @@ type AccountHistoryCheckpointState struct {
 }
 
 type AccountHistoryItem struct {
-	AccountKey    string                `json:"account_key"`
-	Matched       bool                  `json:"matched"`
-	TotalRequests int64                 `json:"total_requests"`
-	SuccessCalls  int64                 `json:"success_calls"`
-	FailureCalls  int64                 `json:"failure_calls"`
-	TotalTokens   int64                 `json:"total_tokens"`
-	TotalCost     float64               `json:"total_cost"`
-	SuccessRate   *float64              `json:"success_rate"`
-	FirstSeenMS   *int64                `json:"first_seen_ms"`
-	LastSeenMS    *int64                `json:"last_seen_ms"`
-	LatestRequest *AccountLatestRequest `json:"latest_request,omitempty"`
-	SyncStatus    string                `json:"sync_status"`
+	AccountKey     string                 `json:"account_key"`
+	Matched        bool                   `json:"matched"`
+	TotalRequests  int64                  `json:"total_requests"`
+	SuccessCalls   int64                  `json:"success_calls"`
+	FailureCalls   int64                  `json:"failure_calls"`
+	TotalTokens    int64                  `json:"total_tokens"`
+	TotalCost      float64                `json:"total_cost"`
+	SuccessRate    *float64               `json:"success_rate"`
+	FirstSeenMS    *int64                 `json:"first_seen_ms"`
+	LastSeenMS     *int64                 `json:"last_seen_ms"`
+	LatestRequest  *AccountLatestRequest  `json:"latest_request,omitempty"`
+	RecentRequests []AccountLatestRequest `json:"recent_requests,omitempty"`
+	SyncStatus     string                 `json:"sync_status"`
 }
 
 // AccountLatestRequest is the most recent persisted request for an auth file.
@@ -1279,7 +1281,11 @@ func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest)
 	if err != nil {
 		return AccountHistoryResponse{}, err
 	}
-	latestRequests, err := s.store.LatestAccountRequests(ctx, latestRequestTargets)
+	recentRequests, err := s.store.RecentAccountRequests(
+		ctx,
+		latestRequestTargets,
+		accountRecentRequestLimit,
+	)
 	if err != nil {
 		return AccountHistoryResponse{}, err
 	}
@@ -1288,31 +1294,45 @@ func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest)
 		return AccountHistoryResponse{}, err
 	}
 	totals := buildAccountHistoryTotals(rows, prices)
-	latestRequestByTargetIndex := make(map[int]*AccountLatestRequest, len(latestRequests))
-	for _, request := range latestRequests {
-		latestRequestByTargetIndex[request.RequestIndex] = accountLatestRequestFromStore(request)
+	recentRequestsByTargetIndex := make(map[int][]AccountLatestRequest, len(recentRequests))
+	for _, request := range recentRequests {
+		mapped := accountLatestRequestFromStore(request)
+		if mapped == nil {
+			continue
+		}
+		recentRequestsByTargetIndex[request.RequestIndex] = append(
+			recentRequestsByTargetIndex[request.RequestIndex],
+			*mapped,
+		)
 	}
 	pending := latestID > checkpoint.LastEventID
 	items := make([]AccountHistoryItem, 0, len(req.Accounts))
 	for index := range req.Accounts {
 		key := targetKeys[index]
-		latestRequest := latestRequestByTargetIndex[index]
+		targetRecentRequests := recentRequestsByTargetIndex[index]
+		var latestRequest *AccountLatestRequest
+		if len(targetRecentRequests) > 0 {
+			value := targetRecentRequests[0]
+			latestRequest = &value
+		}
 		if !validTargets[index] {
 			items = append(items, AccountHistoryItem{
-				AccountKey:    key,
-				Matched:       false,
-				LatestRequest: latestRequest,
-				SyncStatus:    accountHistorySyncStatus(false, false),
+				AccountKey:     key,
+				Matched:        false,
+				LatestRequest:  latestRequest,
+				RecentRequests: targetRecentRequests,
+				SyncStatus:     accountHistorySyncStatus(false, false),
 			})
 			continue
 		}
 		total := totals[key]
 		if total == nil {
 			items = append(items, AccountHistoryItem{
-				AccountKey:    key,
-				Matched:       false,
-				LatestRequest: latestRequest,
-				SyncStatus:    accountHistorySyncStatus(false, pending),
+				AccountKey:     key,
+				Matched:        false,
+				LatestRequest:  latestRequest,
+				RecentRequests: targetRecentRequests,
+				SyncStatus:     accountHistorySyncStatus(false, pending),
 			})
 			continue
 		}
@@ -1322,18 +1342,19 @@ func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest)
 			successRate = &value
 		}
 		items = append(items, AccountHistoryItem{
-			AccountKey:    key,
-			Matched:       true,
-			TotalRequests: total.requests,
-			SuccessCalls:  total.successCalls,
-			FailureCalls:  total.failureCalls,
-			TotalTokens:   total.totalTokens,
-			TotalCost:     total.cost,
-			SuccessRate:   successRate,
-			FirstSeenMS:   nullableMSPointer(total.firstSeenMS),
-			LastSeenMS:    nullableMSPointer(total.lastSeenMS),
-			LatestRequest: latestRequest,
-			SyncStatus:    accountHistorySyncStatus(true, pending),
+			AccountKey:     key,
+			Matched:        true,
+			TotalRequests:  total.requests,
+			SuccessCalls:   total.successCalls,
+			FailureCalls:   total.failureCalls,
+			TotalTokens:    total.totalTokens,
+			TotalCost:      total.cost,
+			SuccessRate:    successRate,
+			FirstSeenMS:    nullableMSPointer(total.firstSeenMS),
+			LastSeenMS:     nullableMSPointer(total.lastSeenMS),
+			LatestRequest:  latestRequest,
+			RecentRequests: targetRecentRequests,
+			SyncStatus:     accountHistorySyncStatus(true, pending),
 		})
 	}
 

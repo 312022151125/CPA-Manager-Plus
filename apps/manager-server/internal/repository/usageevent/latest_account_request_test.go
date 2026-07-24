@@ -11,7 +11,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
-func TestLatestAccountRequestsUseSnapshotIdentityAndConservativeLegacyFallback(t *testing.T) {
+func TestRecentAccountRequestsUseSnapshotIdentityLimitAndConservativeLegacyFallback(t *testing.T) {
 	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
 	if err != nil {
 		t.Fatalf("open database: %v", err)
@@ -21,6 +21,7 @@ func TestLatestAccountRequestsUseSnapshotIdentityAndConservativeLegacyFallback(t
 	ctx := context.Background()
 	baseMS := int64(1_700_000_000_000)
 
+	oldest := latestAccountRequestEvent("oldest", baseMS+500, "credential-a.json", "auth-a", "source-a")
 	current := latestAccountRequestEvent("current", baseMS+1_000, "credential-a.json", "auth-a", "source-a")
 	latest := latestAccountRequestEvent("latest", baseMS+2_000, "Credential-A.JSON", "AUTH-A", "source-a")
 	latest.Failed = true
@@ -40,6 +41,7 @@ func TestLatestAccountRequestsUseSnapshotIdentityAndConservativeLegacyFallback(t
 	legacyWithSnapshot := latestAccountRequestEvent("legacy-with-snapshot", baseMS+12_000, "other.json", "legacy.json", "legacy.json")
 
 	if _, err := repo.InsertBatch(ctx, []usage.Event{
+		oldest,
 		current,
 		latest,
 		wrongFile,
@@ -51,24 +53,28 @@ func TestLatestAccountRequestsUseSnapshotIdentityAndConservativeLegacyFallback(t
 		t.Fatalf("insert events: %v", err)
 	}
 
-	requests, err := repo.LatestAccountRequests(ctx, []LatestAccountRequestQuery{
+	requests, err := repo.RecentAccountRequests(ctx, []LatestAccountRequestQuery{
 		{RequestIndex: 0, AuthFileSnapshot: "credential-a.json", AuthIndex: "auth-a"},
 		{RequestIndex: 1, AuthFileSnapshot: "legacy.json", AuthIndex: "legacy.json"},
 		{RequestIndex: 2, AuthFileSnapshot: "missing.json", AuthIndex: "auth-missing"},
-	})
+	}, 2)
 	if err != nil {
-		t.Fatalf("latest account requests: %v", err)
+		t.Fatalf("recent account requests: %v", err)
 	}
-	if len(requests) != 2 {
+	if len(requests) != 3 {
 		t.Fatalf("requests = %#v", requests)
 	}
 
-	byIndex := make(map[int]LatestAccountRequest, len(requests))
+	byIndex := make(map[int][]LatestAccountRequest, len(requests))
 	for _, request := range requests {
-		byIndex[request.RequestIndex] = request
+		byIndex[request.RequestIndex] = append(byIndex[request.RequestIndex], request)
 	}
 
-	primary := byIndex[0]
+	primaryRequests := byIndex[0]
+	if len(primaryRequests) != 2 {
+		t.Fatalf("primary requests = %#v", primaryRequests)
+	}
+	primary := primaryRequests[0]
 	if primary.TimestampMS != latest.TimestampMS || !primary.Failed || !primary.FailStatusCode.Valid || primary.FailStatusCode.Int64 != 429 {
 		t.Fatalf("primary latest request = %#v", primary)
 	}
@@ -78,8 +84,20 @@ func TestLatestAccountRequestsUseSnapshotIdentityAndConservativeLegacyFallback(t
 	if strings.Contains(primary.FailSummary, "hidden-request-token") || !strings.Contains(primary.FailSummary, "[redacted]") {
 		t.Fatalf("primary failure summary was not safely reduced: %q", primary.FailSummary)
 	}
+	if primaryRequests[1].TimestampMS != current.TimestampMS {
+		t.Fatalf("primary request order = %#v", primaryRequests)
+	}
+	for _, request := range primaryRequests {
+		if request.TimestampMS == oldest.TimestampMS {
+			t.Fatalf("per-credential limit was not applied: %#v", primaryRequests)
+		}
+	}
 
-	legacyResult := byIndex[1]
+	legacyRequests := byIndex[1]
+	if len(legacyRequests) != 1 {
+		t.Fatalf("legacy requests = %#v", legacyRequests)
+	}
+	legacyResult := legacyRequests[0]
 	if legacyResult.TimestampMS != legacy.TimestampMS || !legacyResult.Failed || !legacyResult.FailStatusCode.Valid || legacyResult.FailStatusCode.Int64 != 503 {
 		t.Fatalf("legacy fallback = %#v", legacyResult)
 	}

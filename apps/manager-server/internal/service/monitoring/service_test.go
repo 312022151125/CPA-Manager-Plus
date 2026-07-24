@@ -1998,8 +1998,28 @@ func TestAccountHistoryIncludesLatestCredentialRequestWithoutExposingRawFailureD
 	otherCredential := monitoringEvent("history-latest-other", baseMS+2_000, "gpt-a", "auth-1", "source-other", false, 0, 0, 0, 0, 0, nil)
 	otherCredential.AuthFileSnapshot = "credential-b.json"
 	otherCredential.AccountSnapshot = "alice@example.com"
+	events := []usage.Event{matched, otherCredential}
+	for index := range 11 {
+		historical := monitoringEvent(
+			fmt.Sprintf("history-recent-%02d", index),
+			baseMS-int64(index+1)*1_000,
+			"gpt-a",
+			"auth-1",
+			"source-match",
+			index%3 == 0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			nil,
+		)
+		historical.AuthFileSnapshot = "credential-a.json"
+		historical.AccountSnapshot = "alice@example.com"
+		events = append(events, historical)
+	}
 
-	if _, err := db.InsertEvents(ctx, []usage.Event{matched, otherCredential}); err != nil {
+	if _, err := db.InsertEvents(ctx, events); err != nil {
 		t.Fatalf("insert events: %v", err)
 	}
 
@@ -2016,14 +2036,29 @@ func TestAccountHistoryIncludesLatestCredentialRequestWithoutExposingRawFailureD
 	if len(resp.Items) != 1 || resp.Items[0].LatestRequest == nil {
 		t.Fatalf("history response = %#v", resp)
 	}
-	latest := resp.Items[0].LatestRequest
+	item := resp.Items[0]
+	if len(item.RecentRequests) != accountRecentRequestLimit {
+		t.Fatalf("recent requests = %#v", item.RecentRequests)
+	}
+	for index := 1; index < len(item.RecentRequests); index++ {
+		if item.RecentRequests[index-1].TimestampMS <= item.RecentRequests[index].TimestampMS {
+			t.Fatalf("recent request order = %#v", item.RecentRequests)
+		}
+	}
+	if item.RecentRequests[len(item.RecentRequests)-1].TimestampMS != baseMS-9_000 {
+		t.Fatalf("recent request limit = %#v", item.RecentRequests)
+	}
+	latest := item.LatestRequest
 	if latest.TimestampMS != matched.TimestampMS || !latest.Failed || latest.FailStatusCode == nil || *latest.FailStatusCode != 429 {
 		t.Fatalf("latest request = %#v", latest)
+	}
+	if !reflect.DeepEqual(item.RecentRequests[0], *latest) {
+		t.Fatalf("latest request does not match first recent request: latest=%#v recent=%#v", latest, item.RecentRequests)
 	}
 	if latest.HeaderErrorKind != "rate_limit" || latest.HeaderErrorCode != "quota_exceeded" || latest.HeaderTraceID != "trace-history-latest" {
 		t.Fatalf("latest diagnostics = %#v", latest)
 	}
-	encoded, err := json.Marshal(resp.Items[0])
+	encoded, err := json.Marshal(item)
 	if err != nil {
 		t.Fatalf("marshal history item: %v", err)
 	}
