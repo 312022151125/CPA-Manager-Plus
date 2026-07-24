@@ -334,10 +334,11 @@
   position: relative;
   display: grid;
   grid-template-columns:
-    minmax(150px, 190px)
-    104px
+    minmax(140px, 180px)
+    96px
+    144px
     196px
-    minmax(210px, 1fr)
+    minmax(190px, 1fr)
     124px;
   align-items: stretch;
   column-gap: clamp(10px, 0.8vw, 14px);
@@ -363,10 +364,11 @@
 @media (min-width: 1360px) {
   .accountCard {
     grid-template-columns:
-      minmax(180px, 210px)
-      112px
-      216px
-      minmax(360px, 420px)
+      minmax(160px, 200px)
+      104px
+      150px
+      206px
+      minmax(300px, 1fr)
       124px;
     justify-content: space-between;
     column-gap: clamp(16px, 1.15vw, 22px);
@@ -395,6 +397,7 @@
 
 .accountCardIdentity,
 .accountCardHealth,
+.accountCardLatestRequest,
 .accountCardEvidence,
 .accountCardBusiness,
 .accountCardRecommendation {
@@ -405,12 +408,14 @@
 
 .accountCardIdentity,
 .accountCardHealth,
+.accountCardLatestRequest,
 .accountCardEvidence,
 .accountCardBusiness {
   padding-right: 6px;
 }
 
 .accountCardHealth,
+.accountCardLatestRequest,
 .accountCardEvidence,
 .accountCardBusiness,
 .accountCardRecommendation {
@@ -580,6 +585,12 @@
   small {
     max-width: 100%;
   }
+}
+
+.accountCardLatestRequest {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .accountCardEvidence {
@@ -3167,6 +3178,7 @@
 
   .accountCardIdentity,
   .accountCardHealth,
+  .accountCardLatestRequest,
   .accountCardEvidence,
   .accountCardBusiness,
   .accountCardRecommendation {
@@ -3175,6 +3187,7 @@
   }
 
   .accountCardHealth,
+  .accountCardLatestRequest,
   .accountCardEvidence,
   .accountCardBusiness,
   .accountCardRecommendation {
@@ -3257,6 +3270,7 @@
   }
 
   .accountCardHealth,
+  .accountCardLatestRequest,
   .accountCardEvidence,
   .accountCardBusiness,
   .accountCardRecommendation {
@@ -3264,6 +3278,7 @@
   }
 
   .accountCardHealth,
+  .accountCardLatestRequest,
   .accountCardEvidence,
   .accountCardBusiness,
   .accountCardRecommendation {

@@ -62,6 +62,15 @@ type AccountHistoryResponseForTest = {
     success_rate: number | null;
     first_seen_ms: number | null;
     last_seen_ms: number | null;
+    latest_request?: {
+      timestamp_ms: number;
+      failed: boolean;
+      fail_status_code?: number | null;
+      fail_summary?: string;
+      header_error_kind?: string;
+      header_error_code?: string;
+      header_trace_id?: string;
+    } | null;
     sync_status: string;
   }>;
 };
@@ -549,6 +558,8 @@ vi.mock('@/stores', () => ({
       setXaiQuota: () => void;
     }) => unknown
   ) => selector(mocks.quotaState),
+  useThemeStore: (selector: (state: { resolvedTheme: 'light' | 'dark' }) => unknown) =>
+    selector({ resolvedTheme: 'light' }),
 }));
 
 vi.mock('@/utils/clipboard', () => ({
@@ -843,6 +854,48 @@ describe('AccountsPage replacement flows', () => {
     expect(findHostButtonByText(renderer, 'accounts.detail_tab_quota').props['aria-selected']).toBe(
       true
     );
+    expect(
+      renderer.root.findByProps({ id: 'accounts-provider-filter-codex' }).props['aria-selected']
+    ).toBe(true);
+  });
+
+  it('filters credential rows through platform tabs without rendering a duplicate selector', async () => {
+    mocks.files = [
+      makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      {
+        name: 'xai.json',
+        type: 'xai',
+        provider: 'xai',
+        account: 'xai@example.com',
+        disabled: false,
+      } as AuthFileItem,
+    ];
+
+    const renderer = await renderAccountsPage();
+    const platformControls = renderer.root.findAll(
+      (node) => node.props['aria-label'] === 'accounts.provider_filter'
+    );
+
+    expect(platformControls).toHaveLength(1);
+    expect(platformControls[0]?.props.role).toBe('tablist');
+
+    await act(async () => {
+      renderer.root
+        .findByProps({ id: 'accounts-provider-filter-xai' })
+        .props.onClick({ preventDefault: () => {} });
+      await Promise.resolve();
+    });
+
+    expect(
+      renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
+    ).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
+      1
+    );
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      { pathname: '/accounts', search: '?provider=xai' },
+      { replace: true }
+    );
   });
 
   it('removes an account deep link after files load without a matching account', async () => {
@@ -959,15 +1012,28 @@ describe('AccountsPage replacement flows', () => {
     }
   });
 
-  it('requests the same automation candidate capacity as the legacy credential page', async () => {
-    await renderAccountsPage();
+  it('keeps the initial credential list load free of unrelated background requests', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: true,
+    };
 
-    expect(mocks.listAccountActionCandidates).toHaveBeenCalledWith(
-      'http://manager.local:18317',
-      'manager-key',
-      'pending',
-      500
-    );
+    await renderAccountsPage();
+    await flushPromises();
+
+    expect(mocks.loadFiles).toHaveBeenCalledTimes(1);
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(1);
+    expect(mocks.getActiveQuotaCooldowns).not.toHaveBeenCalled();
+    expect(mocks.getHeaderSnapshots).not.toHaveBeenCalled();
+    expect(mocks.listAccountActionCandidates).not.toHaveBeenCalled();
+    expect(mocks.listCodexInspectionRuns).not.toHaveBeenCalled();
+    expect(mocks.getCodexInspectionRun).not.toHaveBeenCalled();
+    expect(mocks.loadExcluded).not.toHaveBeenCalled();
+    expect(mocks.loadModelAlias).not.toHaveBeenCalled();
+    expect(mocks.getAnalytics).not.toHaveBeenCalled();
+    expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
   });
 
   it('updates the accounts view query when switching views', async () => {
@@ -1445,6 +1511,13 @@ describe('AccountsPage replacement flows', () => {
 
     const renderer = await renderAccountsPage();
     await flushPromises();
+    expect(mocks.getCodexInspectionRun).not.toHaveBeenCalled();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.tab_health').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     expect(mocks.getCodexInspectionRun).toHaveBeenCalledTimes(1);
 
     mocks.apiBase = 'http://cpa-b.local:8317';
@@ -1454,11 +1527,24 @@ describe('AccountsPage replacement flows', () => {
       await Promise.resolve();
     });
     await flushPromises();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.tab_accounts').props.onClick();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.tab_health').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     expect(mocks.getCodexInspectionRun).toHaveBeenCalledTimes(2);
 
     firstDetail.resolve({ run, results: [makeInspectionResult(1, 'old-connection@example.com')] });
     await flushPromises();
 
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.tab_accounts').props.onClick();
+    });
     await act(async () => {
       findDetailButtonByName(renderer, 'codex.json').props.onClick();
     });
@@ -2101,6 +2187,52 @@ describe('AccountsPage replacement flows', () => {
     expect(cardText).not.toContain('999');
   });
 
+  it('renders the latest real request from the existing account-history response without polling again', async () => {
+    mocks.files = [makeCodexFile('latest.json', 'auth-latest', 'latest@example.com')];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory.mockResolvedValue(
+      makeAccountHistoryResponse([
+        {
+          account_key: 'latest@example.com',
+          matched: true,
+          total_requests: 1,
+          success_calls: 0,
+          failure_calls: 1,
+          total_tokens: 0,
+          total_cost: 0,
+          success_rate: 0,
+          first_seen_ms: 1,
+          last_seen_ms: 2,
+          latest_request: {
+            timestamp_ms: 1_700_000_000_000,
+            failed: true,
+            fail_status_code: 429,
+            fail_summary: 'rate limit exceeded',
+            header_error_kind: 'rate_limit',
+            header_error_code: 'quota_exceeded',
+          },
+          sync_status: 'ready',
+        },
+      ])
+    );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const cardText = getAccountListItemTexts(renderer).join('\n');
+    expect(cardText).toContain('monitoring.fail_status_code_short 429');
+    const settledHistoryCallCount = mocks.getAccountHistory.mock.calls.length;
+    expect(settledHistoryCallCount).toBeGreaterThan(0);
+
+    await flushPromises();
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(settledHistoryCallCount);
+  });
+
   it('shows pending history without blocking account rows', async () => {
     mocks.files = [makeCodexFile('pending.json', 'auth-1', 'pending@example.com')];
     mocks.panelFeatureAvailability = {
@@ -2193,6 +2325,17 @@ describe('AccountsPage replacement flows', () => {
     });
 
     const renderer = await renderAccountsPage();
+    expect(mocks.getHeaderSnapshots).not.toHaveBeenCalled();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex-diagnostic.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       findInputByAriaLabel(renderer, 'accounts.search_label').props.onChange({
@@ -2204,16 +2347,77 @@ describe('AccountsPage replacement flows', () => {
     expect(rowTexts).toHaveLength(1);
     expect(rowTexts[0]).toContain('codex-diagnostic.json');
 
+    expect(treeText(renderer)).toContain('accounts.quota_source_observed_header');
+    expect(treeText(renderer)).toContain('trace-diagnostic-only');
+    expect(treeText(renderer)).toContain('usage_limit_reached');
+  });
+
+  it('loads quota diagnostics only after opening one credential quota detail', async () => {
+    mocks.files = [
+      makeCodexFile('codex-a.json', 'auth-a', 'first@example.com'),
+      makeCodexFile('codex-b.json', 'auth-b', 'second@example.com'),
+    ];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const resetLabel = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    mocks.quotaState.codexQuota = {
+      'codex-a.json': {
+        status: 'success',
+        windows: [
+          {
+            id: 'five-hour',
+            label: 'Five hours',
+            usedPercent: 20,
+            resetLabel,
+            limitWindowSeconds: 5 * 60 * 60,
+          },
+        ],
+      },
+      'codex-b.json': {
+        status: 'success',
+        windows: [
+          {
+            id: 'five-hour',
+            label: 'Five hours',
+            usedPercent: 30,
+            resetLabel,
+            limitWindowSeconds: 5 * 60 * 60,
+          },
+        ],
+      },
+    };
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(mocks.getActiveQuotaCooldowns).not.toHaveBeenCalled();
+    expect(mocks.getHeaderSnapshots).not.toHaveBeenCalled();
+    expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
+
     await act(async () => {
-      findDetailButtonByName(renderer, 'codex-diagnostic.json').props.onClick();
+      findDetailButtonByName(renderer, 'codex-a.json').props.onClick();
     });
     await act(async () => {
       findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
     });
+    await flushPromises();
 
-    expect(treeText(renderer)).toContain('accounts.quota_source_observed_header');
-    expect(treeText(renderer)).toContain('trace-diagnostic-only');
-    expect(treeText(renderer)).toContain('usage_limit_reached');
+    expect(mocks.getActiveQuotaCooldowns).toHaveBeenCalledTimes(1);
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(1);
+    const windowUsageRequest = mocks.getAccountWindowUsage.mock.calls[0]?.[2] as
+      | AccountWindowUsageRequestForTest
+      | undefined;
+    expect(windowUsageRequest?.windows).toHaveLength(1);
+    expect(windowUsageRequest?.windows[0]).toMatchObject({
+      row_key: 'codex-a.json\u0000auth-a',
+      source: 'codex-a.json',
+      auth_index: 'auth-a',
+    });
   });
 
   it('loads detail events filtered by auth file and auth index', async () => {

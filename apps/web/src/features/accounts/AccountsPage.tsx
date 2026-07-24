@@ -48,7 +48,6 @@ import {
 } from '@/components/quota';
 import { buildQuotaFailureState, getScopedQuotaState } from '@/components/quota/quotaConfigs';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
-import { useInterval } from '@/hooks/useInterval';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { useAuthFilesData } from '@/features/authFiles/hooks/useAuthFilesData';
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
@@ -56,6 +55,7 @@ import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModel
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
 import { useAccountCredentialSafeSummary } from '@/features/accounts/hooks/useAccountCredentialSafeSummary';
 import { useCredentialInspectionSnapshot } from '@/features/accounts/hooks/useCredentialInspectionSnapshot';
+import { useAccountsWorkspaceRefresh } from '@/features/accounts/hooks/useAccountsWorkspaceRefresh';
 import { PaginationControls } from '@/features/monitoring/components/MonitoringShared';
 import { CredentialHealthInspectionWorkspace } from '@/features/monitoring/components/CredentialHealthInspectionWorkspace';
 import { AuthJsonPasteModal } from '@/features/authFiles/components/AuthJsonPasteModal';
@@ -147,10 +147,8 @@ import {
 import { buildOAuthRulePreviewRows } from '@/features/accounts/model/oauthRulePreview';
 import { resolveAccountReauthAction } from '@/features/accounts/model/accountReauth';
 import { beginAccountQuotaRequest } from '@/features/accounts/model/accountQuotaRequestGate';
-import {
-  buildAccountOperationalItemsByRowKey,
-  buildAccountOperationalScopeKeys,
-} from '@/features/accounts/model/accountOperationalScope';
+import { buildAccountOperationalItemsByRowKey } from '@/features/accounts/model/accountOperationalScope';
+import { mapWithConcurrency } from '@/features/accounts/model/asyncPool';
 import {
   DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE,
   readAccountsWorkspaceUiState,
@@ -165,9 +163,11 @@ import {
 import {
   AccountCredentialTab,
   AccountDiagnosticsTab,
+  AccountLatestRequest,
   AccountMetricsGrid,
   AccountModelsTab,
   AccountOverviewTab,
+  AccountProviderTabs,
   AccountQuotaMatrix,
   AccountQuotaTab,
   AccountsBatchDeletePreview,
@@ -199,12 +199,12 @@ import {
   useAuthStore,
   useNotificationStore,
   useQuotaStore,
+  useThemeStore,
 } from '@/stores';
 import { copyToClipboard } from '@/utils/clipboard';
 import {
   buildUsageHeaderSnapshotLookup,
   getHighConfidenceUsageHeaderSnapshotForAuthFile,
-  isUsageHeaderQuotaSnapshotExpired,
 } from '@/utils/usageHeaderSnapshots';
 import { createCodexInspectionConnectionFingerprint } from '@/features/monitoring/codexInspection';
 import type {
@@ -217,6 +217,7 @@ type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
 
 const ACCOUNTS_USAGE_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_CONCURRENT_QUOTA_REFRESHES = 3;
 
 const readAccountsSearchFromHash = (hash: string): string => {
   const queryIndex = hash.indexOf('?');
@@ -323,6 +324,7 @@ export function AccountsPage() {
   const apiBase = useAuthStore((state) => state.apiBase);
   const managementKey = useAuthStore((state) => state.managementKey);
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
+  const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const featureAvailability = usePanelFeatureAvailability();
   const initialWorkspaceUiState = useRef(readAccountsWorkspaceUiState());
   const initialWorkspaceUrlState = useRef(
@@ -482,7 +484,6 @@ export function AccountsPage() {
     () => new Map()
   );
   const [headerSnapshots, setHeaderSnapshots] = useState<UsageHeaderSnapshot[]>([]);
-  const [headerSnapshotGeneratedAtMs, setHeaderSnapshotGeneratedAtMs] = useState(0);
   const [accountDisplayMode, setAccountDisplayMode] = useState<QuotaAccountDisplayMode>(
     () => initialWorkspaceUrlState.current.accountDisplayMode
   );
@@ -491,16 +492,16 @@ export function AccountsPage() {
   const quotaCooldownRequestIdRef = useRef(0);
   const headerSnapshotReqIdRef = useRef(0);
   const accountHistoryReqIdRef = useRef(0);
+  const accountHistoryAutoLoadKeyRef = useRef<string | null>(null);
   const accountWindowUsageReqIdRef = useRef(0);
+  const accountWindowUsageAutoLoadKeyRef = useRef<string | null>(null);
   const accountActionCandidatesReqIdRef = useRef(0);
   const accountActionCandidatesRef = useRef<AccountActionCandidate[]>([]);
   const lastWorkspaceNavigationRef = useRef<string | null>(null);
   const syncingWorkspaceLocationRef = useRef(false);
   const hasProcessedInitialWorkspaceLocationRef = useRef(false);
-  const previousQuotaCooldownsRef = useRef<Map<string, QuotaCooldownInfo>>(new Map());
-  const autoRefreshingQuotaRef = useRef<Set<string>>(new Set());
+  const hasLoadedInitialFilesRef = useRef(false);
   const quotaRequestVersionsRef = useRef<Map<string, number>>(new Map());
-  const expiredHeaderQuotaRefreshRef = useRef<Set<string>>(new Set());
   const identityCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accountSortDropdownRef = useRef<HTMLDivElement | null>(null);
   const accountSortTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -548,7 +549,6 @@ export function AccountsPage() {
       !featureAvailability.managerServiceBase
     ) {
       setHeaderSnapshots((current) => (current.length === 0 ? current : []));
-      setHeaderSnapshotGeneratedAtMs(0);
       return;
     }
 
@@ -563,13 +563,7 @@ export function AccountsPage() {
         }
       );
       if (id !== headerSnapshotReqIdRef.current) return;
-      expiredHeaderQuotaRefreshRef.current.clear();
       setHeaderSnapshots(response.items ?? []);
-      setHeaderSnapshotGeneratedAtMs(
-        response.generated_at_ms ??
-          (response as { generatedAtMs?: number }).generatedAtMs ??
-          Date.now()
-      );
     } catch {
       // Header snapshots are passive diagnostics; transient failures should not block accounts.
     }
@@ -603,17 +597,8 @@ export function AccountsPage() {
       );
       if (accountActionCandidatesReqIdRef.current !== requestId) return;
       const items = response.items ?? [];
-      const previousById = new Map(
-        accountActionCandidatesRef.current.map((item) => [item.id, item])
-      );
-      const hasNewAutoDisable = items.some(
-        (item) =>
-          Boolean(item.autoDisabledAtMs) &&
-          (item.autoDisabledAtMs ?? 0) > (previousById.get(item.id)?.autoDisabledAtMs ?? 0)
-      );
       accountActionCandidatesRef.current = items;
       setAccountActionCandidates(items);
-      if (hasNewAutoDisable) void loadFiles().catch(() => {});
     } catch (err: unknown) {
       if (accountActionCandidatesReqIdRef.current !== requestId) return;
       setAccountActionCandidatesError(
@@ -627,7 +612,6 @@ export function AccountsPage() {
   }, [
     featureAvailability.checking,
     featureAvailability.managerServiceBase,
-    loadFiles,
     managementKey,
     t,
   ]);
@@ -648,57 +632,34 @@ export function AccountsPage() {
     headerSnapshotReqIdRef.current += 1;
     accountActionCandidatesReqIdRef.current += 1;
     accountActionCandidatesRef.current = [];
-    previousQuotaCooldownsRef.current = new Map();
     setQuotaCooldowns(new Map());
     setAccountActionCandidates([]);
     setHeaderSnapshots((current) => (current.length === 0 ? current : []));
-    setHeaderSnapshotGeneratedAtMs(0);
   }, [featureAvailability.managerServiceBase, managementKey]);
 
   const loadOauthExcluded = oauthState.loadExcluded;
   const loadOauthModelAlias = oauthState.loadModelAlias;
+  const refreshOauthWorkspace = useCallback(async () => {
+    await Promise.all([loadOauthExcluded(), loadOauthModelAlias()]);
+  }, [loadOauthExcluded, loadOauthModelAlias]);
+  const refreshActiveWorkspace = useAccountsWorkspaceRefresh(activeView, {
+    refreshAccounts: loadFiles,
+    refreshHealth: loadInspectionSummary,
+    refreshOauth: refreshOauthWorkspace,
+  });
 
-  const handleRefresh = useCallback(async () => {
-    await Promise.all([
-      loadFiles(),
-      loadInspectionSummary(),
-      loadQuotaCooldowns(),
-      loadHeaderSnapshots(),
-      loadAccountActionCandidates(),
-      loadOauthExcluded(),
-      loadOauthModelAlias(),
-    ]);
-  }, [
-    loadAccountActionCandidates,
-    loadFiles,
-    loadInspectionSummary,
-    loadHeaderSnapshots,
-    loadOauthExcluded,
-    loadOauthModelAlias,
-    loadQuotaCooldowns,
-  ]);
-
-  useHeaderRefresh(handleRefresh);
+  useHeaderRefresh(refreshActiveWorkspace);
 
   useEffect(() => {
-    void handleRefresh();
-  }, [handleRefresh]);
+    if (hasLoadedInitialFilesRef.current) return;
+    hasLoadedInitialFilesRef.current = true;
+    void loadFiles();
+  }, [loadFiles]);
 
-  const handleBackgroundRefresh = useCallback(async () => {
-    await Promise.all([
-      loadFiles(),
-      loadQuotaCooldowns(),
-      loadHeaderSnapshots(),
-      loadAccountActionCandidates(),
-    ]);
-  }, [loadAccountActionCandidates, loadFiles, loadHeaderSnapshots, loadQuotaCooldowns]);
-
-  useInterval(
-    () => {
-      void handleBackgroundRefresh();
-    },
-    connectionStatus === 'connected' ? 240_000 : null
-  );
+  useEffect(() => {
+    if (activeView === 'accounts') return;
+    void refreshActiveWorkspace();
+  }, [activeView, refreshActiveWorkspace]);
 
   useEffect(
     () => () => {
@@ -815,10 +776,6 @@ export function AccountsPage() {
     () => buildAccountRows(files, baseQuotaStores, inspectionResults, accountQuotaOverrides),
     [accountQuotaOverrides, baseQuotaStores, files, inspectionResults]
   );
-  const accountOperationalScopeKeysByRowKey = useMemo(
-    () => buildAccountOperationalScopeKeys(rows),
-    [rows]
-  );
   const actionCandidatesByRowKey = useMemo(
     () =>
       buildAccountOperationalItemsByRowKey(
@@ -908,6 +865,23 @@ export function AccountsPage() {
     () => buildAccountHistoryTargetEntries(pageRows),
     [pageRows]
   );
+  const accountHistoryAutoLoadKey = useMemo(
+    () =>
+      JSON.stringify({
+        checking: featureAvailability.checking,
+        managerServiceBase: featureAvailability.managerServiceBase,
+        managementKey,
+        requestMonitoringAvailable: featureAvailability.requestMonitoringAvailable,
+        targets: accountHistoryTargets.map((entry) => entry.target),
+      }),
+    [
+      accountHistoryTargets,
+      featureAvailability.checking,
+      featureAvailability.managerServiceBase,
+      featureAvailability.requestMonitoringAvailable,
+      managementKey,
+    ]
+  );
   const selectablePageRows = useMemo(() => pageRows.filter((row) => !row.runtimeOnly), [pageRows]);
   const selectableFilteredRows = useMemo(
     () => filteredRows.filter((row) => !row.runtimeOnly),
@@ -941,6 +915,51 @@ export function AccountsPage() {
     detailTab === 'credential'
   );
   const disableControls = connectionStatus !== 'connected';
+  const selectedRowProvider = selectedRow?.provider ?? '';
+
+  useEffect(() => {
+    const needsCooldowns =
+      activeView === 'accounts' &&
+      (operationalFilter === 'cooldown' ||
+        (Boolean(selectedRowKey) && detailTab === 'quota'));
+    if (!needsCooldowns) return;
+    void loadQuotaCooldowns();
+  }, [
+    activeView,
+    detailTab,
+    loadQuotaCooldowns,
+    operationalFilter,
+    selectedRowKey,
+    selectedRowProvider,
+  ]);
+
+  useEffect(() => {
+    const needsActionCandidates =
+      activeView === 'accounts' &&
+      (operationalFilter === 'automation' ||
+        (Boolean(selectedRowKey) && detailTab === 'diagnostics'));
+    if (!needsActionCandidates) return;
+    void loadAccountActionCandidates();
+  }, [
+    activeView,
+    detailTab,
+    loadAccountActionCandidates,
+    operationalFilter,
+    selectedRowKey,
+  ]);
+
+  useEffect(() => {
+    if (
+      activeView !== 'accounts' ||
+      detailTab !== 'quota' ||
+      selectedRowProvider !== CODEX_CONFIG.type ||
+      headerSnapshots.length > 0
+    ) {
+      return;
+    }
+    void loadHeaderSnapshots();
+  }, [activeView, detailTab, headerSnapshots.length, loadHeaderSnapshots, selectedRowProvider]);
+
   const {
     prefixProxyEditor,
     prefixProxyUpdatedText,
@@ -1026,20 +1045,39 @@ export function AccountsPage() {
     return result;
   }, [buildQuotaDisplayWindows, pageRows, selectedRow]);
   const accountWindowUsageTargets = useMemo(() => {
-    const targetRows = new Map<string, AccountRow>();
-    pageRows.forEach((row) => targetRows.set(row.selectionKey, row));
-    if (selectedRow) {
-      targetRows.set(selectedRow.selectionKey, selectedRow);
-    }
+    if (!selectedRow) return [];
     const windowsByRowKey = new Map<string, AccountQuotaDisplayWindow[]>();
-    targetRows.forEach((row) => {
-      windowsByRowKey.set(
-        row.selectionKey,
-        quotaDisplayWindowsByRowKey.get(row.selectionKey) ?? buildQuotaDisplayWindows(row)
-      );
-    });
-    return buildAccountWindowUsageTargetEntries(Array.from(targetRows.values()), windowsByRowKey);
-  }, [buildQuotaDisplayWindows, pageRows, quotaDisplayWindowsByRowKey, selectedRow]);
+    windowsByRowKey.set(
+      selectedRow.selectionKey,
+      quotaDisplayWindowsByRowKey.get(selectedRow.selectionKey) ?? buildQuotaDisplayWindows(selectedRow)
+    );
+    return buildAccountWindowUsageTargetEntries([selectedRow], windowsByRowKey);
+  }, [buildQuotaDisplayWindows, quotaDisplayWindowsByRowKey, selectedRow]);
+  const accountWindowUsageAutoLoadKey = useMemo(
+    () =>
+      JSON.stringify({
+        checking: featureAvailability.checking,
+        managerServiceBase: featureAvailability.managerServiceBase,
+        managementKey,
+        requestMonitoringAvailable: featureAvailability.requestMonitoringAvailable,
+        targets: accountWindowUsageTargets.map(({ rowKey, windowKey, target }) => ({
+          rowKey,
+          windowKey,
+          fromMs: target.from_ms,
+          accountSnapshot: target.account_snapshot,
+          authLabelSnapshot: target.auth_label_snapshot,
+          authIndex: target.auth_index,
+          source: target.source,
+        })),
+      }),
+    [
+      accountWindowUsageTargets,
+      featureAvailability.checking,
+      featureAvailability.managerServiceBase,
+      featureAvailability.requestMonitoringAvailable,
+      managementKey,
+    ]
+  );
   const accountDisplayHint = t(
     accountDisplayMode === 'masked'
       ? 'quota_management.show_full_credentials_hint'
@@ -1234,13 +1272,8 @@ export function AccountsPage() {
   );
 
   const handleInspectionCredentialsChanged = useCallback(async () => {
-    await Promise.all([
-      loadFiles(),
-      loadQuotaCooldowns(),
-      loadHeaderSnapshots(),
-      loadAccountActionCandidates(),
-    ]);
-  }, [loadAccountActionCandidates, loadFiles, loadHeaderSnapshots, loadQuotaCooldowns]);
+    await loadFiles();
+  }, [loadFiles]);
 
   const handleOpenInspectionCredential = useCallback(
     (target: CredentialInspectionTarget) => {
@@ -1332,12 +1365,25 @@ export function AccountsPage() {
   ]);
 
   useEffect(() => {
+    if (activeView !== 'accounts' || detailTab !== 'quota' || !selectedRowKey) {
+      accountWindowUsageAutoLoadKeyRef.current = null;
+      return;
+    }
+    if (accountWindowUsageAutoLoadKeyRef.current === accountWindowUsageAutoLoadKey) return;
+    accountWindowUsageAutoLoadKeyRef.current = accountWindowUsageAutoLoadKey;
     void loadAccountWindowUsage();
-  }, [loadAccountWindowUsage]);
+  }, [
+    accountWindowUsageAutoLoadKey,
+    activeView,
+    detailTab,
+    loadAccountWindowUsage,
+    selectedRowKey,
+  ]);
 
   const loadUsageValues = useCallback(async () => {
+    if (!selectedRow) return;
     const fallback = () => {
-      const fallbackRows = buildUsageValueRowsFromRecent(rows);
+      const fallbackRows = buildUsageValueRowsFromRecent([selectedRow]);
       setUsageRows(fallbackRows);
     };
 
@@ -1353,6 +1399,7 @@ export function AccountsPage() {
 
     try {
       const toMs = Date.now();
+      const authIndex = selectedRow.authIndex ? String(selectedRow.authIndex) : '';
       const response = await monitoringAnalyticsApi.getAnalytics(
         featureAvailability.managerServiceBase,
         managementKey,
@@ -1360,6 +1407,10 @@ export function AccountsPage() {
           from_ms: toMs - ACCOUNTS_USAGE_RANGE_MS,
           to_ms: toMs,
           now_ms: toMs,
+          filters: {
+            auth_files: [selectedRow.fileName],
+            ...(authIndex ? { auth_indices: [authIndex] } : {}),
+          },
           include: {
             summary: true,
             account_stats: true,
@@ -1371,7 +1422,7 @@ export function AccountsPage() {
         fallback();
         return;
       }
-      setUsageRows(buildUsageValueRowsFromMonitoring(rows, stats));
+      setUsageRows(buildUsageValueRowsFromMonitoring([selectedRow], stats));
     } catch {
       fallback();
     }
@@ -1380,12 +1431,13 @@ export function AccountsPage() {
     featureAvailability.managerServiceBase,
     featureAvailability.requestMonitoringAvailable,
     managementKey,
-    rows,
+    selectedRow,
   ]);
 
   useEffect(() => {
+    if (activeView !== 'accounts' || detailTab !== 'overview' || !selectedRowKey) return;
     void loadUsageValues();
-  }, [loadUsageValues]);
+  }, [activeView, detailTab, loadUsageValues, selectedRowKey]);
 
   const loadAccountHistory = useCallback(
     async (targetEntries?: AccountHistoryTargetEntry[]) => {
@@ -1452,8 +1504,14 @@ export function AccountsPage() {
   );
 
   useEffect(() => {
+    if (activeView !== 'accounts') {
+      accountHistoryAutoLoadKeyRef.current = null;
+      return;
+    }
+    if (accountHistoryAutoLoadKeyRef.current === accountHistoryAutoLoadKey) return;
+    accountHistoryAutoLoadKeyRef.current = accountHistoryAutoLoadKey;
     void loadAccountHistory();
-  }, [loadAccountHistory]);
+  }, [accountHistoryAutoLoadKey, activeView, loadAccountHistory]);
 
   const loadDetailEvents = useCallback(
     async (
@@ -1604,81 +1662,6 @@ export function AccountsPage() {
     [setAntigravityQuota, setClaudeQuota, setCodexQuota, setKimiQuota, setXaiQuota, t]
   );
 
-  const autoRefreshQuotaRow = useCallback(
-    async (row: AccountRow) => {
-      if (autoRefreshingQuotaRef.current.has(row.selectionKey)) return;
-      autoRefreshingQuotaRef.current.add(row.selectionKey);
-      try {
-        await refreshQuotaForRow(row);
-      } finally {
-        autoRefreshingQuotaRef.current.delete(row.selectionKey);
-      }
-    },
-    [refreshQuotaForRow]
-  );
-
-  useEffect(() => {
-    const previous = previousQuotaCooldownsRef.current;
-    previousQuotaCooldownsRef.current = quotaCooldowns;
-    if (previous.size === 0) return;
-
-    const recoveredKeys = new Set(
-      Array.from(previous.keys()).filter((key) => !quotaCooldowns.has(key))
-    );
-    if (recoveredKeys.size === 0) return;
-
-    rows.forEach((row) => {
-      if (row.provider !== CODEX_CONFIG.type || row.disabled || row.runtimeOnly) return;
-      if ((quotaCooldownsByRowKey.get(row.selectionKey)?.length ?? 0) > 0) return;
-      const scopeKeys = accountOperationalScopeKeysByRowKey.get(row.selectionKey) ?? [];
-      if (scopeKeys.some((key) => recoveredKeys.has(key))) void autoRefreshQuotaRow(row);
-    });
-  }, [
-    accountOperationalScopeKeysByRowKey,
-    autoRefreshQuotaRow,
-    quotaCooldowns,
-    quotaCooldownsByRowKey,
-    rows,
-  ]);
-
-  useEffect(() => {
-    if (!featureAvailability.managerServiceBase || headerSnapshots.length === 0) return;
-    const nowMs = headerSnapshotGeneratedAtMs || Date.now();
-
-    rows.forEach((row) => {
-      if (row.provider !== CODEX_CONFIG.type || row.disabled || row.runtimeOnly) return;
-      const snapshot = getHighConfidenceUsageHeaderSnapshotForAuthFile(
-        headerSnapshotLookup,
-        row.raw
-      );
-      if (!isUsageHeaderQuotaSnapshotExpired(snapshot, nowMs)) return;
-
-      const storeKey = CODEX_CONFIG.getStoreKey?.(row.raw) ?? row.fileName;
-      const activeQuota =
-        getAuthFileScopedCodexQuota(row.raw, codexQuota[storeKey]) ??
-        getAuthFileScopedCodexQuota(row.raw, codexQuota[row.fileName]);
-      const fetchedAtMs =
-        activeQuota?.status === 'success' && typeof activeQuota.fetchedAtMs === 'number'
-          ? activeQuota.fetchedAtMs
-          : 0;
-      const snapshotAtMs = typeof snapshot?.timestamp_ms === 'number' ? snapshot.timestamp_ms : 0;
-      if (fetchedAtMs > snapshotAtMs) return;
-
-      const marker = `${row.selectionKey}:${snapshot?.event_hash ?? ''}:${snapshotAtMs}`;
-      if (expiredHeaderQuotaRefreshRef.current.has(marker)) return;
-      expiredHeaderQuotaRefreshRef.current.add(marker);
-      void autoRefreshQuotaRow(row);
-    });
-  }, [
-    autoRefreshQuotaRow,
-    codexQuota,
-    featureAvailability.managerServiceBase,
-    headerSnapshotGeneratedAtMs,
-    headerSnapshotLookup,
-    headerSnapshots.length,
-    rows,
-  ]);
-
   const refreshQuotaRows = useCallback(
     async (targets: AccountRow[]) => {
       const refreshable = targets.filter((row) => !row.disabled && !row.runtimeOnly);
@@ -1688,7 +1671,11 @@ export function AccountsPage() {
       }
       setQuotaRefreshing(true);
       try {
-        const results = await Promise.all(refreshable.map((row) => refreshQuotaForRow(row)));
+        const results = await mapWithConcurrency(
+          refreshable,
+          MAX_CONCURRENT_QUOTA_REFRESHES,
+          refreshQuotaForRow
+        );
         const successCount = results.filter(Boolean).length;
         showNotification(
           t('accounts.quota_refresh_result', {
@@ -1925,10 +1912,7 @@ export function AccountsPage() {
   const selectedQuotaFilterLabel =
     quotaBandFilter === 'all' ? t('accounts.quota_all') : t(`accounts.quota_${quotaBandFilter}`);
   const selectedOperationalFilterLabel = t(`accounts.operational_${operationalFilter}`);
-  const selectedProviderFilterLabel =
-    providerFilter === 'all' ? t('accounts.provider_all') : getProviderLabel(providerFilter, t);
   const activeMobileFilterCount = [
-    providerFilter !== 'all',
     statusFilter !== 'all',
     operationalFilter !== 'all',
     planFilter !== 'all',
@@ -1939,7 +1923,6 @@ export function AccountsPage() {
     activeMobileFilterCount === 0
       ? t('accounts.mobile_filters_default')
       : [
-          providerFilter !== 'all' ? selectedProviderFilterLabel : null,
           statusFilter !== 'all' ? selectedStatusFilterLabel : null,
           operationalFilter !== 'all' ? selectedOperationalFilterLabel : null,
           planFilter !== 'all' ? selectedPlanFilterLabel : null,
@@ -1973,8 +1956,6 @@ export function AccountsPage() {
   };
 
   const resetAccountFilters = () => {
-    setSearch('');
-    setProviderFilter('all');
     setStatusFilter('all');
     setOperationalFilter('all');
     setPlanFilter('all');
@@ -2187,21 +2168,6 @@ export function AccountsPage() {
     <>
       <div className={styles.filterField}>
         <Select
-          value={providerFilter}
-          options={[
-            { value: 'all', label: t('accounts.provider_all') },
-            ...providerOptions.map((provider) => ({
-              value: provider,
-              label: getProviderLabel(provider, t),
-            })),
-          ]}
-          onChange={setProviderFilter}
-          ariaLabel={t('accounts.provider_filter')}
-          triggerClassName={styles.toolbarSelectTrigger}
-        />
-      </div>
-      <div className={styles.filterField}>
-        <Select
           value={statusFilter}
           options={[
             { value: 'all', label: t('accounts.status_all') },
@@ -2301,41 +2267,49 @@ export function AccountsPage() {
   );
 
   const renderToolbar = () => (
-    <section className={styles.toolbar}>
-      <div className={styles.searchField}>
-        <Input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder={t('accounts.search_placeholder')}
-          rightElement={<IconSearch size={16} />}
-          aria-label={t('accounts.search_label')}
-          className={styles.toolbarSearchInput}
-        />
-      </div>
-      <div className={styles.mobileToolbarActions}>
-        <Button
-          variant="secondary"
-          size="sm"
-          className={styles.mobileFilterButton}
-          onClick={() => {
-            setIsMobileFiltersOpen(true);
-            setIsAccountSortDropdownOpen(false);
-          }}
-          aria-label={t('accounts.mobile_filters_button')}
-        >
-          <IconSlidersHorizontal size={15} />
-          {t('accounts.mobile_filters_button')}
-          {activeMobileFilterCount > 0 ? (
-            <span className={styles.mobileFilterCount}>{activeMobileFilterCount}</span>
-          ) : null}
-        </Button>
-        <span className={styles.mobileFilterSummary} title={mobileFilterSummary}>
-          {mobileFilterSummary}
-        </span>
-      </div>
-      {renderAccountFilterFields()}
-      {renderAccountSortControls()}
-    </section>
+    <>
+      <AccountProviderTabs
+        rows={rows}
+        value={providerFilter}
+        onChange={setProviderFilter}
+        resolvedTheme={resolvedTheme}
+      />
+      <section className={styles.toolbar}>
+        <div className={styles.searchField}>
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={t('accounts.search_placeholder')}
+            rightElement={<IconSearch size={16} />}
+            aria-label={t('accounts.search_label')}
+            className={styles.toolbarSearchInput}
+          />
+        </div>
+        <div className={styles.mobileToolbarActions}>
+          <Button
+            variant="secondary"
+            size="sm"
+            className={styles.mobileFilterButton}
+            onClick={() => {
+              setIsMobileFiltersOpen(true);
+              setIsAccountSortDropdownOpen(false);
+            }}
+            aria-label={t('accounts.mobile_filters_button')}
+          >
+            <IconSlidersHorizontal size={15} />
+            {t('accounts.mobile_filters_button')}
+            {activeMobileFilterCount > 0 ? (
+              <span className={styles.mobileFilterCount}>{activeMobileFilterCount}</span>
+            ) : null}
+          </Button>
+          <span className={styles.mobileFilterSummary} title={mobileFilterSummary}>
+            {mobileFilterSummary}
+          </span>
+        </div>
+        {renderAccountFilterFields()}
+        {renderAccountSortControls()}
+      </section>
+    </>
   );
 
   const renderAccountDisplayToggle = () => (
@@ -2933,6 +2907,16 @@ export function AccountsPage() {
                   </div>
                 </div>
 
+                <div className={styles.accountCardLatestRequest}>
+                  <AccountLatestRequest
+                    latestRequest={accountHistory?.latest_request}
+                    loading={accountHistoryLoading && !accountHistory}
+                    unavailable={Boolean(accountHistoryError)}
+                    locale={i18n.language}
+                    onCopy={copyTextWithNotification}
+                  />
+                </div>
+
                 <div className={styles.accountCardEvidence} title={accountHistoryTitle}>
                   <div className={styles.accountHistoryGrid}>
                     <div
@@ -3435,7 +3419,12 @@ export function AccountsPage() {
 
   const renderPageActions = () => (
     <div className={styles.headerActions}>
-      <Button variant="secondary" size="sm" onClick={() => void handleRefresh()} disabled={loading}>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => void refreshActiveWorkspace()}
+        disabled={loading}
+      >
         <IconRefreshCw size={15} />
         {t('common.refresh')}
       </Button>

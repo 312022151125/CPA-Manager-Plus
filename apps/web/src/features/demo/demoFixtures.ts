@@ -4644,6 +4644,21 @@ const buildDemoAccountHistoryIndex = (baseNow = now()): Map<string, DemoAccountH
       success_rate: totalRequests > 0 ? successCalls / totalRequests : null,
       first_seen_ms: baseNow - 30 * day,
       last_seen_ms: row.last_seen_ms,
+      latest_request:
+        failureCalls > 0
+          ? {
+              timestamp_ms: row.last_seen_ms,
+              failed: true,
+              fail_status_code: 429,
+              fail_summary: 'Rate limit exceeded for the most recent request.',
+              header_error_kind: 'rate_limit',
+              header_error_code: 'quota_exceeded',
+              header_trace_id: `demo-${row.id}`,
+            }
+          : {
+              timestamp_ms: row.last_seen_ms,
+              failed: false,
+            },
       sync_status: 'ready',
     });
   });
@@ -4667,6 +4682,21 @@ const buildDemoAccountHistoryIndex = (baseNow = now()): Map<string, DemoAccountH
       success_rate: successCalls / totalRequests,
       first_seen_ms: baseNow - 7 * day,
       last_seen_ms: file.modified ?? baseNow,
+      latest_request:
+        failureCalls > 0
+          ? {
+              timestamp_ms: file.modified ?? baseNow,
+              failed: true,
+              fail_status_code: 429,
+              fail_summary: 'Rate limit exceeded for the most recent request.',
+              header_error_kind: 'rate_limit',
+              header_error_code: 'quota_exceeded',
+              header_trace_id: `demo-${file.name}`,
+            }
+          : {
+              timestamp_ms: file.modified ?? baseNow,
+              failed: false,
+            },
       sync_status: 'ready',
     });
   });

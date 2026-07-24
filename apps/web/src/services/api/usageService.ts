@@ -701,6 +701,16 @@ export interface MonitoringAccountHistoryCheckpoint {
   processed: number;
 }
 
+export interface MonitoringAccountLatestRequest {
+  timestamp_ms: number;
+  failed: boolean;
+  fail_status_code?: number | null;
+  fail_summary?: string;
+  header_error_kind?: string;
+  header_error_code?: string;
+  header_trace_id?: string;
+}
+
 export interface MonitoringAccountHistoryItem {
   account_key: string;
   matched: boolean;
@@ -712,6 +722,7 @@ export interface MonitoringAccountHistoryItem {
   success_rate: number | null;
   first_seen_ms: number | null;
   last_seen_ms: number | null;
+  latest_request?: MonitoringAccountLatestRequest | null;
   sync_status: 'ready' | 'pending' | 'empty' | string;
 }
 

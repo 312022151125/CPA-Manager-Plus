@@ -31,6 +31,13 @@ export function useCredentialInspectionSnapshot({
   const [loading, setLoading] = useState(false);
   const requestIdRef = useRef(0);
 
+  const readLocalSnapshot = useCallback(() => {
+    const localState = connectionFingerprint
+      ? loadCodexInspectionLastRun(connectionFingerprint)
+      : null;
+    return localState ? createStoredLocalCredentialInspectionSnapshot(localState) : null;
+  }, [connectionFingerprint]);
+
   const applySnapshot = useCallback((next: CredentialInspectionSnapshot) => {
     setSnapshot((current) => selectLatestCredentialInspectionSnapshot([current, next]));
   }, []);
@@ -38,12 +45,7 @@ export function useCredentialInspectionSnapshot({
   const refresh = useCallback(async () => {
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
-    const localState = connectionFingerprint
-      ? loadCodexInspectionLastRun(connectionFingerprint)
-      : null;
-    const localSnapshot = localState
-      ? createStoredLocalCredentialInspectionSnapshot(localState)
-      : null;
+    const localSnapshot = readLocalSnapshot();
 
     if (checking || !serverAvailable || !managerServiceBase || !managementKey) {
       if (requestIdRef.current === requestId) {
@@ -83,13 +85,13 @@ export function useCredentialInspectionSnapshot({
     } finally {
       if (requestIdRef.current === requestId) setLoading(false);
     }
-  }, [checking, connectionFingerprint, managementKey, managerServiceBase, serverAvailable]);
+  }, [checking, managementKey, managerServiceBase, readLocalSnapshot, serverAvailable]);
 
   useEffect(() => {
     requestIdRef.current += 1;
-    setSnapshot(null);
+    setSnapshot(readLocalSnapshot());
     setLoading(false);
-  }, [connectionFingerprint, managementKey, managerServiceBase]);
+  }, [managementKey, managerServiceBase, readLocalSnapshot]);
 
   return {
     snapshot,
