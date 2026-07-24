@@ -345,6 +345,9 @@ func Migrate(db *sql.DB) error {
 	if err := ensureUsageEventSnapshotColumns(db); err != nil {
 		return err
 	}
+	if err := ensureLatestAccountRequestIndexes(db); err != nil {
+		return err
+	}
 	if err := ensureCodexInspectionRunColumns(db); err != nil {
 		return err
 	}
@@ -810,6 +813,20 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func ensureLatestAccountRequestIndexes(db *sql.DB) error {
+	for _, statement := range []string{
+		`create index if not exists idx_usage_events_latest_request_auth_file
+			on usage_events(auth_file_snapshot collate nocase, auth_index collate nocase, timestamp_ms desc, id desc)`,
+		`create index if not exists idx_usage_events_latest_request_source
+			on usage_events(source collate nocase, auth_index collate nocase, timestamp_ms desc, id desc)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -58,6 +58,43 @@ func TestUsageDataMigrationInitialStateMatchesExistingUsageData(t *testing.T) {
 	}
 }
 
+func TestMigrateCreatesLatestAccountRequestIndexes(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "latest-account-request-indexes.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	rows, err := db.Query(`pragma index_list(usage_events)`)
+	if err != nil {
+		t.Fatalf("list usage event indexes: %v", err)
+	}
+	defer rows.Close()
+	indexes := map[string]bool{}
+	for rows.Next() {
+		var sequence int
+		var name string
+		var unique int
+		var origin string
+		var partial int
+		if err := rows.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+			t.Fatalf("scan usage event index: %v", err)
+		}
+		indexes[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate usage event indexes: %v", err)
+	}
+	for _, name := range []string{
+		"idx_usage_events_latest_request_auth_file",
+		"idx_usage_events_latest_request_source",
+	} {
+		if !indexes[name] {
+			t.Fatalf("usage event indexes = %#v, missing %s", indexes, name)
+		}
+	}
+}
+
 func TestUsageDataMigrationUpgradeAddsChangedRowsAndPreservesV1(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage-data-migration-upgrade.sqlite")
 	db, err := Open(path)
