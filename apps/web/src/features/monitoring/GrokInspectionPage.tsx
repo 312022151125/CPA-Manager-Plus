@@ -64,7 +64,11 @@ import {
   type StatusTone,
   type SummaryCard,
 } from '@/features/monitoring/model/grokInspectionPresentation';
-import { isCodexInspectionAutoExecutionEnabled } from '@/features/monitoring/model/codexInspectionPresentation';
+import {
+  isCodexInspectionAutoExecutionEnabled,
+  toLocalInspectionLogViewEntry,
+  type InspectionLogLevelFilter,
+} from '@/features/monitoring/model/codexInspectionPresentation';
 import { useAuthStore, useNotificationStore } from '@/stores';
 import styles from './CodexInspectionPage.module.scss';
 
@@ -100,6 +104,7 @@ export function GrokInspectionPage() {
   const [configFocusField, setConfigFocusField] = useState<string | null>(null);
   const [logs, setLogs] = useState<InspectionLogEntry[]>(() => initialLastRun?.logs ?? []);
   const [logsCollapsed, setLogsCollapsed] = useState(() => initialLastRun?.logsCollapsed ?? true);
+  const [logLevelFilter, setLogLevelFilter] = useState<InspectionLogLevelFilter>('all');
   const [runStatus, setRunStatus] = useState<RunStatus>(() =>
     initialLastRun?.result ? 'success' : 'idle'
   );
@@ -128,6 +133,10 @@ export function GrokInspectionPage() {
   const activeSessionIdRef = useRef<string | null>(null);
   const restoredConnectionFingerprintRef = useRef<string | null>(connectionFingerprint);
   const logListRef = useRef<HTMLDivElement | null>(null);
+  const localLogEntries = useMemo(
+    () => logs.map((entry) => toLocalInspectionLogViewEntry(entry, t)),
+    [logs, t]
+  );
   const executeItemsRef = useRef<
     ((
       items: GrokInspectionResultItem[],
@@ -985,11 +994,13 @@ export function GrokInspectionPage() {
       />
 
       <CodexInspectionLogsPanel
-        logs={logs}
+        logs={localLogEntries}
         logsCollapsed={logsCollapsed}
+        levelFilter={logLevelFilter}
         logListRef={logListRef}
         locale={i18n.language}
         t={t}
+        onLevelFilterChange={setLogLevelFilter}
         onJumpToLatest={handleJumpToLatest}
         onClearLogs={handleClearLogs}
         onToggleCollapsed={() => setLogsCollapsed((previous) => !previous)}
