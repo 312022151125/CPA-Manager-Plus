@@ -140,7 +140,7 @@ describe('Drawer overlay close guard', () => {
     vi.useRealTimers();
   });
 
-  const mountDrawer = async (onClose: ReturnType<typeof vi.fn>) => {
+  const mountDrawer = async (onClose: () => void) => {
     await act(async () => {
       renderer = create(
         <Drawer open title="Test drawer" onClose={onClose}>
