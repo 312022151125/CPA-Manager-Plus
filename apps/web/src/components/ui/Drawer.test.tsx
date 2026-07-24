@@ -41,13 +41,23 @@ import { Drawer } from './Drawer';
 
 const CLOSE_ANIMATION_DURATION = 280;
 
-const createPointerEvent = (target: unknown, currentTarget: unknown, button = 0) => ({
+const createPointerEvent = (
+  target: unknown,
+  currentTarget: unknown,
+  options: { button?: number; pointerId?: number } = {}
+) => ({
   target,
   currentTarget,
-  button,
+  button: options.button ?? 0,
+  pointerId: options.pointerId ?? 1,
 });
 
 const installMinimalDom = () => {
+  const previousHTMLElement = Object.getOwnPropertyDescriptor(globalThis, 'HTMLElement');
+  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const installedWindow = typeof globalThis.window === 'undefined';
+
   const bodyStyle = { overflow: '' };
   const htmlStyle = { overflow: '' };
   const listeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
@@ -80,29 +90,57 @@ const installMinimalDom = () => {
     value: documentMock,
   });
 
-  if (typeof globalThis.window === 'undefined') {
+  if (installedWindow) {
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
       writable: true,
       value: globalThis,
     });
   }
+
+  return () => {
+    if (previousHTMLElement) {
+      Object.defineProperty(globalThis, 'HTMLElement', previousHTMLElement);
+    } else {
+      Reflect.deleteProperty(globalThis, 'HTMLElement');
+    }
+
+    if (previousDocument) {
+      Object.defineProperty(globalThis, 'document', previousDocument);
+    } else {
+      Reflect.deleteProperty(globalThis, 'document');
+    }
+
+    if (installedWindow) {
+      if (previousWindow) {
+        Object.defineProperty(globalThis, 'window', previousWindow);
+      } else {
+        Reflect.deleteProperty(globalThis, 'window');
+      }
+    }
+  };
 };
 
 describe('Drawer overlay close guard', () => {
+  let renderer: ReactTestRenderer | undefined;
+  let restoreDom: (() => void) | undefined;
+
   beforeEach(() => {
     vi.useFakeTimers();
-    installMinimalDom();
+    restoreDom = installMinimalDom();
   });
 
   afterEach(() => {
+    act(() => {
+      renderer?.unmount();
+    });
+    renderer = undefined;
+    restoreDom?.();
+    restoreDom = undefined;
     vi.useRealTimers();
   });
 
-  it('closes when pointer starts and ends on overlay', async () => {
-    const onClose = vi.fn();
-    let renderer: ReactTestRenderer;
-
+  const mountDrawer = async (onClose: ReturnType<typeof vi.fn>) => {
     await act(async () => {
       renderer = create(
         <Drawer open title="Test drawer" onClose={onClose}>
@@ -116,13 +154,20 @@ describe('Drawer overlay close guard', () => {
       await Promise.resolve();
     });
 
-    const overlay = renderer!.root.find((node) =>
-      String(node.props.className ?? '').includes('overlay')
-    );
+    return renderer!;
+  };
+
+  const findOverlay = (root: ReactTestRenderer) =>
+    root.root.find((node) => String(node.props.className ?? '').includes('overlay'));
+
+  it('closes when pointer starts and ends on overlay', async () => {
+    const onClose = vi.fn();
+    const mounted = await mountDrawer(onClose);
+    const overlay = findOverlay(mounted);
 
     await act(async () => {
-      overlay.props.onPointerDown(createPointerEvent(overlay, overlay));
-      overlay.props.onPointerUp(createPointerEvent(overlay, overlay));
+      overlay.props.onPointerDown(createPointerEvent(overlay, overlay, { pointerId: 1 }));
+      overlay.props.onPointerUp(createPointerEvent(overlay, overlay, { pointerId: 1 }));
     });
 
     expect(onClose).not.toHaveBeenCalled();
@@ -136,29 +181,14 @@ describe('Drawer overlay close guard', () => {
 
   it('does not close when pointer starts inside drawer and ends on overlay', async () => {
     const onClose = vi.fn();
-    let renderer: ReactTestRenderer;
-
-    await act(async () => {
-      renderer = create(
-        <Drawer open title="Test drawer" onClose={onClose}>
-          <input aria-label="field" />
-        </Drawer>
-      );
-    });
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const overlay = renderer!.root.find((node) =>
-      String(node.props.className ?? '').includes('overlay')
-    );
-    const panel = renderer!.root.findByProps({ role: 'dialog' });
+    const mounted = await mountDrawer(onClose);
+    const overlay = findOverlay(mounted);
+    const panel = mounted.root.findByProps({ role: 'dialog' });
 
     await act(async () => {
       // 模拟：在面板内按下，在遮罩上释放（拖选文字场景）
-      overlay.props.onPointerDown(createPointerEvent(panel, overlay));
-      overlay.props.onPointerUp(createPointerEvent(overlay, overlay));
+      overlay.props.onPointerDown(createPointerEvent(panel, overlay, { pointerId: 1 }));
+      overlay.props.onPointerUp(createPointerEvent(overlay, overlay, { pointerId: 1 }));
     });
 
     await act(async () => {
@@ -170,28 +200,33 @@ describe('Drawer overlay close guard', () => {
 
   it('does not close when pointer starts on overlay and ends inside drawer', async () => {
     const onClose = vi.fn();
-    let renderer: ReactTestRenderer;
+    const mounted = await mountDrawer(onClose);
+    const overlay = findOverlay(mounted);
+    const panel = mounted.root.findByProps({ role: 'dialog' });
 
     await act(async () => {
-      renderer = create(
-        <Drawer open title="Test drawer" onClose={onClose}>
-          <input aria-label="field" />
-        </Drawer>
-      );
+      overlay.props.onPointerDown(createPointerEvent(overlay, overlay, { pointerId: 1 }));
+      overlay.props.onPointerUp(createPointerEvent(panel, overlay, { pointerId: 1 }));
     });
 
     await act(async () => {
-      await Promise.resolve();
+      vi.advanceTimersByTime(CLOSE_ANIMATION_DURATION);
     });
 
-    const overlay = renderer!.root.find((node) =>
-      String(node.props.className ?? '').includes('overlay')
-    );
-    const panel = renderer!.root.findByProps({ role: 'dialog' });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not close when interleaved pointers mix panel and overlay starts', async () => {
+    const onClose = vi.fn();
+    const mounted = await mountDrawer(onClose);
+    const overlay = findOverlay(mounted);
+    const panel = mounted.root.findByProps({ role: 'dialog' });
 
     await act(async () => {
-      overlay.props.onPointerDown(createPointerEvent(overlay, overlay));
-      overlay.props.onPointerUp(createPointerEvent(panel, overlay));
+      // 指针 1：面板内按下；指针 2：遮罩上按下；释放指针 1 在遮罩上 → 不应关闭
+      overlay.props.onPointerDown(createPointerEvent(panel, overlay, { pointerId: 1 }));
+      overlay.props.onPointerDown(createPointerEvent(overlay, overlay, { pointerId: 2 }));
+      overlay.props.onPointerUp(createPointerEvent(overlay, overlay, { pointerId: 1 }));
     });
 
     await act(async () => {
