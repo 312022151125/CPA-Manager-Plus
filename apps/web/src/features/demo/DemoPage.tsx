@@ -1,7 +1,9 @@
 import { useLayoutEffect } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
+import i18n from '@/i18n';
 import { apiClient } from '@/services/api/client';
 import { normalizeConfigResponse } from '@/services/api/transformers';
+import { resetDemoCodexInspectionRunState } from '@/services/api/usageService';
 import {
   useAuthStore,
   useConfigStore,
@@ -63,7 +65,9 @@ export const installDemoInspectionState = () => {
   if (typeof window === 'undefined') return () => undefined;
   const lastRunSnapshot = window.localStorage.getItem(CODEX_INSPECTION_LAST_RUN_STORAGE_KEY);
   const settingsSnapshot = window.localStorage.getItem(CODEX_INSPECTION_SETTINGS_STORAGE_KEY);
-  const run = getDemoCodexInspectionLocalRun();
+  const baseNow = Date.now();
+  const run = getDemoCodexInspectionLocalRun(baseNow);
+  const t = i18n.getFixedT(i18n.resolvedLanguage ?? i18n.language);
   const connectionFingerprint = createCodexInspectionConnectionFingerprint(
     DEMO_API_BASE,
     DEMO_MANAGEMENT_KEY
@@ -88,8 +92,8 @@ export const installDemoInspectionState = () => {
   });
   saveCodexInspectionLastRun({
     result: run,
-    logs: getDemoCodexInspectionLocalLogs(),
-    logsCollapsed: true,
+    logs: getDemoCodexInspectionLocalLogs(baseNow, t),
+    logsCollapsed: false,
     actionFilter: 'all',
     connectionFingerprint,
   });
@@ -162,6 +166,7 @@ export function DemoPage() {
     const restoreDemoInspectionState = installDemoInspectionState();
 
     resetDemoCredentialRefresh();
+    resetDemoCodexInspectionRunState();
     setDemoMode(true);
     apiClient.setConfig({
       apiBase: DEMO_API_BASE,
@@ -208,6 +213,7 @@ export function DemoPage() {
 
     return () => {
       resetDemoCredentialRefresh();
+      resetDemoCodexInspectionRunState();
       setDemoMode(false);
       useAuthStore.setState(authSnapshot);
       useConfigStore.setState(configSnapshot);

@@ -1223,7 +1223,13 @@ const readXaiAuthBoolean = (file: AuthFileItem, ...keys: string[]): boolean | nu
 const sameXaiBaseUrl = (left: string, right: string) =>
   left.trim().replace(/\/+$/, '').toLowerCase() === right.trim().replace(/\/+$/, '').toLowerCase();
 
-const resolveXaiInferenceRequest = (file: AuthFileItem, userAgent?: string) => {
+export type XaiInferenceRouteMode = 'auto' | 'official';
+
+const resolveXaiInferenceRequest = (
+  file: AuthFileItem,
+  userAgent?: string,
+  routeMode: XaiInferenceRouteMode = 'auto'
+) => {
   const configuredBaseUrl = readXaiAuthString(file, 'base_url', 'baseUrl').replace(/\/+$/, '');
   const usingApi = readXaiAuthBoolean(file, 'using_api', 'usingApi');
   const authKind = readXaiAuthString(file, 'auth_kind', 'authKind').toLowerCase();
@@ -1232,23 +1238,29 @@ const resolveXaiInferenceRequest = (file: AuthFileItem, userAgent?: string) => {
   // API credentials must opt in explicitly with using_api=true or api_key.
   const resolvedUsingApi = usingApi ?? (authKind ? authKind !== 'oauth' : false);
   const usesCliChatProxy =
+    routeMode !== 'official' &&
     !resolvedUsingApi &&
     (!configuredBaseUrl || sameXaiBaseUrl(configuredBaseUrl, XAI_OFFICIAL_API_BASE_URL));
-  const baseUrl = usesCliChatProxy
-    ? XAI_CLI_CHAT_PROXY_BASE_URL
-    : configuredBaseUrl || XAI_OFFICIAL_API_BASE_URL;
+  const baseUrl =
+    routeMode === 'official'
+      ? XAI_OFFICIAL_API_BASE_URL
+      : usesCliChatProxy
+        ? XAI_CLI_CHAT_PROXY_BASE_URL
+        : configuredBaseUrl || XAI_OFFICIAL_API_BASE_URL;
   const header: Record<string, string> = {
     Authorization: 'Bearer $TOKEN$',
     Accept: 'application/json',
     'Content-Type': 'application/json',
     'User-Agent': normalizeStringValue(userAgent) || XAI_INFERENCE_USER_AGENT,
   };
-  if (usesCliChatProxy || sameXaiBaseUrl(baseUrl, XAI_CLI_CHAT_PROXY_BASE_URL)) {
+  const targetsCliChatProxy =
+    usesCliChatProxy || sameXaiBaseUrl(baseUrl, XAI_CLI_CHAT_PROXY_BASE_URL);
+  if (targetsCliChatProxy) {
     header['x-xai-token-auth'] = 'xai-grok-cli';
     header['x-grok-client-version'] = XAI_GROK_CLIENT_VERSION;
+    const userId = resolveXaiUserId(file);
+    if (userId) header['x-userid'] = userId;
   }
-  const userId = resolveXaiUserId(file);
-  if (userId) header['x-userid'] = userId;
   return { url: `${baseUrl}/responses`, header };
 };
 
@@ -1444,6 +1456,7 @@ export interface XaiInferenceProbeOptions {
   model?: string;
   prompt?: string;
   userAgent?: string;
+  routeMode?: XaiInferenceRouteMode;
 }
 
 const hasCompletedXaiInferenceOutput = (value: unknown): boolean => {
@@ -1474,7 +1487,7 @@ export const probeXaiInference = async (
   options?: XaiInferenceProbeOptions
 ): Promise<XaiInferenceProbeResult> => {
   const authIndex = resolveXaiProbeAuthIndex(file, t);
-  const { url, header } = resolveXaiInferenceRequest(file, options?.userAgent);
+  const { url, header } = resolveXaiInferenceRequest(file, options?.userAgent, options?.routeMode);
   const result = await apiCallApi.request(
     {
       authIndex,

@@ -17,6 +17,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/quotacooldown"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/setting"
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageaggregate"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageevent"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usagerollup"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
@@ -36,6 +37,7 @@ type CodexInspectionRun = model.CodexInspectionRun
 type CodexInspectionResult = model.CodexInspectionResult
 type CodexInspectionLog = model.CodexInspectionLog
 type CodexInspectionDisableOwnership = model.CodexInspectionDisableOwnership
+type CodexInspectionLease = model.CodexInspectionLease
 type InsertResult = model.InsertResult
 type ModelPrice = model.ModelPrice
 type ModelPriceSyncResult = model.ModelPriceSyncResult
@@ -84,6 +86,10 @@ type UsageRollupCheckpoint = usagerollup.Checkpoint
 type UsageRollupCatchUpResult = usagerollup.CatchUpResult
 type AccountHistoryRollupRow = usagerollup.AccountHistoryRow
 type DashboardHourlyRollupRow = usagerollup.DashboardHourlyRow
+type UsageHourlyAggregateState = usageaggregate.State
+type UsageHourlyAggregateCatchUpResult = usageaggregate.CatchUpResult
+type UsageHourlyAggregateFilter = usageaggregate.Filter
+type UsageHourlyAggregateRow = usageaggregate.Row
 
 type Store struct {
 	db *sql.DB
@@ -97,6 +103,7 @@ type Store struct {
 	CodexInspections codexinspection.Repository
 	DataMigrations   datamigration.Repository
 	QuotaCooldowns   quotacooldown.Repository
+	UsageAggregates  usageaggregate.Repository
 	UsageRollups     usagerollup.Repository
 }
 
@@ -120,6 +127,7 @@ func New(db *sql.DB, protector ...*security.Protector) *Store {
 		CodexInspections: codexinspection.New(db),
 		DataMigrations:   datamigration.New(db),
 		QuotaCooldowns:   quotacooldown.New(db),
+		UsageAggregates:  usageaggregate.New(db),
 		UsageRollups:     usagerollup.New(db),
 	}
 }
@@ -247,6 +255,42 @@ func (s *Store) UpdateCodexInspectionRun(ctx context.Context, run CodexInspectio
 	return s.CodexInspections.UpdateRun(ctx, run)
 }
 
+func (s *Store) UpdateCodexInspectionRunProgress(ctx context.Context, run CodexInspectionRun, ownerID string) error {
+	return s.CodexInspections.UpdateRunProgress(ctx, run, ownerID)
+}
+
+func (s *Store) AcquireCodexInspectionRun(ctx context.Context, run CodexInspectionRun, ownerID string, leaseDuration time.Duration) (codexinspection.AcquireRunResult, error) {
+	return s.CodexInspections.AcquireRun(ctx, run, ownerID, leaseDuration)
+}
+
+func (s *Store) HeartbeatCodexInspectionRun(ctx context.Context, runID int64, ownerID string, leaseDuration time.Duration) error {
+	return s.CodexInspections.HeartbeatRun(ctx, runID, ownerID, leaseDuration)
+}
+
+func (s *Store) MarkCodexInspectionRunCancelling(ctx context.Context, runID int64, ownerID string, reason string) (bool, error) {
+	return s.CodexInspections.MarkRunCancelling(ctx, runID, ownerID, reason)
+}
+
+func (s *Store) FinalizeCodexInspectionRun(ctx context.Context, run CodexInspectionRun, ownerID string, finalLog *CodexInspectionLog) error {
+	return s.CodexInspections.FinalizeRun(ctx, run, ownerID, finalLog)
+}
+
+func (s *Store) ForceFinalizeCodexInspectionRun(ctx context.Context, run CodexInspectionRun, ownerID string, finalLog *CodexInspectionLog) error {
+	return s.CodexInspections.ForceFinalizeRun(ctx, run, ownerID, finalLog)
+}
+
+func (s *Store) GetActiveCodexInspectionLease(ctx context.Context, nowMS int64) (CodexInspectionLease, bool, error) {
+	return s.CodexInspections.GetActiveLease(ctx, nowMS)
+}
+
+func (s *Store) RecoverStaleCodexInspectionRuns(ctx context.Context, nowMS int64, reason string) ([]CodexInspectionRun, error) {
+	return s.CodexInspections.RecoverStaleRuns(ctx, nowMS, reason)
+}
+
+func (s *Store) GetLatestCodexInspectionRunByTriggerType(ctx context.Context, triggerType string) (CodexInspectionRun, bool, error) {
+	return s.CodexInspections.GetLatestRunByTriggerType(ctx, triggerType)
+}
+
 func (s *Store) InsertCodexInspectionResult(ctx context.Context, result CodexInspectionResult) (CodexInspectionResult, error) {
 	return s.CodexInspections.InsertResult(ctx, result)
 }
@@ -331,6 +375,29 @@ func (s *Store) UsageCacheAccountingMigrationReady(ctx context.Context) (bool, e
 		return false, err
 	}
 	return state.Status == datamigration.StatusCompleted, nil
+}
+
+func (s *Store) CatchUpUsageHourlyAggregate(ctx context.Context, limit int, nowMS int64) (UsageHourlyAggregateCatchUpResult, error) {
+	ready, err := s.UsageCacheAccountingMigrationReady(ctx)
+	if err != nil {
+		return UsageHourlyAggregateCatchUpResult{}, err
+	}
+	if !ready {
+		return UsageHourlyAggregateCatchUpResult{Pending: true}, nil
+	}
+	return s.UsageAggregates.CatchUp(ctx, limit, nowMS)
+}
+
+func (s *Store) RecordUsageHourlyAggregateFailure(ctx context.Context, aggregateErr error, nowMS int64) error {
+	return s.UsageAggregates.RecordFailure(ctx, aggregateErr, nowMS)
+}
+
+func (s *Store) UsageHourlyAggregateState(ctx context.Context) (UsageHourlyAggregateState, error) {
+	return s.UsageAggregates.State(ctx)
+}
+
+func (s *Store) UsageHourlyAggregateRows(ctx context.Context, filter UsageHourlyAggregateFilter) ([]UsageHourlyAggregateRow, UsageHourlyAggregateState, bool, error) {
+	return s.UsageAggregates.LoadRows(ctx, filter)
 }
 
 func (s *Store) CatchUpAccountHistoryRollups(ctx context.Context, limit int, nowMS int64) (UsageRollupCatchUpResult, error) {
