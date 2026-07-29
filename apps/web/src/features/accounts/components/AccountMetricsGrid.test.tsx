@@ -27,10 +27,10 @@ describe('AccountMetricsGrid', () => {
     });
 
     const cards = renderer!.root.findAll(
-      (node) => typeof node.props['data-metric-key'] === 'string'
+      (node) => typeof node.props['data-summary-icon'] === 'string'
     );
-    expect(cards.map((card) => card.props['data-metric-key'])).toEqual([
-      'total',
+    expect(cards.map((card) => card.props['data-summary-icon'])).toEqual([
+      'credential',
       'available',
       'attention',
       'quota-risk',
@@ -45,7 +45,7 @@ describe('AccountMetricsGrid', () => {
       '2',
       '1',
     ]);
-    expect(renderer!.root.findAllByType('svg')).toHaveLength(6);
+    expect(renderer!.root.findAllByType('svg')).toHaveLength(12);
     expect(renderer!.root.findByProps({ 'aria-label': 'accounts.metrics_label' })).toBeTruthy();
   });
 });

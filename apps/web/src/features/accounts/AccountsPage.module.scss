@@ -52,95 +52,45 @@
   color: var(--primary-color);
 }
 
+.metricsSection {
+  --monitor-surface: var(--accounts-surface);
+  --monitor-ink: var(--accounts-text);
+  --monitor-muted: var(--accounts-muted);
+  --monitor-line: var(--accounts-border);
+  --monitor-line-strong: var(--accounts-strong-border);
+  --monitor-accent: var(--accounts-brand);
+  --monitor-accent-strong: var(--accounts-brand-active);
+  --monitor-green: var(--accounts-success);
+  --monitor-amber: var(--accounts-warning);
+  --monitor-red: var(--accounts-danger);
+
+  container: monitoring-page / inline-size;
+  min-width: 0;
+}
+
 .metricsGrid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(160px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-auto-rows: minmax(112px, auto);
+  gap: 10px;
+  min-width: 0;
+}
 
-  @include tablet {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+@container monitoring-page (max-width: 1240px) {
+  .metricsGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
+}
 
-  @include mobile {
+@container monitoring-page (max-width: 900px) {
+  .metricsGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-.metricCard {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  min-height: 78px;
-  padding: 12px;
-  border: 1px solid var(--glass-border);
-  border-radius: $radius-md;
-  background: var(--glass-bg);
-  box-shadow: var(--shadow-sm);
-}
-
-.metricIcon {
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-}
-
-.metricIconblue {
-  background: color-mix(in srgb, var(--primary-color) 13%, transparent);
-  color: var(--primary-color);
-}
-
-.metricIcongreen {
-  background: color-mix(in srgb, var(--accounts-success) 14%, transparent);
-  color: var(--accounts-success);
-}
-
-.metricIconamber {
-  background: color-mix(in srgb, var(--accounts-warning) 15%, transparent);
-  color: var(--accounts-warning);
-}
-
-.metricIconred {
-  background: color-mix(in srgb, var(--accounts-danger) 13%, transparent);
-  color: var(--accounts-danger);
-}
-
-.metricIconviolet {
-  background: color-mix(in srgb, var(--accounts-brand-active) 13%, transparent);
-  color: var(--accounts-brand-active);
-}
-
-.metricIconneutral {
-  background: color-mix(in srgb, var(--accounts-neutral) 13%, transparent);
-  color: var(--accounts-neutral);
-}
-
-.metricBody {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-
-  span {
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 700;
-  }
-
-  strong {
-    margin-top: 2px;
-    color: var(--text-primary);
-    font-size: 20px;
-    line-height: 1.2;
-  }
-
-  small {
-    margin-top: 2px;
-    color: var(--text-tertiary, var(--text-secondary));
-    font-size: 12px;
+@container monitoring-page (max-width: 768px) {
+  .metricsGrid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2791,122 +2741,6 @@
   }
 }
 
-.metricsGrid {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.metricCard {
-  --metric-accent: var(--accounts-primary);
-  position: relative;
-  isolation: isolate;
-  align-items: flex-start;
-  min-height: 112px;
-  padding: 12px;
-  overflow: hidden;
-  border-color: var(--accounts-border);
-  border-radius: var(--app-radius-md);
-  background: var(--accounts-surface);
-  box-shadow: var(--shadow);
-  transition:
-    transform 0.18s ease,
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
-
-  &:hover {
-    border-color: var(--accounts-strong-border);
-    box-shadow: var(--shadow-lg);
-    transform: translateY(-1px);
-  }
-}
-
-.metricCardblue {
-  --metric-accent: var(--accounts-brand);
-}
-
-.metricCardgreen {
-  --metric-accent: var(--accounts-success);
-}
-
-.metricCardamber {
-  --metric-accent: var(--accounts-warning);
-}
-
-.metricCardred {
-  --metric-accent: var(--accounts-danger);
-}
-
-.metricCardviolet {
-  --metric-accent: var(--accounts-brand-active);
-}
-
-.metricCardneutral {
-  --metric-accent: var(--accounts-neutral);
-}
-
-.metricIcon {
-  position: relative;
-  z-index: 1;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--metric-accent) 12%, transparent);
-  color: var(--metric-accent);
-}
-
-.metricBody {
-  position: relative;
-  z-index: 1;
-  flex: 1 1 auto;
-
-  span {
-    color: var(--accounts-muted);
-    font-size: 12px;
-    font-weight: 600;
-  }
-
-  strong {
-    margin-top: 8px;
-    font-size: 24px;
-    font-weight: 800;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.05;
-    overflow-wrap: anywhere;
-  }
-
-  small {
-    margin-top: 6px;
-    color: var(--accounts-muted);
-    line-height: 1.35;
-  }
-}
-
-.metricSparkline {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  z-index: 0;
-  width: 42%;
-  min-width: 70px;
-  height: 30px;
-  opacity: 0.2;
-  pointer-events: none;
-  background:
-    linear-gradient(
-      135deg,
-      transparent 0 18%,
-      var(--metric-accent) 18% 22%,
-      transparent 22% 44%,
-      var(--metric-accent) 44% 48%,
-      transparent 48% 68%,
-      var(--metric-accent) 68% 72%,
-      transparent 72%
-    ),
-    linear-gradient(to top, color-mix(in srgb, var(--metric-accent) 18%, transparent), transparent);
-  border-radius: 8px;
-}
-
 .panelHeader {
   min-width: 0;
 
@@ -3086,10 +2920,6 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .metricsGrid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .splitGrid,
   .oauthGrid {
     grid-template-columns: 1fr;
@@ -3164,32 +2994,6 @@
     min-width: 0;
   }
 
-  .metricsGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .metricCard {
-    min-height: 84px;
-    gap: 8px;
-    padding: 10px;
-    border-radius: 12px;
-  }
-
-  .metricIcon {
-    width: 32px;
-    height: 32px;
-    flex-basis: 32px;
-  }
-
-  .metricBody strong {
-    font-size: 18px;
-  }
-
-  .metricBody small {
-    font-size: 11px;
-  }
-
   .batchBar,
   .panelHeader {
     align-items: stretch;
@@ -3257,14 +3061,6 @@
   justify-content: center;
 }
 
-.metricCard {
-  min-height: 104px;
-}
-
-.metricSparkline {
-  display: none;
-}
-
 @include tablet {
   .accountCard {
     grid-template-columns: minmax(0, 1fr);
@@ -3301,10 +3097,6 @@
 @include mobile {
   .searchField {
     grid-column: 1;
-  }
-
-  .metricCard {
-    min-height: 84px;
   }
 
   .batchBarIdle {
