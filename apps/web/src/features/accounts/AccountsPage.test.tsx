@@ -3,7 +3,9 @@ import { isValidElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '@/components/ui/Button';
 import { DropdownMenu } from '@/components/ui/DropdownMenu';
-import type { AuthFileItem } from '@/types';
+import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
+import type { AuthFileItem, OAuthModelAliasEntry } from '@/types';
 import type {
   CodexInspectionResult,
   CodexInspectionRun,
@@ -236,6 +238,8 @@ const { mocks } = vi.hoisted(() => {
       showModels: vi.fn(async () => undefined),
       loadExcluded: vi.fn(async () => undefined),
       loadModelAlias: vi.fn(async () => undefined),
+      oauthExcluded: {} as Record<string, string[]>,
+      oauthModelAlias: {} as Record<string, OAuthModelAliasEntry[]>,
       listCodexInspectionRuns: vi.fn(
         async (): Promise<{ items: CodexInspectionRun[] }> => ({ items: [] })
       ),
@@ -383,9 +387,9 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
 
 vi.mock('@/features/authFiles/hooks/useAuthFilesOauth', () => ({
   useAuthFilesOauth: () => ({
-    excluded: {},
+    excluded: mocks.oauthExcluded,
     excludedError: 'ready',
-    modelAlias: {},
+    modelAlias: mocks.oauthModelAlias,
     modelAliasError: 'ready',
     allProviderModels: {},
     providerList: ['codex'],
@@ -780,6 +784,8 @@ describe('AccountsPage replacement flows', () => {
     mocks.loadFiles.mockClear();
     mocks.loadExcluded.mockClear();
     mocks.loadModelAlias.mockClear();
+    mocks.oauthExcluded = {};
+    mocks.oauthModelAlias = {};
     mocks.lastExcludedEditorProps = null;
     mocks.lastAliasEditorProps = null;
     mocks.lastHealthWorkspaceProps = null;
@@ -822,6 +828,78 @@ describe('AccountsPage replacement flows', () => {
 
     expect(treeText(renderer)).toContain('oauth-excluded-add');
     expect(findHostButtonByText(renderer, 'accounts.tab_oauth').props['aria-selected']).toBe(true);
+  });
+
+  it('starts the OAuth rule preview empty instead of assuming a model', async () => {
+    mocks.location = { pathname: '/accounts', search: '?view=oauth' };
+
+    const renderer = await renderAccountsPage();
+    const previewInput = renderer.root
+      .findAllByType(Input)
+      .find((node) => node.props['aria-label'] === 'accounts.oauth_preview_input_label');
+
+    expect(previewInput?.props.value).toBe('');
+    expect(treeText(renderer)).toContain('accounts.oauth_preview_empty');
+  });
+
+  it('prioritizes affected OAuth previews, collapses direct providers and supports filtering', async () => {
+    mocks.location = { pathname: '/accounts', search: '?view=oauth' };
+    mocks.files = [
+      makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      {
+        name: 'claude.json',
+        type: 'claude',
+        provider: 'claude',
+        account: 'claude@example.com',
+        disabled: false,
+      } as AuthFileItem,
+      {
+        name: 'kimi.json',
+        type: 'kimi',
+        provider: 'kimi',
+        account: 'kimi@example.com',
+        disabled: false,
+      } as AuthFileItem,
+    ];
+    mocks.oauthExcluded = { kimi: ['team-*'] };
+    mocks.oauthModelAlias = {
+      codex: [{ name: 'gpt-5-codex', alias: 'team-codex' }],
+    };
+
+    const renderer = await renderAccountsPage();
+    const previewInput = renderer.root
+      .findAllByType(Input)
+      .find((node) => node.props['aria-label'] === 'accounts.oauth_preview_input_label');
+    if (!previewInput) throw new Error('OAuth preview input not found');
+
+    act(() => previewInput.props.onChange({ target: { value: 'team-codex' } }));
+
+    const getRenderedProviders = () =>
+      renderer.root
+        .findAll((node) => typeof node.props['data-oauth-preview-provider'] === 'string')
+        .map((node) => node.props['data-oauth-preview-provider']);
+
+    expect(getRenderedProviders()).toEqual(['codex', 'kimi']);
+    const directSummary = renderer.root.findByProps({
+      'data-oauth-preview-direct-summary': 1,
+    });
+    expect(directSummary.props['aria-expanded']).toBe(false);
+
+    act(() => directSummary.props.onClick());
+    expect(getRenderedProviders()).toEqual(['codex', 'kimi', 'claude']);
+
+    const providerSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.id === 'oauth-preview-provider');
+    if (!providerSelect) throw new Error('OAuth preview provider filter not found');
+    act(() => providerSelect.props.onChange('claude'));
+
+    expect(getRenderedProviders()).toEqual(['claude']);
+    expect(
+      renderer.root.findAll(
+        (node) => typeof node.props['data-oauth-preview-direct-summary'] === 'number'
+      )
+    ).toHaveLength(0);
   });
 
   it('opens OAuth editors from a deep link', async () => {

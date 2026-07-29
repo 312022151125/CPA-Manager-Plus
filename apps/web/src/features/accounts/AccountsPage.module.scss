@@ -2283,35 +2283,169 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  padding-right: 3px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.previewPanelHeader {
+  min-width: 0;
+}
+
+.previewScope {
+  margin: 4px 0 0;
+  color: color-mix(in srgb, var(--text-secondary) 84%, var(--text-primary));
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.previewControls {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+
+  :global(.form-group) {
+    margin: 0;
+  }
+}
+
+.previewProviderFilter {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+
+  label {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+}
+
+.previewEmpty {
+  margin: 0;
+  padding: 12px;
+  border: 1px dashed var(--accounts-border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
 }
 
 .previewRow {
-  display: grid;
-  grid-template-columns: minmax(80px, 0.36fr) minmax(0, 1fr);
-  gap: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--app-radius-sm);
   background: var(--surface-subtle);
 
+  small {
+    color: color-mix(in srgb, var(--text-secondary) 86%, var(--text-primary));
+    font-size: 12px;
+    line-height: 1.45;
+  }
+}
+
+.previewRow[data-oauth-preview-status='excluded'] {
+  border-color: color-mix(in srgb, var(--error-color) 34%, var(--border-color));
+
+  .previewStatus {
+    background: color-mix(in srgb, var(--error-color) 10%, var(--accounts-surface));
+    color: var(--error-color);
+  }
+}
+
+.previewRow[data-oauth-preview-status='aliased'] {
+  border-color: color-mix(in srgb, var(--primary-color) 34%, var(--border-color));
+
+  .previewStatus {
+    background: color-mix(in srgb, var(--primary-color) 10%, var(--accounts-surface));
+    color: var(--primary-active);
+  }
+}
+
+.previewRowHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+
   strong {
     color: var(--text-primary);
     font-size: 13px;
   }
+}
 
-  span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-primary);
-    font-size: 13px;
+.previewStatus {
+  padding: 2px 7px;
+  border-radius: $radius-full;
+  background: var(--accounts-muted-surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.previewDetails {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+
+  div {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 8px;
   }
 
-  small {
-    grid-column: 1 / -1;
-    color: var(--text-secondary);
+  dt {
+    color: color-mix(in srgb, var(--text-secondary) 86%, var(--text-primary));
     font-size: 12px;
+  }
+
+  dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--text-primary);
+    font-size: 12px;
+  }
+}
+
+.previewDirectSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px dashed color-mix(in srgb, var(--primary-color) 30%, var(--accounts-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--primary-color) 5%, var(--accounts-surface));
+  color: var(--accounts-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+
+  span:last-child {
+    flex-shrink: 0;
+    color: var(--primary-color);
+  }
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--primary-color) 48%, var(--accounts-border));
+    background: color-mix(in srgb, var(--primary-color) 8%, var(--accounts-surface));
+  }
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--primary-color) 36%, transparent);
+    outline-offset: 2px;
   }
 }
 
@@ -2867,9 +3001,14 @@
 
 .rulePanel {
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 12px;
   align-content: start;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100dvh - 32px);
   padding: 16px;
+  overflow: hidden;
 
   h2 {
     margin: 0;
@@ -2924,11 +3063,33 @@
   .oauthGrid {
     grid-template-columns: 1fr;
   }
+
+  .rulePanel {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .previewList {
+    padding-right: 0;
+    overflow: visible;
+  }
 }
 
 @include mobile {
   .container {
     gap: 14px;
+  }
+
+  .rulePanel {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .previewList {
+    padding-right: 0;
+    overflow: visible;
   }
 
   .controlsTabsRow,
@@ -2974,6 +3135,10 @@
 
   .controlsTabsRow > .headerActions {
     justify-content: flex-start;
+  }
+
+  .oauthGrid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .toolbar,

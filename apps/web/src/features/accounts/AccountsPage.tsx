@@ -143,7 +143,11 @@ import {
   buildUsageValueRowsFromRecent,
   type UsageValueRow,
 } from '@/features/accounts/model/usageValueRows';
-import { buildOAuthRulePreviewRows } from '@/features/accounts/model/oauthRulePreview';
+import {
+  buildOAuthRulePreviewRows,
+  getOAuthRulePreviewProviders,
+  partitionOAuthRulePreviewRows,
+} from '@/features/accounts/model/oauthRulePreview';
 import { resolveAccountReauthAction } from '@/features/accounts/model/accountReauth';
 import { beginAccountQuotaRequest } from '@/features/accounts/model/accountQuotaRequestGate';
 import { buildAccountOperationalItemsByRowKey } from '@/features/accounts/model/accountOperationalScope';
@@ -455,7 +459,9 @@ export function AccountsPage() {
   );
   const [accountActionCandidatesLoading, setAccountActionCandidatesLoading] = useState(false);
   const [accountActionCandidatesError, setAccountActionCandidatesError] = useState('');
-  const [oauthPreviewModel, setOauthPreviewModel] = useState('gpt-5');
+  const [oauthPreviewModel, setOauthPreviewModel] = useState('');
+  const [oauthPreviewProvider, setOauthPreviewProvider] = useState('');
+  const [oauthDirectExpanded, setOauthDirectExpanded] = useState(false);
   const [oauthExcludedEditorProvider, setOauthExcludedEditorProvider] = useState<string | null>(
     () =>
       initialWorkspaceUrlState.current.editor === 'excluded'
@@ -1072,6 +1078,25 @@ export function AccountsPage() {
       : 'quota_management.show_masked_credentials_hint'
   );
   const AccountDisplayIcon = accountDisplayMode === 'masked' ? IconEyeOff : IconEye;
+  const oauthPreviewProviders = useMemo(
+    () =>
+      getOAuthRulePreviewProviders({
+        providers: providerOptions,
+        excluded: oauthState.excluded,
+        aliases: oauthState.modelAlias,
+      }),
+    [oauthState.excluded, oauthState.modelAlias, providerOptions]
+  );
+  const oauthPreviewProviderOptions = useMemo(
+    () => [
+      { value: '', label: t('accounts.oauth_preview_provider_all') },
+      ...oauthPreviewProviders.map((provider) => ({
+        value: provider,
+        label: getProviderLabel(provider, t),
+      })),
+    ],
+    [oauthPreviewProviders, t]
+  );
   const oauthPreviewRows = useMemo(
     () =>
       buildOAuthRulePreviewRows({
@@ -1081,6 +1106,10 @@ export function AccountsPage() {
         inputModel: oauthPreviewModel,
       }),
     [oauthPreviewModel, oauthState.excluded, oauthState.modelAlias, providerOptions]
+  );
+  const { affectedRows: oauthAffectedPreviewRows, directRows: oauthDirectPreviewRows } = useMemo(
+    () => partitionOAuthRulePreviewRows(oauthPreviewRows, oauthPreviewProvider),
+    [oauthPreviewProvider, oauthPreviewRows]
   );
 
   useEffect(() => {
@@ -3353,6 +3382,59 @@ export function AccountsPage() {
     />
   );
 
+  const renderOAuthPreviewRow = (row: (typeof oauthPreviewRows)[number]) => {
+    const catalogLabel = row.catalogModels.length
+      ? row.catalogModels
+          .map((model) => (model.displayName ? `${model.id} (${model.displayName})` : model.id))
+          .join(' · ')
+      : t('accounts.oauth_preview_catalog_hidden');
+
+    return (
+      <div
+        key={row.provider}
+        className={styles.previewRow}
+        data-oauth-preview-provider={row.provider}
+        data-oauth-preview-status={row.effectiveStatus}
+      >
+        <div className={styles.previewRowHeader}>
+          <strong>{getProviderLabel(row.provider, t)}</strong>
+          <span className={styles.previewStatus}>
+            {t(`accounts.oauth_preview_status_${row.effectiveStatus}`)}
+          </span>
+        </div>
+        <dl className={styles.previewDetails}>
+          <div>
+            <dt>{t('accounts.oauth_preview_route_label')}</dt>
+            <dd>
+              {row.inputModel || '-'} → {row.upstreamModel || '-'}
+            </dd>
+          </div>
+          <div>
+            <dt>{t('accounts.oauth_preview_catalog_label')}</dt>
+            <dd>{catalogLabel}</dd>
+          </div>
+          <div>
+            <dt>{t('accounts.oauth_preview_response_label')}</dt>
+            <dd>
+              {row.responseModel || '-'} ·{' '}
+              {t(
+                row.forceMapping
+                  ? 'accounts.oauth_preview_response_forced'
+                  : 'accounts.oauth_preview_response_passthrough'
+              )}
+            </dd>
+          </div>
+        </dl>
+        <small>
+          {t(row.explanationKey, {
+            model: row.upstreamModel || '-',
+            pattern: row.matchedExclude || '-',
+          })}
+        </small>
+      </div>
+    );
+  };
+
   const renderOAuthView = () => (
     <section className={styles.oauthGrid}>
       <div className={styles.oauthCardStack}>
@@ -3384,21 +3466,72 @@ export function AccountsPage() {
         />
       </div>
       <aside className={styles.rulePanel}>
-        <h2>{t('accounts.oauth_preview_title')}</h2>
-        <Input
-          value={oauthPreviewModel}
-          onChange={(event) => setOauthPreviewModel(event.target.value)}
-          placeholder={t('accounts.oauth_preview_placeholder')}
-          aria-label={t('accounts.oauth_preview_title')}
-        />
+        <div className={styles.previewPanelHeader}>
+          <h2>{t('accounts.oauth_preview_title')}</h2>
+          <p className={styles.previewScope}>{t('accounts.oauth_preview_scope')}</p>
+        </div>
+        <div className={styles.previewControls}>
+          <Input
+            label={t('accounts.oauth_preview_input_label')}
+            value={oauthPreviewModel}
+            onChange={(event) => {
+              setOauthPreviewModel(event.target.value);
+              setOauthDirectExpanded(false);
+            }}
+            placeholder={t('accounts.oauth_preview_placeholder')}
+            aria-label={t('accounts.oauth_preview_input_label')}
+          />
+          <div className={styles.previewProviderFilter}>
+            <label id="oauth-preview-provider-label">
+              {t('accounts.oauth_preview_provider_label')}
+            </label>
+            <Select
+              id="oauth-preview-provider"
+              value={oauthPreviewProvider}
+              options={oauthPreviewProviderOptions}
+              onChange={(value) => {
+                setOauthPreviewProvider(value);
+                setOauthDirectExpanded(false);
+              }}
+              ariaLabelledBy="oauth-preview-provider-label"
+            />
+          </div>
+        </div>
         <div className={styles.previewList}>
-          {oauthPreviewRows.map((row) => (
-            <div key={row.provider} className={styles.previewRow}>
-              <strong>{getProviderLabel(row.provider, t)}</strong>
-              <span>{row.effectiveModel || '-'}</span>
-              <small>{t(row.explanationKey)}</small>
-            </div>
-          ))}
+          {oauthPreviewRows.length === 0 ? (
+            <p className={styles.previewEmpty}>{t('accounts.oauth_preview_empty')}</p>
+          ) : oauthAffectedPreviewRows.length === 0 && oauthDirectPreviewRows.length === 0 ? (
+            <p className={styles.previewEmpty}>{t('accounts.oauth_preview_provider_empty')}</p>
+          ) : (
+            <>
+              {oauthAffectedPreviewRows.map(renderOAuthPreviewRow)}
+              {!oauthPreviewProvider && oauthDirectPreviewRows.length > 0 ? (
+                <button
+                  type="button"
+                  className={styles.previewDirectSummary}
+                  data-oauth-preview-direct-summary={oauthDirectPreviewRows.length}
+                  aria-expanded={oauthDirectExpanded}
+                  onClick={() => setOauthDirectExpanded((current) => !current)}
+                >
+                  <span>
+                    {t('accounts.oauth_preview_direct_summary', {
+                      count: oauthDirectPreviewRows.length,
+                    })}
+                  </span>
+                  <span>
+                    {t(
+                      oauthDirectExpanded
+                        ? 'accounts.oauth_preview_direct_collapse'
+                        : 'accounts.oauth_preview_direct_expand'
+                    )}
+                  </span>
+                </button>
+              ) : null}
+              {oauthPreviewProvider || oauthDirectExpanded
+                ? oauthDirectPreviewRows.map(renderOAuthPreviewRow)
+                : null}
+            </>
+          )}
         </div>
       </aside>
     </section>

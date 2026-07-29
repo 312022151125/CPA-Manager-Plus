@@ -96,6 +96,32 @@ describe('accounts workspace wiring', () => {
   });
 
   it.each([
+    [en, 'OAuth Configuration'],
+    [ru, 'Настройки OAuth'],
+    [zhCN, 'OAuth 配置'],
+    [zhTW, 'OAuth 設定'],
+  ])('localizes the OAuth configuration tab', (locale, expectedLabel) => {
+    expect(locale.accounts.tab_oauth).toBe(expectedLabel);
+  });
+
+  it.each([
+    [en, 'List', 'Relationship Diagram', 'Delete Rules'],
+    [ru, 'Список', 'Схема связей', 'Удалить правила'],
+    [zhCN, '列表', '关系图', '删除规则'],
+    [zhTW, '清單', '關係圖', '刪除規則'],
+  ])(
+    'uses precise OAuth list, relationship and rule-deletion terminology',
+    (locale, listLabel, diagramLabel, deleteLabel) => {
+      expect(locale.oauth_model_alias.view_mode_list).toBe(listLabel);
+      expect(locale.oauth_model_alias.view_mode_diagram).toBe(diagramLabel);
+      expect(locale.oauth_excluded.delete).toBe(deleteLabel);
+      expect(locale.oauth_model_alias.delete).toBe(deleteLabel);
+      expect(locale.accounts.oauth_preview_provider_label).toBeTypeOf('string');
+      expect(locale.accounts.oauth_preview_direct_summary).toBeTypeOf('string');
+    }
+  );
+
+  it.each([
     [
       en,
       [
