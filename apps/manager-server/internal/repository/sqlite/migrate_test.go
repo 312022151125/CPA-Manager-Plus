@@ -587,6 +587,29 @@ func TestEnsureModelPriceColumnsPreservesLegacyZeroBasePrices(t *testing.T) {
 	}
 }
 
+func TestMigrateCreatesModelPriceServiceTierTableWithCascade(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "model-price-service-tier.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := db.Exec(`insert into model_prices (
+		model, prompt_per_1m, completion_per_1m, cache_per_1m, updated_at_ms
+	) values ('gpt-test', 1, 2, 0.1, 1)`); err != nil {
+		t.Fatalf("insert model price: %v", err)
+	}
+	if _, err := db.Exec(`insert into model_price_service_tiers (
+		model, mode, service_tier, prompt_per_1m, prompt_configured
+	) values ('gpt-test', 'fast', 'priority', 2.5, 1)`); err != nil {
+		t.Fatalf("insert model price service tier: %v", err)
+	}
+	if _, err := db.Exec(`delete from model_prices where model = 'gpt-test'`); err != nil {
+		t.Fatalf("delete model price: %v", err)
+	}
+	assertTableCount(t, db, "model_price_service_tiers", 0)
+}
+
 func migrationTableColumns(t *testing.T, db *sql.DB, table string) map[string]bool {
 	t.Helper()
 	rows, err := db.Query(`pragma table_info(` + table + `)`)
