@@ -1016,10 +1016,8 @@ export function CodexInspectionPage({
   const statusTone = statusToneMap[runStatus];
   const statusLabel = statusLabelMap[runStatus];
 
-  const lastFinishedLabel =
-    result && result.finishedAt > 0
-      ? `${t('monitoring.codex_inspection_last_finished_at')} · ${formatTime(result.finishedAt, i18n.language)}`
-      : null;
+  const lastFinishedValue =
+    result && result.finishedAt > 0 ? formatTime(result.finishedAt, i18n.language) : null;
 
   const openSettingsModal = useCallback(
     (field?: string) => {
@@ -1192,7 +1190,7 @@ export function CodexInspectionPage({
       <CodexInspectionStatusPanel
         statusTone={statusTone}
         statusLabel={statusLabel}
-        lastFinishedLabel={lastFinishedLabel}
+        lastFinishedValue={lastFinishedValue}
         pendingActionCount={pendingActionCount}
         summaryCards={summaryCards}
         progress={progress}

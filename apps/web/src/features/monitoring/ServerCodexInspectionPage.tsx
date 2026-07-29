@@ -1455,35 +1455,9 @@ export function ServerCodexInspectionPage({
 
     return (
       <Panel className={styles.statusPanel}>
-        <div className={styles.statusBar}>
-          <div className={styles.statusInfo}>
-            <span className={`${styles.statusBadge} ${statusToneClass[activeTone]}`}>
-              <span className={styles.statusDot} aria-hidden="true" />
-              {getRunStatusLabel(activeRun, t)}
-            </span>
-            <span
-              className={`${styles.statusBadge} ${
-                selectedConfig.enabled ? statusToneClass.good : statusToneClass.idle
-              }`}
-            >
-              <span className={styles.statusDot} aria-hidden="true" />
-              {selectedConfig.enabled
-                ? t('monitoring.server_codex_inspection_schedule_enabled')
-                : t('monitoring.server_codex_inspection_schedule_disabled')}
-            </span>
-            <div className={styles.statusMeta}>
-              <span>
-                {t('monitoring.server_codex_inspection_last_run')}: {lastRunTime}
-                {activeRun?.finishedAtMs ? ` · ${durationLabel}` : ''}
-              </span>
-              {serviceHost ? (
-                <span className={styles.statusMetaHost} title={serviceBase}>
-                  {serviceHost}
-                </span>
-              ) : null}
-            </div>
-          </div>
-          <div className={styles.statusActions}>
+        <div className={styles.statusPanelHeader}>
+          {modeControl ? <div className={styles.statusPanelTabs}>{modeControl}</div> : <div />}
+          <div className={styles.statusPanelActions}>
             <details className={`${styles.infoNote} ${styles.infoNoteCompact}`}>
               <summary>{t('monitoring.server_codex_inspection_info_summary')}</summary>
               <ul className={styles.infoNoteList}>
@@ -1509,6 +1483,9 @@ export function ServerCodexInspectionPage({
             >
               {t('common.refresh')}
             </Button>
+            <Button variant="secondary" size="sm" onClick={() => openConfigDrawer()}>
+              {t('monitoring.codex_inspection_config_overview_edit')}
+            </Button>
             <Button
               size="sm"
               onClick={handleRunNow}
@@ -1526,89 +1503,131 @@ export function ServerCodexInspectionPage({
           </div>
         </div>
 
-        {modeControl ? <div className={styles.statusModeRow}>{modeControl}</div> : null}
+        <div className={styles.statusPanelBody}>
+          <div className={styles.statusMetricsRow}>
+            <div className={styles.statusMetric}>
+              <span className={styles.statusMetricLabel}>{t('common.status')}</span>
+              <span className={styles.statusMetricValue}>
+                <span
+                  className={styles.statusDot}
+                  aria-hidden="true"
+                  style={{
+                    color: `var(--inspect-${activeTone === 'good' ? 'green' : activeTone === 'bad' ? 'red' : activeTone === 'warn' ? 'amber' : activeTone === 'info' ? 'accent' : 'muted'})`,
+                    background: 'currentColor',
+                  }}
+                />
+                {getRunStatusLabel(activeRun, t)}
+              </span>
+            </div>
+            <div className={styles.statusMetric}>
+              <span className={styles.statusMetricLabel}>
+                {t('monitoring.server_codex_inspection_last_run')}
+              </span>
+              <span className={styles.statusMetricValue}>
+                {lastRunTime} {activeRun?.finishedAtMs ? ` · ${durationLabel}` : ''}
+              </span>
+            </div>
+            {serviceHost ? (
+              <div className={styles.statusMetric}>
+                <span className={styles.statusMetricLabel}>
+                  {t('monitoring.server_codex_inspection_host')}
+                </span>
+                <span className={styles.statusMetricValue} title={serviceBase}>
+                  {serviceHost}
+                </span>
+              </div>
+            ) : null}
+          </div>
 
-        <CodexInspectionConfigOverview
-          title={t('monitoring.codex_inspection_config_overview_title')}
-          editLabel={t('monitoring.codex_inspection_config_overview_edit')}
-          copyLabel={t('monitoring.codex_inspection_settings_copy_prompt')}
-          copiedLabel={t('common.copied')}
-          ariaLabel={t('monitoring.server_codex_inspection_config_summary_title')}
-          items={configOverviewItems}
-          onEdit={openConfigDrawer}
-          compact
-          embedded
-        />
+          {!selectedConfig.enabled ? (
+            <div className={styles.statusAlertBanner}>
+              ⚠️ {t('monitoring.server_codex_inspection_schedule_disabled')}
+            </div>
+          ) : null}
 
-        <div className={styles.summaryGrid}>
-          {[
-            {
-              key: 'probe-total',
-              label: t('monitoring.codex_inspection_total_accounts'),
-              value: activeRun ? String(activeRun.probeSetCount) : summaryBlankValue,
-              meta: t('monitoring.server_codex_inspection_total_files', {
-                count: activeRun?.totalFiles ?? 0,
-              }),
-              icon: 'probe' as const,
-              accent: 'blue' as const,
-            },
-            {
-              key: 'sampled',
-              label: t('monitoring.codex_inspection_sampled_accounts'),
-              value: activeRun ? String(activeRun.sampledCount) : summaryBlankValue,
-              meta: getRunStatusLabel(activeRun, t),
-              icon: 'sampled' as const,
-              accent: 'cyan' as const,
-            },
-            {
-              key: 'delete',
-              label: t('monitoring.codex_inspection_delete_count'),
-              value: activeRun ? String(activeRun.deleteCount) : summaryBlankValue,
-              meta: t('monitoring.codex_inspection_delete_meta'),
-              tone: 'bad' as const,
-              icon: 'delete' as const,
-              accent: 'red' as const,
-            },
-            {
-              key: 'disable',
-              label: t('monitoring.codex_inspection_disable_count'),
-              value: activeRun ? String(activeRun.disableCount) : summaryBlankValue,
-              meta: `${t('monitoring.codex_inspection_threshold')} ${selectedConfig.usedPercentThreshold}%`,
-              tone: 'warn' as const,
-              icon: 'disable' as const,
-              accent: 'amber' as const,
-            },
-            {
-              key: 'enable',
-              label: t('monitoring.codex_inspection_enable_count'),
-              value: activeRun ? String(activeRun.enableCount) : summaryBlankValue,
-              meta: t('monitoring.codex_inspection_enable_meta'),
-              tone: 'good' as const,
-              icon: 'enable' as const,
-              accent: 'green' as const,
-            },
-            {
-              key: 'reauth',
-              label: t('monitoring.codex_inspection_reauth_count'),
-              value: activeRun ? String(activeRun.reauthCount) : summaryBlankValue,
-              meta: t('monitoring.codex_inspection_reauth_meta'),
-              icon: 'reauth' as const,
-              accent: 'violet' as const,
-            },
-          ].map((card) => {
-            const tone: MonitoringSummaryCardProps['tone'] = card.tone;
-            return (
-              <MonitoringSummaryCard
-                key={card.key}
-                label={card.label}
-                value={card.value}
-                meta={card.meta}
-                icon={card.icon}
-                accent={card.accent}
-                tone={tone}
-              />
-            );
-          })}
+          <CodexInspectionConfigOverview
+            title={t('monitoring.codex_inspection_config_overview_title')}
+            editLabel={t('monitoring.codex_inspection_config_overview_edit')}
+            copyLabel={t('monitoring.codex_inspection_settings_copy_prompt')}
+            copiedLabel={t('common.copied')}
+            ariaLabel={t('monitoring.server_codex_inspection_config_summary_title')}
+            items={configOverviewItems}
+            onEdit={openConfigDrawer}
+            compact
+            embedded
+            hideHeader
+          />
+
+          <section className={styles.summaryGrid}>
+            {[
+              {
+                key: 'probe-total',
+                label: t('monitoring.codex_inspection_total_accounts'),
+                value: activeRun ? String(activeRun.probeSetCount) : summaryBlankValue,
+                meta: t('monitoring.server_codex_inspection_total_files', {
+                  count: activeRun?.totalFiles ?? 0,
+                }),
+                icon: 'probe' as const,
+                accent: 'blue' as const,
+              },
+              {
+                key: 'sampled',
+                label: t('monitoring.codex_inspection_sampled_accounts'),
+                value: activeRun ? String(activeRun.sampledCount) : summaryBlankValue,
+                meta: getRunStatusLabel(activeRun, t),
+                icon: 'sampled' as const,
+                accent: 'cyan' as const,
+              },
+              {
+                key: 'delete',
+                label: t('monitoring.codex_inspection_delete_count'),
+                value: activeRun ? String(activeRun.deleteCount) : summaryBlankValue,
+                meta: t('monitoring.codex_inspection_delete_meta'),
+                tone: 'bad' as const,
+                icon: 'delete' as const,
+                accent: 'red' as const,
+              },
+              {
+                key: 'disable',
+                label: t('monitoring.codex_inspection_disable_count'),
+                value: activeRun ? String(activeRun.disableCount) : summaryBlankValue,
+                meta: `${t('monitoring.codex_inspection_threshold')} ${selectedConfig.usedPercentThreshold}%`,
+                tone: 'warn' as const,
+                icon: 'disable' as const,
+                accent: 'amber' as const,
+              },
+              {
+                key: 'enable',
+                label: t('monitoring.codex_inspection_enable_count'),
+                value: activeRun ? String(activeRun.enableCount) : summaryBlankValue,
+                meta: t('monitoring.codex_inspection_enable_meta'),
+                tone: 'good' as const,
+                icon: 'enable' as const,
+                accent: 'green' as const,
+              },
+              {
+                key: 'reauth',
+                label: t('monitoring.codex_inspection_reauth_count'),
+                value: activeRun ? String(activeRun.reauthCount) : summaryBlankValue,
+                meta: t('monitoring.codex_inspection_reauth_meta'),
+                icon: 'reauth' as const,
+                accent: 'violet' as const,
+              },
+            ].map((card) => {
+              const tone: MonitoringSummaryCardProps['tone'] = card.tone;
+              return (
+                <MonitoringSummaryCard
+                  key={card.key}
+                  label={card.label}
+                  value={card.value}
+                  meta={card.meta}
+                  icon={card.icon}
+                  accent={card.accent}
+                  tone={tone}
+                />
+              );
+            })}
+          </section>
         </div>
       </Panel>
     );

@@ -2816,6 +2816,7 @@
     "server_codex_inspection_trigger_scheduled": "Запуск по расписанию",
     "server_codex_inspection_total_files": "Файлов: {{count}}",
     "server_codex_inspection_last_run": "Последний запуск",
+    "server_codex_inspection_host": "Узел выполнения",
     "server_codex_inspection_duration_value": "{{seconds}} сек.",
     "server_codex_inspection_history_title": "История проверок",
     "server_codex_inspection_history_desc": "Сохраненные серверные проверки. Выберите запуск, чтобы посмотреть результаты и логи.",

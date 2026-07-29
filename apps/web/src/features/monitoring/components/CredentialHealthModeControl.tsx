@@ -1,5 +1,4 @@
 import { useTranslation } from 'react-i18next';
-import { SegmentedTabs, type SegmentedTabItem } from '@/components/ui/SegmentedTabs';
 import type { CredentialHealthInspectionMode } from '@/features/monitoring/model/credentialInspectionSnapshot';
 import styles from '../CodexInspectionPage.module.scss';
 
@@ -17,34 +16,37 @@ export function CredentialHealthModeControl({
   onChange,
 }: CredentialHealthModeControlProps) {
   const { t } = useTranslation();
-  const items: ReadonlyArray<SegmentedTabItem<CredentialHealthInspectionMode>> = [
-    {
-      id: 'local',
-      label: t('monitoring.codex_inspection_mode_local'),
-    },
-    {
-      id: 'server',
-      label: t('monitoring.codex_inspection_mode_server'),
-      disabled: checking || !serverAvailable,
-      title:
-        !checking && !serverAvailable
-          ? t('monitoring.codex_inspection_mode_server_unavailable')
-          : undefined,
-    },
-  ];
 
   return (
-    <div className={styles.credentialHealthModeControl}>
-      <SegmentedTabs
-        items={items}
-        activeTab={activeMode}
-        ariaLabel={t('monitoring.codex_inspection_mode_label')}
-        onChange={onChange}
-        idBase="credential-health-mode"
-        className={styles.credentialHealthModeTabs}
-        equalWidth
-        responsiveFullWidth={false}
-      />
+    <div
+      className={styles.credentialHealthTabs}
+      role="tablist"
+      aria-label={t('monitoring.codex_inspection_mode_label')}
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeMode === 'local'}
+        className={`${styles.credentialHealthTab} ${activeMode === 'local' ? styles.credentialHealthTabActive : ''}`}
+        onClick={() => onChange('local')}
+      >
+        {t('monitoring.codex_inspection_mode_local')}
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeMode === 'server'}
+        className={`${styles.credentialHealthTab} ${activeMode === 'server' ? styles.credentialHealthTabActive : ''}`}
+        onClick={() => onChange('server')}
+        disabled={checking || !serverAvailable}
+        title={
+          !checking && !serverAvailable
+            ? t('monitoring.codex_inspection_mode_server_unavailable')
+            : undefined
+        }
+      >
+        {t('monitoring.codex_inspection_mode_server')}
+      </button>
     </div>
   );
 }

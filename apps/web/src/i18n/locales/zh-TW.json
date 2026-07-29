@@ -2816,6 +2816,7 @@
     "server_codex_inspection_trigger_scheduled": "定時觸發",
     "server_codex_inspection_total_files": "來源檔案 {{count}} 個",
     "server_codex_inspection_last_run": "最近執行",
+    "server_codex_inspection_host": "執行節點",
     "server_codex_inspection_duration_value": "耗時 {{seconds}} 秒",
     "server_codex_inspection_history_title": "巡檢歷史",
     "server_codex_inspection_history_desc": "服務端保存的巡檢執行記錄，點擊可查看結果和日誌。",

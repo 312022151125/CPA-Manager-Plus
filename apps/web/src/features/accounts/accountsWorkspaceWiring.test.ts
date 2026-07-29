@@ -34,7 +34,7 @@ describe('accounts workspace wiring', () => {
     expect(routesSource).not.toContain(`${legacyPagesRoot}/ServerCodexInspectionPage`);
   });
 
-  it('embeds credential health as an Accounts tab and isolates mode controls from actions', () => {
+  it('embeds credential health as an Accounts tab and isolates header tabs from actions', () => {
     expect(accountsPageSource).toContain(
       "import { CredentialHealthInspectionWorkspace } from '@/features/monitoring/components/CredentialHealthInspectionWorkspace';"
     );
@@ -42,16 +42,16 @@ describe('accounts workspace wiring', () => {
     expect(accountsPageSource).toContain('<CredentialHealthInspectionWorkspace');
     expect(accountsPageSource).not.toContain("id: 'inspection'");
     expect(localStatusPanelSource).toContain(
-      '<div className={styles.statusModeRow}>{modeControl}</div>'
+      '<div className={styles.statusPanelTabs}>{modeControl}</div>'
     );
     expect(serverInspectionPageSource).toContain(
-      '<div className={styles.statusModeRow}>{modeControl}</div>'
+      '<div className={styles.statusPanelTabs}>{modeControl}</div>'
     );
     expect(localStatusPanelSource).not.toContain(
-      '<div className={styles.statusActions}>\n            {modeControl}'
+      '<div className={styles.statusPanelActions}>\n            {modeControl}'
     );
     expect(serverInspectionPageSource).not.toContain(
-      '<div className={styles.statusActions}>\n            {modeControl}'
+      '<div className={styles.statusPanelActions}>\n            {modeControl}'
     );
   });
 

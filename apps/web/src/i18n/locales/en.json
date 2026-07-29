@@ -2816,6 +2816,7 @@
     "server_codex_inspection_trigger_scheduled": "Scheduled trigger",
     "server_codex_inspection_total_files": "{{count}} source files",
     "server_codex_inspection_last_run": "Latest Run",
+    "server_codex_inspection_host": "Runtime node",
     "server_codex_inspection_duration_value": "{{seconds}}s",
     "server_codex_inspection_history_title": "Inspection History",
     "server_codex_inspection_history_desc": "Persisted server inspection runs. Select a run to view results and logs.",
