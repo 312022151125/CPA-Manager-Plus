@@ -347,30 +347,31 @@
 .accountCardHeader {
   align-items: center;
   min-height: 34px;
-  padding: 2px 13px 0;
+  padding: 2px 12px 0;
   color: var(--accounts-muted);
   font-size: 12px;
   font-weight: 700;
 
   > span {
+    display: flex;
+    align-items: center;
     min-width: 0;
-    padding-right: 6px;
+    padding: 0;
     line-height: 1.25;
-  }
-
-  > span:not(:first-child) {
-    padding-left: 11px;
   }
 
   > span:nth-child(2),
   > span:nth-child(3),
   > span:nth-child(4),
   > span:last-child {
+    justify-content: center;
     text-align: center;
   }
 
-  > span:last-child {
-    padding-right: 0;
+  > span:first-child,
+  > span:nth-child(5) {
+    justify-content: flex-start;
+    text-align: left;
   }
 }
 
@@ -378,8 +379,8 @@
   position: relative;
   align-items: stretch;
   row-gap: 10px;
-  min-height: 116px;
-  padding: 12px;
+  min-height: 104px;
+  padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
   border-radius: 8px;
   background: var(--bg-primary);
@@ -404,9 +405,15 @@
       150px
       196px
       minmax(268px, 2fr)
-      144px;
+      176px;
     justify-content: space-between;
     column-gap: clamp(16px, 1.15vw, 22px);
+  }
+
+  .rowActions {
+    grid-template-columns: 98px 1px 54px;
+    width: 165px;
+    min-width: 165px;
   }
 }
 
@@ -478,8 +485,8 @@
 .accountCardBusiness::before,
 .accountCardRecommendation::before {
   position: absolute;
-  top: 8px;
-  bottom: 8px;
+  top: 6px;
+  bottom: 6px;
   left: 0;
   width: 1px;
   border-radius: $radius-full;
@@ -792,6 +799,17 @@
   }
 }
 
+.quotaEmptyState {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 20px;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .accountCardQuotaMeta {
   span {
     min-width: 0;
@@ -848,6 +866,12 @@
   grid-template-columns: repeat(2, 30px);
   grid-auto-rows: 30px;
   gap: 4px;
+}
+
+@media (min-width: 1360px) {
+  .accountQuickActionsGrid {
+    grid-template-columns: repeat(3, 30px);
+  }
 }
 
 .accountActionsDivider {

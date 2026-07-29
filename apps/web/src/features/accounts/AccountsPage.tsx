@@ -104,7 +104,6 @@ import {
   buildAccountWindowUsageTargetEntries,
 } from '@/features/accounts/model/accountWindowUsageRows';
 import {
-  buildAccountQuotaDisplayWindow,
   buildAccountQuotaDisplayWindows,
   formatQuotaResetInlineLabel,
   getQuotaWindowShortLabel,
@@ -2744,25 +2743,11 @@ export function AccountsPage() {
               codexStatus,
               quotaWindows,
             });
-            const remaining = item.quota.remainingPercent;
             const antigravityQuotaMatrix = buildAntigravityQuotaMatrix(row, quotaWindows);
-            const displayQuotaWindows =
-              !antigravityQuotaMatrix && quotaWindows.length > 0
-                ? quotaWindows.slice(0, 2)
-                : antigravityQuotaMatrix
-                  ? []
-                  : [
-                      buildAccountQuotaDisplayWindow({
-                        key: 'unknown',
-                        label: t('accounts.col_quota'),
-                        remainingPercent: remaining,
-                        usedPercent: item.quota.usedPercent,
-                        resetLabel: item.quota.resetLabel,
-                      }),
-                    ];
+            const displayQuotaWindows = antigravityQuotaMatrix ? [] : quotaWindows.slice(0, 2);
             const displayedQuotaWindowCount = antigravityQuotaMatrix
               ? antigravityQuotaMatrix.windowKeys.size
-              : 2;
+              : displayQuotaWindows.length;
             const hiddenQuotaWindowCount = Math.max(
               0,
               quotaWindows.length - displayedQuotaWindowCount
@@ -2775,7 +2760,7 @@ export function AccountsPage() {
                     : window.label;
                   return `${label}: ${formatPercent(window.remainingPercent)}`;
                 })
-                .join('\n') || t('accounts.quota_brief_unknown');
+                .join('\n') || t('accounts.quota_source_none');
             const healthTitle = t(item.health.tooltipKey, item.health.tooltipParams);
             const accountHistory = accountHistoryByRowKey.get(row.selectionKey) ?? null;
             const accountHistoryMatched = accountHistory?.matched === true;
@@ -2978,7 +2963,7 @@ export function AccountsPage() {
                         accountKey={row.selectionKey}
                         matrix={antigravityQuotaMatrix}
                       />
-                    ) : (
+                    ) : displayQuotaWindows.length > 0 ? (
                       displayQuotaWindows.map((window) => {
                         const windowRemaining = window.remainingPercent;
                         const windowWidth = Math.max(0, Math.min(100, windowRemaining ?? 0));
@@ -3019,6 +3004,10 @@ export function AccountsPage() {
                           </div>
                         );
                       })
+                    ) : (
+                      <span className={styles.quotaEmptyState} data-account-quota-empty="true">
+                        {t('accounts.quota_source_none')}
+                      </span>
                     )}
                     {hiddenQuotaWindowCount > 0 ? (
                       <button

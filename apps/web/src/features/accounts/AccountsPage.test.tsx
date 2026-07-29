@@ -1930,6 +1930,9 @@ describe('AccountsPage replacement flows', () => {
       'accounts.list_header_quota',
       'accounts.list_header_actions',
     ]);
+
+    expect(renderer.root.findAllByProps({ 'data-account-quota-empty': 'true' })).toHaveLength(1);
+    expect(treeText(renderer)).not.toContain('SUM');
   });
 
   it('selects account cards by row click while selection mode is active', async () => {
