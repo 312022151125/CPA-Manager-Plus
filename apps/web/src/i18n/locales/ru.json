@@ -1503,7 +1503,7 @@
     "summary_missing": "Цены не заданы",
     "summary_candidates": "Ждут подтверждения",
     "sync_title": "Синхронизация цен",
-    "sync_idle": "Синхронизируйте используемые модели с LiteLLM, OpenRouter и другими источниками цен. Неочевидные совпадения появятся в списке для ручного подтверждения.",
+    "sync_idle": "Сначала синхронизируйте используемые модели с models.dev, используя LiteLLM и OpenRouter как резервные источники. Неочевидные совпадения появятся в списке для ручного подтверждения.",
     "sync_result": "Sources {{sources}}, imported {{imported}}, skipped {{skipped}}, {{proxy}}.",
     "sync_success_detail": "Синхронизация завершена: импортировано {{imported}}, ждут подтверждения {{candidates}}, без совпадений {{unmatched}}.",
     "source_result_ok": "{{models}} models, skipped {{skipped}}",

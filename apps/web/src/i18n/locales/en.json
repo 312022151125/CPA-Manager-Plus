@@ -1503,7 +1503,7 @@
     "summary_missing": "Missing prices",
     "summary_candidates": "Pending confirmation",
     "sync_title": "Price Sync",
-    "sync_idle": "Sync currently used models from LiteLLM, OpenRouter, and other pricing metadata sources. Ambiguous matches will be listed for confirmation.",
+    "sync_idle": "Sync currently used models from models.dev first, with LiteLLM and OpenRouter fallbacks. Ambiguous matches will be listed for confirmation.",
     "sync_result": "Sources {{sources}}, imported {{imported}}, skipped {{skipped}}, {{proxy}}.",
     "sync_success_detail": "Sync complete: imported {{imported}}, pending {{candidates}}, unmatched {{unmatched}}.",
     "source_result_ok": "{{models}} models, skipped {{skipped}}",

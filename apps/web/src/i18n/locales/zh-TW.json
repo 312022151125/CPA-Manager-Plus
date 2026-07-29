@@ -1503,7 +1503,7 @@
     "summary_missing": "缺少價格",
     "summary_candidates": "待確認",
     "sync_title": "價格同步",
-    "sync_idle": "從 LiteLLM、OpenRouter 等價格元資料同步目前使用過的模型。無法確認的相似模型會進入待確認列表。",
+    "sync_idle": "優先從 models.dev 同步目前使用過的模型，並使用 LiteLLM、OpenRouter 回退。無法確認的相似模型會進入待確認列表。",
     "sync_result": "來源 {{sources}}，已匯入 {{imported}}，跳過 {{skipped}}，{{proxy}}。",
     "sync_success_detail": "同步完成：自動匯入 {{imported}}，待確認 {{candidates}}，未匹配 {{unmatched}}。",
     "source_result_ok": "{{models}} 條，跳過 {{skipped}}",
