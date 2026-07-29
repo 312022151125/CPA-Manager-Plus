@@ -2718,7 +2718,7 @@ export function AccountsPage() {
           <div className={styles.accountCardHeader} data-account-list-header="true">
             <span>{t('accounts.list_header_credential')}</span>
             <span>{t('accounts.list_header_availability')}</span>
-            <span>{t('accounts.list_header_latest_status')}</span>
+            <span>{t('accounts.list_header_recent_requests')}</span>
             <span>{t('accounts.list_header_historical_usage')}</span>
             <span>{t('accounts.list_header_quota')}</span>
             <span>{t('accounts.list_header_actions')}</span>

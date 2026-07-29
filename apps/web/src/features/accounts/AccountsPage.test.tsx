@@ -1925,7 +1925,7 @@ describe('AccountsPage replacement flows', () => {
     expect(header.findAllByType('span').map((node) => readText(node))).toEqual([
       'accounts.list_header_credential',
       'accounts.list_header_availability',
-      'accounts.list_header_latest_status',
+      'accounts.list_header_recent_requests',
       'accounts.list_header_historical_usage',
       'accounts.list_header_quota',
       'accounts.list_header_actions',

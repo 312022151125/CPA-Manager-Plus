@@ -864,7 +864,7 @@
     "col_actions": "Действия",
     "list_header_credential": "Учётные данные / аккаунт",
     "list_header_availability": "Доступность",
-    "list_header_latest_status": "Последний статус",
+    "list_header_recent_requests": "Последние запросы",
     "list_header_historical_usage": "История использования",
     "list_header_quota": "Сведения о квоте",
     "list_header_actions": "Действия",

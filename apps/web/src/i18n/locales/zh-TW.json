@@ -864,7 +864,7 @@
     "col_actions": "操作",
     "list_header_credential": "憑證/帳號",
     "list_header_availability": "可用狀態",
-    "list_header_latest_status": "最近狀態",
+    "list_header_recent_requests": "最近請求",
     "list_header_historical_usage": "歷史用量",
     "list_header_quota": "額度資訊",
     "list_header_actions": "操作",

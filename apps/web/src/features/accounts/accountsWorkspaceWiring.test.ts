@@ -101,7 +101,7 @@ describe('accounts workspace wiring', () => {
       [
         'Credential / Account',
         'Availability',
-        'Latest Status',
+        'Recent Requests',
         'Historical Usage',
         'Quota Details',
         'Actions',
@@ -112,19 +112,19 @@ describe('accounts workspace wiring', () => {
       [
         'Учётные данные / аккаунт',
         'Доступность',
-        'Последний статус',
+        'Последние запросы',
         'История использования',
         'Сведения о квоте',
         'Действия',
       ],
     ],
-    [zhCN, ['凭证/账号', '可用状态', '最近状态', '历史用量', '额度信息', '操作']],
-    [zhTW, ['憑證/帳號', '可用狀態', '最近狀態', '歷史用量', '額度資訊', '操作']],
+    [zhCN, ['凭证/账号', '可用状态', '最近请求', '历史用量', '额度信息', '操作']],
+    [zhTW, ['憑證/帳號', '可用狀態', '最近請求', '歷史用量', '額度資訊', '操作']],
   ])('localizes the six credential list headers', (locale, expectedHeaders) => {
     expect([
       locale.accounts.list_header_credential,
       locale.accounts.list_header_availability,
-      locale.accounts.list_header_latest_status,
+      locale.accounts.list_header_recent_requests,
       locale.accounts.list_header_historical_usage,
       locale.accounts.list_header_quota,
       locale.accounts.list_header_actions,

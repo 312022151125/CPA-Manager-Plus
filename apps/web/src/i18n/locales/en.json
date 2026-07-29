@@ -864,7 +864,7 @@
     "col_actions": "Actions",
     "list_header_credential": "Credential / Account",
     "list_header_availability": "Availability",
-    "list_header_latest_status": "Latest Status",
+    "list_header_recent_requests": "Recent Requests",
     "list_header_historical_usage": "Historical Usage",
     "list_header_quota": "Quota Details",
     "list_header_actions": "Actions",
