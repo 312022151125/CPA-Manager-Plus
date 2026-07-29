@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 )
@@ -33,6 +34,8 @@ const (
 const maxSyncCandidates = 8
 const minCandidateScore = 0.55
 const minWeakCandidateScore = 0.34
+const defaultSyncSourceTimeout = 10 * time.Second
+const defaultSyncProxyResolutionTimeout = 5 * time.Second
 
 type UpdateRequest struct {
 	Prices map[string]store.ModelPrice `json:"prices"`
@@ -50,6 +53,7 @@ type SyncResult struct {
 	Matched       map[string]store.ModelPrice `json:"matched,omitempty"`
 	Candidates    []SyncCandidateSet          `json:"candidates,omitempty"`
 	Unmatched     []string                    `json:"unmatched,omitempty"`
+	Preserved     []string                    `json:"preserved,omitempty"`
 	ProxyUsed     bool                        `json:"proxyUsed,omitempty"`
 	SourceResults []SyncSourceResult          `json:"sourceResults,omitempty"`
 	Prices        map[string]store.ModelPrice `json:"prices"`
@@ -79,9 +83,13 @@ type SetupResolver interface {
 }
 
 type Service struct {
-	store         *store.Store
-	syncSources   []priceSyncSource
-	setupResolver SetupResolver
+	store                 *store.Store
+	syncSources           []priceSyncSource
+	syncSourceTimeout     time.Duration
+	syncProxyTimeout      time.Duration
+	setupResolver         SetupResolver
+	notifierMu            sync.RWMutex
+	pricesChangedNotifier func()
 }
 
 type fetchModelPricesFunc func(context.Context, string, *http.Client) (map[string]store.ModelPrice, int, error)
@@ -145,7 +153,13 @@ func newMultiSource(
 			Fetch:  fetchOpenRouterModelPrices,
 		})
 	}
-	return &Service{store: store, syncSources: sources, setupResolver: resolver}
+	return &Service{
+		store:             store,
+		syncSources:       sources,
+		syncSourceTimeout: defaultSyncSourceTimeout,
+		syncProxyTimeout:  defaultSyncProxyResolutionTimeout,
+		setupResolver:     resolver,
+	}
 }
 
 func (s *Service) List(ctx context.Context) (map[string]store.ModelPrice, error) {
@@ -156,6 +170,21 @@ func (s *Service) UsageSummary(ctx context.Context, limit int) (store.ModelUsage
 	return s.store.ModelUsageSummary(ctx, limit)
 }
 
+func (s *Service) SetPricesChangedNotifier(notifier func()) {
+	s.notifierMu.Lock()
+	s.pricesChangedNotifier = notifier
+	s.notifierMu.Unlock()
+}
+
+func (s *Service) notifyPricesChanged() {
+	s.notifierMu.RLock()
+	notifier := s.pricesChangedNotifier
+	s.notifierMu.RUnlock()
+	if notifier != nil {
+		notifier()
+	}
+}
+
 func (s *Service) Replace(ctx context.Context, prices map[string]store.ModelPrice) (map[string]store.ModelPrice, error) {
 	if prices == nil {
 		return nil, errors.New("prices are required")
@@ -163,6 +192,7 @@ func (s *Service) Replace(ctx context.Context, prices map[string]store.ModelPric
 	if err := s.store.SaveModelPrices(ctx, prices); err != nil {
 		return nil, err
 	}
+	s.notifyPricesChanged()
 	return s.store.LoadModelPrices(ctx)
 }
 
@@ -176,9 +206,20 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 		return SyncResult{}, err
 	}
 	selection := selectModelPrices(remotePrices, req.Models)
+	preserved := []string(nil)
+	if hasFailedSyncSource(sourceResults) {
+		existingPrices, err := s.store.LoadModelPrices(ctx)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		selection, preserved = preserveFailedSourcePrices(selection, existingPrices, sourceResults, req.Models)
+	}
 	result, err := s.store.UpsertSyncedModelPrices(ctx, selection.Prices)
 	if err != nil {
 		return SyncResult{}, err
+	}
+	if result.Imported > 0 {
+		s.notifyPricesChanged()
 	}
 	prices, err := s.store.LoadModelPrices(ctx)
 	if err != nil {
@@ -192,6 +233,7 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 		Matched:       selection.Matched,
 		Candidates:    selection.Candidates,
 		Unmatched:     selection.Unmatched,
+		Preserved:     preserved,
 		ProxyUsed:     proxyUsed,
 		SourceResults: sourceResults,
 		Prices:        prices,
@@ -222,7 +264,13 @@ func (s *Service) fetchAllModelPrices(ctx context.Context, client *http.Client, 
 			failures = append(failures, source.Source+": "+result.Error)
 			continue
 		}
-		prices, skipped, err := source.Fetch(ctx, syncURL, client)
+		sourceCtx := ctx
+		cancel := func() {}
+		if s.syncSourceTimeout > 0 {
+			sourceCtx, cancel = context.WithTimeout(ctx, s.syncSourceTimeout)
+		}
+		prices, skipped, err := source.Fetch(sourceCtx, syncURL, client)
+		cancel()
 		result.Skipped = skipped
 		if err != nil {
 			result.Error = err.Error()
@@ -270,9 +318,73 @@ func (s *Service) fetchAllModelPrices(ctx context.Context, client *http.Client, 
 		if len(failures) == 0 {
 			failures = append(failures, "no price sync sources configured")
 		}
-		return nil, 0, nil, sourceResults, errors.New("model price sync failed: " + strings.Join(failures, "; "))
+		return nil, 0, nil, sourceResults, errors.New("model price sync failed; existing prices were not changed: " + strings.Join(failures, "; "))
 	}
 	return remotePrices, totalSkipped, sources, sourceResults, nil
+}
+
+// preserveFailedSourcePrices prevents a transient failure of a preferred
+// source from automatically downgrading an existing price to a lower-priority
+// source. A successful preferred-source response that omits a model still
+// permits the normal fallback behavior.
+func preserveFailedSourcePrices(
+	selection priceSelectionResult,
+	existingPrices map[string]store.ModelPrice,
+	sourceResults []SyncSourceResult,
+	requestedModels []string,
+) (priceSelectionResult, []string) {
+	failedSources := make(map[string]bool, len(sourceResults))
+	for _, result := range sourceResults {
+		if result.Error != "" {
+			failedSources[result.Source] = true
+		}
+	}
+	if len(failedSources) == 0 {
+		return selection, nil
+	}
+	requestedScope := requestedModelScope(requestedModels)
+	preserved := make([]string, 0)
+	for modelID, existing := range existingPrices {
+		if requestedScope != nil && !requestedScope[modelID] {
+			continue
+		}
+		if !failedSources[existing.Source] {
+			continue
+		}
+		candidate, hasCandidate := selection.Prices[modelID]
+		if hasCandidate && modelPriceSourcePriority(existing.Source) >= modelPriceSourcePriority(candidate.Source) {
+			continue
+		}
+		if hasCandidate {
+			delete(selection.Prices, modelID)
+			delete(selection.Matched, modelID)
+		}
+		preserved = append(preserved, modelID)
+	}
+	sort.Strings(preserved)
+	return selection, preserved
+}
+
+func requestedModelScope(models []string) map[string]bool {
+	if len(models) == 0 {
+		return nil
+	}
+	scope := make(map[string]bool, len(models))
+	for _, modelID := range models {
+		if normalized := strings.TrimSpace(modelID); normalized != "" {
+			scope[normalized] = true
+		}
+	}
+	return scope
+}
+
+func hasFailedSyncSource(sourceResults []SyncSourceResult) bool {
+	for _, result := range sourceResults {
+		if result.Error != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (source priceSyncSource) currentURL() string {
@@ -293,7 +405,13 @@ func syncResultSource(sources []string) string {
 }
 
 func (s *Service) syncHTTPClient(ctx context.Context) (*http.Client, bool, error) {
-	proxyURL := s.resolveCPAProxyURL(ctx)
+	proxyCtx := ctx
+	cancel := func() {}
+	if s.syncProxyTimeout > 0 {
+		proxyCtx, cancel = context.WithTimeout(ctx, s.syncProxyTimeout)
+	}
+	proxyURL := s.resolveCPAProxyURL(proxyCtx)
+	cancel()
 	if proxyURL == "" {
 		return defaultSyncHTTPClient(), false, nil
 	}
@@ -376,7 +494,7 @@ func (cache *modelsDevPriceCache) fetch(ctx context.Context, syncURL string, cli
 
 	prices, skipped, err := decodeModelsDevModelPrices(res.Body)
 	if err != nil {
-		return nil, 0, err
+		return nil, skipped, err
 	}
 	cache.etag = strings.TrimSpace(res.Header.Get("ETag"))
 	cache.prices = prices
@@ -476,14 +594,110 @@ func decodeModelsDevModelPrices(reader io.Reader) (map[string]store.ModelPrice, 
 				Source:                  SyncSourceModelsDev,
 				SourceModelID:           sourceModelID,
 				RawJSON:                 string(modelRaw),
+				ContextTiers:            readModelsDevContextTiers(cost),
+				ServiceTiers:            readModelsDevServiceTiers(entry),
 				UpdatedAtMS:             now,
 				SyncedAtMS:              &now,
 			}
 			prices[sourceModelID] = price
 		}
 	}
+	if len(prices) == 0 {
+		return nil, skipped, errors.New("model price sync failed: models.dev catalog contained no usable prices")
+	}
 
 	return prices, skipped, nil
+}
+
+func readModelsDevContextTiers(cost map[string]any) []store.ModelPriceContextTier {
+	rawTiers, ok := cost["tiers"].([]any)
+	if !ok || len(rawTiers) == 0 {
+		return nil
+	}
+	tiers := make([]store.ModelPriceContextTier, 0, len(rawTiers))
+	for _, rawTier := range rawTiers {
+		entry, ok := rawTier.(map[string]any)
+		if !ok {
+			continue
+		}
+		descriptor, ok := entry["tier"].(map[string]any)
+		if !ok || !strings.EqualFold(readString(descriptor, "type"), "context") {
+			continue
+		}
+		threshold, ok := readPositiveInt64(descriptor, "size")
+		if !ok {
+			return nil
+		}
+		prompt, hasPrompt := readFloat(entry, "input")
+		completion, hasCompletion := readFloat(entry, "output")
+		cacheRead, hasCacheRead := readFloat(entry, "cache_read")
+		cacheCreation, hasCacheCreation := readFloat(entry, "cache_write")
+		if !hasPrompt && !hasCompletion && !hasCacheRead && !hasCacheCreation {
+			return nil
+		}
+		tiers = append(tiers, store.ModelPriceContextTier{
+			ThresholdTokens:         threshold,
+			Prompt:                  prompt,
+			Completion:              completion,
+			Cache:                   cacheRead,
+			CacheRead:               cacheRead,
+			CacheCreation:           cacheCreation,
+			PromptConfigured:        hasPrompt,
+			CompletionConfigured:    hasCompletion,
+			CacheConfigured:         hasCacheRead,
+			CacheReadConfigured:     hasCacheRead,
+			CacheCreationConfigured: hasCacheCreation,
+		})
+	}
+	normalized, err := model.NormalizeModelPriceContextTiers(tiers)
+	if err != nil {
+		return nil
+	}
+	return normalized
+}
+
+func readModelsDevServiceTiers(entry map[string]any) []store.ModelPriceServiceTier {
+	experimental, ok := entry["experimental"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	modes, ok := experimental["modes"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	fast, ok := modes["fast"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	cost, ok := fast["cost"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	prompt, hasPrompt := readFloat(cost, "input")
+	completion, hasCompletion := readFloat(cost, "output")
+	cacheRead, hasCacheRead := readFloat(cost, "cache_read")
+	cacheCreation, hasCacheCreation := readFloat(cost, "cache_write")
+	if !hasPrompt && !hasCompletion && !hasCacheRead && !hasCacheCreation {
+		return nil
+	}
+	tiers, err := model.NormalizeModelPriceServiceTiers([]store.ModelPriceServiceTier{{
+		Mode:                    "fast",
+		ServiceTier:             "priority",
+		Prompt:                  prompt,
+		Completion:              completion,
+		Cache:                   cacheRead,
+		CacheRead:               cacheRead,
+		CacheCreation:           cacheCreation,
+		PromptConfigured:        hasPrompt,
+		CompletionConfigured:    hasCompletion,
+		CacheConfigured:         hasCacheRead,
+		CacheReadConfigured:     hasCacheRead,
+		CacheCreationConfigured: hasCacheCreation,
+	}})
+	if err != nil {
+		return nil
+	}
+	return tiers
 }
 
 type basePriceRule struct {
@@ -1404,6 +1618,36 @@ func readFirstFloat(entry map[string]any, keys ...string) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+func readPositiveInt64(entry map[string]any, key string) (int64, bool) {
+	value, ok := entry[key]
+	if !ok || value == nil {
+		return 0, false
+	}
+	var parsed int64
+	switch typed := value.(type) {
+	case float64:
+		if typed <= 0 || typed > math.MaxInt64 || math.Trunc(typed) != typed {
+			return 0, false
+		}
+		parsed = int64(typed)
+	case json.Number:
+		value, err := typed.Int64()
+		if err != nil || value <= 0 {
+			return 0, false
+		}
+		parsed = value
+	case string:
+		value, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		if err != nil || value <= 0 {
+			return 0, false
+		}
+		parsed = value
+	default:
+		return 0, false
+	}
+	return parsed, true
 }
 
 func readString(entry map[string]any, key string) string {

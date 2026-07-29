@@ -8,18 +8,27 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/testutil"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
+type staticSetupResolver struct {
+	setup store.Setup
+}
+
+func (r staticSetupResolver) ResolveSetup(context.Context) (store.Setup, bool, error) {
+	return r.setup, true, nil
+}
+
 func TestFetchModelsDevModelPrices(t *testing.T) {
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"provider-a": {"models": {
-				"shared-model": {"name":"Shared A", "cost":{"input":1,"output":2,"cache_read":0.1,"cache_write":0.2,"tiers":[{"input":3,"output":4,"tier":{"type":"context","size":200000}}]}},
+					"shared-model": {"name":"Shared A", "cost":{"input":1,"output":2,"cache_read":0.1,"cache_write":0.2,"tiers":[{"input":3,"output":4,"tier":{"type":"context","size":200000}}]},"experimental":{"modes":{"fast":{"cost":{"input":2.5,"output":5,"cache_read":0}}}}},
 				"unique-model": {"cost":{"input":3,"output":4}}
 			}},
 			"provider-b": {"models": {
@@ -56,6 +65,17 @@ func TestFetchModelsDevModelPrices(t *testing.T) {
 	if !strings.Contains(shared.RawJSON, `"tiers"`) {
 		t.Fatalf("raw model metadata was not retained: %s", shared.RawJSON)
 	}
+	if len(shared.ContextTiers) != 1 || shared.ContextTiers[0].ThresholdTokens != 200_000 ||
+		shared.ContextTiers[0].Prompt != 3 || shared.ContextTiers[0].Completion != 4 ||
+		!shared.ContextTiers[0].PromptConfigured || !shared.ContextTiers[0].CompletionConfigured {
+		t.Fatalf("context tiers = %#v", shared.ContextTiers)
+	}
+	if len(shared.ServiceTiers) != 1 || shared.ServiceTiers[0].Mode != "fast" ||
+		shared.ServiceTiers[0].ServiceTier != "priority" || shared.ServiceTiers[0].Prompt != 2.5 ||
+		shared.ServiceTiers[0].Completion != 5 || !shared.ServiceTiers[0].CacheReadConfigured ||
+		shared.ServiceTiers[0].CacheRead != 0 {
+		t.Fatalf("service tiers = %#v", shared.ServiceTiers)
+	}
 
 	for _, alias := range []string{"shared-model", "unique-model", "same-rule"} {
 		if _, ok := prices[alias]; ok {
@@ -73,6 +93,119 @@ func TestFetchModelsDevModelPrices(t *testing.T) {
 	}
 	if len(selection.Candidates) != 0 || len(selection.Unmatched) != 0 {
 		t.Fatalf("unexpected selection result = %#v", selection)
+	}
+}
+
+func TestDecodeModelsDevContextTiersPreservesConfiguredZerosAndIgnoresUnsafeRules(t *testing.T) {
+	prices, skipped, err := decodeModelsDevModelPrices(strings.NewReader(`{
+		"provider-a":{"models":{
+			"tiered":{"cost":{"input":1,"output":2,"tiers":[
+				{"input":0,"output":8,"cache_read":0,"tier":{"type":"context","size":200000}},
+				{"input":3,"output":4,"cache_write":0.5,"tier":{"type":"context","size":32000}},
+				{"input":99,"output":99,"tier":{"type":"future-mode","size":1}}
+			]}},
+			"duplicate":{"cost":{"input":1,"tiers":[
+				{"input":2,"tier":{"type":"context","size":32000}},
+				{"input":3,"tier":{"type":"context","size":32000}}
+			]}},
+			"invalid":{"cost":{"input":1,"tiers":[
+				{"input":2,"tier":{"type":"context","size":0}}
+			]}},
+			"unknown-only":{"cost":{"input":1,"tiers":[
+				{"input":2,"tier":{"type":"requests","size":10}}
+			]}}
+		}}
+	}`))
+	if err != nil {
+		t.Fatalf("decode models.dev prices: %v", err)
+	}
+	if skipped != 0 {
+		t.Fatalf("skipped = %d", skipped)
+	}
+
+	tiers := prices["provider-a/tiered"].ContextTiers
+	if len(tiers) != 2 || tiers[0].ThresholdTokens != 32_000 || tiers[1].ThresholdTokens != 200_000 {
+		t.Fatalf("sorted tiers = %#v", tiers)
+	}
+	if !tiers[1].PromptConfigured || tiers[1].Prompt != 0 || !tiers[1].CacheReadConfigured || tiers[1].CacheRead != 0 ||
+		tiers[1].CacheCreationConfigured {
+		t.Fatalf("explicit zero and missing flags = %#v", tiers[1])
+	}
+	if tiers[0].CacheReadConfigured || !tiers[0].CacheCreationConfigured || tiers[0].CacheCreation != 0.5 {
+		t.Fatalf("optional cache fields = %#v", tiers[0])
+	}
+	for _, modelID := range []string{"provider-a/duplicate", "provider-a/invalid", "provider-a/unknown-only"} {
+		if len(prices[modelID].ContextTiers) != 0 {
+			t.Fatalf("unsafe tiers activated for %s: %#v", modelID, prices[modelID].ContextTiers)
+		}
+		if !strings.Contains(prices[modelID].RawJSON, `"tiers"`) {
+			t.Fatalf("raw tiers missing for %s: %s", modelID, prices[modelID].RawJSON)
+		}
+	}
+}
+
+func TestDecodeModelsDevRejectsCatalogWithoutUsablePrices(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "empty object", payload: `{}`},
+		{name: "null", payload: `null`},
+		{name: "empty provider catalog", payload: `{"provider-a":{"models":{}}}`},
+		{name: "all models skipped", payload: `{"provider-a":{"models":{"uncosted":{"limit":{"context":1000}}}}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prices, _, err := decodeModelsDevModelPrices(strings.NewReader(tt.payload))
+			if err == nil || !strings.Contains(err.Error(), "no usable prices") {
+				t.Fatalf("decode error = %v, prices = %#v", err, prices)
+			}
+		})
+	}
+}
+
+func TestPriceMutationsNotifyPricingRollup(t *testing.T) {
+	ctx := context.Background()
+	st := testutil.NewStore(t, testutil.NewConfig(t))
+	modelsDev := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"provider-a":{"models":{"synced":{"cost":{"input":3,"output":4}}}}}`))
+	}))
+	t.Cleanup(modelsDev.Close)
+
+	modelsDevURL := modelsDev.URL
+	service := NewMultiSourceWithModelsDev(st, &modelsDevURL, nil, nil)
+	var notifications atomic.Int32
+	service.SetPricesChangedNotifier(func() {
+		notifications.Add(1)
+	})
+
+	if _, err := service.Replace(ctx, map[string]store.ModelPrice{
+		"manual": {Prompt: 1},
+	}); err != nil {
+		t.Fatalf("replace prices: %v", err)
+	}
+	if got := notifications.Load(); got != 1 {
+		t.Fatalf("replace notifications = %d, want 1", got)
+	}
+	if _, err := service.Replace(ctx, map[string]store.ModelPrice{
+		"": {Prompt: 1},
+	}); err == nil {
+		t.Fatal("invalid replace error = nil")
+	}
+	if got := notifications.Load(); got != 1 {
+		t.Fatalf("failed replace notifications = %d, want 1", got)
+	}
+
+	result, err := service.Sync(ctx, SyncRequest{Models: []string{"synced"}})
+	if err != nil {
+		t.Fatalf("sync prices: %v", err)
+	}
+	if result.Imported != 1 {
+		t.Fatalf("sync result = %#v", result)
+	}
+	if got := notifications.Load(); got != 2 {
+		t.Fatalf("sync notifications = %d, want 2", got)
 	}
 }
 
@@ -142,6 +275,49 @@ func TestModelsDevPriceCacheReusesETagConcurrently(t *testing.T) {
 	}
 	if got := requestCount.Load(); got != workers+1 {
 		t.Fatalf("request count = %d", got)
+	}
+}
+
+func TestModelsDevPriceCacheKeepsLastKnownGoodAfterUnusableResponse(t *testing.T) {
+	const initialETag = `"catalog-v1"`
+	var requestCount atomic.Int32
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch requestCount.Add(1) {
+		case 1:
+			w.Header().Set("ETag", initialETag)
+			_, _ = w.Write([]byte(`{"provider-a":{"models":{"cached":{"cost":{"input":1,"output":2}}}}}`))
+		case 2:
+			if received := r.Header.Get("If-None-Match"); received != initialETag {
+				http.Error(w, "missing initial cache validator", http.StatusPreconditionFailed)
+				return
+			}
+			w.Header().Set("ETag", `"catalog-v2"`)
+			_, _ = w.Write([]byte(`{"provider-a":{"models":{"uncosted":{"limit":{"context":1000}}}}}`))
+		default:
+			if received := r.Header.Get("If-None-Match"); received != initialETag {
+				http.Error(w, "unusable response replaced cache validator", http.StatusPreconditionFailed)
+				return
+			}
+			w.Header().Set("ETag", initialETag)
+			w.WriteHeader(http.StatusNotModified)
+		}
+	}))
+	t.Cleanup(source.Close)
+
+	cache := &modelsDevPriceCache{}
+	prices, _, err := cache.fetch(context.Background(), source.URL, source.Client())
+	if err != nil || prices["provider-a/cached"].Prompt != 1 {
+		t.Fatalf("prime cache: prices=%#v err=%v", prices, err)
+	}
+	if _, skipped, err := cache.fetch(context.Background(), source.URL, source.Client()); err == nil ||
+		!strings.Contains(err.Error(), "no usable prices") {
+		t.Fatalf("unusable response error = %v", err)
+	} else if skipped != 1 {
+		t.Fatalf("unusable response skipped = %d, want 1", skipped)
+	}
+	prices, _, err = cache.fetch(context.Background(), source.URL, source.Client())
+	if err != nil || prices["provider-a/cached"].Prompt != 1 {
+		t.Fatalf("reuse last-known-good cache: prices=%#v err=%v", prices, err)
 	}
 }
 
@@ -242,6 +418,256 @@ func TestModelsDevCacheFailureFallsBackWithoutStalePrices(t *testing.T) {
 	}
 	if _, exists := prices["openai/gpt-test"]; exists {
 		t.Fatalf("stale models.dev price was reused: %#v", prices)
+	}
+}
+
+func TestFetchAllModelPricesFallsBackWhenPreferredSourceHangs(t *testing.T) {
+	modelsDev := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(modelsDev.Close)
+	liteLLM := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"gpt-test":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002}}`))
+	}))
+	t.Cleanup(liteLLM.Close)
+
+	modelsDevURL := modelsDev.URL
+	liteLLMURL := liteLLM.URL
+	service := NewMultiSourceWithModelsDev(nil, &modelsDevURL, &liteLLMURL, nil)
+	service.syncSourceTimeout = 25 * time.Millisecond
+
+	startedAt := time.Now()
+	prices, _, sources, sourceResults, err := service.fetchAllModelPrices(
+		context.Background(),
+		modelsDev.Client(),
+		[]string{"gpt-test"},
+	)
+	if err != nil {
+		t.Fatalf("fallback after preferred source timeout: %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf("fallback elapsed = %s, want under 1s", elapsed)
+	}
+	if len(sources) != 1 || sources[0] != SyncSourceLiteLLM {
+		t.Fatalf("fallback sources = %#v", sources)
+	}
+	if len(sourceResults) != 2 || sourceResults[0].Source != SyncSourceModelsDev ||
+		sourceResults[0].Error == "" || sourceResults[1].Source != SyncSourceLiteLLM {
+		t.Fatalf("fallback source results = %#v", sourceResults)
+	}
+	if price := prices["gpt-test"]; price.Source != SyncSourceLiteLLM || price.Prompt != 1 {
+		t.Fatalf("fallback price = %#v", price)
+	}
+}
+
+func TestSyncHTTPClientBoundsProxyResolution(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(upstream.Close)
+
+	service := NewMultiSource(nil, nil, nil, staticSetupResolver{setup: store.Setup{
+		CPAUpstreamURL: upstream.URL,
+		ManagementKey:  "test-key",
+	}})
+	service.syncProxyTimeout = 25 * time.Millisecond
+
+	startedAt := time.Now()
+	client, proxyUsed, err := service.syncHTTPClient(context.Background())
+	if err != nil {
+		t.Fatalf("resolve sync client: %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf("proxy resolution elapsed = %s, want under 1s", elapsed)
+	}
+	if client == nil || proxyUsed {
+		t.Fatalf("client = %#v, proxy used = %v", client, proxyUsed)
+	}
+}
+
+func TestSyncPreservesLastKnownModelsDevPriceDuringPreferredSourceFailure(t *testing.T) {
+	ctx := context.Background()
+	st := testutil.NewStore(t, testutil.NewConfig(t))
+	if err := st.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-test": {
+			Prompt: 9, Completion: 18, PromptConfigured: true, CompletionConfigured: true,
+			Source: SyncSourceModelsDev, SourceModelID: "openai/gpt-test",
+			ContextTiers: []store.ModelPriceContextTier{{
+				ThresholdTokens: 200_000, Prompt: 12, PromptConfigured: true,
+			}},
+			ServiceTiers: []store.ModelPriceServiceTier{{
+				Mode: "fast", ServiceTier: "priority", Prompt: 20, PromptConfigured: true,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("save last-known models.dev price: %v", err)
+	}
+
+	var modelsDevAvailable atomic.Bool
+	modelsDev := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !modelsDevAvailable.Load() {
+			http.Error(w, "temporary outage", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"openai":{"models":{"gpt-test":{"cost":{"input":7,"output":14},"experimental":{"modes":{"fast":{"cost":{"input":17.5,"output":35}}}}}}}}`))
+	}))
+	t.Cleanup(modelsDev.Close)
+	liteLLM := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"gpt-test":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002},
+			"fallback-only":{"input_cost_per_token":0.000003,"output_cost_per_token":0.000004}
+		}`))
+	}))
+	t.Cleanup(liteLLM.Close)
+
+	modelsDevURL := modelsDev.URL
+	liteLLMURL := liteLLM.URL
+	service := NewMultiSourceWithModelsDev(st, &modelsDevURL, &liteLLMURL, nil)
+	result, err := service.Sync(ctx, SyncRequest{Models: []string{"gpt-test", "fallback-only"}})
+	if err != nil {
+		t.Fatalf("sync with preferred source outage: %v", err)
+	}
+	if result.Imported != 1 || len(result.Preserved) != 1 || result.Preserved[0] != "gpt-test" {
+		t.Fatalf("outage sync result = %#v", result)
+	}
+	if price := result.Prices["gpt-test"]; price.Source != SyncSourceModelsDev || price.Prompt != 9 ||
+		len(price.ContextTiers) != 1 || len(price.ServiceTiers) != 1 {
+		t.Fatalf("last-known price was not preserved: %#v", price)
+	}
+	if price := result.Prices["fallback-only"]; price.Source != SyncSourceLiteLLM || price.Prompt != 3 {
+		t.Fatalf("fallback model was not imported: %#v", price)
+	}
+
+	modelsDevAvailable.Store(true)
+	result, err = service.Sync(ctx, SyncRequest{Models: []string{"gpt-test"}})
+	if err != nil {
+		t.Fatalf("sync after preferred source recovery: %v", err)
+	}
+	if result.Imported != 1 || len(result.Preserved) != 0 {
+		t.Fatalf("recovery sync result = %#v", result)
+	}
+	price := result.Prices["gpt-test"]
+	if price.Source != SyncSourceModelsDev || price.Prompt != 7 || len(price.ServiceTiers) != 1 ||
+		price.ServiceTiers[0].Prompt != 17.5 {
+		t.Fatalf("recovered models.dev price = %#v", price)
+	}
+}
+
+func TestSyncTreatsUnusableModelsDevResponseAsFailureAndReportsAllPreservedPrices(t *testing.T) {
+	ctx := context.Background()
+	st := testutil.NewStore(t, testutil.NewConfig(t))
+	if err := st.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-test": {
+			Prompt: 9, Completion: 18, PromptConfigured: true, CompletionConfigured: true,
+			Source: SyncSourceModelsDev, SourceModelID: "openai/gpt-test",
+		},
+		"rare-model": {
+			Prompt: 11, Completion: 22, PromptConfigured: true, CompletionConfigured: true,
+			Source: SyncSourceModelsDev, SourceModelID: "rare/rare-model",
+		},
+	}); err != nil {
+		t.Fatalf("save last-known models.dev prices: %v", err)
+	}
+
+	modelsDev := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(modelsDev.Close)
+	liteLLM := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"gpt-test":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002}}`))
+	}))
+	t.Cleanup(liteLLM.Close)
+
+	modelsDevURL := modelsDev.URL
+	liteLLMURL := liteLLM.URL
+	service := NewMultiSourceWithModelsDev(st, &modelsDevURL, &liteLLMURL, nil)
+	result, err := service.Sync(ctx, SyncRequest{Models: []string{"gpt-test", "rare-model"}})
+	if err != nil {
+		t.Fatalf("sync with unusable preferred response: %v", err)
+	}
+	if len(result.Preserved) != 2 || result.Preserved[0] != "gpt-test" || result.Preserved[1] != "rare-model" {
+		t.Fatalf("preserved prices = %#v, want both existing models", result.Preserved)
+	}
+	if len(result.SourceResults) < 1 || result.SourceResults[0].Source != SyncSourceModelsDev ||
+		!strings.Contains(result.SourceResults[0].Error, "no usable prices") {
+		t.Fatalf("models.dev source result = %#v", result.SourceResults)
+	}
+	if price := result.Prices["gpt-test"]; price.Source != SyncSourceModelsDev || price.Prompt != 9 {
+		t.Fatalf("fallback replaced last-known gpt-test price: %#v", price)
+	}
+	if price := result.Prices["rare-model"]; price.Source != SyncSourceModelsDev || price.Prompt != 11 {
+		t.Fatalf("rare model was not retained: %#v", price)
+	}
+}
+
+func TestSyncAllSourceFailuresLeaveExistingPricesUnchanged(t *testing.T) {
+	ctx := context.Background()
+	st := testutil.NewStore(t, testutil.NewConfig(t))
+	if err := st.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"existing": {Prompt: 4, Source: SyncSourceModelsDev, SourceModelID: "openai/existing"},
+	}); err != nil {
+		t.Fatalf("save existing price: %v", err)
+	}
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "offline", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(failing.Close)
+	modelsDevURL := failing.URL
+	liteLLMURL := failing.URL
+	service := NewMultiSourceWithModelsDev(st, &modelsDevURL, &liteLLMURL, nil)
+	if _, err := service.Sync(ctx, SyncRequest{Models: []string{"existing"}}); err == nil ||
+		!strings.Contains(err.Error(), "existing prices were not changed") {
+		t.Fatalf("all-source failure error = %v", err)
+	}
+	prices, err := st.LoadModelPrices(ctx)
+	if err != nil {
+		t.Fatalf("load existing prices: %v", err)
+	}
+	if len(prices) != 1 || prices["existing"].Prompt != 4 || prices["existing"].Source != SyncSourceModelsDev {
+		t.Fatalf("existing prices changed after failure: %#v", prices)
+	}
+}
+
+func TestPreferredSourceSuccessAllowsFallbackReplacementForMissingModel(t *testing.T) {
+	selection := priceSelectionResult{
+		Prices: map[string]store.ModelPrice{
+			"gpt-test": {Prompt: 1, Source: SyncSourceLiteLLM},
+		},
+		Matched: map[string]store.ModelPrice{
+			"gpt-test": {Prompt: 1, Source: SyncSourceLiteLLM},
+		},
+	}
+	existing := map[string]store.ModelPrice{
+		"gpt-test": {Prompt: 9, Source: SyncSourceModelsDev},
+	}
+	filtered, preserved := preserveFailedSourcePrices(selection, existing, []SyncSourceResult{
+		{Source: SyncSourceModelsDev, Models: 1},
+		{Source: SyncSourceLiteLLM, Models: 1},
+	}, []string{"gpt-test"})
+	if len(preserved) != 0 || filtered.Prices["gpt-test"].Source != SyncSourceLiteLLM {
+		t.Fatalf("successful preferred-source omission did not allow fallback: selection=%#v preserved=%#v", filtered, preserved)
+	}
+}
+
+func TestPreserveFailedSourcePricesReportsOnlyRequestedModels(t *testing.T) {
+	selection := priceSelectionResult{
+		Prices:  map[string]store.ModelPrice{},
+		Matched: map[string]store.ModelPrice{},
+	}
+	existing := map[string]store.ModelPrice{
+		"requested":   {Prompt: 1, Source: SyncSourceModelsDev},
+		"unrequested": {Prompt: 2, Source: SyncSourceModelsDev},
+	}
+	_, preserved := preserveFailedSourcePrices(selection, existing, []SyncSourceResult{
+		{Source: SyncSourceModelsDev, Error: "offline"},
+	}, []string{" requested "})
+	if len(preserved) != 1 || preserved[0] != "requested" {
+		t.Fatalf("preserved prices = %#v, want requested model only", preserved)
 	}
 }
 
