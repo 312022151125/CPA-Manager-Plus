@@ -1736,6 +1736,8 @@
     "alias_label": "Псевдонимы моделей",
     "alias_name_placeholder": "Исходное имя модели",
     "alias_placeholder": "Псевдоним (обязательно)",
+    "alias_display_name_label": "Отображаемое имя в каталоге",
+    "alias_display_name_placeholder": "Отображаемое имя в каталоге (необязательно)",
     "alias_fork_label": "Сохранить оригинал",
     "alias_force_mapping_label": "Переписывать модель в ответе",
     "alias_same_as_name": "Исходное имя модели и псевдоним должны отличаться.",

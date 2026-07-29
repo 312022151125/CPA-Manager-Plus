@@ -16,6 +16,8 @@ import {
   normalizeProviderKey,
   type AuthFileModelItem,
 } from '@/features/authFiles/constants';
+import { isOAuthAliasDraftDirty } from '@/features/authFiles/oauthEditorState';
+import { normalizeOAuthAliasEntries } from '@/features/authFiles/oauthAliasValidation';
 import { generateId } from '@/utils/helpers';
 import styles from './OAuthEditorModals.module.scss';
 
@@ -40,6 +42,7 @@ const OAUTH_PROVIDER_PRESETS = [
   'antigravity',
   'claude',
   'codex',
+  'xai',
   'qwen',
   'kimi',
   'iflow',
@@ -52,6 +55,8 @@ const buildEmptyMappingEntry = (): OAuthModelMappingFormEntry => ({
   name: '',
   alias: '',
   fork: true,
+  displayName: '',
+  forceMapping: false,
 });
 
 const normalizeMappingEntries = (
@@ -65,40 +70,10 @@ const normalizeMappingEntries = (
     name: entry.name ?? '',
     alias: entry.alias ?? '',
     fork: Boolean(entry.fork),
+    displayName: entry.displayName ?? '',
+    forceMapping: Boolean(entry.forceMapping),
   }));
 };
-
-const normalizeModelAliasEntriesForSave = (
-  entries: Array<Pick<OAuthModelAliasEntry, 'name' | 'alias' | 'fork'>>
-): OAuthModelAliasEntry[] => {
-  const seen = new Set<string>();
-  return entries
-    .map((entry) => {
-      const name = String(entry.name ?? '').trim();
-      const alias = String(entry.alias ?? '').trim();
-      if (!name || !alias) return null;
-      const key = `${name.toLowerCase()}::${alias.toLowerCase()}::${entry.fork ? '1' : '0'}`;
-      if (seen.has(key)) return null;
-      seen.add(key);
-      return entry.fork ? { name, alias, fork: true } : { name, alias };
-    })
-    .filter(Boolean) as OAuthModelAliasEntry[];
-};
-
-const buildModelAliasComparable = (entries: OAuthModelAliasEntry[]) =>
-  JSON.stringify(
-    entries
-      .map((entry) => ({
-        name: entry.name,
-        alias: entry.alias,
-        fork: Boolean(entry.fork),
-      }))
-      .sort((a, b) =>
-        `${a.name}\u0000${a.alias}\u0000${a.fork ? '1' : '0'}`.localeCompare(
-          `${b.name}\u0000${b.alias}\u0000${b.fork ? '1' : '0'}`
-        )
-      )
-  );
 
 const findProviderEntries = <T,>(record: Record<string, T>, providerKey: string): T | undefined => {
   const entry = Object.entries(record).find(
@@ -498,16 +473,9 @@ export function OAuthModelAliasEditorModal({
     return t('oauth_model_alias.model_source_loaded', { count: models.length });
   }, [error, loading, models.length, provider, t]);
 
-  const normalizedMappings = useMemo(() => normalizeModelAliasEntriesForSave(mappings), [mappings]);
-  const normalizedExistingMappings = useMemo(
-    () => normalizeModelAliasEntriesForSave(existingMappings),
-    [existingMappings]
-  );
   const hasMappingsChanged = useMemo(
-    () =>
-      buildModelAliasComparable(normalizedMappings) !==
-      buildModelAliasComparable(normalizedExistingMappings),
-    [normalizedExistingMappings, normalizedMappings]
+    () => isOAuthAliasDraftDirty(mappings, existingMappings),
+    [existingMappings, mappings]
   );
 
   const updateMappingEntry = useCallback(
@@ -537,6 +505,33 @@ export function OAuthModelAliasEditorModal({
       return;
     }
 
+    const normalization = normalizeOAuthAliasEntries(mappings);
+    const firstIssue = normalization.issues[0];
+    if (firstIssue) {
+      if (firstIssue.code === 'same_as_name') {
+        showNotification(t('oauth_model_alias.alias_same_as_name'), 'error');
+        return;
+      }
+      if (firstIssue.code === 'duplicate_alias') {
+        showNotification(
+          t('oauth_model_alias.alias_duplicate', { alias: firstIssue.alias ?? '' }),
+          'error'
+        );
+        return;
+      }
+      showNotification(t('oauth_model_alias.alias_incomplete'), 'error');
+      return;
+    }
+
+    const normalizedMappings = normalization.accepted;
+    if (
+      normalizedMappings.length === 0 &&
+      mappings.some((entry) => entry.name.trim() || entry.alias.trim())
+    ) {
+      showNotification(t('oauth_model_alias.alias_incomplete'), 'error');
+      return;
+    }
+
     setSaving(true);
     try {
       if (normalizedMappings.length > 0) {
@@ -553,7 +548,7 @@ export function OAuthModelAliasEditorModal({
     } finally {
       setSaving(false);
     }
-  }, [normalizedMappings, onClose, onSaved, provider, showNotification, t]);
+  }, [mappings, onClose, onSaved, provider, showNotification, t]);
 
   const canSave =
     !disabled && !saving && !unsupported && Boolean(resolvedProviderKey) && hasMappingsChanged;
@@ -643,49 +638,75 @@ export function OAuthModelAliasEditorModal({
               </Button>
             </div>
             <div className={styles.mappingsBody}>
+              <div className={styles.mappingUsageHint}>{t('oauth_model_alias.usage_hint')}</div>
               {mappings.map((entry, index) => (
                 <div key={entry.id} className={styles.mappingRow}>
-                  <AutocompleteInput
-                    wrapperStyle={{ flex: 1, marginBottom: 0 }}
-                    placeholder={t('oauth_model_alias.alias_name_placeholder')}
-                    value={entry.name}
-                    onChange={(value) => updateMappingEntry(index, 'name', value)}
-                    disabled={disabled || saving}
-                    options={models.map((model) => ({
-                      value: model.id,
-                      label:
-                        model.display_name && model.display_name !== model.id
-                          ? model.display_name
-                          : undefined,
-                    }))}
-                  />
-                  <span className={styles.mappingSeparator}>-&gt;</span>
-                  <input
-                    className={`input ${styles.mappingAliasInput}`}
-                    placeholder={t('oauth_model_alias.alias_placeholder')}
-                    value={entry.alias}
-                    onChange={(event) => updateMappingEntry(index, 'alias', event.target.value)}
-                    disabled={disabled || saving}
-                  />
-                  <div className={styles.mappingFork}>
-                    <ToggleSwitch
-                      label={t('oauth_model_alias.alias_fork_label')}
-                      labelPosition="left"
-                      checked={Boolean(entry.fork)}
-                      onChange={(value) => updateMappingEntry(index, 'fork', value)}
+                  <div className={styles.mappingCore}>
+                    <AutocompleteInput
+                      wrapperStyle={{ flex: 1, marginBottom: 0 }}
+                      placeholder={t('oauth_model_alias.alias_name_placeholder')}
+                      value={entry.name}
+                      onChange={(value) => updateMappingEntry(index, 'name', value)}
+                      disabled={disabled || saving}
+                      options={models.map((model) => ({
+                        value: model.id,
+                        label:
+                          model.display_name && model.display_name !== model.id
+                            ? model.display_name
+                            : undefined,
+                      }))}
+                    />
+                    <span className={styles.mappingSeparator}>-&gt;</span>
+                    <input
+                      className={`input ${styles.mappingAliasInput}`}
+                      placeholder={t('oauth_model_alias.alias_placeholder')}
+                      value={entry.alias}
+                      onChange={(event) => updateMappingEntry(index, 'alias', event.target.value)}
                       disabled={disabled || saving}
                     />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeMappingEntry(index)}
+                      disabled={disabled || saving || mappings.length <= 1}
+                      title={t('common.delete')}
+                      aria-label={t('common.delete')}
+                    >
+                      <IconX size={14} />
+                    </Button>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => removeMappingEntry(index)}
-                    disabled={disabled || saving || mappings.length <= 1}
-                    title={t('common.delete')}
-                    aria-label={t('common.delete')}
-                  >
-                    <IconX size={14} />
-                  </Button>
+                  <div className={styles.mappingOptions}>
+                    <input
+                      className={`input ${styles.mappingDisplayNameInput}`}
+                      placeholder={t('oauth_model_alias.alias_display_name_placeholder')}
+                      aria-label={t('oauth_model_alias.alias_display_name_label')}
+                      value={entry.displayName ?? ''}
+                      onChange={(event) =>
+                        updateMappingEntry(index, 'displayName', event.target.value)
+                      }
+                      disabled={disabled || saving}
+                    />
+                    <div className={styles.mappingToggles}>
+                      <div className={styles.mappingFork}>
+                        <ToggleSwitch
+                          label={t('oauth_model_alias.alias_fork_label')}
+                          labelPosition="left"
+                          checked={Boolean(entry.fork)}
+                          onChange={(value) => updateMappingEntry(index, 'fork', value)}
+                          disabled={disabled || saving}
+                        />
+                      </div>
+                      <div className={styles.mappingFork}>
+                        <ToggleSwitch
+                          label={t('oauth_model_alias.alias_force_mapping_label')}
+                          labelPosition="left"
+                          checked={Boolean(entry.forceMapping)}
+                          onChange={(value) => updateMappingEntry(index, 'forceMapping', value)}
+                          disabled={disabled || saving}
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>

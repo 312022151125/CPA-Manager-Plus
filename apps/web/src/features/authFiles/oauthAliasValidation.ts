@@ -29,6 +29,9 @@ const toEntry = (entry: OAuthModelAliasEntry): OAuthModelAliasEntry => {
     name,
     alias,
     ...(entry.fork === true ? { fork: true } : {}),
+    ...(String(entry.displayName ?? '').trim()
+      ? { displayName: String(entry.displayName).trim() }
+      : {}),
     ...(entry.forceMapping === true ? { forceMapping: true } : {}),
   };
 };
@@ -84,7 +87,7 @@ export const normalizeOAuthAliasEntries = (
       return;
     }
 
-    const entryKey = `${entry.name.toLowerCase()}::${aliasKey}::${entry.fork ? '1' : '0'}::${entry.forceMapping ? '1' : '0'}`;
+    const entryKey = `${entry.name.toLowerCase()}::${aliasKey}::${entry.fork ? '1' : '0'}::${entry.displayName?.toLowerCase() ?? ''}::${entry.forceMapping ? '1' : '0'}`;
     if (seenEntry.has(entryKey)) {
       rejectedCount += 1;
       issues.push({

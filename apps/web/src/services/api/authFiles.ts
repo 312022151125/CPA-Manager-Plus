@@ -603,10 +603,14 @@ const normalizeOauthModelAlias = (payload: unknown): Record<string, OAuthModelAl
           entry['force-mapping'] === true ||
           entry.forceMapping === true ||
           entry.force_mapping === true;
+        const displayName = String(
+          entry['display-name'] ?? entry.displayName ?? entry.display_name ?? ''
+        ).trim();
         return {
           name,
           alias,
           ...(fork ? { fork: true } : {}),
+          ...(displayName ? { displayName } : {}),
           ...(forceMapping ? { forceMapping: true } : {}),
         };
       })
@@ -775,8 +779,9 @@ export const authFilesApi = {
       normalizeOauthModelAlias({ [normalizedChannel]: aliases })[normalizedChannel] ?? [];
     await apiClient.patch(OAUTH_MODEL_ALIAS_ENDPOINT, {
       channel: normalizedChannel,
-      aliases: normalizedAliases.map(({ forceMapping, ...entry }) => ({
+      aliases: normalizedAliases.map(({ displayName, forceMapping, ...entry }) => ({
         ...entry,
+        ...(displayName ? { 'display-name': displayName } : {}),
         ...(forceMapping ? { 'force-mapping': true } : {}),
       })),
     });

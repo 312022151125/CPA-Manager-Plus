@@ -243,21 +243,59 @@
   }
 }
 
+.mappingUsageHint {
+  padding: 4px 0 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .mappingRow {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto auto;
-  align-items: center;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
   gap: $spacing-sm;
-  padding: 10px 0;
+  padding: 12px 0;
   border-bottom: 1px solid var(--border-color);
 
   &:last-child {
     border-bottom: none;
   }
+}
+
+.mappingCore {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: $spacing-sm;
+  min-width: 0;
 
   @include mobile {
     grid-template-columns: 1fr;
-    gap: $spacing-sm;
+  }
+}
+
+.mappingOptions {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: $spacing-md;
+  min-width: 0;
+
+  @include mobile {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mappingToggles {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: $spacing-md;
+  flex-wrap: wrap;
+
+  @include mobile {
+    justify-content: flex-start;
   }
 }
 
@@ -271,6 +309,10 @@
 }
 
 .mappingAliasInput {
+  width: 100%;
+}
+
+.mappingDisplayNameInput {
   width: 100%;
 }
 

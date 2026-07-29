@@ -1736,6 +1736,8 @@
     "alias_label": "Model aliases",
     "alias_name_placeholder": "Source model name",
     "alias_placeholder": "Alias (required)",
+    "alias_display_name_label": "Catalog display name",
+    "alias_display_name_placeholder": "Catalog display name (optional)",
     "alias_fork_label": "Keep original",
     "alias_force_mapping_label": "Rewrite response model",
     "alias_same_as_name": "Source model name and alias must be different.",

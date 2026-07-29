@@ -1736,6 +1736,8 @@
     "alias_label": "模型別名",
     "alias_name_placeholder": "原模型名稱",
     "alias_placeholder": "別名（必填）",
+    "alias_display_name_label": "模型目錄顯示名稱",
+    "alias_display_name_placeholder": "模型目錄顯示名稱（可選）",
     "alias_fork_label": "保留原名",
     "alias_force_mapping_label": "回寫回應模型名稱",
     "alias_same_as_name": "原模型名稱與別名不能相同。",
