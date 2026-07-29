@@ -368,6 +368,7 @@ export interface ModelPriceSyncResponse extends ModelPricesResponse {
   matched?: Record<string, ModelPrice>;
   candidates?: ModelPriceSyncCandidateSet[];
   unmatched?: string[];
+  preserved?: string[];
   proxyUsed?: boolean;
   sourceResults?: ModelPriceSyncSourceResult[];
 }
@@ -2479,7 +2480,7 @@ export const usageServiceApi = {
         buildUrl(base, '/v0/management/model-prices/sync'),
         models ? { models } : {},
         {
-          timeout: 30 * 1000,
+          timeout: 45 * 1000,
           headers: authHeaders(managementKey),
         }
       );
