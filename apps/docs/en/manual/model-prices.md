@@ -11,11 +11,15 @@ Open the [Model Prices Demo](https://seakee.github.io/CPA-Manager-Plus/#/demo/mo
 
 ## Price Sources
 
-- Public metadata actively synchronized from LiteLLM or OpenRouter.
+- Public metadata synchronized from models.dev first, with LiteLLM and OpenRouter used as fallbacks when the preferred source is unavailable or lacks a model.
 - Local prices added or overridden by the user.
 - Entries for aliases, internal names, or provider-specific variants.
 
 Synchronization only occurs when the user triggers it and may use the current Manager Server proxy configuration.
+
+The same models.dev model ID may be offered by multiple providers, and a real model ID may itself contain `/`. CPAMP compares source identities separately from original model IDs and only matches automatically when the complete pricing metadata, including tiers and experimental-mode prices, is consistent. Identity or price conflicts remain in the candidate-confirmation flow; a same-named LiteLLM or OpenRouter entry cannot bypass that conflict.
+
+The current sync maps models.dev `cost.input`, `cost.output`, `cost.cache_read`, and `cost.cache_write`. The complete model object remains available in the raw metadata, including `cost.tiers`, Fast Mode, and reasoning fields, but those advanced fields are not yet converted automatically into CPAMP billing rules.
 
 ## Supported Billing Semantics
 

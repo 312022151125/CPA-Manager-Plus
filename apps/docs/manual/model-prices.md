@@ -11,11 +11,15 @@ description: 配置 CPA Manager Plus 模型价格、service tier、长上下文�
 
 ## 价格来源
 
-- 从 LiteLLM 或 OpenRouter 主动同步的公开元数据。
+- 首选从 models.dev 主动同步的公开元数据；当该来源不可用或缺少模型时，再使用 LiteLLM 和 OpenRouter 回退。
 - 用户手动添加或覆盖的本地价格。
 - 为模型别名、内部名称或 Provider 特定变体维护的条目。
 
 同步只在用户主动触发时发生，可能使用当前 Manager Server 代理设置。
+
+models.dev 中同一个模型 ID 可能由多个 Provider 提供，而且真实模型 ID 本身也可能包含 `/`。CPAMP 会分别比较来源身份和原始模型 ID；只有完整价格元数据（包括阶梯和实验模式价格）明确一致时才自动匹配。任何身份或价格冲突都会进入候选确认流程，LiteLLM 或 OpenRouter 的同名条目不会绕过该冲突。
+
+当前同步会映射 models.dev 的 `cost.input`、`cost.output`、`cost.cache_read` 和 `cost.cache_write`。完整模型对象仍保存在原始元数据中，包括 `cost.tiers`、Fast Mode 和 reasoning 等字段，但这些高级字段暂不会自动转换为 CPAMP 计费规则。
 
 ## 当前支持的计费语义
 
