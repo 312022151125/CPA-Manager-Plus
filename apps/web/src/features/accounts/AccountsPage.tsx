@@ -3192,6 +3192,7 @@ export function AccountsPage() {
           <AccountCredentialTab
             row={selectedRow}
             detailView={detailView}
+            healthStatusClass={getHealthStatusClass(detailView.health.status)}
             disableControls={disableControls}
             fileName={credentialSafeSummary.fileName}
             loading={credentialSafeSummary.loading}

@@ -1489,24 +1489,6 @@
   }
 }
 
-.authChips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 12px;
-}
-
-.authChip {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accounts-muted) 12%, var(--accounts-surface));
-  color: var(--accounts-text);
-  font-size: 12px;
-  font-weight: 500;
-}
-
 .collapsibleHeader {
   @include button-reset;
   display: flex;
@@ -1964,6 +1946,102 @@
 
   span {
     color: var(--accounts-muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+}
+
+.credentialIdentitySection {
+  min-width: 0;
+}
+
+.credentialStatusSummary {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accounts-primary) 18%, var(--accounts-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accounts-primary) 5%, var(--accounts-surface));
+
+  &[data-credential-health='reauth'],
+  &[data-credential-health='exception'] {
+    border-color: color-mix(in srgb, var(--accounts-danger) 36%, var(--accounts-border));
+    background: color-mix(in srgb, var(--accounts-danger) 7%, var(--accounts-surface));
+  }
+}
+
+.credentialStatusHeader,
+.credentialEnablementRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.credentialStatusLabel,
+.credentialEnablementRow span {
+  color: var(--accounts-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.credentialStatusReason {
+  color: var(--accounts-text) !important;
+  font-size: 12px !important;
+  line-height: 1.5;
+}
+
+.credentialEnablementRow {
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--accounts-border) 75%, transparent);
+
+  strong {
+    color: var(--accounts-text);
+    font-size: 12px;
+  }
+
+  strong[data-credential-enablement='disabled'] {
+    color: var(--accounts-muted);
+  }
+}
+
+.credentialIdentityFields {
+  min-width: 0;
+}
+
+.credentialAdvancedDetails {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--accounts-border);
+
+  summary {
+    width: fit-content;
+    color: var(--accounts-muted);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  &[open] summary {
+    margin-bottom: 10px;
+  }
+}
+
+.credentialDefaultState {
+  display: grid;
+  gap: 3px;
+  padding: 11px 12px;
+  border: 1px dashed color-mix(in srgb, var(--accounts-border) 84%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accounts-muted-surface) 72%, var(--accounts-surface));
+
+  strong {
+    color: var(--accounts-text);
+    font-size: 13px;
+  }
+
+  p {
     font-size: 12px;
     line-height: 1.45;
   }
@@ -3665,6 +3743,30 @@
 
   .overviewMetricGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detailScopeNotice {
+    gap: 2px;
+    padding: 8px 10px;
+
+    span {
+      font-size: 11px;
+    }
+  }
+
+  .credentialStatusSummary {
+    gap: 7px;
+    margin-bottom: 12px;
+    padding: 10px;
+  }
+
+  .credentialStatusHeader,
+  .credentialEnablementRow {
+    gap: 8px;
+  }
+
+  .credentialAdvancedDetails {
+    margin-top: 10px;
   }
 
   .overviewAttentionCard {

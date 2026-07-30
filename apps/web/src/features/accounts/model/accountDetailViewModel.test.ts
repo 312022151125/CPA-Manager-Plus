@@ -172,6 +172,28 @@ const makeMonitoringValue = (
 });
 
 describe('accountDetailViewModel', () => {
+  it('keeps credential identity fields focused and hides missing values', () => {
+    const populated = buildAccountDetailViewModel(
+      makeRow({
+        authIndex: 'auth-1',
+        projectId: 'project-1',
+        provider: 'xai',
+        planType: 'pro',
+        priority: 0,
+      })
+    );
+    const sparse = buildAccountDetailViewModel(
+      makeRow({ authIndex: '', projectId: '', planType: null, priority: null })
+    );
+
+    expect(populated.auth.fields.map((field) => field.key)).toEqual([
+      'authIndex',
+      'projectId',
+      'runtime',
+    ]);
+    expect(sparse.auth.fields.map((field) => field.key)).toEqual(['runtime']);
+  });
+
   it('matches window usage and action candidates by file name plus auth index', () => {
     const row = makeRow({
       selectionKey: 'shared.codex.json\u00001',

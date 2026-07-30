@@ -1151,17 +1151,8 @@ const buildQuotaFields = (row: AccountRow, listItem: AccountListPresentationItem
 
 const buildAuthFields = (row: AccountRow): AccountDetailField[] =>
   compactFields([
-    field('authIndex', 'accounts.detail_auth_index', row.authIndex || '-'),
-    field('projectId', 'accounts.detail_project_id', row.projectId || '-'),
-    field('provider', 'accounts.col_provider', row.provider),
-    field('planType', 'accounts.col_plan', row.planType || '-'),
-    field('priority', 'accounts.col_priority', row.priority ?? 0, 'number'),
-    field(
-      'status',
-      'common.status',
-      row.disabled ? 'accounts.detail_auth_status_disabled' : 'accounts.detail_auth_status_enabled',
-      'i18n'
-    ),
+    field('authIndex', 'accounts.detail_auth_index', row.authIndex),
+    field('projectId', 'accounts.detail_project_id', row.projectId),
     field(
       'runtime',
       'accounts.detail_runtime_source',
