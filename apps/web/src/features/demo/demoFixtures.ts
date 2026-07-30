@@ -3954,9 +3954,13 @@ const buildMonitoringAnalytics = (
     ? events.filter((event) => matchesDemoCredentialFilters(event, credentialFilters))
     : events;
 
+  const recentFailureLimit =
+    typeof request?.include?.recent_failures === 'number'
+      ? Math.max(0, Math.floor(request.include.recent_failures))
+      : 8;
   const recentFailures = scopedEvents
     .filter((event) => event.failed)
-    .slice(0, 8)
+    .slice(0, recentFailureLimit)
     .map((event) => ({
       timestamp_ms: event.timestamp_ms,
       model: event.model,
@@ -5027,6 +5031,7 @@ const demoAccountCandidates: AccountActionCandidate[] = [
     accountSnapshot: 'Automation Pool',
     accountIdSnapshot: 'acct_codex_auto',
     authLabel: 'Fallback Pool',
+    reasonCode: 'authentication_review',
     reason: 'Repeated quota and authentication warnings',
     firstSeenAtMs: now() - 2 * day,
     lastSeenAtMs: now() - 18 * 60 * 1000,
@@ -5060,6 +5065,7 @@ const demoAccountCandidates: AccountActionCandidate[] = [
     accountSnapshot: 'Design Tools Seat',
     accountIdSnapshot: 'acct_codex_design',
     authLabel: 'Codex Design Seat',
+    reasonCode: 'token_revoked',
     reason: 'Quota refresh returned HTTP 401 after token invalidation',
     firstSeenAtMs: now() - 6 * hour,
     lastSeenAtMs: now() - 37 * minute,

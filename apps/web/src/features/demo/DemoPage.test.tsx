@@ -3,6 +3,7 @@ import { createAppRoutes } from '@/app/appRoutes';
 import { CODEX_INSPECTION_LAST_RUN_STORAGE_KEY } from '@/features/monitoring/model/codexInspectionStorage';
 import { CODEX_INSPECTION_SETTINGS_STORAGE_KEY } from '@/features/monitoring/model/codexInspectionSettings';
 import {
+  getDemoAccountActionCandidates,
   getDemoAccountHistory,
   getDemoAuthFiles,
   getDemoCodexInspectionRun,
@@ -411,6 +412,7 @@ describe('DemoPage', () => {
       to_ms: Date.now(),
       include: {
         events_page: { limit: 10 },
+        recent_failures: 1,
         drilldown_preview: { from_ms: 0, to_ms: Date.now(), limit: 8 },
       },
     });
@@ -426,6 +428,7 @@ describe('DemoPage', () => {
     expect(firstPage.heatmap?.some((point) => point.calls > 0)).toBe(true);
     expect(firstPage.events?.items).toHaveLength(10);
     expect(firstPage.events?.has_more).toBe(true);
+    expect(firstPage.recent_failures).toHaveLength(1);
     expect(
       new Set(firstPage.events?.items.map((event) => event.api_key_hash)).size
     ).toBeGreaterThanOrEqual(8);
@@ -443,6 +446,19 @@ describe('DemoPage', () => {
     expect(secondPage.events?.items.every((event) => !firstHashes.has(event.event_hash))).toBe(
       true
     );
+  });
+
+  it('provides stable reason codes for localized account diagnostics', () => {
+    const candidates = getDemoAccountActionCandidates().items;
+
+    expect(
+      candidates.find((candidate) => candidate.authFileName === 'codex-fallback-02.json')
+        ?.reasonCode
+    ).toBe('authentication_review');
+    expect(
+      candidates.find((candidate) => candidate.authFileName === 'codex-expired-oauth-03.json')
+        ?.reasonCode
+    ).toBe('token_revoked');
   });
 
   it('filters credential overview analytics instead of returning the global demo summary', () => {
