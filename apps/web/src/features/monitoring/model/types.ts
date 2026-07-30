@@ -152,6 +152,9 @@ export type MonitoringEventRow = {
   endpoint: string;
   endpointMethod: string;
   endpointPath: string;
+  clientIp?: string;
+  xForwardedFor?: string;
+  userAgent?: string;
   sourceKey: string;
   source: string;
   sourceMasked: string;
