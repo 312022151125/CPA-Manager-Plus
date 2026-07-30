@@ -27,6 +27,9 @@ type AnalyticsRequestForTest = {
   include?: {
     events_page?: unknown;
     summary?: boolean;
+    summary_profile?: 'full' | 'compact';
+    summary_percentiles?: boolean;
+    recent_failures?: number;
     account_stats?: boolean;
   };
 };
@@ -43,7 +46,16 @@ type AnalyticsResponseForTest = {
     output_tokens: number;
     total_tokens: number;
     total_cost: number;
+    p95_latency_ms?: number | null;
   };
+  recent_failures?: Array<{
+    timestamp_ms: number;
+    model: string;
+    fail_status_code?: number | null;
+    fail_summary?: string;
+    header_error_kind?: string;
+    header_error_code?: string;
+  }>;
   events?: {
     items: Array<Record<string, unknown>>;
     next_before_ms: number;
@@ -1422,8 +1434,30 @@ describe('AccountsPage replacement flows', () => {
     );
   });
 
-  it('links the last local inspection into credential diagnostics', async () => {
+  it('marks the last local inspection as conflicting when a newer request succeeds', async () => {
     mocks.location = { pathname: '/accounts', search: '' };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        if (!analyticsRequest.include?.events_page) return makeEmptyAnalyticsResponse();
+        return {
+          generated_at_ms: 10_000,
+          granularity: 'day',
+          events: {
+            items: [makeAnalyticsEvent({ timestamp_ms: 9_000, failed: false })],
+            next_before_ms: 0,
+            has_more: false,
+            total_count: 1,
+          },
+        };
+      }
+    );
     mocks.localInspection = {
       savedAt: 300,
       logs: [],
@@ -1484,8 +1518,14 @@ describe('AccountsPage replacement flows', () => {
     });
     await act(async () => {
       findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
     });
 
+    expect(
+      renderer.root.findByProps({ 'data-diagnostic-evidence-status': 'conflict' })
+    ).toBeDefined();
+    expect(treeText(renderer)).toContain('accounts.detail_diagnostic_reinspect');
     expect(treeText(renderer)).toContain('expired token');
     expect(treeText(renderer)).toContain('accounts.action_reauth');
     expect(treeText(renderer)).toContain('accounts.inspection_source_local');
@@ -3029,7 +3069,81 @@ describe('AccountsPage replacement flows', () => {
       auth_files: ['codex.json'],
       auth_indices: ['auth-1'],
     });
+    expect(eventRequest?.include).toMatchObject({
+      summary: true,
+      summary_profile: 'compact',
+      summary_percentiles: true,
+      recent_failures: 1,
+    });
     expect(eventRequest?.include?.events_page).toMatchObject({ limit: 20 });
+  });
+
+  it('renders full-range activity summary and recent failure independently of the event page', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        if (!analyticsRequest.include?.events_page) return makeEmptyAnalyticsResponse();
+        return {
+          generated_at_ms: 2500,
+          granularity: 'day',
+          summary: {
+            total_calls: 42,
+            success_calls: 35,
+            failure_calls: 7,
+            success_rate: 35 / 42,
+            input_tokens: 100,
+            output_tokens: 50,
+            total_tokens: 150,
+            total_cost: 1.25,
+            p95_latency_ms: 2345,
+          },
+          recent_failures: [
+            {
+              timestamp_ms: 1800,
+              model: 'gpt-5',
+              fail_status_code: 503,
+              fail_summary: 'full-range failure',
+            },
+          ],
+          events: {
+            items: [makeAnalyticsEvent({ timestamp_ms: 2000, failed: false })],
+            next_before_ms: 0,
+            has_more: false,
+            total_count: 42,
+          },
+        };
+      }
+    );
+
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const requestsMetric = renderer.root.findByProps({
+      'data-diagnostic-activity-metric': 'requests',
+    });
+    const failureRateMetric = renderer.root.findByProps({
+      'data-diagnostic-activity-metric': 'failure-rate',
+    });
+    const latencyMetric = renderer.root.findByProps({
+      'data-diagnostic-activity-metric': 'p95-latency',
+    });
+    expect(readText(requestsMetric)).toContain('42');
+    expect(readText(failureRateMetric)).toContain('16.7%');
+    expect(readText(latencyMetric)).toContain('2345 ms');
+    expect(treeText(renderer)).toContain('full-range failure');
   });
 
   it('keeps the scoped monitoring link visible when the event list is empty', async () => {
@@ -3070,6 +3184,50 @@ describe('AccountsPage replacement flows', () => {
       .findAll((node) => node.type === 'a')
       .find((node) => String(node.props.href).startsWith('#/monitoring?'));
     expect(monitoringLink?.props.href).toBe('#/monitoring?auth_file=codex.json&auth_index=auth-1');
+    expect(treeText(renderer)).not.toContain('accounts.detail_diagnostic_candidate_evidence');
+  });
+
+  it('translates known action-candidate reason codes in diagnostic evidence', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.listAccountActionCandidates.mockResolvedValue({
+      items: [
+        {
+          id: 9,
+          actionType: 'reauth',
+          status: 'pending',
+          provider: 'codex',
+          authFileName: 'codex.json',
+          authIndex: 'auth-1',
+          reasonCode: 'invalid_credentials',
+          reason: 'Credentials are invalid or expired',
+          firstSeenAtMs: 100,
+          lastSeenAtMs: 200,
+          hitCount: 2,
+          createdAtMs: 100,
+          updatedAtMs: 200,
+        },
+      ],
+      pendingCount: 1,
+    });
+
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(treeText(renderer)).toContain('account_actions.reason_invalid_credentials');
+    expect(treeText(renderer)).not.toContain('Credentials are invalid or expired');
   });
 
   it('loads additional detail events with the returned cursor', async () => {

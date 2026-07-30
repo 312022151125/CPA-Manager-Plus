@@ -2125,9 +2125,160 @@
   }
 }
 
-.detailStrategySummary {
+.diagnosticConclusionSection {
   display: grid;
+  gap: 10px;
+  border-color: color-mix(in srgb, var(--accounts-primary) 22%, var(--accounts-border));
+  background: color-mix(in srgb, var(--accounts-primary) 5%, var(--accounts-surface));
+}
+
+.diagnosticConclusionHeader,
+.diagnosticConclusionState,
+.diagnosticEvidenceGroupHeader {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.diagnosticConclusionHeader,
+.diagnosticEvidenceGroupHeader {
+  justify-content: space-between;
+}
+
+.diagnosticConclusionHeader h3 {
+  margin: 0;
+}
+
+.diagnosticConclusionState {
+  flex: 0 0 auto;
+}
+
+.diagnosticEvidenceStatusCurrent,
+.diagnosticEvidenceStatusOutdated,
+.diagnosticEvidenceStatusConflict {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.diagnosticEvidenceStatusCurrent {
+  background: color-mix(in srgb, var(--accounts-success) 12%, transparent);
+  color: var(--accounts-success);
+}
+
+.diagnosticEvidenceStatusOutdated {
+  background: color-mix(in srgb, var(--accounts-warning) 13%, transparent);
+  color: var(--accounts-warning);
+}
+
+.diagnosticEvidenceStatusConflict {
+  background: color-mix(in srgb, var(--accounts-danger) 12%, transparent);
+  color: var(--accounts-danger);
+}
+
+.diagnosticConclusionMain {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+
+  p {
+    color: var(--accounts-text);
+    line-height: 1.5;
+  }
+}
+
+.diagnosticConclusionMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  color: var(--accounts-muted);
+  font-size: 11px;
+
+  span {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  strong {
+    color: var(--accounts-text);
+    font-weight: 800;
+  }
+
+  @include mobile {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+.diagnosticEvidenceDisclosure {
+  padding: 0;
+  overflow: hidden;
+
+  > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 46px;
+    padding: 10px 14px;
+    cursor: pointer;
+    list-style: none;
+    color: var(--accounts-text);
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  > summary::after {
+    content: '›';
+    flex: 0 0 auto;
+    color: var(--accounts-muted);
+    font-size: 20px;
+    line-height: 1;
+    transform: rotate(0deg);
+    transition: transform 0.16s ease;
+  }
+
+  &[open] > summary::after {
+    transform: rotate(90deg);
+  }
+
+  > summary small {
+    margin-left: auto;
+    color: var(--accounts-danger);
+    font-size: 11px;
+    font-weight: 700;
+  }
+}
+
+.diagnosticEvidenceBody {
+  display: grid;
+  gap: 14px;
+  padding: 0 14px 14px;
+}
+
+.diagnosticEvidenceGroup {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+
+  h4 {
+    margin: 0;
+    color: var(--accounts-muted);
+    font-size: 11px;
+    font-weight: 800;
+  }
 }
 
 .detailBadgeList {
@@ -2171,6 +2322,22 @@
     flex: 0 0 auto;
     text-align: right;
     white-space: nowrap;
+  }
+
+  > div > span {
+    overflow: visible;
+    line-height: 1.45;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  @include mobile {
+    align-items: stretch;
+    flex-direction: column;
+
+    small {
+      text-align: left;
+    }
   }
 }
 
@@ -2283,26 +2450,7 @@
 }
 
 .detailEventsList {
-  position: relative;
-  max-height: 360px;
-  overflow-y: auto;
-  padding-right: 4px;
-  scrollbar-width: thin;
-
-  &::after {
-    content: '';
-    position: sticky;
-    bottom: 0;
-    display: block;
-    height: 18px;
-    margin: -18px -4px 0;
-    background: linear-gradient(
-      to bottom,
-      transparent,
-      color-mix(in srgb, var(--accounts-surface) 92%, transparent)
-    );
-    pointer-events: none;
-  }
+  overflow: visible;
 }
 
 .detailEventsFooter {
@@ -2324,7 +2472,7 @@
   }
 }
 
-.detailEventSummary {
+.detailActivitySummary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
@@ -2341,9 +2489,6 @@
   strong {
     display: block;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   span {
@@ -2355,8 +2500,22 @@
   strong {
     margin-top: 4px;
     color: var(--accounts-text);
-    font-size: 14px;
+    font-size: 18px;
     font-variant-numeric: tabular-nums;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  @include mobile {
+    gap: 6px;
+
+    div {
+      padding: 9px 8px;
+    }
+
+    strong {
+      font-size: 16px;
+    }
   }
 }
 
@@ -2381,11 +2540,16 @@
 
   strong {
     min-width: 0;
-    overflow: hidden;
     color: var(--accounts-danger);
     font-size: 12px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  small {
+    color: var(--accounts-muted);
+    font-size: 11px;
+    line-height: 1.4;
   }
 }
 

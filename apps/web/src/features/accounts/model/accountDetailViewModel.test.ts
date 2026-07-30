@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { AuthFileItem, CodexQuotaState, XaiQuotaState } from '@/types';
 import type {
   AccountActionCandidate,
+  MonitoringAnalyticsEventRow,
+  MonitoringAnalyticsRecentFailure,
+  MonitoringAnalyticsSummary,
   MonitoringAccountHistoryItem,
   MonitoringAccountWindowUsageItem,
 } from '@/services/api';
@@ -118,6 +121,36 @@ const makeHistory = (
   ...overrides,
 });
 
+const makeAnalyticsEvent = (
+  overrides: Partial<MonitoringAnalyticsEventRow> = {}
+): MonitoringAnalyticsEventRow => ({
+  request_id: 'req-1',
+  event_hash: 'event-1',
+  timestamp_ms: 2000,
+  model: 'gpt-5',
+  endpoint: '/v1/responses',
+  method: 'POST',
+  path: '/v1/responses',
+  auth_index: '0',
+  source: 'shared.codex.json',
+  source_hash: 'source-hash',
+  api_key_hash: 'api-key-hash',
+  account_snapshot: 'codex@example.com',
+  auth_label_snapshot: 'codex@example.com',
+  auth_file_snapshot: 'shared.codex.json',
+  auth_provider_snapshot: 'codex',
+  input_tokens: 10,
+  output_tokens: 5,
+  cached_tokens: 0,
+  cache_read_tokens: 0,
+  cache_creation_tokens: 0,
+  reasoning_tokens: 0,
+  total_tokens: 15,
+  latency_ms: 120,
+  failed: false,
+  ...overrides,
+});
+
 const makeMonitoringValue = (
   row: AccountRow,
   overrides: Partial<UsageValueRow> = {}
@@ -190,7 +223,13 @@ describe('accountDetailViewModel', () => {
       windowUsageByKey,
       actionCandidates: [
         makeCandidate({ id: 1, authIndex: '0', reason: 'first account' }),
-        makeCandidate({ id: 2, authIndex: '1', reason: 'second account', lastSeenAtMs: 300 }),
+        makeCandidate({
+          id: 2,
+          authIndex: '1',
+          reasonCode: 'invalid_credentials',
+          reason: 'second account',
+          lastSeenAtMs: 300,
+        }),
         makeCandidate({ id: 3, authIndex: undefined, reason: 'file-level fallback' }),
       ],
     });
@@ -206,6 +245,7 @@ describe('accountDetailViewModel', () => {
     expect(viewModel.strategy.actionCandidates).toHaveLength(1);
     expect(viewModel.strategy.actionCandidates[0]).toMatchObject({
       id: 2,
+      reasonCode: 'invalid_credentials',
       reason: 'second account',
     });
   });
@@ -227,6 +267,136 @@ describe('accountDetailViewModel', () => {
     expect(viewModel.strategy.actionCandidates[0]).toMatchObject({
       id: 4,
       reason: 'file-level fallback',
+    });
+  });
+
+  it('builds diagnostics activity from the complete summary and latest known activity', () => {
+    const row = makeRow();
+    const viewModel = buildAccountDetailViewModel(row, {
+      valueRow: makeMonitoringValue(row, { lastSeenMs: 2500 }),
+      diagnosticsSummary: {
+        total_calls: 42,
+        failure_calls: 7,
+        p95_latency_ms: 2345,
+      } as MonitoringAnalyticsSummary,
+      diagnosticsRecentFailure: {
+        timestamp_ms: 1800,
+        model: 'gpt-5',
+        fail_status_code: 503,
+        fail_summary: 'full-range failure',
+      } as MonitoringAnalyticsRecentFailure,
+      diagnosticsEvents: [makeAnalyticsEvent({ timestamp_ms: 2000 })],
+      diagnosticsTotalCount: 1,
+    });
+
+    expect(viewModel.strategy.activity).toMatchObject({
+      totalCalls: 42,
+      failureCalls: 7,
+      failureRate: (7 / 42) * 100,
+      p95LatencyMs: 2345,
+      latestActivityAtMs: 2500,
+      latestSuccessAtMs: 2000,
+      latestFailureAtMs: 1800,
+      recentFailure: {
+        timestampMs: 1800,
+        reason: 'full-range failure',
+        statusCode: 503,
+        model: 'gpt-5',
+      },
+    });
+  });
+
+  it('marks an actionable inspection as conflicting when a newer request succeeds', () => {
+    const row = makeRow({
+      inspection: {
+        source: 'local',
+        action: 'reauth',
+        actionReason: 'expired token',
+        actionStatus: 'pending',
+        statusCode: 401,
+        usedPercent: null,
+        isQuota: false,
+        runId: 0,
+        resultId: -1,
+        createdAtMs: 1000,
+      },
+    });
+    const viewModel = buildAccountDetailViewModel(row, {
+      recommendation: {
+        row,
+        action: 'reauth',
+        priority: 'critical',
+        reasonKey: 'accounts.recommend_reason_inspection',
+      },
+      diagnosticsEvents: [makeAnalyticsEvent({ timestamp_ms: 2000, failed: false })],
+    });
+
+    expect(viewModel.strategy.conclusion).toMatchObject({
+      actionLabelKey: 'accounts.detail_diagnostic_reinspect',
+      reasonKey: 'accounts.detail_diagnostic_conflict_desc',
+      priority: 'medium',
+      sourceLabelKey: 'accounts.inspection_source_local',
+      observedAtMs: 1000,
+      evidenceStatus: 'conflict',
+      evidenceStatusLabelKey: 'accounts.detail_diagnostic_evidence_conflict',
+      latestActivityAtMs: 2000,
+    });
+  });
+
+  it('marks a healthy inspection as conflicting when a newer failure appears', () => {
+    const row = makeRow({
+      inspection: {
+        source: 'server',
+        action: 'keep',
+        actionReason: 'healthy',
+        actionStatus: 'none',
+        statusCode: 200,
+        usedPercent: 20,
+        isQuota: false,
+        runId: 1,
+        resultId: 2,
+        createdAtMs: 1000,
+      },
+    });
+    const viewModel = buildAccountDetailViewModel(row, {
+      diagnosticsRecentFailure: {
+        timestamp_ms: 2200,
+        model: 'gpt-5',
+        fail_status_code: 401,
+        fail_summary: 'token expired',
+      } as MonitoringAnalyticsRecentFailure,
+    });
+
+    expect(viewModel.strategy.conclusion).toMatchObject({
+      actionLabelKey: 'accounts.detail_diagnostic_reinspect',
+      sourceLabelKey: 'accounts.inspection_source_server',
+      evidenceStatus: 'conflict',
+      latestActivityAtMs: 2200,
+    });
+  });
+
+  it('does not use a successful request to clear a quota recommendation', () => {
+    const row = makeRow({
+      quota: {
+        status: 'exhausted',
+        remainingPercent: 0,
+        usedPercent: 100,
+      },
+    });
+    const viewModel = buildAccountDetailViewModel(row, {
+      recommendation: {
+        row,
+        action: 'disable',
+        priority: 'critical',
+        reasonKey: 'accounts.recommend_reason_exhausted',
+      },
+      diagnosticsEvents: [makeAnalyticsEvent({ timestamp_ms: 2000, failed: false })],
+    });
+
+    expect(viewModel.strategy.conclusion).toMatchObject({
+      actionLabelKey: 'accounts.recommend_action_disable',
+      reasonKey: 'accounts.recommend_reason_exhausted',
+      evidenceStatus: 'current',
     });
   });
 

@@ -3,6 +3,9 @@ import { getSortedCodexResetCreditExpiries } from '@/components/quota/quotaConfi
 import type {
   AccountActionCandidate,
   MonitoringAccountHistoryItem,
+  MonitoringAnalyticsEventRow,
+  MonitoringAnalyticsRecentFailure,
+  MonitoringAnalyticsSummary,
   MonitoringAccountWindowUsageItem,
   QuotaCooldownInfo,
 } from '@/services/api';
@@ -92,6 +95,7 @@ export interface AccountDetailActionCandidateSummary {
   id: number;
   actionType: string;
   status: string;
+  reasonCode: string;
   reason: string;
   hitCount: number;
   firstSeenAtMs: number;
@@ -100,6 +104,37 @@ export interface AccountDetailActionCandidateSummary {
   accountSnapshot: string;
   authLabel: string;
   hasEvidence: boolean;
+}
+
+export type AccountDetailDiagnosticEvidenceStatus = 'current' | 'outdated' | 'conflict';
+
+export interface AccountDetailRecentFailureSummary {
+  timestampMs: number;
+  reason: string;
+  statusCode: number | null;
+  model: string;
+}
+
+export interface AccountDetailDiagnosticsActivity {
+  totalCalls: number | null;
+  failureCalls: number | null;
+  failureRate: number | null;
+  p95LatencyMs: number | null;
+  latestActivityAtMs: number | null;
+  latestSuccessAtMs: number | null;
+  latestFailureAtMs: number | null;
+  recentFailure: AccountDetailRecentFailureSummary | null;
+}
+
+export interface AccountDetailDiagnosticConclusion {
+  actionLabelKey: string;
+  reasonKey: string;
+  priority: AccountRecommendationPriority | null;
+  sourceLabelKey: string;
+  observedAtMs: number | null;
+  evidenceStatus: AccountDetailDiagnosticEvidenceStatus;
+  evidenceStatusLabelKey: string;
+  latestActivityAtMs: number | null;
 }
 
 export interface AccountDetailValueSummary {
@@ -231,6 +266,8 @@ export interface AccountDetailViewModel {
     recommendation: AccountRecommendation | null;
     recommendationActionLabelKey: string;
     recommendationReasonKey: string;
+    conclusion: AccountDetailDiagnosticConclusion;
+    activity: AccountDetailDiagnosticsActivity;
     inspectionFields: AccountDetailField[];
     codexBadges: AccountDetailCodexBadge[];
     actionCandidates: AccountDetailActionCandidateSummary[];
@@ -251,6 +288,10 @@ export interface BuildAccountDetailViewModelOptions {
   valueRow?: UsageValueRow | null;
   codexQuota?: CodexQuotaState | null;
   xaiQuota?: XaiQuotaState | null;
+  diagnosticsSummary?: MonitoringAnalyticsSummary | null;
+  diagnosticsRecentFailure?: MonitoringAnalyticsRecentFailure | null;
+  diagnosticsEvents?: MonitoringAnalyticsEventRow[];
+  diagnosticsTotalCount?: number | null;
 }
 
 const normalizeAuthIndexKey = (value: unknown): string => {
@@ -293,6 +334,7 @@ const toActionCandidateSummary = (
   id: candidate.id,
   actionType: candidate.actionType,
   status: candidate.status,
+  reasonCode: candidate.reasonCode ?? '',
   reason: candidate.reason,
   hitCount: candidate.hitCount,
   firstSeenAtMs: candidate.firstSeenAtMs,
@@ -302,6 +344,83 @@ const toActionCandidateSummary = (
   authLabel: candidate.authLabel ?? '',
   hasEvidence: candidate.evidence !== undefined && candidate.evidence !== null,
 });
+
+const maxTimestamp = (values: Array<number | null | undefined>): number | null => {
+  const timestamps = values.filter(
+    (value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0
+  );
+  return timestamps.length > 0 ? Math.max(...timestamps) : null;
+};
+
+const buildRecentFailureSummary = (
+  failure: MonitoringAnalyticsRecentFailure | null | undefined
+): AccountDetailRecentFailureSummary | null => {
+  if (!failure) return null;
+  const reason =
+    failure.fail_summary?.trim() ||
+    [failure.header_error_kind, failure.header_error_code].filter(Boolean).join(' / ') ||
+    (typeof failure.fail_status_code === 'number' ? `HTTP ${failure.fail_status_code}` : '');
+  return {
+    timestampMs: failure.timestamp_ms,
+    reason,
+    statusCode: failure.fail_status_code ?? null,
+    model: failure.model || '',
+  };
+};
+
+const buildDiagnosticsActivity = (
+  summary: MonitoringAnalyticsSummary | null | undefined,
+  recentFailure: MonitoringAnalyticsRecentFailure | null | undefined,
+  events: MonitoringAnalyticsEventRow[],
+  totalCount: number | null | undefined,
+  knownLatestActivityAtMs: number | null | undefined
+): AccountDetailDiagnosticsActivity => {
+  const latestSuccessAtMs = maxTimestamp(
+    events.filter((event) => !event.failed).map((event) => event.timestamp_ms)
+  );
+  const latestLoadedFailureAtMs = maxTimestamp(
+    events.filter((event) => event.failed).map((event) => event.timestamp_ms)
+  );
+  const recentFailureSummary = buildRecentFailureSummary(recentFailure);
+  const latestFailureAtMs = maxTimestamp([
+    latestLoadedFailureAtMs,
+    recentFailureSummary?.timestampMs,
+  ]);
+  const latestActivityAtMs = maxTimestamp([
+    ...events.map((event) => event.timestamp_ms),
+    recentFailureSummary?.timestampMs,
+    knownLatestActivityAtMs,
+  ]);
+  const summaryTotalCalls = summary?.total_calls;
+  const resolvedTotalCalls =
+    typeof summaryTotalCalls === 'number'
+      ? summaryTotalCalls
+      : typeof totalCount === 'number'
+        ? totalCount
+        : null;
+  const failureCalls = typeof summary?.failure_calls === 'number' ? summary.failure_calls : null;
+  const failureRate =
+    summary && summary.total_calls > 0
+      ? (summary.failure_calls / summary.total_calls) * 100
+      : summary && summary.total_calls === 0
+        ? 0
+        : null;
+  const p95LatencyMs =
+    typeof summary?.p95_latency_ms === 'number' && Number.isFinite(summary.p95_latency_ms)
+      ? summary.p95_latency_ms
+      : null;
+
+  return {
+    totalCalls: resolvedTotalCalls,
+    failureCalls,
+    failureRate,
+    p95LatencyMs,
+    latestActivityAtMs,
+    latestSuccessAtMs,
+    latestFailureAtMs,
+    recentFailure: recentFailureSummary,
+  };
+};
 
 const toWindowUsageSummary = (
   item: MonitoringAccountWindowUsageItem | undefined
@@ -932,6 +1051,90 @@ const buildOverviewAttention = (
   return null;
 };
 
+type DiagnosticEvidenceDirection = 'positive' | 'negative' | null;
+
+const getDiagnosticEvidenceDirection = (action: string): DiagnosticEvidenceDirection => {
+  const normalized = action.trim().toLowerCase();
+  if (!normalized) return null;
+  return normalized === 'keep' || normalized === 'enable' ? 'positive' : 'negative';
+};
+
+const getDiagnosticEvidenceStatusLabelKey = (status: AccountDetailDiagnosticEvidenceStatus) =>
+  `accounts.detail_diagnostic_evidence_${status}`;
+
+const buildDiagnosticConclusion = (
+  row: AccountRow,
+  recommendation: AccountRecommendation | null,
+  actionCandidates: AccountDetailActionCandidateSummary[],
+  overviewDecision: AccountDetailOverviewDecision,
+  activity: AccountDetailDiagnosticsActivity
+): AccountDetailDiagnosticConclusion => {
+  const candidate = actionCandidates[0] ?? null;
+  let actionLabelKey = recommendation
+    ? getRecommendationActionLabelKey(recommendation.action)
+    : 'accounts.recommend_normal';
+  let reasonKey = recommendation?.reasonKey ?? 'accounts.recommend_normal_desc';
+  let priority = recommendation?.priority ?? null;
+  let sourceLabelKey = overviewDecision.basisLabelKey;
+  let observedAtMs = overviewDecision.observedAtMs;
+  let direction: DiagnosticEvidenceDirection = null;
+
+  if (recommendation?.reasonKey === 'accounts.recommend_reason_inspection' && row.inspection) {
+    sourceLabelKey = `accounts.inspection_source_${row.inspection.source}`;
+    observedAtMs = row.inspection.createdAtMs;
+    direction = getDiagnosticEvidenceDirection(row.inspection.action);
+  } else if (!recommendation && candidate) {
+    actionLabelKey = `accounts.action_type_${candidate.actionType}`;
+    reasonKey = 'accounts.detail_diagnostic_candidate_reason';
+    priority = 'medium';
+    sourceLabelKey = 'accounts.detail_action_candidates';
+    observedAtMs = candidate.lastSeenAtMs;
+    direction = getDiagnosticEvidenceDirection(candidate.actionType);
+  } else if (!recommendation && row.inspection) {
+    sourceLabelKey = `accounts.inspection_source_${row.inspection.source}`;
+    observedAtMs = row.inspection.createdAtMs;
+    direction = getDiagnosticEvidenceDirection(row.inspection.action);
+  }
+
+  let evidenceStatus: AccountDetailDiagnosticEvidenceStatus = 'current';
+  if (
+    observedAtMs !== null &&
+    activity.latestActivityAtMs !== null &&
+    activity.latestActivityAtMs > observedAtMs
+  ) {
+    evidenceStatus = 'outdated';
+  }
+
+  const conflictsWithNewerSuccess =
+    direction === 'negative' &&
+    observedAtMs !== null &&
+    activity.latestSuccessAtMs !== null &&
+    activity.latestSuccessAtMs > observedAtMs;
+  const conflictsWithNewerFailure =
+    direction === 'positive' &&
+    observedAtMs !== null &&
+    activity.latestFailureAtMs !== null &&
+    activity.latestFailureAtMs > observedAtMs;
+
+  if (conflictsWithNewerSuccess || conflictsWithNewerFailure) {
+    evidenceStatus = 'conflict';
+    actionLabelKey = 'accounts.detail_diagnostic_reinspect';
+    reasonKey = 'accounts.detail_diagnostic_conflict_desc';
+    priority = 'medium';
+  }
+
+  return {
+    actionLabelKey,
+    reasonKey,
+    priority,
+    sourceLabelKey,
+    observedAtMs,
+    evidenceStatus,
+    evidenceStatusLabelKey: getDiagnosticEvidenceStatusLabelKey(evidenceStatus),
+    latestActivityAtMs: activity.latestActivityAtMs,
+  };
+};
+
 const buildQuotaFields = (row: AccountRow, listItem: AccountListPresentationItem) =>
   compactFields([
     field('status', 'accounts.detail_status', listItem.quota.statusLabelKey, 'i18n'),
@@ -1023,6 +1226,13 @@ export const buildAccountDetailViewModel = (
   ]
     .sort((left, right) => right.lastSeenAtMs - left.lastSeenAtMs)
     .map(toActionCandidateSummary);
+  const diagnosticsActivity = buildDiagnosticsActivity(
+    options.diagnosticsSummary,
+    options.diagnosticsRecentFailure,
+    options.diagnosticsEvents ?? [],
+    options.diagnosticsTotalCount,
+    value.lastSeenMs
+  );
   const overview = {
     decision: buildOverviewDecision(row, listItem, quotaCooldown),
     capacity: buildOverviewCapacity(row, quotaWindows, listItem),
@@ -1030,6 +1240,13 @@ export const buildAccountDetailViewModel = (
     activity: buildOverviewActivity(row, value),
     attention: buildOverviewAttention(recommendation, actionCandidates),
   };
+  const diagnosticConclusion = buildDiagnosticConclusion(
+    row,
+    recommendation,
+    actionCandidates,
+    overview.decision,
+    diagnosticsActivity
+  );
 
   return {
     selectionKey: row.selectionKey,
@@ -1079,6 +1296,8 @@ export const buildAccountDetailViewModel = (
         ? getRecommendationActionLabelKey(recommendation.action)
         : 'accounts.recommend_normal',
       recommendationReasonKey: recommendation?.reasonKey ?? 'accounts.recommend_normal_desc',
+      conclusion: diagnosticConclusion,
+      activity: diagnosticsActivity,
       inspectionFields: buildInspectionFields(row),
       codexBadges: options.codexStatus?.badges ?? [],
       actionCandidates,

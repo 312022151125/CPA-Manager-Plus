@@ -9,6 +9,7 @@ import type { MonitoringAnalyticsEventRow } from '@/services/api';
 import {
   formatCompactNumber,
   formatDurationMs,
+  formatPercent,
   formatTimestamp,
   getEventFailureReason,
   getEventStatusText,
@@ -58,128 +59,81 @@ export function AccountDiagnosticsTab({
   onLoadMoreEvents,
 }: AccountDiagnosticsTabProps) {
   const { t, i18n } = useTranslation();
-  const failedEventCount = events.filter((event) => event.failed).length;
-  const latestFailedEvent = events.find((event) => event.failed) ?? null;
-  const slowestLatencyMs = events.reduce<number | null>((current, event) => {
-    if (typeof event.latency_ms !== 'number') return current;
-    return current === null ? event.latency_ms : Math.max(current, event.latency_ms);
-  }, null);
+  const conclusion = detailView.strategy.conclusion;
+  const activity = detailView.strategy.activity;
   const monitoringParams = new URLSearchParams({ auth_file: row.fileName });
   if (row.authIndex) monitoringParams.set('auth_index', row.authIndex);
 
+  const evidenceStatusClass = {
+    current: styles.diagnosticEvidenceStatusCurrent,
+    outdated: styles.diagnosticEvidenceStatusOutdated,
+    conflict: styles.diagnosticEvidenceStatusConflict,
+  }[conclusion.evidenceStatus];
+  const hasInspectionEvidence =
+    detailView.strategy.inspectionFields.length > 0 || inspectionLoading;
+  const hasCodexEvidence = detailView.strategy.codexBadges.length > 0;
+  const hasCandidateEvidence =
+    detailView.strategy.actionCandidates.length > 0 ||
+    candidatesLoading ||
+    Boolean(candidatesError);
+  const hasDiagnosticEvidence = hasInspectionEvidence || hasCodexEvidence || hasCandidateEvidence;
+  const activityTotalCalls = activity.totalCalls ?? eventsTotalCount;
+  const recentFailureMeta = activity.recentFailure
+    ? [
+        formatTimestamp(activity.recentFailure.timestampMs, i18n.language),
+        activity.recentFailure.model,
+        activity.recentFailure.statusCode ? `HTTP ${activity.recentFailure.statusCode}` : '',
+      ].filter(Boolean)
+    : [];
+
   return (
     <div className={styles.drawerDetailStack}>
-      <section className={styles.drawerSection}>
-        <h3>{t('accounts.recommend_action')}</h3>
-        <div className={styles.detailStrategySummary}>
+      <section
+        className={`${styles.drawerSection} ${styles.diagnosticConclusionSection}`}
+        data-diagnostic-evidence-status={conclusion.evidenceStatus}
+      >
+        <div className={styles.diagnosticConclusionHeader}>
+          <h3>{t('accounts.detail_diagnostic_conclusion')}</h3>
+          <div className={styles.diagnosticConclusionState}>
+            {inspectionLoading ? <LoadingSpinner size={14} /> : null}
+            <span className={evidenceStatusClass}>{t(conclusion.evidenceStatusLabelKey)}</span>
+          </div>
+        </div>
+        <div className={styles.diagnosticConclusionMain}>
           <span
             className={`${styles.badge} ${
-              detailView.strategy.recommendation
-                ? getRecommendationPriorityClass(detailView.strategy.recommendation.priority)
+              conclusion.priority
+                ? getRecommendationPriorityClass(conclusion.priority)
                 : styles.badgeNeutral
             }`}
           >
-            {t(detailView.strategy.recommendationActionLabelKey)}
+            {t(conclusion.actionLabelKey)}
           </span>
-          <p>{t(detailView.strategy.recommendationReasonKey)}</p>
+          <p>{t(conclusion.reasonKey)}</p>
         </div>
-      </section>
-      <section className={styles.drawerSection}>
-        <h3>{t('accounts.detail_inspection')}</h3>
-        {detailView.strategy.inspectionFields.length > 0 ? (
-          <AccountDetailFieldList fields={detailView.strategy.inspectionFields} />
-        ) : (
-          <p>{inspectionLoading ? t('common.loading') : t('accounts.detail_no_inspection')}</p>
-        )}
-      </section>
-      {detailView.strategy.codexBadges.length > 0 ? (
-        <section className={styles.drawerSection}>
-          <h3>{t('accounts.detail_codex_status_badges')}</h3>
-          <div className={styles.detailBadgeList}>
-            {[...detailView.strategy.codexBadges]
-              .sort((left, right) => {
-                const order = { danger: 0, warning: 1, info: 2 } as const;
-                return order[left.tone] - order[right.tone];
-              })
-              .map((badge) => (
-                <span
-                  key={badge.kind}
-                  className={`${styles.badge} ${
-                    badge.tone === 'danger'
-                      ? styles.badgeBad
-                      : badge.tone === 'warning'
-                        ? styles.badgeWarn
-                        : styles.badgeInfo
-                  }`}
-                  title={
-                    badge.titleKey
-                      ? t(badge.titleKey, {
-                          defaultValue: badge.defaultTitle,
-                          ...badge.labelParams,
-                        })
-                      : undefined
-                  }
-                >
-                  {t(badge.labelKey, {
-                    defaultValue: badge.defaultLabel,
-                    ...badge.labelParams,
-                  })}
-                </span>
-              ))}
-          </div>
-        </section>
-      ) : null}
-      <section className={styles.drawerSection}>
-        <div className={styles.sectionHeaderInline}>
-          <div>
-            <h3>{t('accounts.detail_action_candidates')}</h3>
-            <p>{t('accounts.detail_action_candidates_desc')}</p>
-          </div>
-          {candidatesLoading ? (
-            <div className={styles.inlineLoading}>
-              <LoadingSpinner size={16} />
-              <span>{t('common.loading')}</span>
-            </div>
+        <div className={styles.diagnosticConclusionMeta}>
+          <span>
+            <strong>{t('accounts.detail_diagnostic_source')}</strong>
+            {t(conclusion.sourceLabelKey)}
+          </span>
+          {conclusion.observedAtMs !== null ? (
+            <span>
+              <strong>{t('accounts.detail_observed_at')}</strong>
+              {formatTimestamp(conclusion.observedAtMs, i18n.language)}
+            </span>
+          ) : null}
+          {conclusion.evidenceStatus !== 'current' && conclusion.latestActivityAtMs !== null ? (
+            <span>
+              <strong>{t('accounts.detail_diagnostic_latest_activity')}</strong>
+              {formatTimestamp(conclusion.latestActivityAtMs, i18n.language)}
+            </span>
           ) : null}
         </div>
-        {candidatesError ? (
-          <div className={styles.errorBox}>{candidatesError}</div>
-        ) : detailView.strategy.actionCandidates.length === 0 ? (
-          <p>{t('accounts.detail_action_candidates_empty')}</p>
-        ) : (
-          <div className={styles.detailCandidateList}>
-            {detailView.strategy.actionCandidates.map((candidate) => (
-              <div key={candidate.id} className={styles.detailCandidateItem}>
-                <div>
-                  <div className={styles.detailCandidateHeader}>
-                    <strong>
-                      {t(`accounts.action_type_${candidate.actionType}`, {
-                        defaultValue: candidate.actionType,
-                      })}
-                    </strong>
-                    <span className={styles.detailCandidateStatus}>
-                      {translateDetailEnum(t, 'accounts.action_status_', candidate.status)}
-                    </span>
-                  </div>
-                  <span>{candidate.reason || '-'}</span>
-                </div>
-                <small>
-                  {t('accounts.detail_action_candidate_meta', {
-                    hits: candidate.hitCount,
-                    seen: formatTimestamp(candidate.lastSeenAtMs, i18n.language),
-                  })}
-                </small>
-              </div>
-            ))}
-          </div>
-        )}
       </section>
+
       <section className={styles.drawerSection}>
         <div className={styles.sectionHeaderInline}>
-          <div>
-            <h3>{t('accounts.detail_event_log')}</h3>
-            <p>{t('accounts.detail_event_log_desc')}</p>
-          </div>
+          <h3>{t('accounts.detail_activity_title')}</h3>
           <Button
             variant="secondary"
             size="sm"
@@ -200,114 +154,235 @@ export function AccountDiagnosticsTab({
           </div>
         ) : eventsError ? (
           <div className={styles.errorBox}>{eventsError}</div>
-        ) : events.length === 0 ? (
-          <div className={styles.detailEventsFooter}>
-            <span>{t('accounts.detail_events_empty')}</span>
-            <a href={`#/monitoring?${monitoringParams.toString()}`}>
-              {t('accounts.detail_event_footer_open_monitoring', {
-                defaultValue: '前往请求监控',
-              })}
-            </a>
-          </div>
         ) : (
           <div className={styles.detailEventsStack}>
-            <div className={styles.detailEventSummary}>
-              <div>
-                <span>{t('accounts.detail_event_summary_total')}</span>
-                <strong>{formatCompactNumber(eventsTotalCount || events.length)}</strong>
+            <div className={styles.detailActivitySummary}>
+              <div data-diagnostic-activity-metric="requests">
+                <span>{t('accounts.detail_activity_requests')}</span>
+                <strong title={String(activityTotalCalls)}>
+                  {formatCompactNumber(activityTotalCalls)}
+                </strong>
               </div>
-              <div>
-                <span>{t('accounts.detail_event_summary_failed')}</span>
-                <strong>{formatCompactNumber(failedEventCount)}</strong>
+              <div data-diagnostic-activity-metric="failure-rate">
+                <span>{t('accounts.detail_activity_failure_rate')}</span>
+                <strong>{formatPercent(activity.failureRate, 1)}</strong>
               </div>
-              <div>
-                <span>{t('accounts.detail_event_summary_slowest')}</span>
-                <strong>{formatDurationMs(slowestLatencyMs)}</strong>
+              <div data-diagnostic-activity-metric="p95-latency">
+                <span>{t('accounts.detail_activity_p95_latency')}</span>
+                <strong>{formatDurationMs(activity.p95LatencyMs)}</strong>
               </div>
             </div>
-            {latestFailedEvent ? (
+
+            {activity.recentFailure ? (
               <div className={styles.detailEventFailureSummary}>
-                <span>{t('accounts.detail_event_latest_failure')}</span>
-                <strong>{getEventFailureReason(latestFailedEvent) || '-'}</strong>
+                <span>{t('accounts.detail_activity_latest_failure')}</span>
+                <strong>
+                  {activity.recentFailure.reason || t('accounts.detail_event_failed_reason_empty')}
+                </strong>
+                {recentFailureMeta.length > 0 ? (
+                  <small>{recentFailureMeta.join(' · ')}</small>
+                ) : null}
               </div>
             ) : null}
-            <div className={styles.detailEventsList}>
-              {events.map((event) => {
-                const requestLabel = event.request_id || event.event_hash.slice(0, 10) || '-';
-                const modelLabel = event.resolved_model || event.model || '-';
-                const failureReason = getEventFailureReason(event);
-                return (
-                  <article key={event.event_hash} className={styles.detailEventItem}>
-                    <div className={styles.detailEventHeader}>
-                      <span
-                        className={`${styles.eventStatus} ${
-                          event.failed ? styles.eventStatusFailed : styles.eventStatusSuccess
-                        }`}
-                        title={failureReason || undefined}
-                      >
-                        {getEventStatusText(event, t)}
-                      </span>
-                      <strong>{formatTimestamp(event.timestamp_ms, i18n.language)}</strong>
-                    </div>
-                    <div className={styles.detailEventIdentity}>
-                      <CopyableText
-                        value={requestLabel}
-                        copyValue={event.request_id || event.event_hash}
-                      />
-                      <span title={modelLabel}>{modelLabel}</span>
-                    </div>
-                    {event.failed ? (
-                      <p className={styles.detailEventFailureReason}>
-                        {failureReason || t('accounts.detail_event_failed_reason_empty')}
-                      </p>
-                    ) : null}
-                    <div className={styles.detailEventMeta}>
-                      <span>
-                        {t('accounts.value_input_tokens')}:{' '}
-                        {formatCompactNumber(event.input_tokens)}
-                      </span>
-                      <span>
-                        {t('accounts.value_output_tokens')}:{' '}
-                        {formatCompactNumber(event.output_tokens)}
-                      </span>
-                      <span>
-                        {t('accounts.detail_event_col_latency')}:{' '}
-                        {formatDurationMs(event.latency_ms)}
-                      </span>
-                      <span>TTFT: {formatDurationMs(event.ttft_ms)}</span>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-            {eventsHasMore ? (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => onLoadMoreEvents(nextBeforeMs, nextBeforeId)}
-                disabled={eventsAppending}
-                loading={eventsAppending}
-              >
-                {t('accounts.detail_event_load_more')}
-              </Button>
-            ) : null}
-            <div className={styles.detailEventsFooter}>
-              <span>
-                {t('accounts.detail_event_footer_count', {
-                  defaultValue: '显示 {{shown}} / 共 {{total}} 条',
-                  shown: events.length,
-                  total: eventsTotalCount || events.length,
-                })}
-              </span>
-              <a href={`#/monitoring?${monitoringParams.toString()}`}>
-                {t('accounts.detail_event_footer_open_monitoring', {
-                  defaultValue: '前往请求监控',
-                })}
-              </a>
-            </div>
+
+            {events.length === 0 ? (
+              <div className={styles.detailEventsFooter}>
+                <span>{t('accounts.detail_events_empty')}</span>
+                <a href={`#/monitoring?${monitoringParams.toString()}`}>
+                  {t('accounts.detail_event_footer_open_monitoring')}
+                </a>
+              </div>
+            ) : (
+              <>
+                <div className={styles.detailEventsList}>
+                  {events.map((event) => {
+                    const requestLabel = event.request_id || event.event_hash.slice(0, 10) || '-';
+                    const modelLabel = event.resolved_model || event.model || '-';
+                    const failureReason = getEventFailureReason(event);
+                    return (
+                      <article key={event.event_hash} className={styles.detailEventItem}>
+                        <div className={styles.detailEventHeader}>
+                          <span
+                            className={`${styles.eventStatus} ${
+                              event.failed ? styles.eventStatusFailed : styles.eventStatusSuccess
+                            }`}
+                            title={failureReason || undefined}
+                          >
+                            {getEventStatusText(event, t)}
+                          </span>
+                          <strong>{formatTimestamp(event.timestamp_ms, i18n.language)}</strong>
+                        </div>
+                        <div className={styles.detailEventIdentity}>
+                          <CopyableText
+                            value={requestLabel}
+                            copyValue={event.request_id || event.event_hash}
+                          />
+                          <span title={modelLabel}>{modelLabel}</span>
+                        </div>
+                        {event.failed ? (
+                          <p className={styles.detailEventFailureReason}>
+                            {failureReason || t('accounts.detail_event_failed_reason_empty')}
+                          </p>
+                        ) : null}
+                        <div className={styles.detailEventMeta}>
+                          <span>
+                            {t('accounts.value_input_tokens')}:{' '}
+                            {formatCompactNumber(event.input_tokens)}
+                          </span>
+                          <span>
+                            {t('accounts.value_output_tokens')}:{' '}
+                            {formatCompactNumber(event.output_tokens)}
+                          </span>
+                          <span>
+                            {t('accounts.detail_event_col_latency')}:{' '}
+                            {formatDurationMs(event.latency_ms)}
+                          </span>
+                          <span>TTFT: {formatDurationMs(event.ttft_ms)}</span>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+                {eventsHasMore ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => onLoadMoreEvents(nextBeforeMs, nextBeforeId)}
+                    disabled={eventsAppending}
+                    loading={eventsAppending}
+                  >
+                    {t('accounts.detail_event_load_more')}
+                  </Button>
+                ) : null}
+                <div className={styles.detailEventsFooter}>
+                  <span>
+                    {t('accounts.detail_event_footer_count', {
+                      shown: events.length,
+                      total: eventsTotalCount || events.length,
+                    })}
+                  </span>
+                  <a href={`#/monitoring?${monitoringParams.toString()}`}>
+                    {t('accounts.detail_event_footer_open_monitoring')}
+                  </a>
+                </div>
+              </>
+            )}
           </div>
         )}
       </section>
+
+      {hasDiagnosticEvidence ? (
+        <details className={`${styles.drawerSection} ${styles.diagnosticEvidenceDisclosure}`}>
+          <summary>
+            <span>{t('accounts.detail_diagnostic_evidence')}</span>
+            {candidatesError ? (
+              <small>{t('accounts.detail_diagnostic_evidence_error')}</small>
+            ) : null}
+          </summary>
+          <div className={styles.diagnosticEvidenceBody}>
+            {hasInspectionEvidence ? (
+              <section className={styles.diagnosticEvidenceGroup}>
+                <h4>{t('accounts.detail_diagnostic_inspection_evidence')}</h4>
+                {detailView.strategy.inspectionFields.length > 0 ? (
+                  <AccountDetailFieldList fields={detailView.strategy.inspectionFields} />
+                ) : (
+                  <div className={styles.inlineLoading}>
+                    <LoadingSpinner size={14} />
+                    <span>{t('common.loading')}</span>
+                  </div>
+                )}
+              </section>
+            ) : null}
+
+            {hasCodexEvidence ? (
+              <section className={styles.diagnosticEvidenceGroup}>
+                <h4>{t('accounts.detail_diagnostic_codex_evidence')}</h4>
+                <div className={styles.detailBadgeList}>
+                  {[...detailView.strategy.codexBadges]
+                    .sort((left, right) => {
+                      const order = { danger: 0, warning: 1, info: 2 } as const;
+                      return order[left.tone] - order[right.tone];
+                    })
+                    .map((badge) => (
+                      <span
+                        key={badge.kind}
+                        className={`${styles.badge} ${
+                          badge.tone === 'danger'
+                            ? styles.badgeBad
+                            : badge.tone === 'warning'
+                              ? styles.badgeWarn
+                              : styles.badgeInfo
+                        }`}
+                        title={
+                          badge.titleKey
+                            ? t(badge.titleKey, {
+                                defaultValue: badge.defaultTitle,
+                                ...badge.labelParams,
+                              })
+                            : undefined
+                        }
+                      >
+                        {t(badge.labelKey, {
+                          defaultValue: badge.defaultLabel,
+                          ...badge.labelParams,
+                        })}
+                      </span>
+                    ))}
+                </div>
+              </section>
+            ) : null}
+
+            {hasCandidateEvidence ? (
+              <section className={styles.diagnosticEvidenceGroup}>
+                <div className={styles.diagnosticEvidenceGroupHeader}>
+                  <h4>{t('accounts.detail_diagnostic_candidate_evidence')}</h4>
+                  {candidatesLoading ? <LoadingSpinner size={14} /> : null}
+                </div>
+                {candidatesError ? (
+                  <div className={styles.errorBox}>{candidatesError}</div>
+                ) : detailView.strategy.actionCandidates.length > 0 ? (
+                  <div className={styles.detailCandidateList}>
+                    {detailView.strategy.actionCandidates.map((candidate) => {
+                      const candidateReason = candidate.reasonCode
+                        ? t(`account_actions.reason_${candidate.reasonCode}`, {
+                            defaultValue: candidate.reason || '-',
+                          })
+                        : candidate.reason || '-';
+                      return (
+                        <div key={candidate.id} className={styles.detailCandidateItem}>
+                          <div>
+                            <div className={styles.detailCandidateHeader}>
+                              <strong>
+                                {t(`accounts.action_type_${candidate.actionType}`, {
+                                  defaultValue: candidate.actionType,
+                                })}
+                              </strong>
+                              <span className={styles.detailCandidateStatus}>
+                                {translateDetailEnum(
+                                  t,
+                                  'accounts.action_status_',
+                                  candidate.status
+                                )}
+                              </span>
+                            </div>
+                            <span>{candidateReason}</span>
+                          </div>
+                          <small>
+                            {t('accounts.detail_action_candidate_meta', {
+                              hits: candidate.hitCount,
+                              seen: formatTimestamp(candidate.lastSeenAtMs, i18n.language),
+                            })}
+                          </small>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }

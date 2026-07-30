@@ -185,6 +185,8 @@ import {
   type AccountActionCandidate,
   type MonitoringAnalyticsAccountStatRow,
   type MonitoringAnalyticsEventRow,
+  type MonitoringAnalyticsRecentFailure,
+  type MonitoringAnalyticsSummary,
   type MonitoringAccountHistoryItem,
   type MonitoringAccountWindowUsageItem,
   type QuotaCooldownInfo,
@@ -482,6 +484,11 @@ export function AccountsPage() {
   const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
   const [detailEventsRowKey, setDetailEventsRowKey] = useState<string | null>(null);
   const [detailEvents, setDetailEvents] = useState<MonitoringAnalyticsEventRow[]>([]);
+  const [detailEventsSummary, setDetailEventsSummary] = useState<MonitoringAnalyticsSummary | null>(
+    null
+  );
+  const [detailEventsRecentFailure, setDetailEventsRecentFailure] =
+    useState<MonitoringAnalyticsRecentFailure | null>(null);
   const [detailEventsTotalCount, setDetailEventsTotalCount] = useState(0);
   const [detailEventsHasMore, setDetailEventsHasMore] = useState(false);
   const [detailEventsNextBeforeMs, setDetailEventsNextBeforeMs] = useState<number | null>(null);
@@ -1547,6 +1554,8 @@ export function AccountsPage() {
       setDetailEventsRowKey(row.selectionKey);
       if (!append) {
         setDetailEvents([]);
+        setDetailEventsSummary(null);
+        setDetailEventsRecentFailure(null);
         setDetailEventsTotalCount(0);
         setDetailEventsHasMore(false);
         setDetailEventsNextBeforeMs(null);
@@ -1581,6 +1590,10 @@ export function AccountsPage() {
               ...(authIndex ? { auth_indices: [authIndex] } : {}),
             },
             include: {
+              summary: true,
+              summary_profile: 'compact',
+              summary_percentiles: true,
+              recent_failures: 1,
               events_page: {
                 limit: DETAIL_EVENTS_LIMIT,
                 before_ms: options.beforeMs ?? null,
@@ -1594,6 +1607,10 @@ export function AccountsPage() {
         const eventsPage = response.events;
         const nextItems = eventsPage?.items ?? [];
         setDetailEvents((current) => (append ? [...current, ...nextItems] : nextItems));
+        setDetailEventsSummary((current) => response.summary ?? (append ? current : null));
+        setDetailEventsRecentFailure(
+          (current) => response.recent_failures?.[0] ?? (append ? current : null)
+        );
         setDetailEventsTotalCount(
           (current) =>
             eventsPage?.total_count ?? (append ? current + nextItems.length : nextItems.length)
@@ -3127,6 +3144,11 @@ export function AccountsPage() {
             getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, selectedRow.raw)
           )
         : null;
+    const hasMatchingDetailEvents = detailEventsRowKey === selectedRow.selectionKey;
+    const rowEvents = hasMatchingDetailEvents ? detailEvents : [];
+    const rowEventsSummary = hasMatchingDetailEvents ? detailEventsSummary : null;
+    const rowEventsRecentFailure = hasMatchingDetailEvents ? detailEventsRecentFailure : null;
+    const rowEventsTotalCount = hasMatchingDetailEvents ? detailEventsTotalCount : 0;
     const detailView = buildAccountDetailViewModel(selectedRow, {
       recommendation: recommendationBySelectionKey.get(selectedRow.selectionKey) ?? null,
       quotaCooldown: selectedQuotaCooldown,
@@ -3140,8 +3162,11 @@ export function AccountsPage() {
       codexQuota: selectedCodexQuota,
       xaiQuota:
         selectedRow.provider === XAI_CONFIG.type ? xaiQuota[selectedRow.fileName] : undefined,
+      diagnosticsSummary: rowEventsSummary,
+      diagnosticsRecentFailure: rowEventsRecentFailure,
+      diagnosticsEvents: rowEvents,
+      diagnosticsTotalCount: rowEventsTotalCount,
     });
-    const rowEvents = detailEventsRowKey === selectedRow.selectionKey ? detailEvents : [];
     const eventsUnavailable =
       !featureAvailability.requestMonitoringAvailable ||
       !featureAvailability.managerServiceBase ||
@@ -3203,7 +3228,7 @@ export function AccountsPage() {
             candidatesLoading={accountActionCandidatesLoading}
             candidatesError={accountActionCandidatesError}
             events={rowEvents}
-            eventsTotalCount={detailEventsTotalCount}
+            eventsTotalCount={rowEventsTotalCount}
             eventsHasMore={detailEventsHasMore}
             eventsLoading={detailEventsLoading}
             eventsAppending={detailEventsAppending}
