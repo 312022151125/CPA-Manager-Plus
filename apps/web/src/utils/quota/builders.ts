@@ -13,8 +13,10 @@ import type {
   KimiLimitItem,
   KimiLimitWindow,
   KimiQuotaRow,
+  QuotaResetAccuracy,
 } from '@/types';
 import { normalizeQuotaFraction, normalizeStringValue } from './parsers';
+import { resolveAbsoluteQuotaReset, resolveRelativeQuotaReset } from './formatters';
 
 export function getAntigravityQuotaInfo(entry?: AntigravityQuotaInfo): {
   remainingFraction: number | null;
@@ -214,14 +216,19 @@ function getAntigravityModelQuotaEntry(
   };
 }
 
-function pickEarlierResetTime(current?: string, next?: string): string | undefined {
-  if (!current) return next;
-  if (!next) return current;
-  const currentTime = new Date(current).getTime();
-  const nextTime = new Date(next).getTime();
-  if (Number.isNaN(currentTime)) return next;
-  if (Number.isNaN(nextTime)) return current;
-  return currentTime <= nextTime ? current : next;
+function resolveConservativeAntigravityResetTime(
+  entries: AntigravityModelQuotaEntry[]
+): string | undefined {
+  let selected: { value: string; resetAtMs: number } | null = null;
+  for (const entry of entries) {
+    const value = entry.resetTime;
+    const resetAtMs = resolveAbsoluteQuotaReset(value).resetAtMs;
+    if (!value || resetAtMs === null) return undefined;
+    if (!selected || resetAtMs > selected.resetAtMs) {
+      selected = { value, resetAtMs };
+    }
+  }
+  return selected?.value;
 }
 
 function buildAntigravitySharedGroup(
@@ -238,10 +245,8 @@ function buildAntigravitySharedGroup(
   if (entries.length === 0) return null;
 
   const remainingFraction = Math.min(...entries.map((entry) => entry.remainingFraction));
-  const resetTime = entries.reduce<string | undefined>(
-    (current, entry) => pickEarlierResetTime(current, entry.resetTime),
-    undefined
-  );
+  const limitingEntries = entries.filter((entry) => entry.remainingFraction === remainingFraction);
+  const resetTime = resolveConservativeAntigravityResetTime(limitingEntries);
   const modelIdsForDescription = entries.map((entry) => entry.id);
 
   return {
@@ -414,45 +419,58 @@ function applyKimiScopeLabel(label: KimiRowLabel, scope: unknown): KimiRowLabel 
   return label;
 }
 
-function kimiResetHint(data: Record<string, unknown>): string | undefined {
+type KimiResetResolution = {
+  resetHint?: string;
+  resetAtMs: number | null;
+  resetAccuracy: QuotaResetAccuracy;
+};
+
+function formatKimiResetDuration(deltaMs: number): string | undefined {
+  if (!Number.isFinite(deltaMs) || deltaMs <= 0) return undefined;
+  const totalMinutes = Math.floor(deltaMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h`;
+  if (minutes > 0) return `${minutes}m`;
+  return '<1m';
+}
+
+function resolveKimiReset(
+  sources: Record<string, unknown>[],
+  observedAtMs: number
+): KimiResetResolution {
   const absoluteKeys = ['reset_at', 'resetAt', 'reset_time', 'resetTime'];
-  for (const key of absoluteKeys) {
-    const raw = data[key];
-    if (typeof raw === 'string' && raw.trim()) {
-      try {
-        const truncated = raw.replace(/(\.\d{6})\d+/, '$1');
-        const date = new Date(truncated);
-        if (Number.isNaN(date.getTime())) continue;
-        const now = Date.now();
-        const delta = date.getTime() - now;
-        if (delta <= 0) return undefined;
-        const totalMinutes = Math.floor(delta / 60000);
-        const hours = Math.floor(totalMinutes / 60);
-        const minutes = totalMinutes % 60;
-        if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
-        if (hours > 0) return `${hours}h`;
-        if (minutes > 0) return `${minutes}m`;
-        return '<1m';
-      } catch {
-        continue;
-      }
+  for (const source of sources) {
+    for (const key of absoluteKeys) {
+      const raw = source[key];
+      const reset = resolveAbsoluteQuotaReset(raw);
+      if (reset.resetAtMs === null) continue;
+      return {
+        resetHint: formatKimiResetDuration(reset.resetAtMs - observedAtMs),
+        resetAtMs: reset.resetAtMs,
+        resetAccuracy: reset.resetAccuracy,
+      };
     }
   }
 
   const relativeKeys = ['reset_in', 'resetIn', 'ttl'];
-  for (const key of relativeKeys) {
-    const raw = toInt(data[key]);
-    if (raw !== null && raw > 0) {
-      const hours = Math.floor(raw / 3600);
-      const minutes = Math.floor((raw % 3600) / 60);
-      if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
-      if (hours > 0) return `${hours}h`;
-      if (minutes > 0) return `${minutes}m`;
-      return '<1m';
+  for (const source of sources) {
+    for (const key of relativeKeys) {
+      const raw = toInt(source[key]);
+      if (raw !== null && raw > 0) {
+        const reset = resolveRelativeQuotaReset(raw, observedAtMs);
+        if (reset.resetAtMs === null) continue;
+        return {
+          resetHint: formatKimiResetDuration(reset.resetAtMs - observedAtMs),
+          resetAtMs: reset.resetAtMs,
+          resetAccuracy: reset.resetAccuracy,
+        };
+      }
     }
   }
 
-  return undefined;
+  return { resetAtMs: null, resetAccuracy: 'unknown' };
 }
 
 function kimiDurationToken(duration: number, rawTimeUnit: unknown): string {
@@ -510,8 +528,18 @@ function kimiLimitLabel(
 
 function toKimiUsageRow(
   data: Record<string, unknown>,
-  fallbackLabel: KimiRowLabel
-): (KimiRowLabel & { used: number; limit: number; resetHint?: string }) | null {
+  fallbackLabel: KimiRowLabel,
+  observedAtMs: number,
+  resetSources: Record<string, unknown>[] = [data]
+):
+  | (KimiRowLabel & {
+      used: number;
+      limit: number;
+      resetHint?: string;
+      resetAtMs: number | null;
+      resetAccuracy: QuotaResetAccuracy;
+    })
+  | null {
   const limit = toInt(data.limit);
   let used = toInt(data.used);
   if (used === null) {
@@ -525,16 +553,21 @@ function toKimiUsageRow(
     (typeof data.name === 'string' && data.name.trim()) ||
     (typeof data.title === 'string' && data.title.trim());
   const label = explicitLabel ? { label: explicitLabel } : fallbackLabel;
+  const reset = resolveKimiReset(resetSources, observedAtMs);
   return {
     ...label,
     used: used ?? 0,
     limit: limit ?? 0,
-    resetHint: kimiResetHint(data),
+    ...reset,
   };
 }
 
-export function buildKimiQuotaRows(payload: KimiUsagePayload): KimiQuotaRow[] {
+export function buildKimiQuotaRows(
+  payload: KimiUsagePayload,
+  options?: { observedAtMs?: number }
+): KimiQuotaRow[] {
   const rows: KimiQuotaRow[] = [];
+  const observedAtMs = options?.observedAtMs ?? Date.now();
 
   const addRows = (
     usage: KimiUsagePayload['usage'],
@@ -543,9 +576,13 @@ export function buildKimiQuotaRows(payload: KimiUsagePayload): KimiQuotaRow[] {
     scope?: unknown
   ) => {
     if (usage && typeof usage === 'object') {
-      const summary = toKimiUsageRow(usage as Record<string, unknown>, {
-        labelKey: 'kimi_quota.weekly_limit',
-      });
+      const summary = toKimiUsageRow(
+        usage as Record<string, unknown>,
+        {
+          labelKey: 'kimi_quota.weekly_limit',
+        },
+        observedAtMs
+      );
       if (summary) {
         rows.push({ id: `${idPrefix}summary`, ...summary, ...applyKimiScopeLabel(summary, scope) });
       }
@@ -556,11 +593,18 @@ export function buildKimiQuotaRows(payload: KimiUsagePayload): KimiQuotaRow[] {
         const detail = (item.detail && typeof item.detail === 'object' ? item.detail : item) as
           | KimiUsageDetail
           | KimiLimitItem;
+        const detailRecord = detail as Record<string, unknown>;
+        const itemRecord = item as Record<string, unknown>;
         const window = (
           item.window && typeof item.window === 'object' ? item.window : {}
         ) as KimiLimitWindow;
         const fallbackLabel = kimiLimitLabel(item, detail, window, idx);
-        const row = toKimiUsageRow(detail as Record<string, unknown>, fallbackLabel);
+        const row = toKimiUsageRow(
+          detailRecord,
+          fallbackLabel,
+          observedAtMs,
+          detail === item ? [itemRecord] : [detailRecord, itemRecord]
+        );
         if (row) {
           rows.push({ id: `${idPrefix}limit-${idx}`, ...row, ...applyKimiScopeLabel(row, scope) });
         }

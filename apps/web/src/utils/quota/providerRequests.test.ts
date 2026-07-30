@@ -84,6 +84,7 @@ describe('fetchCodexQuota', () => {
         bodyText: '',
         body: {
           plan_type: 'plus',
+          subscription_active_until: 1_788_220_799,
           rate_limit_reset_credits: {
             available_count: 1,
           },
@@ -155,6 +156,7 @@ describe('fetchCodexQuota', () => {
     expect(result.rateLimitResetCreditsAvailableCount).toBe(2);
     expect(result.rateLimitResetCredits).toHaveLength(1);
     expect(result.rateLimitResetCreditsError).toBeNull();
+    expect(result.subscriptionActiveUntil).toBe(1_788_220_799);
     expect(result).toMatchObject({
       creditsHasCredits: true,
       creditsUnlimited: false,
@@ -309,11 +311,13 @@ describe('fetchClaudeQuota', () => {
       'weekly-scoped-fable%205%20max',
       'iguana-necktie',
     ]);
-    expect(result.windows[2]).toEqual({
+    expect(result.windows[2]).toMatchObject({
       id: 'weekly-scoped-fable%205%20max',
       label: 'Fable 5 Max',
       usedPercent: 100,
       resetLabel: formatQuotaResetTime(resetAt),
+      resetAtMs: Date.parse(resetAt),
+      resetAccuracy: 'exact',
     });
     expect(result.windows[3]).toMatchObject({
       id: 'iguana-necktie',
@@ -370,7 +374,7 @@ describe('fetchClaudeQuota', () => {
       t
     );
 
-    expect(result.windows).toEqual([
+    expect(result.windows).toMatchObject([
       {
         id: 'five-hour',
         label: 'claude_quota.five_hour',
@@ -390,6 +394,65 @@ describe('fetchClaudeQuota', () => {
         label: 'Fable 5 Max',
         usedPercent: 42,
         resetLabel: formatQuotaResetTime(scopedResetAt),
+      },
+    ]);
+  });
+
+  it('normalizes Unix seconds and milliseconds from structured Claude limits', async () => {
+    const sessionResetAtMs = Date.parse('2026-07-01T10:00:00Z');
+    const weeklyResetAtMs = Date.parse('2026-07-07T10:00:00Z');
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          limits: [
+            {
+              kind: 'session',
+              group: 'session',
+              percent: 18,
+              resets_at: sessionResetAtMs / 1000,
+              is_active: true,
+            },
+            {
+              kind: 'weekly_all',
+              group: 'weekly',
+              percent: 42,
+              resetsAt: weeklyResetAtMs,
+              isActive: true,
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {},
+      });
+
+    const result = await fetchClaudeQuota(
+      {
+        name: 'claude.json',
+        type: 'claude',
+        authIndex: 'claude-1',
+      },
+      t
+    );
+
+    expect(result.windows).toMatchObject([
+      {
+        id: 'five-hour',
+        resetAtMs: sessionResetAtMs,
+        resetAccuracy: 'exact',
+      },
+      {
+        id: 'seven-day',
+        resetAtMs: weeklyResetAtMs,
+        resetAccuracy: 'exact',
       },
     ]);
   });
@@ -449,7 +512,7 @@ describe('fetchClaudeQuota', () => {
       t
     );
 
-    expect(result.windows).toEqual([
+    expect(result.windows).toMatchObject([
       {
         id: 'five-hour',
         label: 'claude_quota.five_hour',
@@ -514,7 +577,7 @@ describe('fetchClaudeQuota', () => {
       t
     );
 
-    expect(result.windows).toEqual([
+    expect(result.windows).toMatchObject([
       {
         id: 'five-hour',
         label: 'claude_quota.five_hour',
@@ -624,8 +687,8 @@ describe('fetchClaudeQuota', () => {
         resetLabel: formatQuotaResetTime(weeklyResetAt),
       },
     ];
-    expect(first.windows).toEqual(expectedWindows);
-    expect(reversed.windows).toEqual(expectedWindows);
+    expect(first.windows).toMatchObject(expectedWindows);
+    expect(reversed.windows).toMatchObject(expectedWindows);
   });
 
   it('orders base candidates by freshness, completeness, then kind precedence', async () => {
@@ -681,7 +744,7 @@ describe('fetchClaudeQuota', () => {
       t
     );
 
-    expect(result.windows).toEqual([
+    expect(result.windows).toMatchObject([
       {
         id: 'five-hour',
         label: 'claude_quota.five_hour',
@@ -758,7 +821,7 @@ describe('fetchClaudeQuota', () => {
       t
     );
 
-    expect(result.windows).toEqual([
+    expect(result.windows).toMatchObject([
       {
         id: 'weekly-scoped-healthy%20scoped%20model',
         label: 'Healthy scoped model',
@@ -797,12 +860,14 @@ describe('fetchClaudeQuota', () => {
       t
     );
 
-    expect(result.windows).toEqual([
+    expect(result.windows).toMatchObject([
       {
         id: 'weekly-scoped-over%20limit',
         label: 'Over Limit',
         usedPercent: 125,
         resetLabel: '-',
+        resetAtMs: null,
+        resetAccuracy: 'unknown',
       },
     ]);
   });
@@ -871,7 +936,7 @@ describe('fetchClaudeQuota', () => {
       t
     );
 
-    expect(result.windows).toEqual([
+    expect(result.windows).toMatchObject([
       {
         id: 'weekly-scoped-id-model-dormant',
         label: 'Dormant model',
@@ -966,7 +1031,7 @@ describe('fetchClaudeQuota', () => {
       t
     );
 
-    expect(result.windows).toEqual([
+    expect(result.windows).toMatchObject([
       {
         id: 'weekly-scoped-id-model-percent',
         label: 'Fresh percent',
@@ -1041,8 +1106,8 @@ describe('fetchClaudeQuota', () => {
         resetLabel: '-',
       },
     ];
-    expect(first.windows).toEqual(expected);
-    expect(reversed.windows).toEqual(expected);
+    expect(first.windows).toMatchObject(expected);
+    expect(reversed.windows).toMatchObject(expected);
   });
 
   it('ignores unscoped duplicates, unrelated kinds, and malformed scoped limits', async () => {
@@ -1291,8 +1356,8 @@ describe('fetchClaudeQuota', () => {
         resetLabel: formatQuotaResetTime(resetAt),
       },
     ];
-    expect(withoutIdFirst.windows).toEqual(expectedWindows);
-    expect(withIdFirst.windows).toEqual(expectedWindows);
+    expect(withoutIdFirst.windows).toMatchObject(expectedWindows);
+    expect(withIdFirst.windows).toMatchObject(expectedWindows);
   });
 
   it('preserves non-equivalent label-only scoped data instead of dropping it', async () => {
@@ -1545,11 +1610,13 @@ describe('fetchClaudeQuota', () => {
       id: 'five-hour',
       usedPercent: 12,
     });
-    expect(result.windows[1]).toEqual({
+    expect(result.windows[1]).toMatchObject({
       id: 'weekly-scoped-fable%205%20max',
       label: 'Fable 5 Max',
       usedPercent: 100,
       resetLabel: formatQuotaResetTime(scopedResetAt),
+      resetAtMs: Date.parse(scopedResetAt),
+      resetAccuracy: 'exact',
     });
   });
 

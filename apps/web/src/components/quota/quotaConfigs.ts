@@ -30,6 +30,7 @@ import {
   resolveCodexPlanType,
   formatQuotaResetTime,
   formatKimiResetHint,
+  isValidQuotaResetAtMs,
   fetchAntigravityQuota,
   fetchClaudeQuota,
   fetchCodexQuota,
@@ -356,7 +357,7 @@ const getCodexPlanLabel = (planType: string | null | undefined, t: TFunction): s
 };
 
 const getCodexEffectivePlanType = (file: AuthFileItem, quota?: CodexQuotaState): string | null =>
-  resolveCodexPlanType(file) ?? quota?.planType ?? null;
+  quota?.planType ?? resolveCodexPlanType(file) ?? null;
 
 const getCodexPlanSortRank = (file: AuthFileItem, quota?: CodexQuotaState): number | null => {
   const normalized = normalizePlanType(getCodexEffectivePlanType(file, quota));
@@ -429,27 +430,43 @@ const hasKnownResetLabel = (value: unknown): value is string => {
 const mergeCodexQuotaWindow = (
   activeWindow: CodexQuotaWindow,
   observedWindow: CodexQuotaWindow
-): CodexQuotaWindow => ({
-  ...activeWindow,
-  ...(hasHeaderValue(observedWindow.label) ? { label: observedWindow.label } : {}),
-  ...(hasHeaderValue(observedWindow.labelKey) ? { labelKey: observedWindow.labelKey } : {}),
-  ...(observedWindow.labelParams && Object.keys(observedWindow.labelParams).length > 0
-    ? { labelParams: observedWindow.labelParams }
-    : {}),
-  ...(observedWindow.usedPercent !== null &&
-  observedWindow.usedPercent !== undefined &&
-  Number.isFinite(observedWindow.usedPercent)
-    ? { usedPercent: observedWindow.usedPercent }
-    : {}),
-  ...(hasKnownResetLabel(observedWindow.resetLabel)
-    ? { resetLabel: observedWindow.resetLabel }
-    : {}),
-  ...(observedWindow.limitWindowSeconds !== null &&
-  observedWindow.limitWindowSeconds !== undefined &&
-  observedWindow.limitWindowSeconds > 0
-    ? { limitWindowSeconds: observedWindow.limitWindowSeconds }
-    : {}),
-});
+): CodexQuotaWindow => {
+  const hasObservedResetLabel = hasKnownResetLabel(observedWindow.resetLabel);
+  const hasObservedResetAt = isValidQuotaResetAtMs(observedWindow.resetAtMs);
+  const resetMetadata = hasObservedResetAt
+    ? {
+        resetLabel: hasObservedResetLabel ? observedWindow.resetLabel : '-',
+        resetAtMs: observedWindow.resetAtMs ?? null,
+        resetAccuracy: observedWindow.resetAccuracy ?? 'unknown',
+      }
+    : hasObservedResetLabel
+      ? {
+          resetLabel: observedWindow.resetLabel,
+          resetAtMs: null,
+          resetAccuracy: 'unknown' as const,
+        }
+      : {};
+
+  return {
+    ...activeWindow,
+    ...(hasHeaderValue(observedWindow.label) ? { label: observedWindow.label } : {}),
+    ...(hasHeaderValue(observedWindow.labelKey) ? { labelKey: observedWindow.labelKey } : {}),
+    ...(observedWindow.labelParams && Object.keys(observedWindow.labelParams).length > 0
+      ? { labelParams: observedWindow.labelParams }
+      : {}),
+    ...(observedWindow.usedPercent !== null &&
+    observedWindow.usedPercent !== undefined &&
+    Number.isFinite(observedWindow.usedPercent)
+      ? { usedPercent: observedWindow.usedPercent }
+      : {}),
+    ...resetMetadata,
+    ...(observedWindow.limitWindowSeconds !== null &&
+    observedWindow.limitWindowSeconds !== undefined &&
+    observedWindow.limitWindowSeconds > 0
+      ? { limitWindowSeconds: observedWindow.limitWindowSeconds }
+      : {}),
+  };
+};
 
 const mergeCodexQuotaWindows = (
   activeWindows: CodexQuotaWindow[] | undefined,
@@ -620,9 +637,14 @@ export const buildObservedCodexQuotaState = (
   const recoverAtMS = getHeaderSnapshotRecoverAtMs(snapshot);
   const recoverLabel = recoverAtMS ? new Date(recoverAtMS).toLocaleString() : '-';
   const headerPlanType = observedQuota?.planType || getHeaderSnapshotPlanType(snapshot);
-  const planType = resolveCodexPlanType(file) ?? (headerPlanType || null);
+  const planType = headerPlanType || resolveCodexPlanType(file) || null;
   const observedWindows = observedQuota?.payload
-    ? buildCodexQuotaWindows(observedQuota.payload, t, planType)
+    ? buildCodexQuotaWindows(
+        observedQuota.payload,
+        t,
+        planType,
+        snapshot?.timestamp_ms ?? Date.now()
+      )
     : [];
   const windows: CodexQuotaWindow[] =
     observedWindows.length > 0
@@ -636,6 +658,8 @@ export const buildObservedCodexQuotaState = (
               }),
               usedPercent,
               resetLabel: recoverLabel,
+              resetAtMs: recoverAtMS,
+              resetAccuracy: recoverAtMS ? 'estimated' : 'unknown',
             },
           ]
         : [];

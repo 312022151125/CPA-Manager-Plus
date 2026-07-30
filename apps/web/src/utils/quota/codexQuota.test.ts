@@ -7,6 +7,100 @@ import {
 } from './codexQuota';
 
 describe('buildCodexQuotaWindowInfos', () => {
+  it('distinguishes exact absolute resets from relative estimates anchored to observation time', () => {
+    const observedAtMs = Date.parse('2026-07-29T10:00:00Z');
+    const exactResetAtMs = Date.parse('2026-07-29T12:00:00Z');
+    const windows = buildCodexQuotaWindowInfos(
+      {
+        rate_limit: {
+          primary_window: {
+            used_percent: 10,
+            limit_window_seconds: 18_000,
+            reset_at: exactResetAtMs / 1000,
+          },
+          secondary_window: {
+            used_percent: 20,
+            limit_window_seconds: 604_800,
+            reset_after_seconds: 7_200,
+          },
+        },
+      },
+      { observedAtMs }
+    );
+
+    expect(windows.find((window) => window.id === 'five-hour')).toMatchObject({
+      resetAtMs: exactResetAtMs,
+      resetAccuracy: 'exact',
+    });
+    expect(windows.find((window) => window.id === 'weekly')).toMatchObject({
+      resetAtMs: observedAtMs + 7_200_000,
+      resetAccuracy: 'estimated',
+    });
+  });
+
+  it('accepts Codex absolute resets as Unix milliseconds or ISO timestamps', () => {
+    const millisecondResetAtMs = Date.parse('2026-07-29T12:00:00Z');
+    const isoResetAt = '2026-08-05T12:00:00Z';
+    const windows = buildCodexQuotaWindowInfos({
+      rate_limit: {
+        primary_window: {
+          used_percent: 10,
+          limit_window_seconds: 18_000,
+          reset_at: millisecondResetAtMs,
+        },
+        secondary_window: {
+          used_percent: 20,
+          limit_window_seconds: 604_800,
+          reset_at: isoResetAt,
+        },
+      },
+    });
+
+    expect(windows.find((window) => window.id === 'five-hour')).toMatchObject({
+      resetAtMs: millisecondResetAtMs,
+      resetAccuracy: 'exact',
+    });
+    expect(windows.find((window) => window.id === 'weekly')).toMatchObject({
+      resetAtMs: Date.parse(isoResetAt),
+      resetAccuracy: 'exact',
+    });
+  });
+
+  it('rejects reset timestamps that exceed the JavaScript date range', () => {
+    const windows = buildCodexQuotaWindowInfos(
+      {
+        rate_limit: {
+          primary_window: {
+            used_percent: 10,
+            limit_window_seconds: 18_000,
+            reset_at: Number.MAX_VALUE,
+          },
+          secondary_window: {
+            used_percent: 20,
+            limit_window_seconds: 604_800,
+            reset_after_seconds: Number.MAX_VALUE,
+          },
+        },
+      },
+      { observedAtMs: Date.parse('2026-07-29T10:00:00Z') }
+    );
+
+    expect(windows).toMatchObject([
+      {
+        id: 'five-hour',
+        resetLabel: '-',
+        resetAtMs: null,
+        resetAccuracy: 'unknown',
+      },
+      {
+        id: 'weekly',
+        resetLabel: '-',
+        resetAtMs: null,
+        resetAccuracy: 'unknown',
+      },
+    ]);
+  });
+
   it('classifies Codex primary and weekly windows by duration', () => {
     const windows = buildCodexQuotaWindowInfos({
       rate_limit: {

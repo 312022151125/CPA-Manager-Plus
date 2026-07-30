@@ -119,6 +119,8 @@ export interface AntigravityQuotaGroupDefinition {
   labelFromModel?: boolean;
 }
 
+export type QuotaResetAccuracy = 'exact' | 'estimated' | 'unknown';
+
 export interface CodexUsageWindow {
   used_percent?: number | string;
   usedPercent?: number | string;
@@ -281,6 +283,8 @@ export interface ClaudeQuotaWindow {
   labelKey?: string;
   usedPercent: number | null;
   resetLabel: string;
+  resetAtMs?: number | null;
+  resetAccuracy?: QuotaResetAccuracy;
 }
 
 export interface ClaudeQuotaState {
@@ -332,6 +336,8 @@ export interface CodexQuotaWindow {
   labelParams?: Record<string, string | number>;
   usedPercent: number | null;
   resetLabel: string;
+  resetAtMs?: number | null;
+  resetAccuracy?: QuotaResetAccuracy;
   limitWindowSeconds?: number | null;
 }
 
@@ -350,7 +356,7 @@ export interface CodexQuotaState {
   spendControlIndividualLimit?: number | null;
   rateLimitReachedType?: string | null;
   primaryOverSecondaryLimitPercent?: number | null;
-  subscriptionActiveUntil?: string | null;
+  subscriptionActiveUntil?: string | number | null;
   rateLimitResetCreditsAvailableCount?: number | null;
   rateLimitResetCredits?: CodexRateLimitResetCredit[];
   rateLimitResetCreditsError?: string | null;
@@ -376,10 +382,10 @@ export interface KimiUsageDetail {
   remaining?: number | string;
   name?: string;
   title?: string;
-  resetAt?: string;
-  reset_at?: string;
-  resetTime?: string;
-  reset_time?: string;
+  resetAt?: string | number;
+  reset_at?: string | number;
+  resetTime?: string | number;
+  reset_time?: string | number;
   resetIn?: number | string;
   reset_in?: number | string;
   ttl?: number | string;
@@ -401,8 +407,10 @@ export interface KimiLimitItem {
   remaining?: number | string;
   duration?: number | string;
   timeUnit?: string;
-  resetAt?: string;
-  reset_at?: string;
+  resetAt?: string | number;
+  reset_at?: string | number;
+  resetTime?: string | number;
+  reset_time?: string | number;
   resetIn?: number | string;
   reset_in?: number | string;
   ttl?: number | string;
@@ -428,6 +436,8 @@ export interface KimiQuotaRow {
   used: number;
   limit: number;
   resetHint?: string;
+  resetAtMs?: number | null;
+  resetAccuracy?: QuotaResetAccuracy;
 }
 
 export interface KimiQuotaState {

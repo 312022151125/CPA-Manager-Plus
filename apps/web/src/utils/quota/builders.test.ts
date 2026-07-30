@@ -114,9 +114,114 @@ describe('buildAntigravityQuotaGroups', () => {
     expect(groups.some((group) => group.id === 'tab-models')).toBe(false);
     expect(groups.some((group) => group.models?.includes('chat_20706'))).toBe(false);
   });
+
+  it('keeps a shared Antigravity group reset aligned with its limiting models', () => {
+    const groups = buildAntigravityQuotaGroups({
+      models: {
+        'claude-limited-a': {
+          displayName: 'Claude Limited A',
+          quotaInfo: {
+            remainingFraction: 0,
+            resetTime: '2026-07-29T14:00:00Z',
+          },
+          apiProvider: 'API_PROVIDER_ANTHROPIC_VERTEX',
+        },
+        'claude-limited-b': {
+          displayName: 'Claude Limited B',
+          quotaInfo: {
+            remainingFraction: 0,
+            resetTime: '2026-07-29T16:00:00Z',
+          },
+          apiProvider: 'API_PROVIDER_ANTHROPIC_VERTEX',
+        },
+        'gpt-available': {
+          displayName: 'GPT Available',
+          quotaInfo: {
+            remainingFraction: 0.8,
+            resetTime: '2026-07-29T12:00:00Z',
+          },
+          apiProvider: 'API_PROVIDER_OPENAI_VERTEX',
+        },
+      },
+    });
+
+    expect(groups.find((group) => group.id === 'claude-gpt')?.buckets[0]).toMatchObject({
+      remainingFraction: 0,
+      resetTime: '2026-07-29T16:00:00Z',
+    });
+  });
 });
 
 describe('buildKimiQuotaRows', () => {
+  it('normalizes absolute, relative, and outer limit reset fields', () => {
+    const observedAtMs = Date.parse('2026-07-29T10:00:00Z');
+    const exactResetAt = '2026-07-29T12:00:00Z';
+    const outerResetAt = '2026-07-29T13:00:00Z';
+    const unixResetAt = Date.parse('2026-07-29T14:00:00Z');
+    const rows = buildKimiQuotaRows(
+      {
+        limits: [
+          {
+            detail: { used: 1, limit: 10, resetTime: exactResetAt },
+          },
+          {
+            detail: { used: 2, limit: 10, reset_in: 90 },
+          },
+          {
+            resetAt: outerResetAt,
+            detail: { used: 3, limit: 10 },
+          },
+          {
+            detail: { used: 4, limit: 10, resetTime: String(unixResetAt / 1000) },
+          },
+        ],
+      },
+      { observedAtMs }
+    );
+
+    expect(rows[0]).toMatchObject({
+      resetAtMs: Date.parse(exactResetAt),
+      resetAccuracy: 'exact',
+    });
+    expect(rows[1]).toMatchObject({
+      resetAtMs: observedAtMs + 90_000,
+      resetAccuracy: 'estimated',
+    });
+    expect(rows[2]).toMatchObject({
+      resetAtMs: Date.parse(outerResetAt),
+      resetAccuracy: 'exact',
+    });
+    expect(rows[3]).toMatchObject({
+      resetAtMs: unixResetAt,
+      resetAccuracy: 'exact',
+    });
+  });
+
+  it('rejects Kimi reset values that exceed the JavaScript date range', () => {
+    const rows = buildKimiQuotaRows(
+      {
+        limits: [
+          { detail: { used: 1, limit: 10, resetTime: Number.MAX_VALUE } },
+          { detail: { used: 2, limit: 10, ttl: Number.MAX_VALUE } },
+        ],
+      },
+      { observedAtMs: Date.parse('2026-07-29T10:00:00Z') }
+    );
+
+    expect(rows).toMatchObject([
+      {
+        resetAtMs: null,
+        resetAccuracy: 'unknown',
+      },
+      {
+        resetAtMs: null,
+        resetAccuracy: 'unknown',
+      },
+    ]);
+    expect(rows[0]).not.toHaveProperty('resetHint');
+    expect(rows[1]).not.toHaveProperty('resetHint');
+  });
+
   it('normalizes singular, plural, second, and empty duration units', () => {
     const rows = buildKimiQuotaRows({
       limits: [
