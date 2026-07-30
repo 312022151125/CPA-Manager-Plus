@@ -7,26 +7,43 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import type { AuthFileItem, OAuthModelAliasEntry } from '@/types';
 import type {
+  AccountActionCandidatesResponse,
   CodexInspectionResult,
   CodexInspectionRun,
+  QuotaCooldownInfo,
   UsageHeaderSnapshot,
 } from '@/services/api/usageService';
 import { copyToClipboard } from '@/utils/clipboard';
+import { formatQuotaResetTimestamp } from './model/accountsPagePresentation';
 import { AccountsPage } from './AccountsPage';
 
 type AnalyticsRequestForTest = {
+  from_ms?: number;
+  to_ms?: number;
   filters?: {
     auth_files?: string[];
     auth_indices?: string[];
   };
   include?: {
     events_page?: unknown;
+    summary?: boolean;
+    account_stats?: boolean;
   };
 };
 
 type AnalyticsResponseForTest = {
   generated_at_ms: number;
   granularity: string;
+  summary?: {
+    total_calls: number;
+    success_calls: number;
+    failure_calls: number;
+    success_rate: number;
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    total_cost: number;
+  };
   events?: {
     items: Array<Record<string, unknown>>;
     next_before_ms: number;
@@ -249,8 +266,10 @@ const { mocks } = vi.hoisted(() => {
           results: CodexInspectionResult[];
         }> => ({ run: null, results: [] })
       ),
-      getActiveQuotaCooldowns: vi.fn(async () => []),
-      listAccountActionCandidates: vi.fn(async () => ({ items: [], pendingCount: 0 })),
+      getActiveQuotaCooldowns: vi.fn(async (): Promise<QuotaCooldownInfo[]> => []),
+      listAccountActionCandidates: vi.fn(
+        async (): Promise<AccountActionCandidatesResponse> => ({ items: [], pendingCount: 0 })
+      ),
       getAnalytics: vi.fn(
         async (_base: string, _key: string | undefined, _request: unknown): Promise<unknown> => ({
           generated_at_ms: 1,
@@ -315,6 +334,7 @@ const { mocks } = vi.hoisted(() => {
         onModeChange: (mode: 'local' | 'server') => void;
         onOpenCredential: (target: { fileName: string; authIndex: string | null }) => void;
       },
+      credentialSafeSummaryEnabledCalls: [] as boolean[],
       quotaState: {
         antigravityQuota: {},
         claudeQuota: {},
@@ -429,14 +449,17 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor', () => ({
 }));
 
 vi.mock('@/features/accounts/hooks/useAccountCredentialSafeSummary', () => ({
-  useAccountCredentialSafeSummary: () => ({
-    fileName: '',
-    loading: false,
-    error: '',
-    summary: null,
-    reload: vi.fn(async () => undefined),
-    invalidate: vi.fn(),
-  }),
+  useAccountCredentialSafeSummary: (_file: AuthFileItem | null, enabled: boolean) => {
+    mocks.credentialSafeSummaryEnabledCalls.push(enabled);
+    return {
+      fileName: '',
+      loading: false,
+      error: '',
+      summary: null,
+      reload: vi.fn(async () => undefined),
+      invalidate: vi.fn(),
+    };
+  },
 }));
 
 vi.mock('@/features/monitoring/components/CredentialHealthInspectionWorkspace', () => ({
@@ -789,6 +812,7 @@ describe('AccountsPage replacement flows', () => {
     mocks.lastExcludedEditorProps = null;
     mocks.lastAliasEditorProps = null;
     mocks.lastHealthWorkspaceProps = null;
+    mocks.credentialSafeSummaryEnabledCalls = [];
     mocks.localInspection = null;
   });
 
@@ -2123,6 +2147,363 @@ describe('AccountsPage replacement flows', () => {
     expect(treeText(renderer)).toContain('accounts.detail_tab_overview');
   });
 
+  it('renders a decision-first overview without enabling raw credential loading', async () => {
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+
+    expect(renderer.root.findAllByProps({ 'data-overview-section': 'decision' })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-overview-section': 'capacity' })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-overview-section': 'credential' })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-overview-section': 'activity' })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-overview-section': 'attention' })).toHaveLength(0);
+    expect(
+      renderer.root.findAllByProps({ 'data-overview-activity-scope': 'recent_snapshot' })
+    ).toHaveLength(1);
+    const overviewText = treeText(renderer);
+    expect(overviewText).toContain('accounts.detail_overview_decision_title');
+    expect(overviewText).toContain('accounts.detail_overview_capacity_title');
+    expect(overviewText).toContain('accounts.detail_overview_credential_title');
+    expect(overviewText).toContain('accounts.detail_overview_activity_title');
+    expect(overviewText).toContain('accounts.detail_overview_activity_scope_recent');
+    [
+      'accounts.detail_overview_decision_eyebrow',
+      'accounts.detail_overview_capacity_eyebrow',
+      'accounts.detail_overview_credential_eyebrow',
+      'accounts.detail_overview_credential_desc',
+      'accounts.detail_overview_activity_eyebrow',
+      'accounts.detail_overview_activity_source',
+    ].forEach((key) => expect(overviewText).not.toContain(key));
+    expect(mocks.credentialSafeSummaryEnabledCalls.length).toBeGreaterThan(0);
+    expect(mocks.credentialSafeSummaryEnabledCalls.every((enabled) => !enabled)).toBe(true);
+  });
+
+  it('loads and renders matching pending actions in the overview', async () => {
+    mocks.listAccountActionCandidates.mockResolvedValue({
+      pendingCount: 1,
+      items: [
+        {
+          id: 1,
+          actionType: 'reauth',
+          status: 'pending',
+          provider: 'codex',
+          authFileName: 'codex.json',
+          authIndex: 'auth-1',
+          accountSnapshot: 'codex@example.com',
+          authLabel: 'codex@example.com',
+          reason: 'expired',
+          firstSeenAtMs: 100,
+          lastSeenAtMs: 200,
+          hitCount: 1,
+          createdAtMs: 100,
+          updatedAtMs: 200,
+        },
+      ],
+    });
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+
+    expect(mocks.listAccountActionCandidates).toHaveBeenCalledTimes(1);
+    expect(renderer.root.findAllByProps({ 'data-overview-section': 'attention' })).toHaveLength(1);
+    expect(treeText(renderer)).toContain('accounts.detail_overview_attention_candidates');
+  });
+
+  it('navigates from overview cards to their contextual detail tabs', async () => {
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      renderer.root.findByProps({ 'data-overview-target-tab': 'quota' }).props.onClick();
+    });
+
+    expect(findHostButtonByText(renderer, 'accounts.detail_tab_quota').props['aria-selected']).toBe(
+      true
+    );
+    expect(mocks.credentialSafeSummaryEnabledCalls.every((enabled) => !enabled)).toBe(true);
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_overview').props.onClick();
+    });
+    await act(async () => {
+      renderer.root.findByProps({ 'data-overview-target-tab': 'credential' }).props.onClick();
+    });
+
+    expect(
+      findHostButtonByText(renderer, 'accounts.detail_tab_credential').props['aria-selected']
+    ).toBe(true);
+    expect(mocks.credentialSafeSummaryEnabledCalls).toContain(true);
+  });
+
+  it('uses the fixed seven-day monitoring range for overview activity', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        if (analyticsRequest.include?.events_page) {
+          return makeEventsResponse(makeAnalyticsEvent({}));
+        }
+        return {
+          generated_at_ms: 1,
+          granularity: 'day',
+          account_stats: [
+            {
+              id: 'codex-overview',
+              account_snapshot: 'codex@example.com',
+              auth_label_snapshot: 'codex@example.com',
+              auth_provider_snapshot: 'codex',
+              auth_indices: ['auth-1'],
+              sources: ['codex.json'],
+              calls: 8,
+              success_rate: 0.875,
+              input_tokens: 800,
+              output_tokens: 200,
+              cost: 0.42,
+              last_seen_ms: 1_700_000_000_000,
+            },
+          ],
+          timeline: [],
+        };
+      }
+    );
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+
+    expect(
+      renderer.root.findAllByProps({ 'data-overview-activity-scope': 'monitoring_7d' })
+    ).toHaveLength(1);
+    const lastActiveMetric = renderer.root.findByProps({
+      'data-overview-metric-key': 'lastSeenMs',
+    });
+    expect(lastActiveMetric.props['data-overview-metric-kind']).toBe('timestamp');
+    expect(readText(lastActiveMetric)).toContain('accounts.detail_overview_activity_last_active');
+    expect(lastActiveMetric.findByType('strong').props.title).toBeTruthy();
+    const overviewCall = mocks.getAnalytics.mock.calls.find(
+      (call) => (call[2] as AnalyticsRequestForTest).include?.account_stats === true
+    );
+    const overviewRequest = overviewCall?.[2] as AnalyticsRequestForTest | undefined;
+    expect((overviewRequest?.to_ms ?? 0) - (overviewRequest?.from_ms ?? 0)).toBe(
+      7 * 24 * 60 * 60 * 1000
+    );
+    expect(overviewRequest?.filters).toEqual({
+      auth_files: ['codex.json'],
+      auth_indices: ['auth-1'],
+    });
+  });
+
+  it('shows an empty seven-day monitoring state instead of stale recent activity', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAnalytics.mockImplementation(defaultGetAnalytics);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+
+    expect(
+      renderer.root.findAllByProps({ 'data-overview-activity-scope': 'monitoring_7d' })
+    ).toHaveLength(1);
+    expect(treeText(renderer)).toContain('accounts.detail_overview_activity_empty_7d');
+    expect(treeText(renderer)).not.toContain('accounts.detail_overview_activity_scope_recent');
+  });
+
+  it('uses the filtered overview summary when one credential has split account stats', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        if (analyticsRequest.include?.events_page) {
+          return makeEventsResponse(makeAnalyticsEvent({}));
+        }
+        return {
+          generated_at_ms: 1,
+          granularity: 'day',
+          summary: {
+            total_calls: 15,
+            success_calls: 12,
+            failure_calls: 3,
+            success_rate: 0.8,
+            input_tokens: 1_000,
+            output_tokens: 300,
+            total_tokens: 1_500,
+            total_cost: 0.75,
+          },
+          account_stats: [
+            {
+              id: 'old-label',
+              account_snapshot: 'old@example.com',
+              auth_label_snapshot: 'old@example.com',
+              auth_provider_snapshot: 'codex',
+              auth_indices: ['auth-1'],
+              sources: ['codex.json'],
+              calls: 6,
+              success_rate: 0.5,
+              input_tokens: 100,
+              output_tokens: 20,
+              cost: 0.1,
+              last_seen_ms: 1_700_000_000_100,
+            },
+            {
+              id: 'current-label',
+              account_snapshot: 'codex@example.com',
+              auth_label_snapshot: 'codex@example.com',
+              auth_provider_snapshot: 'codex',
+              auth_indices: ['auth-1'],
+              sources: ['codex.json'],
+              calls: 9,
+              success_rate: 1,
+              input_tokens: 200,
+              output_tokens: 30,
+              cost: 0.2,
+              last_seen_ms: 1_700_000_000_900,
+            },
+          ],
+          timeline: [],
+        };
+      }
+    );
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+
+    expect(
+      readText(renderer.root.findByProps({ 'data-overview-metric-key': 'requests' }))
+    ).toContain('15');
+    expect(readText(renderer.root.findByProps({ 'data-overview-metric-key': 'tokens' }))).toContain(
+      '1.5K'
+    );
+    expect(readText(renderer.root.findByProps({ 'data-overview-metric-key': 'cost' }))).toContain(
+      '$0.75'
+    );
+  });
+
+  it('ignores stale overview activity responses after switching rows', async () => {
+    mocks.files = [
+      makeCodexFile('codex-a.json', 'auth-a', 'first@example.com'),
+      makeCodexFile('codex-b.json', 'auth-b', 'second@example.com'),
+    ];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+
+    const firstActivity = createDeferred<AnalyticsResponseForTest>();
+    const secondActivity = createDeferred<AnalyticsResponseForTest>();
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        const fileName = analyticsRequest.filters?.auth_files?.[0];
+        if (fileName === 'codex-a.json') return firstActivity.promise;
+        if (fileName === 'codex-b.json') return secondActivity.promise;
+        return makeEmptyAnalyticsResponse();
+      }
+    );
+
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex-a.json').props.onClick();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex-b.json').props.onClick();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      secondActivity.resolve({
+        generated_at_ms: 2,
+        granularity: 'day',
+        account_stats: [
+          {
+            id: 'codex-b-overview',
+            account_snapshot: 'second@example.com',
+            auth_label_snapshot: 'second@example.com',
+            auth_provider_snapshot: 'codex',
+            auth_indices: ['auth-b'],
+            sources: ['codex-b.json'],
+            calls: 22,
+            success_rate: 1,
+            input_tokens: 220,
+            output_tokens: 22,
+            cost: 0.22,
+            last_seen_ms: 1_700_000_000_022,
+          },
+        ],
+        timeline: [],
+      });
+      await Promise.resolve();
+    });
+
+    expect(
+      readText(renderer.root.findByProps({ 'data-overview-metric-key': 'requests' }))
+    ).toContain('22');
+
+    await act(async () => {
+      firstActivity.resolve({
+        generated_at_ms: 1,
+        granularity: 'day',
+        account_stats: [
+          {
+            id: 'codex-a-overview',
+            account_snapshot: 'first@example.com',
+            auth_label_snapshot: 'first@example.com',
+            auth_provider_snapshot: 'codex',
+            auth_indices: ['auth-a'],
+            sources: ['codex-a.json'],
+            calls: 11,
+            success_rate: 1,
+            input_tokens: 110,
+            output_tokens: 11,
+            cost: 0.11,
+            last_seen_ms: 1_700_000_000_011,
+          },
+        ],
+        timeline: [],
+      });
+      await Promise.resolve();
+    });
+
+    const requestsMetric = renderer.root.findByProps({
+      'data-overview-metric-key': 'requests',
+    });
+    expect(readText(requestsMetric)).toContain('22');
+    expect(readText(requestsMetric)).not.toContain('11');
+  });
+
   it('refreshes single-account history from the row refresh action', async () => {
     mocks.files = [
       {
@@ -2452,6 +2833,11 @@ describe('AccountsPage replacement flows', () => {
     await act(async () => {
       findDetailButtonByName(renderer, 'codex-diagnostic.json').props.onClick();
     });
+    await flushPromises();
+
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
+    expect(treeText(renderer)).toContain('accounts.quota_source_observed_header');
+
     await act(async () => {
       findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
     });
@@ -2474,7 +2860,7 @@ describe('AccountsPage replacement flows', () => {
     expect(treeText(renderer)).toContain('usage_limit_reached');
   });
 
-  it('loads quota diagnostics only after opening one credential quota detail', async () => {
+  it('loads overview evidence once and keeps window usage scoped to the quota tab', async () => {
     mocks.files = [
       makeCodexFile('codex-a.json', 'auth-a', 'first@example.com'),
       makeCodexFile('codex-b.json', 'auth-b', 'second@example.com'),
@@ -2512,17 +2898,34 @@ describe('AccountsPage replacement flows', () => {
         ],
       },
     };
+    mocks.getActiveQuotaCooldowns.mockResolvedValue([
+      {
+        authFileName: 'codex-a.json',
+        authIndex: 'auth-a',
+        recoverAtMs: Date.now() + 2 * 60 * 60 * 1000,
+        disabledAtMs: Date.now() - 5 * 60 * 1000,
+      },
+    ]);
 
     const renderer = await renderAccountsPage();
     await flushPromises();
 
     expect(mocks.getActiveQuotaCooldowns).not.toHaveBeenCalled();
     expect(mocks.getHeaderSnapshots).not.toHaveBeenCalled();
+    expect(mocks.listAccountActionCandidates).not.toHaveBeenCalled();
     expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
 
     await act(async () => {
       findDetailButtonByName(renderer, 'codex-a.json').props.onClick();
     });
+    await flushPromises();
+
+    expect(mocks.getActiveQuotaCooldowns).toHaveBeenCalledTimes(1);
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
+    expect(mocks.listAccountActionCandidates).toHaveBeenCalledTimes(1);
+    expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
+    expect(treeText(renderer)).toContain('accounts.detail_overview_basis_cooldown');
+
     await act(async () => {
       findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
     });
@@ -2530,6 +2933,7 @@ describe('AccountsPage replacement flows', () => {
 
     expect(mocks.getActiveQuotaCooldowns).toHaveBeenCalledTimes(1);
     expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
+    expect(mocks.listAccountActionCandidates).toHaveBeenCalledTimes(1);
     expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(1);
     const windowUsageRequest = mocks.getAccountWindowUsage.mock.calls[0]?.[2] as
       | AccountWindowUsageRequestForTest
@@ -2540,6 +2944,53 @@ describe('AccountsPage replacement flows', () => {
       source: 'codex-a.json',
       auth_index: 'auth-a',
     });
+  });
+
+  it('uses the unified quota timestamp format for cooldown and reset-credit expiry', async () => {
+    const cooldownRecoverAtMs = new Date(2026, 6, 30, 10, 5, 0, 0).getTime();
+    const resetCreditExpiresAtMs = new Date(2026, 7, 2, 18, 45, 0, 0).getTime();
+    mocks.quotaState.codexQuota = {
+      'codex.json': {
+        status: 'success',
+        authFileKey: 'codex.json::auth-1',
+        windows: [],
+        rateLimitResetCreditsAvailableCount: 1,
+        rateLimitResetCredits: [
+          {
+            id: 'reset-credit-1',
+            status: 'available',
+            grantedAt: new Date(resetCreditExpiresAtMs - 24 * 60 * 60 * 1000).toISOString(),
+            expiresAt: new Date(resetCreditExpiresAtMs).toISOString(),
+          },
+        ],
+      },
+    };
+    mocks.getActiveQuotaCooldowns.mockResolvedValue([
+      {
+        authFileName: 'codex.json',
+        authIndex: 'auth-1',
+        recoverAtMs: cooldownRecoverAtMs,
+        disabledAtMs: cooldownRecoverAtMs - 60 * 60 * 1000,
+      },
+    ]);
+
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    expect(readText(renderer.root.findByProps({ 'data-quota-cooldown-recover-at': 'true' }))).toBe(
+      formatQuotaResetTimestamp(cooldownRecoverAtMs, 'en')
+    );
+    expect(
+      readText(renderer.root.findByProps({ 'data-quota-reset-credit-expiry': 'reset-credit-1' }))
+    ).toBe(formatQuotaResetTimestamp(resetCreditExpiresAtMs, 'en'));
   });
 
   it('loads detail events filtered by auth file and auth index', async () => {

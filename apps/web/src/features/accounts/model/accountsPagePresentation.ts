@@ -12,6 +12,7 @@ import type {
 } from '@/features/accounts/model/accountRows';
 import type { AuthFileCodexInspectionSnapshot } from '@/features/authFiles/model/authFilesPageModel';
 import type { MonitoringAccountHistoryItem, MonitoringAnalyticsEventRow } from '@/services/api';
+import { parseQuotaResetLabelMs } from '@/utils/quota/formatters';
 
 export type AccountsView = 'accounts' | 'health' | 'oauth';
 export type DetailTab = 'overview' | 'quota' | 'credential' | 'models' | 'diagnostics';
@@ -135,14 +136,85 @@ export const parsePriorityValue = (value: string) => {
   return Number.isSafeInteger(parsed) ? parsed : null;
 };
 
+const resolveValidTimestampDate = (value: number | null | undefined): Date | null => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
 export const formatTimestamp = (value: number | null, locale: string) => {
-  if (!value) return '-';
-  return new Intl.DateTimeFormat(locale, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
+  const date = resolveValidTimestampDate(value);
+  if (!date) return '-';
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date);
+  } catch {
+    return '-';
+  }
+};
+
+export const formatTimestampTitle = (
+  value: number | null | undefined,
+  locale: string
+): string | undefined => {
+  const date = resolveValidTimestampDate(value);
+  if (!date) return undefined;
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      dateStyle: 'medium',
+      timeStyle: 'medium',
+    }).format(date);
+  } catch {
+    return undefined;
+  }
+};
+
+const padQuotaResetPart = (value: number) => String(value).padStart(2, '0');
+
+export const formatQuotaResetTimestamp = (value: number | null | undefined, _locale?: string) => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return `${date.getFullYear()}-${padQuotaResetPart(date.getMonth() + 1)}-${padQuotaResetPart(
+    date.getDate()
+  )} ${padQuotaResetPart(date.getHours())}:${padQuotaResetPart(date.getMinutes())}`;
+};
+
+export const formatQuotaResetDisplay = (
+  resetAtMs: number | null | undefined,
+  resetLabel: string | null | undefined,
+  locale?: string
+) => {
+  const normalizedResetAt = formatQuotaResetTimestamp(resetAtMs, locale);
+  if (normalizedResetAt !== '-') return normalizedResetAt;
+
+  const normalizedLabel = resetLabel?.trim() ?? '';
+  if (!normalizedLabel || normalizedLabel === '-') return '-';
+  const parsedLabel = formatQuotaResetTimestamp(parseQuotaResetLabelMs(normalizedLabel), locale);
+  if (parsedLabel !== '-') return parsedLabel;
+  return normalizedLabel;
+};
+
+export const formatQuotaResetTooltipParams = (
+  params: Record<string, string | number>,
+  resetAtMs: number | null | undefined,
+  locale?: string,
+  recoverAtMs?: number | null
+) => {
+  let formatted = params;
+  if (Object.prototype.hasOwnProperty.call(params, 'resetAt')) {
+    const resetAt = formatQuotaResetDisplay(resetAtMs, String(params.resetAt ?? ''), locale);
+    if (resetAt !== params.resetAt) formatted = { ...formatted, resetAt };
+  }
+  if (Object.prototype.hasOwnProperty.call(params, 'recoverAt')) {
+    const recoverAt = formatQuotaResetDisplay(recoverAtMs, String(params.recoverAt ?? ''), locale);
+    if (recoverAt !== params.recoverAt) formatted = { ...formatted, recoverAt };
+  }
+  return formatted;
 };
 
 const normalizeDetailToken = (value: string | number | null | undefined) =>

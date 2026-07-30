@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { AuthFileItem } from '@/types';
-import type { MonitoringAnalyticsAccountStatRow } from '@/services/api/usageService';
+import type {
+  MonitoringAnalyticsAccountStatRow,
+  MonitoringAnalyticsSummary,
+} from '@/services/api/usageService';
 import { buildAccountRows, type AccountQuotaStores } from './accountRows';
 import {
+  buildUsageValueRowFromMonitoringSummary,
+  buildFallbackTimeline,
   buildUsageValueRowsFromMonitoring,
   buildUsageValueRowsFromRecent,
   buildUsageValueSummary,
@@ -37,7 +42,56 @@ const makeStat = (
   ...overrides,
 });
 
+const makeSummary = (
+  overrides: Partial<MonitoringAnalyticsSummary> = {}
+): MonitoringAnalyticsSummary => ({
+  total_calls: 0,
+  success_calls: 0,
+  failure_calls: 0,
+  success_rate: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  cached_tokens: 0,
+  cache_read_tokens: 0,
+  cache_creation_tokens: 0,
+  reasoning_tokens: 0,
+  total_tokens: 0,
+  total_cost: 0,
+  average_latency_ms: null,
+  zero_token_calls: 0,
+  rpm_30m: 0,
+  tpm_30m: 0,
+  avg_daily_requests: 0,
+  avg_daily_tokens: 0,
+  approx_tasks: 0,
+  approx_task_failures: 0,
+  approx_task_success_rate: 0,
+  zero_token_models: [],
+  ...overrides,
+});
+
 describe('usageValueRows', () => {
+  it('derives fallback timeline failures from the remaining request count', () => {
+    const timeline = buildFallbackTimeline([
+      {
+        key: 'monitoring:one',
+        accountLabel: 'One',
+        fileName: 'one.json',
+        provider: 'codex',
+        requests: 10,
+        successRate: 80,
+        inputTokens: 100,
+        outputTokens: 50,
+        estimatedCost: 0,
+        lastSeenMs: null,
+        rating: 'normal',
+        source: 'monitoring',
+      },
+    ]);
+
+    expect(timeline[0]).toMatchObject({ calls: 10, success: 8, failure: 2 });
+  });
+
   it('builds fallback value rows from auth-file recent request buckets', () => {
     const files: AuthFileItem[] = [
       {
@@ -133,6 +187,117 @@ describe('usageValueRows', () => {
     });
   });
 
+  it('uses the filtered summary across split account stats and keeps the latest activity time', () => {
+    const row = buildAccountRows(
+      [
+        {
+          name: 'codex.json',
+          type: 'codex',
+          authIndex: 'auth-1',
+          email: 'current@example.com',
+        },
+      ],
+      emptyStores()
+    )[0];
+    const value = buildUsageValueRowFromMonitoringSummary(
+      row,
+      makeSummary({
+        total_calls: 15,
+        success_calls: 12,
+        failure_calls: 3,
+        success_rate: 0.8,
+        input_tokens: 1_000,
+        output_tokens: 300,
+        total_tokens: 1_500,
+        total_cost: 0.75,
+      }),
+      [
+        makeStat({
+          id: 'old-label',
+          account_snapshot: 'old@example.com',
+          calls: 6,
+          last_seen_ms: 1_700_000_000_100,
+        }),
+        makeStat({
+          id: 'current-label',
+          account_snapshot: 'current@example.com',
+          calls: 9,
+          last_seen_ms: 1_700_000_000_900,
+        }),
+      ]
+    );
+
+    expect(value).toMatchObject({
+      requests: 15,
+      successRate: 80,
+      inputTokens: 1_000,
+      outputTokens: 300,
+      totalTokens: 1_500,
+      estimatedCost: 0.75,
+      lastSeenMs: 1_700_000_000_900,
+      source: 'monitoring',
+      row,
+    });
+  });
+
+  it('aggregates split account stats when a legacy response omits summary', () => {
+    const row = buildAccountRows(
+      [{ name: 'codex.json', type: 'codex', authIndex: 'auth-1' }],
+      emptyStores()
+    )[0];
+    const value = buildUsageValueRowFromMonitoringSummary(row, undefined, [
+      makeStat({
+        id: 'first',
+        calls: 4,
+        success_calls: 3,
+        input_tokens: 100,
+        output_tokens: 20,
+        total_tokens: 140,
+        cost: 0.1,
+        last_seen_ms: 100,
+      }),
+      makeStat({
+        id: 'second',
+        calls: 6,
+        success_calls: 5,
+        input_tokens: 200,
+        output_tokens: 30,
+        total_tokens: 260,
+        cost: 0.2,
+        last_seen_ms: 200,
+      }),
+    ]);
+
+    expect(value).toMatchObject({
+      requests: 10,
+      successRate: 80,
+      inputTokens: 300,
+      outputTokens: 50,
+      totalTokens: 400,
+      lastSeenMs: 200,
+    });
+    expect(value?.estimatedCost).toBeCloseTo(0.3);
+  });
+
+  it('keeps a successful empty monitoring response as an empty monitoring result', () => {
+    const row = buildAccountRows(
+      [{ name: 'codex.json', type: 'codex', authIndex: 'auth-1' }],
+      emptyStores()
+    )[0];
+
+    expect(buildUsageValueRowFromMonitoringSummary(row, undefined, [])).toMatchObject({
+      requests: 0,
+      successRate: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      estimatedCost: 0,
+      lastSeenMs: null,
+      source: 'monitoring',
+      row,
+    });
+  });
+
   it('summarizes value rows with request-weighted average success rate', () => {
     const summary = buildUsageValueSummary(
       [
@@ -188,8 +353,8 @@ describe('usageValueRows', () => {
     );
 
     expect(filterUsageValueRows(rows, { provider: 'codex', search: '' })).toHaveLength(1);
-    expect(filterUsageValueRows(rows, { provider: 'all', search: 'bob' }).map((row) => row.fileName)).toEqual([
-      'claude-b.json',
-    ]);
+    expect(
+      filterUsageValueRows(rows, { provider: 'all', search: 'bob' }).map((row) => row.fileName)
+    ).toEqual(['claude-b.json']);
   });
 });

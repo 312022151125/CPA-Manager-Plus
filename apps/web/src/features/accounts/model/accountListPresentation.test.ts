@@ -4,9 +4,15 @@ import type { QuotaCooldownInfo } from '@/services/api';
 import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/authFilesPageModel';
 import type { AccountRow } from './accountRows';
 import { buildAccountListItem, buildRecommendationBySelectionKey } from './accountListPresentation';
+import { summarizeGroupedQuotaAvailability } from './accountQuotaSummary';
 import type { AccountRecommendation } from './quotaRecommendations';
 
-const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
+type AccountRowOverrides = Omit<Partial<AccountRow>, 'quota'> & {
+  quota?: Partial<AccountRow['quota']>;
+};
+
+const makeRow = (overrides: AccountRowOverrides = {}): AccountRow => {
+  const { quota: quotaOverrides, ...rowOverrides } = overrides;
   const raw: AuthFileItem = {
     name: overrides.fileName ?? 'codex-1.json',
     type: overrides.provider ?? 'codex',
@@ -26,13 +32,17 @@ const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
     projectId: '',
     priority: null,
     createdAtMs: null,
+    updatedAtMs: null,
     quota: {
       status: 'ok',
       remainingPercent: 80,
       usedPercent: 20,
       resetLabel: '-',
+      resetAtMs: null,
+      resetAccuracy: 'unknown',
       planType: null,
       source: 'cache',
+      ...quotaOverrides,
     },
     usage: {
       success: 0,
@@ -42,7 +52,7 @@ const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
     },
     inspection: null,
     raw,
-    ...overrides,
+    ...rowOverrides,
   };
 };
 
@@ -359,6 +369,298 @@ describe('accountListPresentation', () => {
     expect(rawItem.health.status).toBe('raw');
     expect(rawItem.health.reasonKey).toBe('accounts.health_reason_raw');
     expect(rawItem.health.reasonTone).toBe('muted');
+  });
+
+  it('uses the latest known recovery for multiple exhausted windows of the same kind', () => {
+    const earlierResetAtMs = Date.parse('2026-07-30T04:00:00Z');
+    const laterResetAtMs = Date.parse('2026-07-30T06:00:00Z');
+    const item = buildAccountListItem(
+      makeRow({
+        quota: {
+          status: 'exhausted',
+          remainingPercent: 0,
+          usedPercent: 100,
+          resetLabel: '2026-07-30T04:00:00Z',
+          resetAtMs: earlierResetAtMs,
+          resetAccuracy: 'exact',
+        },
+      }),
+      {
+        quotaWindows: [
+          {
+            key: 'weekly-base',
+            label: 'Weekly base',
+            kind: 'weekly',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: '2026-07-30T04:00:00Z',
+            resetAtMs: earlierResetAtMs,
+            resetAccuracy: 'exact',
+          },
+          {
+            key: 'weekly-model',
+            label: 'Weekly model',
+            kind: 'weekly',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: '2026-07-30T06:00:00Z',
+            resetAtMs: laterResetAtMs,
+            resetAccuracy: 'exact',
+          },
+        ],
+      }
+    );
+
+    expect(item.health.status).toBe('weekly_exhausted');
+    expect(item.health.tooltipParams).toEqual({ resetAt: '2026-07-30T06:00:00Z' });
+    expect(item.health.resetAtMs).toBe(laterResetAtMs);
+  });
+
+  it('does not promise recovery when one matching exhausted window has no reset time', () => {
+    const item = buildAccountListItem(
+      makeRow({
+        quota: {
+          status: 'exhausted',
+          remainingPercent: 0,
+          usedPercent: 100,
+          resetLabel: '2026-07-30T04:00:00Z',
+          resetAtMs: Date.parse('2026-07-30T04:00:00Z'),
+          resetAccuracy: 'exact',
+        },
+      }),
+      {
+        quotaWindows: [
+          {
+            key: 'weekly-known',
+            label: 'Weekly known',
+            kind: 'weekly',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: '2026-07-30T04:00:00Z',
+            resetAtMs: Date.parse('2026-07-30T04:00:00Z'),
+            resetAccuracy: 'exact',
+          },
+          {
+            key: 'weekly-unknown',
+            label: 'Weekly unknown',
+            kind: 'weekly',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: '-',
+            resetAtMs: null,
+            resetAccuracy: 'unknown',
+          },
+        ],
+      }
+    );
+
+    expect(item.health.status).toBe('weekly_exhausted');
+    expect(item.health.tooltipParams).toEqual({ resetAt: '-' });
+    expect(item.health.resetAtMs).toBeNull();
+  });
+
+  it('marks mixed Antigravity model groups as partially available', () => {
+    const item = buildAccountListItem(
+      makeRow({
+        provider: 'antigravity',
+        statusMessage: 'Gemini 5-hour pool exhausted; waiting for Antigravity reset',
+        quota: {
+          status: 'ok',
+          remainingPercent: 66,
+          usedPercent: 34,
+          resetLabel: 'later',
+          planType: 'pro',
+          source: 'cache',
+        },
+      }),
+      {
+        quotaWindows: [
+          {
+            key: 'gemini:five-hour',
+            label: 'Five hour',
+            kind: 'five_hour',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: 'later',
+            groupLabel: 'Gemini models',
+          },
+          {
+            key: 'claude:five-hour',
+            label: 'Five hour',
+            kind: 'five_hour',
+            remainingPercent: 82,
+            usedPercent: 18,
+            resetLabel: 'later',
+            groupLabel: 'Claude and GPT models',
+          },
+          {
+            key: 'claude:weekly',
+            label: 'Weekly',
+            kind: 'weekly',
+            remainingPercent: 66,
+            usedPercent: 34,
+            resetLabel: 'later',
+            groupLabel: 'Claude and GPT models',
+          },
+        ],
+      }
+    );
+
+    expect(item.health.status).toBe('partial');
+    expect(item.health.labelKey).toBe('accounts.health_partial');
+    expect(item.health.reasonKey).toBe('accounts.health_reason_partial');
+    expect(item.health.reasonParams).toEqual({ available: 1, total: 2 });
+    expect(item.health.tooltipParams).toEqual({
+      available: 1,
+      total: 2,
+      limited: 'Gemini models',
+    });
+  });
+
+  it('keeps the exhausted state when every Antigravity model group is blocked', () => {
+    const geminiFiveHourResetAtMs = Date.parse('2026-07-30T04:00:00Z');
+    const geminiWeeklyResetAtMs = Date.parse('2026-08-02T08:00:00Z');
+    const claudeFiveHourResetAtMs = Date.parse('2026-07-30T06:00:00Z');
+    const item = buildAccountListItem(
+      makeRow({
+        provider: 'antigravity',
+        quota: {
+          status: 'exhausted',
+          remainingPercent: 0,
+          usedPercent: 100,
+          resetLabel: '2026-07-30T06:00:00Z',
+          resetAtMs: claudeFiveHourResetAtMs,
+          resetAccuracy: 'exact',
+          planType: 'pro',
+          source: 'cache',
+        },
+      }),
+      {
+        quotaWindows: [
+          {
+            key: 'gemini:five-hour',
+            label: 'Five hour',
+            kind: 'five_hour',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: '2026-07-30T04:00:00Z',
+            resetAtMs: geminiFiveHourResetAtMs,
+            resetAccuracy: 'exact',
+            groupLabel: 'Gemini models',
+          },
+          {
+            key: 'gemini:weekly',
+            label: 'Weekly',
+            kind: 'weekly',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: '2026-08-02T08:00:00Z',
+            resetAtMs: geminiWeeklyResetAtMs,
+            resetAccuracy: 'exact',
+            groupLabel: 'Gemini models',
+          },
+          {
+            key: 'claude:five-hour',
+            label: 'Five hour',
+            kind: 'five_hour',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: '2026-07-30T06:00:00Z',
+            resetAtMs: claudeFiveHourResetAtMs,
+            resetAccuracy: 'exact',
+            groupLabel: 'Claude and GPT models',
+          },
+        ],
+      }
+    );
+
+    expect(item.health.status).toBe('five_hour_exhausted');
+    expect(item.health.tooltipParams).toEqual({ resetAt: '2026-07-30T06:00:00Z' });
+    expect(item.health.resetAtMs).toBe(claudeFiveHourResetAtMs);
+  });
+
+  it('does not promise a group recovery while one blocking bucket has no reset time', () => {
+    const summary = summarizeGroupedQuotaAvailability([
+      {
+        groupLabel: 'Gemini models',
+        kind: 'five_hour',
+        remainingPercent: 0,
+        resetLabel: '2026-07-30T04:00:00Z',
+        resetAtMs: Date.parse('2026-07-30T04:00:00Z'),
+        resetAccuracy: 'exact',
+      },
+      {
+        groupLabel: 'Gemini models',
+        kind: 'weekly',
+        remainingPercent: 0,
+        resetLabel: '-',
+        resetAtMs: null,
+        resetAccuracy: 'unknown',
+      },
+    ]);
+
+    expect(summary?.groups[0]).toMatchObject({
+      resetLabel: '-',
+      resetAtMs: null,
+      resetAccuracy: 'unknown',
+      resetKind: 'weekly',
+    });
+  });
+
+  it('does not substitute an available-group reset for an unknown limited-group recovery', () => {
+    const summary = summarizeGroupedQuotaAvailability([
+      {
+        groupLabel: 'Gemini models',
+        kind: 'weekly',
+        remainingPercent: 0,
+        resetLabel: '-',
+        resetAtMs: null,
+        resetAccuracy: 'unknown',
+      },
+      {
+        groupLabel: 'Claude and GPT models',
+        kind: 'five_hour',
+        remainingPercent: 60,
+        resetLabel: '2026-07-30T05:00:00Z',
+        resetAtMs: Date.parse('2026-07-30T05:00:00Z'),
+        resetAccuracy: 'exact',
+      },
+    ]);
+
+    expect(summary).toMatchObject({
+      state: 'partial',
+      resetLabel: '-',
+      resetAtMs: null,
+      resetAccuracy: 'unknown',
+    });
+  });
+
+  it('degrades grouped recovery accuracy when any blocking reset is estimated', () => {
+    const laterExactResetAtMs = Date.parse('2026-07-30T06:00:00Z');
+    const summary = summarizeGroupedQuotaAvailability([
+      {
+        groupLabel: 'Gemini models',
+        kind: 'five_hour',
+        remainingPercent: 0,
+        resetLabel: '2026-07-30T05:00:00Z',
+        resetAtMs: Date.parse('2026-07-30T05:00:00Z'),
+        resetAccuracy: 'estimated',
+      },
+      {
+        groupLabel: 'Gemini models',
+        kind: 'weekly',
+        remainingPercent: 0,
+        resetLabel: '2026-07-30T06:00:00Z',
+        resetAtMs: laterExactResetAtMs,
+        resetAccuracy: 'exact',
+      },
+    ]);
+
+    expect(summary?.groups[0]).toMatchObject({
+      resetAtMs: laterExactResetAtMs,
+      resetAccuracy: 'estimated',
+      resetKind: 'weekly',
+    });
   });
 
   it('builds identity and activity summaries for list rendering', () => {

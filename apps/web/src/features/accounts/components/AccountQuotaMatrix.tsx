@@ -1,7 +1,9 @@
 import {
   formatPercent,
+  formatQuotaResetDisplay,
   type AntigravityQuotaMatrix,
 } from '@/features/accounts/model/accountsPagePresentation';
+import { useTranslation } from 'react-i18next';
 import styles from '../AccountsPage.module.scss';
 
 interface AccountQuotaMatrixProps {
@@ -17,6 +19,7 @@ const getRemainingPercentBarClass = (remainingPercent: number | null) => {
 };
 
 export function AccountQuotaMatrix({ accountKey, matrix }: AccountQuotaMatrixProps) {
+  const { t, i18n } = useTranslation();
   return (
     <div className={styles.quotaMatrix} data-account-quota-matrix={accountKey}>
       {matrix.rows.map((matrixRow) => (
@@ -30,14 +33,23 @@ export function AccountQuotaMatrix({ accountKey, matrix }: AccountQuotaMatrixPro
             {matrixRow.cells.map((cell) => {
               const windowRemaining = cell.window.remainingPercent;
               const windowWidth = Math.max(0, Math.min(100, windowRemaining ?? 0));
+              const resetDisplay = formatQuotaResetDisplay(
+                cell.window.resetAtMs,
+                cell.window.resetLabel,
+                i18n.language
+              );
+              const title = [
+                `${cell.groupLabel} ${cell.window.label}: ${formatPercent(windowRemaining)}`,
+                resetDisplay !== '-' ? `${t('accounts.col_reset')}: ${resetDisplay}` : '',
+              ]
+                .filter(Boolean)
+                .join(' · ');
               return (
                 <div
                   key={cell.window.key}
                   className={styles.quotaMatrixCell}
                   data-account-quota-matrix-cell={`${matrixRow.key}:${cell.groupLabel}`}
-                  title={`${cell.groupLabel} ${cell.window.label}: ${formatPercent(
-                    windowRemaining
-                  )}`}
+                  title={title}
                 >
                   <span className={styles.quotaMatrixGroupLabel} title={cell.groupLabel}>
                     {cell.displayLabel}

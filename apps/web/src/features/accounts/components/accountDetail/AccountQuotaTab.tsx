@@ -4,9 +4,9 @@ import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { IconRefreshCw } from '@/components/ui/icons';
 import type { AccountDetailViewModel } from '@/features/accounts/model/accountDetailViewModel';
 import type { AccountRow } from '@/features/accounts/model/accountRows';
+import { formatQuotaResetTimestamp } from '@/features/accounts/model/accountsPagePresentation';
 import { AccountHealthBadge, severityFromQuotaStatus } from '../AccountHealthBadge';
 import { QuotaWindowCard } from '../QuotaWindowCard';
-import { RelativeTime } from '../RelativeTime';
 import { AccountDetailFieldList } from './AccountDetailFieldList';
 import styles from '@/features/accounts/AccountsPage.module.scss';
 
@@ -77,8 +77,8 @@ export function AccountQuotaTab({
             {detailView.quota.resetCreditExpiries.map((item, index) => (
               <div key={`${item.id}:${item.expiresAtMs}`} className={styles.detailCandidateItem}>
                 <span>{t('codex_quota.reset_credit_expiry_item', { index: index + 1 })}</span>
-                <strong>
-                  <RelativeTime timestamp={item.expiresAtMs} mode="both" locale={i18n.language} />
+                <strong data-quota-reset-credit-expiry={item.id}>
+                  {formatQuotaResetTimestamp(item.expiresAtMs, i18n.language)}
                 </strong>
               </div>
             ))}
@@ -87,12 +87,8 @@ export function AccountQuotaTab({
         {detailView.quota.cooldown ? (
           <div className={styles.detailInlineNote}>
             <span>{t('accounts.detail_cooldown')}</span>
-            <strong>
-              <RelativeTime
-                timestamp={detailView.quota.cooldown.recoverAtMs}
-                mode="both"
-                locale={i18n.language}
-              />
+            <strong data-quota-cooldown-recover-at="true">
+              {formatQuotaResetTimestamp(detailView.quota.cooldown.recoverAtMs, i18n.language)}
             </strong>
           </div>
         ) : null}

@@ -4,6 +4,7 @@ import {
   formatCompactNumber,
   formatMoney,
   formatPercent,
+  formatQuotaResetTimestamp,
   formatTimestamp,
   getProviderLabel,
   translateDetailEnum,
@@ -44,6 +45,15 @@ export function AccountDetailFieldValue({ field }: { field: AccountDetailField }
   if (field.valueKind === 'timestamp') {
     return (
       <>{typeof field.value === 'number' ? formatTimestamp(field.value, i18n.language) : '-'}</>
+    );
+  }
+  if (field.valueKind === 'quota_reset') {
+    return (
+      <>
+        {typeof field.value === 'number'
+          ? formatQuotaResetTimestamp(field.value, i18n.language)
+          : '-'}
+      </>
     );
   }
   if (field.valueKind === 'number') {

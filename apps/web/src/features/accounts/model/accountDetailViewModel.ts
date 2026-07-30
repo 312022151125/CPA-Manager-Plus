@@ -1,4 +1,4 @@
-import type { CodexQuotaState, XaiQuotaState } from '@/types';
+import type { CodexQuotaState, QuotaResetAccuracy, XaiQuotaState } from '@/types';
 import { getSortedCodexResetCreditExpiries } from '@/components/quota/quotaConfigs';
 import type {
   AccountActionCandidate,
@@ -7,6 +7,10 @@ import type {
   QuotaCooldownInfo,
 } from '@/services/api';
 import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/authFilesPageModel';
+import { normalizePlanType, parseIdTokenPayload } from '@/utils/quota/parsers';
+import { isValidQuotaResetAtMs } from '@/utils/quota/formatters';
+import { resolveCodexPlanType } from '@/utils/quota/resolvers';
+import { parseTimestampMs } from '@/utils/timestamp';
 import type { AccountRow } from './accountRows';
 import {
   buildAccountListItem,
@@ -14,12 +18,31 @@ import {
   type AccountListHealthStatusKey,
   type AccountListPresentationItem,
 } from './accountListPresentation';
-import type { AccountQuotaDisplayWindow } from './accountQuotaDisplayWindows';
+import { summarizeGroupedQuotaAvailability } from './accountQuotaSummary';
+import {
+  inferAccountQuotaWindowKind,
+  type AccountQuotaDisplayWindow,
+  type AccountQuotaWindowKind,
+} from './accountQuotaDisplayWindows';
 import { accountWindowUsageRequestKey } from './accountWindowUsageRows';
-import type { AccountRecommendation } from './quotaRecommendations';
+import type { AccountRecommendation, AccountRecommendationPriority } from './quotaRecommendations';
 import type { UsageValueRow, UsageValueSource } from './usageValueRows';
 
-export type AccountDetailValueKind = 'text' | 'i18n' | 'number' | 'percent' | 'money' | 'timestamp';
+export type AccountDetailValueKind =
+  | 'text'
+  | 'i18n'
+  | 'number'
+  | 'percent'
+  | 'money'
+  | 'timestamp'
+  | 'quota_reset';
+
+export const ACCOUNT_OVERVIEW_ACTIVITY_RANGE_DAYS = 7;
+export const ACCOUNT_OVERVIEW_ACTIVITY_RANGE_MS =
+  ACCOUNT_OVERVIEW_ACTIVITY_RANGE_DAYS * 24 * 60 * 60 * 1000;
+
+export type AccountDetailOverviewTargetTab = 'quota' | 'credential' | 'diagnostics';
+export type AccountDetailOverviewActivityScope = 'monitoring_7d' | 'recent_snapshot';
 
 export interface AccountDetailField {
   key: string;
@@ -30,10 +53,11 @@ export interface AccountDetailField {
 
 export interface AccountDetailQuotaWindowInput extends Omit<
   AccountQuotaDisplayWindow,
-  'limitWindowSeconds' | 'resetAtMs' | 'fromMs' | 'toMs'
+  'limitWindowSeconds' | 'resetAtMs' | 'resetAccuracy' | 'fromMs' | 'toMs'
 > {
   limitWindowSeconds?: number | null;
   resetAtMs?: number | null;
+  resetAccuracy?: QuotaResetAccuracy;
   fromMs?: number | null;
   toMs?: number | null;
 }
@@ -50,7 +74,12 @@ export interface AccountDetailWindowUsageSummary {
   syncStatus: string;
 }
 
-export interface AccountDetailQuotaWindow extends AccountDetailQuotaWindowInput {
+export interface AccountDetailQuotaWindow extends Omit<
+  AccountDetailQuotaWindowInput,
+  'resetAtMs' | 'resetAccuracy'
+> {
+  resetAtMs: number | null;
+  resetAccuracy: QuotaResetAccuracy;
   usage: AccountDetailWindowUsageSummary | null;
 }
 
@@ -79,7 +108,7 @@ export interface AccountDetailValueSummary {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  estimatedCost: number;
+  estimatedCost: number | null;
   lastSeenMs: number | null;
   source: UsageValueSource;
 }
@@ -107,6 +136,53 @@ export interface AccountDetailCodexBadge {
   labelParams?: Record<string, string | number>;
 }
 
+export interface AccountDetailOverviewDecision {
+  status: AccountListHealthStatusKey;
+  labelKey: string;
+  reasonKey: string;
+  reasonParams: Record<string, string | number>;
+  observedAtMs: number | null;
+  basisLabelKey: string;
+  targetTab: AccountDetailOverviewTargetTab;
+}
+
+export interface AccountDetailOverviewCapacity {
+  kind: 'percent' | 'group_availability';
+  statusLabelKey: string;
+  remainingPercent: number | null;
+  availableGroupCount: number | null;
+  totalGroupCount: number | null;
+  hasData: boolean;
+  descriptionKey: string;
+  fields: AccountDetailField[];
+  targetTab: AccountDetailOverviewTargetTab;
+}
+
+export interface AccountDetailOverviewCredential {
+  statusLabelKey: string;
+  sourceLabelKey: string;
+  fields: AccountDetailField[];
+  targetTab: AccountDetailOverviewTargetTab;
+}
+
+export interface AccountDetailOverviewActivity {
+  scope: AccountDetailOverviewActivityScope;
+  scopeDays: number | null;
+  sourceLabelKey: string;
+  hasActivity: boolean;
+  emptyStateKey: string;
+  metrics: AccountDetailField[];
+  targetTab: AccountDetailOverviewTargetTab;
+}
+
+export interface AccountDetailOverviewAttention {
+  priority: AccountRecommendationPriority;
+  actionLabelKey: string;
+  reasonKey: string;
+  reasonParams?: Record<string, string | number>;
+  targetTab: AccountDetailOverviewTargetTab;
+}
+
 export interface AccountDetailViewModel {
   selectionKey: string;
   identity: {
@@ -129,10 +205,14 @@ export interface AccountDetailViewModel {
     tooltipParams: Record<string, string | number>;
     reasonKey: string;
     reasonParams: Record<string, string | number>;
+    resetAtMs: number | null;
   };
   overview: {
-    statusDescriptionKey: string;
-    metrics: AccountDetailField[];
+    decision: AccountDetailOverviewDecision;
+    capacity: AccountDetailOverviewCapacity;
+    credential: AccountDetailOverviewCredential;
+    activity: AccountDetailOverviewActivity;
+    attention: AccountDetailOverviewAttention | null;
   };
   quota: {
     statusLabelKey: string;
@@ -268,18 +348,20 @@ const buildValueSummary = (
   valueRow: UsageValueRow | null | undefined
 ): AccountDetailValueSummary => {
   const matchedValue = valueRow && isValueRowForAccount(row, valueRow) ? valueRow : null;
-  const requests = matchedValue?.requests ?? row.usage.success + row.usage.failure;
-  const inputTokens = matchedValue?.inputTokens ?? 0;
-  const outputTokens = matchedValue?.outputTokens ?? 0;
+  const monitoringValue = matchedValue?.source === 'monitoring' ? matchedValue : null;
+  const requests = monitoringValue?.requests ?? row.usage.success + row.usage.failure;
+  const inputTokens = monitoringValue?.inputTokens ?? 0;
+  const outputTokens = monitoringValue?.outputTokens ?? 0;
+  const totalTokens = monitoringValue?.totalTokens ?? inputTokens + outputTokens;
   return {
     requests,
-    successRate: matchedValue?.successRate ?? row.usage.successRate,
+    successRate: monitoringValue?.successRate ?? row.usage.successRate,
     inputTokens,
     outputTokens,
-    totalTokens: inputTokens + outputTokens,
-    estimatedCost: matchedValue?.estimatedCost ?? requests * 0.018,
-    lastSeenMs: matchedValue?.lastSeenMs ?? null,
-    source: matchedValue?.source ?? 'recent',
+    totalTokens,
+    estimatedCost: monitoringValue?.estimatedCost ?? null,
+    lastSeenMs: monitoringValue?.lastSeenMs ?? null,
+    source: monitoringValue ? 'monitoring' : 'recent',
   };
 };
 
@@ -288,12 +370,17 @@ const buildQuotaWindows = (
   quotaWindows: AccountDetailQuotaWindowInput[],
   windowUsageByKey: Map<string, MonitoringAccountWindowUsageItem>
 ): AccountDetailQuotaWindow[] =>
-  quotaWindows.map((window) => ({
-    ...window,
-    usage: toWindowUsageSummary(
-      windowUsageByKey.get(accountWindowUsageRequestKey(row.selectionKey, window.key))
-    ),
-  }));
+  quotaWindows.map((window) => {
+    const resetAtMs = isValidQuotaResetAtMs(window.resetAtMs) ? window.resetAtMs : null;
+    return {
+      ...window,
+      resetAtMs,
+      resetAccuracy: resetAtMs !== null ? (window.resetAccuracy ?? 'unknown') : 'unknown',
+      usage: toWindowUsageSummary(
+        windowUsageByKey.get(accountWindowUsageRequestKey(row.selectionKey, window.key))
+      ),
+    };
+  });
 
 const buildQuotaDiagnostics = (
   row: AccountRow,
@@ -396,12 +483,466 @@ const quotaSourceLabelKey = (source: AccountRow['quota']['source']) => {
   }
 };
 
+const presentOverviewText = (value: string | null | undefined): string | null => {
+  const normalized = value?.trim() ?? '';
+  return normalized && normalized !== '-' ? normalized : null;
+};
+
+const getOverviewHealthLimitKind = (
+  status: AccountListHealthStatusKey
+): Extract<AccountQuotaWindowKind, 'five_hour' | 'weekly' | 'monthly'> | null => {
+  if (status === 'five_hour_exhausted' || status === 'five_hour_cooldown') return 'five_hour';
+  if (status === 'weekly_exhausted' || status === 'weekly_cooldown') return 'weekly';
+  if (status === 'monthly_exhausted' || status === 'monthly_cooldown') return 'monthly';
+  return null;
+};
+
+const selectConservativeBlockingWindow = (
+  windows: AccountDetailQuotaWindowInput[]
+): AccountDetailQuotaWindowInput => {
+  const unknownResetWindow = windows.find((window) => !isValidQuotaResetAtMs(window.resetAtMs));
+  if (unknownResetWindow) return unknownResetWindow;
+  return windows.reduce((current, next) =>
+    (next.resetAtMs ?? 0) > (current.resetAtMs ?? 0) ? next : current
+  );
+};
+
+const selectOverviewQuotaWindow = (
+  quotaWindows: AccountDetailQuotaWindowInput[],
+  healthStatus: AccountListHealthStatusKey
+) => {
+  if (quotaWindows.length === 0) return null;
+  const windowsWithRemaining = quotaWindows.filter(
+    (window) =>
+      typeof window.remainingPercent === 'number' && Number.isFinite(window.remainingPercent)
+  );
+  if (windowsWithRemaining.length === 0) return quotaWindows[0];
+  const healthLimitKind = getOverviewHealthLimitKind(healthStatus);
+  if (healthLimitKind) {
+    const matchingBlockingWindows = windowsWithRemaining.filter(
+      (window) =>
+        (window.remainingPercent ?? 100) <= 0 &&
+        (window.kind ??
+          inferAccountQuotaWindowKind({
+            key: window.key,
+            label: window.label,
+            limitWindowSeconds: window.limitWindowSeconds,
+          })) === healthLimitKind
+    );
+    if (matchingBlockingWindows.length > 0) {
+      return selectConservativeBlockingWindow(matchingBlockingWindows);
+    }
+  }
+
+  const minimumRemaining = windowsWithRemaining.reduce((current, next) =>
+    (next.remainingPercent ?? 100) < (current.remainingPercent ?? 100) ? next : current
+  ).remainingPercent;
+  const limitingWindows = windowsWithRemaining.filter(
+    (window) => window.remainingPercent === minimumRemaining
+  );
+  return (minimumRemaining ?? 100) <= 0 && limitingWindows.length > 1
+    ? selectConservativeBlockingWindow(limitingWindows)
+    : limitingWindows[0];
+};
+
+const getQuotaObservedAtMs = (row: AccountRow): number | null =>
+  row.quota.source === 'observed-header'
+    ? (row.quota.observedAtMs ?? row.quota.fetchedAtMs ?? null)
+    : (row.quota.fetchedAtMs ?? row.quota.observedAtMs ?? null);
+
+const getObservedHeaderAtMs = (row: AccountRow): number | null => row.quota.observedAtMs ?? null;
+
+const resolveOverviewDecisionBasis = (
+  row: AccountRow,
+  listItem: AccountListPresentationItem,
+  quotaCooldown: QuotaCooldownInfo | null
+): { labelKey: string; observedAtMs: number | null } => {
+  if (
+    quotaCooldown &&
+    (listItem.health.reasonKey === 'accounts.health_reason_cooldown' ||
+      listItem.health.reasonKey === 'accounts.health_reason_limited_cooldown')
+  ) {
+    return {
+      labelKey: 'accounts.detail_overview_basis_cooldown',
+      observedAtMs: quotaCooldown.disabledAtMs ?? quotaCooldown.createdAtMs ?? null,
+    };
+  }
+
+  if (listItem.health.status === 'reauth') {
+    if (listItem.health.reasonKey === 'accounts.health_reason_reauth_quota_refresh') {
+      return {
+        labelKey: quotaSourceLabelKey(row.quota.source),
+        observedAtMs: getQuotaObservedAtMs(row),
+      };
+    }
+    if (listItem.health.reasonKey === 'accounts.health_reason_reauth_inspection') {
+      return {
+        labelKey: 'accounts.detail_overview_basis_inspection',
+        observedAtMs: row.inspection?.createdAtMs ?? null,
+      };
+    }
+    return {
+      labelKey: 'accounts.detail_overview_basis_credential_state',
+      observedAtMs: row.updatedAtMs,
+    };
+  }
+
+  if (listItem.health.status === 'exception') {
+    if (listItem.health.reasonKey === 'accounts.health_reason_exception_quota') {
+      return {
+        labelKey: quotaSourceLabelKey(row.quota.source),
+        observedAtMs: getQuotaObservedAtMs(row),
+      };
+    }
+    if (listItem.health.reasonKey === 'accounts.health_reason_exception_header') {
+      return {
+        labelKey: 'accounts.quota_source_observed_header',
+        observedAtMs: getObservedHeaderAtMs(row),
+      };
+    }
+    if (listItem.health.reasonKey === 'accounts.health_reason_exception_inspection') {
+      return {
+        labelKey: 'accounts.detail_overview_basis_inspection',
+        observedAtMs: row.inspection?.createdAtMs ?? null,
+      };
+    }
+    return {
+      labelKey: 'accounts.detail_overview_basis_credential_state',
+      observedAtMs: row.updatedAtMs,
+    };
+  }
+
+  if (listItem.health.reasonKey === 'accounts.health_reason_limited_header') {
+    return {
+      labelKey: 'accounts.quota_source_observed_header',
+      observedAtMs: getObservedHeaderAtMs(row),
+    };
+  }
+
+  if (listItem.health.status === 'disabled' || listItem.health.status === 'raw') {
+    return {
+      labelKey: 'accounts.detail_overview_basis_credential_state',
+      observedAtMs: row.updatedAtMs,
+    };
+  }
+
+  if (
+    row.quota.source !== 'none' ||
+    row.quota.remainingPercent !== null ||
+    row.quota.status === 'loading'
+  ) {
+    return {
+      labelKey: quotaSourceLabelKey(row.quota.source),
+      observedAtMs: getQuotaObservedAtMs(row),
+    };
+  }
+
+  if (row.inspection) {
+    return {
+      labelKey: 'accounts.detail_overview_basis_inspection',
+      observedAtMs: row.inspection.createdAtMs,
+    };
+  }
+
+  return {
+    labelKey: 'accounts.detail_overview_basis_credential_state',
+    observedAtMs: row.updatedAtMs,
+  };
+};
+
+const buildOverviewDecision = (
+  row: AccountRow,
+  listItem: AccountListPresentationItem,
+  quotaCooldown: QuotaCooldownInfo | null
+): AccountDetailOverviewDecision => {
+  const basis = resolveOverviewDecisionBasis(row, listItem, quotaCooldown);
+
+  return {
+    status: listItem.health.status,
+    labelKey: listItem.health.labelKey,
+    reasonKey: listItem.health.reasonKey,
+    reasonParams: listItem.health.reasonParams,
+    observedAtMs: basis.observedAtMs,
+    basisLabelKey: basis.labelKey,
+    targetTab: 'diagnostics',
+  };
+};
+
+const buildOverviewCapacity = (
+  row: AccountRow,
+  quotaWindows: AccountDetailQuotaWindowInput[],
+  listItem: AccountListPresentationItem
+): AccountDetailOverviewCapacity => {
+  const groupedAvailability =
+    row.provider === 'antigravity'
+      ? summarizeGroupedQuotaAvailability(
+          quotaWindows.map((window) => ({
+            groupLabel: window.groupLabel,
+            kind: window.kind,
+            remainingPercent: window.remainingPercent,
+            resetLabel: window.resetLabel,
+            resetAtMs: window.resetAtMs,
+            resetAccuracy: window.resetAccuracy,
+          }))
+        )
+      : null;
+  const observedAtMs = getQuotaObservedAtMs(row);
+
+  if (groupedAvailability) {
+    const limitedGroups = groupedAvailability.groups
+      .filter((group) => group.remainingPercent <= 0)
+      .map((group) => group.label)
+      .join(' · ');
+    const resetValue =
+      groupedAvailability.resetAtMs ?? presentOverviewText(groupedAvailability.resetLabel);
+    return {
+      kind: 'group_availability',
+      statusLabelKey:
+        groupedAvailability.state === 'partial'
+          ? 'accounts.health_partial'
+          : groupedAvailability.state === 'exhausted'
+            ? 'accounts.quota_status_exhausted'
+            : 'accounts.quota_status_ok',
+      remainingPercent: row.quota.remainingPercent,
+      availableGroupCount: groupedAvailability.availableGroupCount,
+      totalGroupCount: groupedAvailability.totalGroupCount,
+      hasData: true,
+      descriptionKey: 'accounts.detail_overview_capacity_group_desc',
+      fields: compactFields([
+        field(
+          'overviewLimitedGroups',
+          'accounts.detail_overview_capacity_limited_groups',
+          presentOverviewText(limitedGroups)
+        ),
+        field(
+          'overviewGroupRecovery',
+          groupedAvailability.state === 'available'
+            ? 'accounts.detail_reset'
+            : 'accounts.detail_overview_capacity_recovery',
+          resetValue,
+          typeof resetValue === 'number' ? 'quota_reset' : 'text'
+        ),
+        field('source', 'accounts.detail_source', quotaSourceLabelKey(row.quota.source), 'i18n'),
+        field(
+          'overviewQuotaObservedAt',
+          'accounts.detail_overview_capacity_checked',
+          observedAtMs,
+          'timestamp'
+        ),
+      ]),
+      targetTab: 'quota',
+    };
+  }
+
+  const quotaWindow = selectOverviewQuotaWindow(quotaWindows, listItem.health.status);
+  const resetValue = quotaWindow
+    ? (quotaWindow.resetAtMs ?? presentOverviewText(quotaWindow.resetLabel))
+    : (row.quota.resetAtMs ?? presentOverviewText(row.quota.resetLabel));
+  const hasQuotaData =
+    (typeof row.quota.remainingPercent === 'number' &&
+      Number.isFinite(row.quota.remainingPercent)) ||
+    quotaWindow !== null;
+
+  return {
+    kind: 'percent',
+    statusLabelKey: listItem.quota.statusLabelKey,
+    remainingPercent: row.quota.remainingPercent,
+    availableGroupCount: null,
+    totalGroupCount: null,
+    hasData: hasQuotaData,
+    descriptionKey: hasQuotaData
+      ? 'accounts.detail_overview_capacity_desc'
+      : 'accounts.detail_overview_capacity_missing_desc',
+    fields: compactFields([
+      field(
+        'overviewQuotaWindow',
+        'accounts.detail_overview_capacity_window',
+        presentOverviewText(quotaWindow?.label)
+      ),
+      field(
+        'overviewQuotaAmount',
+        'accounts.detail_overview_capacity_amount',
+        presentOverviewText(quotaWindow?.amountLabel)
+      ),
+      field(
+        'reset',
+        'accounts.detail_reset',
+        resetValue,
+        typeof resetValue === 'number' ? 'quota_reset' : 'text'
+      ),
+      field('source', 'accounts.detail_source', quotaSourceLabelKey(row.quota.source), 'i18n'),
+      field(
+        'overviewQuotaObservedAt',
+        'accounts.detail_overview_capacity_checked',
+        observedAtMs,
+        'timestamp'
+      ),
+    ]),
+    targetTab: 'quota',
+  };
+};
+
+const buildOverviewCredential = (
+  row: AccountRow,
+  codexQuota: CodexQuotaState | null | undefined
+): AccountDetailOverviewCredential => {
+  const parseValidSubscriptionUntilMs = (value: unknown): number | null => {
+    const numeric =
+      typeof value === 'number'
+        ? value
+        : typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value.trim())
+          ? Number(value.trim())
+          : null;
+    const parsed =
+      numeric !== null && Number.isFinite(numeric)
+        ? numeric < 1e12
+          ? numeric * 1000
+          : numeric
+        : parseTimestampMs(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return Number.isNaN(new Date(parsed).getTime()) ? null : parsed;
+  };
+  const effectivePlanType = normalizePlanType(
+    codexQuota?.planType ?? row.planType ?? resolveCodexPlanType(row.raw)
+  );
+  const hasPaidCodexSubscription =
+    row.provider === 'codex' && effectivePlanType !== null && effectivePlanType !== 'free';
+  const liveSubscriptionUntilMs = hasPaidCodexSubscription
+    ? parseValidSubscriptionUntilMs(codexQuota?.subscriptionActiveUntil)
+    : null;
+  const asRecord = (value: unknown): Record<string, unknown> | null =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  const metadata = asRecord(row.raw.metadata);
+  const attributes = asRecord(row.raw.attributes);
+  const tokenSubscriptionUntilMs = hasPaidCodexSubscription
+    ? [row.raw.id_token, metadata?.id_token, attributes?.id_token].reduce<number | null>(
+        (resolved, candidate) => {
+          if (resolved !== null) return resolved;
+          const payload = parseIdTokenPayload(candidate);
+          return parseValidSubscriptionUntilMs(
+            payload?.chatgpt_subscription_active_until ?? payload?.chatgptSubscriptionActiveUntil
+          );
+        },
+        null
+      )
+    : null;
+  const subscriptionUntilMs = liveSubscriptionUntilMs ?? tokenSubscriptionUntilMs;
+  const subscriptionUntilLabelKey =
+    liveSubscriptionUntilMs !== null
+      ? 'accounts.detail_subscription_until'
+      : 'accounts.detail_subscription_until_token';
+
+  return {
+    statusLabelKey: row.disabled
+      ? 'accounts.detail_auth_status_disabled'
+      : 'accounts.detail_auth_status_enabled',
+    sourceLabelKey: row.runtimeOnly
+      ? 'accounts.detail_runtime_only'
+      : 'accounts.detail_local_auth_file',
+    fields: compactFields([
+      field('provider', 'accounts.col_provider', row.provider),
+      field('planType', 'accounts.col_plan', effectivePlanType),
+      field('updatedAtMs', 'accounts.detail_updated_at', row.updatedAtMs, 'timestamp'),
+      field('subscriptionUntilMs', subscriptionUntilLabelKey, subscriptionUntilMs, 'quota_reset'),
+      field('authIndex', 'accounts.detail_auth_index', presentOverviewText(row.authIndex)),
+      field('priority', 'accounts.col_priority', row.priority ?? 0, 'number'),
+    ]),
+    targetTab: 'credential',
+  };
+};
+
+const buildOverviewActivity = (
+  row: AccountRow,
+  value: AccountDetailValueSummary
+): AccountDetailOverviewActivity => {
+  const monitoring = value.source === 'monitoring';
+  const recentRequests = row.usage.success + row.usage.failure;
+  return {
+    scope: monitoring ? 'monitoring_7d' : 'recent_snapshot',
+    scopeDays: monitoring ? ACCOUNT_OVERVIEW_ACTIVITY_RANGE_DAYS : null,
+    sourceLabelKey: `accounts.value_source_${value.source}`,
+    hasActivity: value.requests > 0,
+    emptyStateKey: monitoring
+      ? 'accounts.detail_overview_activity_empty_7d'
+      : 'accounts.detail_overview_activity_empty_recent',
+    metrics: monitoring
+      ? compactFields([
+          field('requests', 'accounts.value_requests', value.requests, 'number'),
+          field('successRate', 'accounts.detail_success_rate', value.successRate, 'percent'),
+          field('tokens', 'usage_analytics.trend_metric_totalTokens', value.totalTokens, 'number'),
+          field('cost', 'accounts.history_cost', value.estimatedCost, 'money'),
+          field(
+            'lastSeenMs',
+            'accounts.detail_overview_activity_last_active',
+            value.lastSeenMs,
+            'timestamp'
+          ),
+        ])
+      : compactFields([
+          field('requests', 'accounts.value_requests', recentRequests, 'number'),
+          field('successRate', 'accounts.detail_success_rate', row.usage.successRate, 'percent'),
+          field(
+            'successCalls',
+            'accounts.detail_overview_activity_success',
+            row.usage.success,
+            'number'
+          ),
+          field(
+            'failureCalls',
+            'accounts.detail_overview_activity_failure',
+            row.usage.failure,
+            'number'
+          ),
+        ]),
+    targetTab: 'diagnostics',
+  };
+};
+
+const getOverviewAttentionTarget = (
+  action: AccountRecommendation['action']
+): AccountDetailOverviewTargetTab => {
+  if (action === 'refresh') return 'quota';
+  if (action === 'reauth' || action === 'review') return 'diagnostics';
+  return 'credential';
+};
+
+const buildOverviewAttention = (
+  recommendation: AccountRecommendation | null,
+  actionCandidates: AccountDetailActionCandidateSummary[]
+): AccountDetailOverviewAttention | null => {
+  if (recommendation) {
+    return {
+      priority: recommendation.priority,
+      actionLabelKey: getRecommendationActionLabelKey(recommendation.action),
+      reasonKey: recommendation.reasonKey,
+      targetTab: getOverviewAttentionTarget(recommendation.action),
+    };
+  }
+  if (actionCandidates.length > 0) {
+    return {
+      priority: 'medium',
+      actionLabelKey: 'accounts.detail_overview_attention_review',
+      reasonKey: 'accounts.detail_overview_attention_candidates',
+      reasonParams: { count: actionCandidates.length },
+      targetTab: 'diagnostics',
+    };
+  }
+  return null;
+};
+
 const buildQuotaFields = (row: AccountRow, listItem: AccountListPresentationItem) =>
   compactFields([
     field('status', 'accounts.detail_status', listItem.quota.statusLabelKey, 'i18n'),
     field('used', 'accounts.detail_used', row.quota.usedPercent, 'percent'),
     field('remaining', 'accounts.detail_quota', row.quota.remainingPercent, 'percent'),
-    field('reset', 'accounts.detail_reset', row.quota.resetLabel),
+    field(
+      'reset',
+      'accounts.detail_reset',
+      row.quota.resetAtMs ?? row.quota.resetLabel,
+      row.quota.resetAtMs === null ? 'text' : 'quota_reset'
+    ),
     field('source', 'accounts.detail_source', quotaSourceLabelKey(row.quota.source), 'i18n'),
   ]);
 
@@ -449,40 +990,22 @@ const buildInspectionFields = (row: AccountRow): AccountDetailField[] => {
   ]);
 };
 
-const buildOverviewMetrics = (
-  row: AccountRow,
-  value: AccountDetailValueSummary,
-  history: AccountDetailHistorySummary | null
-): AccountDetailField[] =>
-  compactFields([
-    field('quota', 'accounts.detail_quota', row.quota.remainingPercent, 'percent'),
-    field('priority', 'accounts.col_priority', row.priority ?? 0, 'number'),
-    field('successRate', 'accounts.detail_success_rate', value.successRate, 'percent'),
-    field(
-      'requests',
-      'accounts.value_requests',
-      history?.totalRequests ?? value.requests,
-      'number'
-    ),
-    field('inputTokens', 'accounts.value_input_tokens', value.inputTokens, 'number'),
-    field('outputTokens', 'accounts.value_output_tokens', value.outputTokens, 'number'),
-    field(
-      'tokens',
-      'usage_analytics.trend_metric_totalTokens',
-      history?.totalTokens ?? value.totalTokens,
-      'number'
-    ),
-    field('cost', 'accounts.history_cost', history?.totalCost ?? value.estimatedCost, 'money'),
-    field('lastSeenMs', 'accounts.value_recent', value.lastSeenMs, 'timestamp'),
-  ]);
-
 export const buildAccountDetailViewModel = (
   row: AccountRow,
   options: BuildAccountDetailViewModelOptions = {}
 ): AccountDetailViewModel => {
   const recommendation = options.recommendation ?? null;
   const quotaCooldown = options.quotaCooldown ?? null;
-  const quotaWindows = options.quotaWindows ?? [];
+  const quotaWindows: AccountDetailQuotaWindowInput[] = (options.quotaWindows ?? []).map(
+    (window) => {
+      const resetAtMs = isValidQuotaResetAtMs(window.resetAtMs) ? window.resetAtMs : null;
+      return {
+        ...window,
+        resetAtMs,
+        resetAccuracy: resetAtMs !== null ? (window.resetAccuracy ?? 'unknown') : 'unknown',
+      };
+    }
+  );
   const listItem = buildAccountListItem(row, {
     recommendation,
     quotaCooldown,
@@ -490,7 +1013,8 @@ export const buildAccountDetailViewModel = (
     quotaWindows,
   });
   const value = buildValueSummary(row, options.valueRow);
-  const history = toHistorySummary(options.history);
+  const rawHistory = toHistorySummary(options.history);
+  const history = rawHistory?.matched === true ? rawHistory : null;
   const actionCandidates = [
     ...(options.matchedActionCandidates ??
       (options.actionCandidates ?? []).filter((candidate) =>
@@ -499,6 +1023,13 @@ export const buildAccountDetailViewModel = (
   ]
     .sort((left, right) => right.lastSeenAtMs - left.lastSeenAtMs)
     .map(toActionCandidateSummary);
+  const overview = {
+    decision: buildOverviewDecision(row, listItem, quotaCooldown),
+    capacity: buildOverviewCapacity(row, quotaWindows, listItem),
+    credential: buildOverviewCredential(row, options.codexQuota),
+    activity: buildOverviewActivity(row, value),
+    attention: buildOverviewAttention(recommendation, actionCandidates),
+  };
 
   return {
     selectionKey: row.selectionKey,
@@ -524,13 +1055,9 @@ export const buildAccountDetailViewModel = (
       tooltipParams: listItem.health.tooltipParams,
       reasonKey: listItem.health.reasonKey,
       reasonParams: listItem.health.reasonParams,
+      resetAtMs: listItem.health.resetAtMs,
     },
-    overview: {
-      statusDescriptionKey: row.disabled
-        ? 'accounts.detail_overview_disabled'
-        : 'accounts.detail_overview_enabled',
-      metrics: buildOverviewMetrics(row, value, history),
-    },
+    overview,
     quota: {
       statusLabelKey: listItem.quota.statusLabelKey,
       sourceShortLabelKey: listItem.quota.sourceShortLabelKey,

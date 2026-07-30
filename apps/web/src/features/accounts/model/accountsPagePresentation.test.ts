@@ -3,6 +3,11 @@ import {
   buildAntigravityQuotaMatrix,
   formatCompactNumber,
   formatHistorySuccessRate,
+  formatQuotaResetDisplay,
+  formatQuotaResetTimestamp,
+  formatQuotaResetTooltipParams,
+  formatTimestamp,
+  formatTimestampTitle,
   parsePriorityValue,
   quotaStatusLabelKey,
 } from './accountsPagePresentation';
@@ -17,6 +22,28 @@ describe('accountsPagePresentation', () => {
     expect(formatCompactNumber(12_500)).toBe('12.5K');
     expect(formatHistorySuccessRate(0.975)).toBe('97.5%');
     expect(quotaStatusLabelKey('exhausted')).toBe('accounts.quota_status_exhausted');
+  });
+
+  it('formats normalized quota resets consistently and preserves legacy text fallbacks', () => {
+    const resetAtMs = new Date(2026, 6, 30, 10, 5, 0, 0).getTime();
+    const recoverAtMs = new Date(2026, 6, 31, 11, 15, 0, 0).getTime();
+
+    expect(formatQuotaResetTimestamp(resetAtMs, 'zh-CN')).toBe('2026-07-30 10:05');
+    expect(formatQuotaResetDisplay(resetAtMs, '2h', 'en')).toBe('2026-07-30 10:05');
+    expect(formatQuotaResetDisplay(null, 'resets in 2d', 'en')).toBe('resets in 2d');
+    expect(
+      formatQuotaResetTooltipParams(
+        { resetAt: '2h', recoverAt: 'later' },
+        resetAtMs,
+        'en',
+        recoverAtMs
+      )
+    ).toEqual({ resetAt: '2026-07-30 10:05', recoverAt: '2026-07-31 11:15' });
+  });
+
+  it('rejects timestamps outside the JavaScript date range', () => {
+    expect(formatTimestamp(Number.MAX_VALUE, 'en')).toBe('-');
+    expect(formatTimestampTitle(Number.MAX_VALUE, 'en')).toBeUndefined();
   });
 
   it('builds the two-provider-group Antigravity quota matrix in stable order', () => {

@@ -105,11 +105,13 @@ import {
 } from '@/features/accounts/model/accountWindowUsageRows';
 import {
   buildAccountQuotaDisplayWindows,
-  formatQuotaResetInlineLabel,
   getQuotaWindowShortLabel,
   type AccountQuotaDisplayWindow,
 } from '@/features/accounts/model/accountQuotaDisplayWindows';
-import { buildAccountDetailViewModel } from '@/features/accounts/model/accountDetailViewModel';
+import {
+  ACCOUNT_OVERVIEW_ACTIVITY_RANGE_MS,
+  buildAccountDetailViewModel,
+} from '@/features/accounts/model/accountDetailViewModel';
 import {
   ACCOUNT_SORT_DEFAULT_DIRECTIONS,
   ACCOUNT_SORT_FIELD_OPTIONS,
@@ -121,6 +123,8 @@ import {
   formatHistorySuccessRate,
   formatMoney,
   formatPercent,
+  formatQuotaResetDisplay,
+  formatQuotaResetTooltipParams,
   getAccountHistoryTitle,
   getAccountSortFieldOption,
   getProviderLabel,
@@ -139,7 +143,7 @@ import {
   hasPartialSharedAuthFileSelection,
 } from '@/features/authFiles/model/authFilesPageModel';
 import {
-  buildUsageValueRowsFromMonitoring,
+  buildUsageValueRowFromMonitoringSummary,
   buildUsageValueRowsFromRecent,
   type UsageValueRow,
 } from '@/features/accounts/model/usageValueRows';
@@ -219,7 +223,6 @@ import styles from './AccountsPage.module.scss';
 type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
 
-const ACCOUNTS_USAGE_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_CONCURRENT_QUOTA_REFRESHES = 3;
 
 const readAccountsSearchFromHash = (hash: string): string => {
@@ -235,6 +238,7 @@ const getHealthStatusClass = (status: AccountListHealthStatusKey) => {
     case 'weekly_cooldown':
     case 'monthly_cooldown':
     case 'limited':
+    case 'partial':
       return styles.badgeWarn;
     case 'five_hour_exhausted':
     case 'weekly_exhausted':
@@ -500,6 +504,7 @@ export function AccountsPage() {
   const accountHistoryAutoLoadKeyRef = useRef<string | null>(null);
   const accountWindowUsageReqIdRef = useRef(0);
   const accountWindowUsageAutoLoadKeyRef = useRef<string | null>(null);
+  const usageValuesRequestIdRef = useRef(0);
   const accountActionCandidatesReqIdRef = useRef(0);
   const accountActionCandidatesRef = useRef<AccountActionCandidate[]>([]);
   const lastWorkspaceNavigationRef = useRef<string | null>(null);
@@ -916,42 +921,35 @@ export function AccountsPage() {
   );
   const disableControls = connectionStatus !== 'connected';
   const selectedRowProvider = selectedRow?.provider ?? '';
+  const hasSelectedAccountDetail = activeView === 'accounts' && Boolean(selectedRowKey);
+  const needsQuotaCooldowns =
+    activeView === 'accounts' &&
+    (operationalFilter === 'cooldown' ||
+      (hasSelectedAccountDetail && (detailTab === 'overview' || detailTab === 'quota')));
+  const needsActionCandidates =
+    activeView === 'accounts' &&
+    (operationalFilter === 'automation' ||
+      (hasSelectedAccountDetail && (detailTab === 'overview' || detailTab === 'diagnostics')));
+  const needsHeaderSnapshots =
+    hasSelectedAccountDetail &&
+    (detailTab === 'overview' || detailTab === 'quota') &&
+    selectedRowProvider === CODEX_CONFIG.type &&
+    headerSnapshots.length === 0;
 
   useEffect(() => {
-    const needsCooldowns =
-      activeView === 'accounts' &&
-      (operationalFilter === 'cooldown' || (Boolean(selectedRowKey) && detailTab === 'quota'));
-    if (!needsCooldowns) return;
+    if (!needsQuotaCooldowns) return;
     void loadQuotaCooldowns();
-  }, [
-    activeView,
-    detailTab,
-    loadQuotaCooldowns,
-    operationalFilter,
-    selectedRowKey,
-    selectedRowProvider,
-  ]);
+  }, [loadQuotaCooldowns, needsQuotaCooldowns]);
 
   useEffect(() => {
-    const needsActionCandidates =
-      activeView === 'accounts' &&
-      (operationalFilter === 'automation' ||
-        (Boolean(selectedRowKey) && detailTab === 'diagnostics'));
     if (!needsActionCandidates) return;
     void loadAccountActionCandidates();
-  }, [activeView, detailTab, loadAccountActionCandidates, operationalFilter, selectedRowKey]);
+  }, [loadAccountActionCandidates, needsActionCandidates]);
 
   useEffect(() => {
-    if (
-      activeView !== 'accounts' ||
-      detailTab !== 'quota' ||
-      selectedRowProvider !== CODEX_CONFIG.type ||
-      headerSnapshots.length > 0
-    ) {
-      return;
-    }
+    if (!needsHeaderSnapshots) return;
     void loadHeaderSnapshots();
-  }, [activeView, detailTab, headerSnapshots.length, loadHeaderSnapshots, selectedRowProvider]);
+  }, [loadHeaderSnapshots, needsHeaderSnapshots]);
 
   const {
     prefixProxyEditor,
@@ -1399,9 +1397,14 @@ export function AccountsPage() {
 
   const loadUsageValues = useCallback(async () => {
     if (!selectedRow) return;
+    const requestId = usageValuesRequestIdRef.current + 1;
+    usageValuesRequestIdRef.current = requestId;
+    const commitRows = (rows: UsageValueRow[]) => {
+      if (usageValuesRequestIdRef.current !== requestId) return;
+      setUsageRows(rows);
+    };
     const fallback = () => {
-      const fallbackRows = buildUsageValueRowsFromRecent([selectedRow]);
-      setUsageRows(fallbackRows);
+      commitRows(buildUsageValueRowsFromRecent([selectedRow]));
     };
 
     if (
@@ -1421,7 +1424,7 @@ export function AccountsPage() {
         featureAvailability.managerServiceBase,
         managementKey,
         {
-          from_ms: toMs - ACCOUNTS_USAGE_RANGE_MS,
+          from_ms: toMs - ACCOUNT_OVERVIEW_ACTIVITY_RANGE_MS,
           to_ms: toMs,
           now_ms: toMs,
           filters: {
@@ -1435,11 +1438,12 @@ export function AccountsPage() {
         }
       );
       const stats: MonitoringAnalyticsAccountStatRow[] = response.account_stats ?? [];
-      if (stats.length === 0) {
-        fallback();
-        return;
-      }
-      setUsageRows(buildUsageValueRowsFromMonitoring([selectedRow], stats));
+      const monitoringRow = buildUsageValueRowFromMonitoringSummary(
+        selectedRow,
+        response.summary,
+        stats
+      );
+      commitRows([monitoringRow]);
     } catch {
       fallback();
     }
@@ -2790,7 +2794,15 @@ export function AccountsPage() {
                   return `${label}: ${formatPercent(window.remainingPercent)}`;
                 })
                 .join('\n') || t('accounts.quota_source_none');
-            const healthTitle = t(item.health.tooltipKey, item.health.tooltipParams);
+            const healthTitle = t(
+              item.health.tooltipKey,
+              formatQuotaResetTooltipParams(
+                item.health.tooltipParams,
+                item.health.resetAtMs,
+                i18n.language,
+                item.health.cooldown?.recoverAtMs
+              )
+            );
             const accountHistory = accountHistoryByRowKey.get(row.selectionKey) ?? null;
             const accountHistoryMatched = accountHistory?.matched === true;
             const accountHistoryTitle = getAccountHistoryTitle(
@@ -2998,9 +3010,11 @@ export function AccountsPage() {
                         const windowWidth = Math.max(0, Math.min(100, windowRemaining ?? 0));
                         const resetLabel =
                           window.resetLabel && window.resetLabel !== '-' ? window.resetLabel : '';
-                        const resetDisplayLabel = resetLabel
-                          ? formatQuotaResetInlineLabel(resetLabel, i18n.language)
-                          : '';
+                        const resetDisplayLabel = formatQuotaResetDisplay(
+                          window.resetAtMs,
+                          resetLabel,
+                          i18n.language
+                        );
                         const shortLabel = getQuotaWindowShortLabel(window);
                         return (
                           <div
@@ -3024,10 +3038,12 @@ export function AccountsPage() {
                               <span
                                 className={styles.quotaResetMeta}
                                 title={
-                                  resetLabel ? `${t('accounts.col_reset')}: ${resetLabel}` : ''
+                                  resetDisplayLabel !== '-'
+                                    ? `${t('accounts.col_reset')}: ${resetDisplayLabel}`
+                                    : ''
                                 }
                               >
-                                {resetDisplayLabel || '-'}
+                                {resetDisplayLabel}
                               </span>
                             </div>
                           </div>
@@ -3210,8 +3226,8 @@ export function AccountsPage() {
       return (
         <AccountOverviewTab
           detailView={detailView}
-          quotaRemainingPercent={selectedRow.quota.remainingPercent}
           getHealthStatusClass={getHealthStatusClass}
+          onSelectTab={setDetailTab}
         />
       );
     };

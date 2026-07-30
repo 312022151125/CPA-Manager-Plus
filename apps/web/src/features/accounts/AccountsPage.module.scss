@@ -1529,39 +1529,423 @@
   font-size: 12px;
 }
 
-.drawerSummary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-
-  div {
-    padding: 12px;
-    border: 1px solid var(--border-color);
-    border-radius: $radius-md;
-    background: var(--surface-subtle);
-  }
-
-  span {
-    display: block;
-    color: var(--text-secondary);
-    font-size: 12px;
-  }
-
-  strong {
-    display: block;
-    margin-top: 4px;
-    color: var(--text-primary);
-    font-size: 18px;
-  }
-
-  @include mobile {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 .drawerDetailStack {
   display: grid;
   gap: 12px;
+}
+
+.overviewStack {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.overviewDecisionCard,
+.overviewCard,
+.overviewActivityCard,
+.overviewAttentionCard {
+  min-width: 0;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: var(--accounts-surface);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--accounts-text) 4%, transparent);
+}
+
+.overviewDecisionCard {
+  --overview-accent: var(--accounts-primary);
+  position: relative;
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--overview-accent) 34%, var(--accounts-border));
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--overview-accent) 11%, var(--accounts-surface)),
+      color-mix(in srgb, var(--overview-accent) 3%, var(--accounts-surface)) 62%
+    ),
+    var(--accounts-surface);
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: -54px;
+    right: -38px;
+    width: 148px;
+    height: 148px;
+    border: 28px solid color-mix(in srgb, var(--overview-accent) 8%, transparent);
+    border-radius: 50%;
+    pointer-events: none;
+  }
+
+  &[data-overview-health='available'] {
+    --overview-accent: var(--accounts-success);
+  }
+
+  &[data-overview-health='five_hour_cooldown'],
+  &[data-overview-health='weekly_cooldown'],
+  &[data-overview-health='monthly_cooldown'],
+  &[data-overview-health='limited'],
+  &[data-overview-health='partial'] {
+    --overview-accent: var(--accounts-warning);
+  }
+
+  &[data-overview-health='reauth'],
+  &[data-overview-health='five_hour_exhausted'],
+  &[data-overview-health='weekly_exhausted'],
+  &[data-overview-health='monthly_exhausted'],
+  &[data-overview-health='exception'] {
+    --overview-accent: var(--accounts-danger);
+  }
+
+  &[data-overview-health='disabled'],
+  &[data-overview-health='raw'] {
+    --overview-accent: var(--accounts-neutral);
+  }
+}
+
+.overviewCardGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
+.overviewCard,
+.overviewActivityCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 15px;
+  background: color-mix(in srgb, var(--accounts-muted-surface) 44%, var(--accounts-surface));
+}
+
+.overviewActivityCard {
+  background: color-mix(in srgb, var(--accounts-primary) 3%, var(--accounts-surface));
+}
+
+.overviewCardHeader {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.overviewSectionHeading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+
+  h3 {
+    min-width: 0;
+    margin: 0;
+    color: var(--accounts-text);
+    font-size: 14px;
+    line-height: 1.35;
+  }
+}
+
+.overviewSectionIcon,
+.overviewAttentionIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accounts-primary) 10%, var(--accounts-surface));
+  color: var(--accounts-primary);
+}
+
+.overviewDecisionCard .overviewSectionIcon {
+  background: color-mix(in srgb, var(--overview-accent) 13%, var(--accounts-surface));
+  color: var(--overview-accent);
+}
+
+.overviewDecisionReason {
+  position: relative;
+  z-index: 1;
+  max-width: 620px;
+  margin: 0;
+  color: var(--accounts-text);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.overviewEvidenceRow {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+
+  > div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+    padding: 9px 10px;
+    border: 1px solid color-mix(in srgb, var(--overview-accent) 16%, var(--accounts-border));
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--accounts-surface) 84%, transparent);
+  }
+
+  span {
+    color: var(--accounts-muted);
+    font-size: 11px;
+  }
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--accounts-text);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.overviewPrimaryRow,
+.overviewCredentialState {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.overviewPrimaryValue {
+  min-width: 0;
+  color: var(--accounts-text);
+  font-size: clamp(20px, 3vw, 28px);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.overviewStatusPill,
+.overviewScopePill,
+.overviewCredentialState span {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accounts-primary) 9%, transparent);
+  color: var(--accounts-primary);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.overviewCredentialState strong {
+  color: var(--accounts-text);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.overviewCardDescription {
+  margin: 0;
+  color: var(--accounts-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.overviewFieldGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+
+  > div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+    padding: 9px 10px;
+    border: 1px solid color-mix(in srgb, var(--accounts-border) 76%, transparent);
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--accounts-surface) 86%, transparent);
+  }
+
+  dt {
+    color: var(--accounts-muted);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+
+  dd {
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    color: var(--accounts-text);
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.overviewTabLink {
+  @include button-reset;
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 5px;
+  margin-top: auto;
+  padding: 3px 1px;
+  color: var(--accounts-primary);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--accounts-brand-active);
+  }
+
+  &:focus-visible {
+    border-radius: 4px;
+    outline: 2px solid color-mix(in srgb, var(--accounts-primary) 58%, transparent);
+    outline-offset: 2px;
+  }
+}
+
+.overviewScopePillFallback {
+  background: color-mix(in srgb, var(--accounts-warning) 12%, transparent);
+  color: var(--accounts-warning);
+}
+
+.overviewMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.overviewMetricCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 92px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accounts-primary) 12%, var(--accounts-border));
+  border-radius: 10px;
+  background: var(--accounts-surface);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accounts-text) 3%, transparent);
+}
+
+.overviewMetricCardHeader {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.overviewMetricLabel {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accounts-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overviewMetricCardBody {
+  display: flex;
+  min-width: 0;
+  margin-top: auto;
+}
+
+.overviewMetricValue {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--accounts-text);
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.overviewMetricCard[data-overview-metric-kind='timestamp'] .overviewMetricValue {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.overviewEmptyState {
+  padding: 16px;
+  border: 1px dashed var(--accounts-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accounts-muted-surface) 54%, var(--accounts-surface));
+  color: var(--accounts-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.overviewAttentionCard {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 14px;
+  border-color: color-mix(in srgb, var(--accounts-warning) 42%, var(--accounts-border));
+  background: color-mix(in srgb, var(--accounts-warning) 7%, var(--accounts-surface));
+
+  &[data-overview-attention-priority='critical'],
+  &[data-overview-attention-priority='high'] {
+    border-color: color-mix(in srgb, var(--accounts-danger) 42%, var(--accounts-border));
+    background: color-mix(in srgb, var(--accounts-danger) 7%, var(--accounts-surface));
+
+    .overviewAttentionIcon {
+      background: color-mix(in srgb, var(--accounts-danger) 13%, transparent);
+      color: var(--accounts-danger);
+    }
+  }
+
+  .overviewTabLink {
+    margin-top: 0;
+  }
+}
+
+.overviewAttentionIcon {
+  background: color-mix(in srgb, var(--accounts-warning) 13%, transparent);
+  color: var(--accounts-warning);
+}
+
+.overviewAttentionBody {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+
+  p {
+    margin: 0;
+    color: var(--accounts-muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+}
+
+.overviewAttentionHeading {
+  margin: 0;
+  color: var(--accounts-text);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .detailScopeNotice {
@@ -1582,43 +1966,6 @@
     color: var(--accounts-muted);
     font-size: 12px;
     line-height: 1.45;
-  }
-}
-
-.detailInlineMeta {
-  margin-top: 8px !important;
-  font-size: 12px !important;
-}
-
-.drawerHero {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-  min-width: 0;
-  padding: 14px;
-  border: 1px solid var(--accounts-border);
-  border-radius: $radius-md;
-  background: color-mix(in srgb, var(--accounts-muted-surface) 36%, var(--accounts-surface));
-
-  h3 {
-    margin: 8px 0 4px;
-    color: var(--accounts-text);
-    font-size: 15px;
-  }
-
-  p {
-    margin: 0;
-    color: var(--accounts-muted);
-    font-size: 12px;
-    line-height: 1.5;
-  }
-
-  > strong {
-    color: var(--accounts-text);
-    font-size: 24px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
   }
 }
 
@@ -3040,15 +3387,6 @@
   }
 }
 
-.drawerSummary {
-  gap: 8px;
-
-  div {
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--accounts-muted-surface) 82%, var(--accounts-surface));
-  }
-}
-
 .drawerSection {
   border-radius: 10px;
   background: color-mix(in srgb, var(--accounts-muted-surface) 36%, var(--accounts-surface));
@@ -3141,9 +3479,37 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .toolbar,
-  .drawerSummary {
+  .toolbar {
     grid-template-columns: 1fr;
+  }
+
+  .overviewCardGrid,
+  .overviewEvidenceRow,
+  .overviewFieldGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .overviewCardHeader,
+  .overviewPrimaryRow,
+  .overviewCredentialState {
+    align-items: flex-start;
+  }
+
+  .overviewCardHeader {
+    flex-direction: column;
+  }
+
+  .overviewMetricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overviewAttentionCard {
+    grid-template-columns: auto minmax(0, 1fr);
+
+    .overviewTabLink {
+      grid-column: 1 / -1;
+      margin-left: 46px;
+    }
   }
 
   .toolbar > .filterField,
@@ -3260,6 +3626,31 @@
 }
 
 @include mobile {
+  .overviewCardGrid,
+  .overviewEvidenceRow,
+  .overviewFieldGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .overviewCardHeader,
+  .overviewPrimaryRow,
+  .overviewCredentialState {
+    align-items: flex-start;
+  }
+
+  .overviewCardHeader {
+    flex-direction: column;
+  }
+
+  .overviewAttentionCard {
+    grid-template-columns: auto minmax(0, 1fr);
+
+    .overviewTabLink {
+      grid-column: 1 / -1;
+      margin-left: 46px;
+    }
+  }
+
   .searchField {
     grid-column: 1;
   }

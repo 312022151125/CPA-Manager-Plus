@@ -7,7 +7,7 @@
 import type { JSX } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AccountDetailQuotaWindow } from '@/features/accounts/model/accountDetailViewModel';
-import { RelativeTime } from './RelativeTime';
+import { formatQuotaResetDisplay } from '@/features/accounts/model/accountsPagePresentation';
 import styles from './QuotaWindowCard.module.scss';
 
 interface QuotaWindowCardProps {
@@ -53,6 +53,11 @@ export const QuotaWindowCard = ({
   const usage = q.usage;
   const resetTimestamp =
     typeof q.resetAtMs === 'number' && Number.isFinite(q.resetAtMs) ? q.resetAtMs : null;
+  const resetDisplay = formatQuotaResetDisplay(
+    resetTimestamp,
+    q.resetLabel,
+    locale ?? i18n.language
+  );
   const compactTitle = [q.groupLabel, q.label, q.amountLabel, q.description]
     .filter(Boolean)
     .join(' · ');
@@ -68,18 +73,7 @@ export const QuotaWindowCard = ({
           />
         </div>
         <span className={styles.compactValue}>{formatPercent(q.remainingPercent)}</span>
-        <span className={styles.compactReset}>
-          {q.amountLabel ??
-            (resetTimestamp !== null ? (
-              <RelativeTime
-                timestamp={resetTimestamp}
-                mode="relative"
-                locale={locale ?? i18n.language}
-              />
-            ) : (
-              ''
-            ))}
-        </span>
+        <span className={styles.compactReset}>{q.amountLabel ?? resetDisplay}</span>
       </div>
     );
   }
@@ -95,15 +89,7 @@ export const QuotaWindowCard = ({
               {q.description}
             </span>
           ) : null}
-          {resetTimestamp !== null ? (
-            <RelativeTime
-              timestamp={resetTimestamp}
-              mode="absolute"
-              locale={locale ?? i18n.language}
-            />
-          ) : (
-            <span>{q.resetLabel || '-'}</span>
-          )}
+          <span>{resetDisplay}</span>
         </div>
         <b className={styles.headerValue}>{formatPercent(q.remainingPercent)}</b>
       </div>

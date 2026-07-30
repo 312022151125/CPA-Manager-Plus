@@ -1,9 +1,15 @@
 import type { QuotaCooldownInfo } from '@/services/api';
 import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/authFilesPageModel';
 import type { AccountRow } from './accountRows';
+import {
+  summarizeGroupedQuotaAvailability,
+  type AccountGroupedQuotaAvailabilitySummary,
+} from './accountQuotaSummary';
 import type { AccountQuotaWindowKind } from './accountQuotaDisplayWindows';
+import type { QuotaResetAccuracy } from '@/types';
 import type { AccountRecommendation } from './quotaRecommendations';
 import type { UsageValueSource } from './usageValueRows';
+import { isValidQuotaResetAtMs } from '@/utils/quota/formatters';
 
 export type AccountListHealthStatusKey =
   | 'reauth'
@@ -14,6 +20,7 @@ export type AccountListHealthStatusKey =
   | 'weekly_exhausted'
   | 'monthly_exhausted'
   | 'limited'
+  | 'partial'
   | 'disabled'
   | 'exception'
   | 'available'
@@ -35,7 +42,18 @@ export interface AccountListQuotaWindowPresentation {
   remainingPercent: number | null;
   usedPercent: number | null;
   resetLabel: string;
+  resetAtMs: number | null;
+  resetAccuracy: QuotaResetAccuracy;
+  groupLabel?: string;
 }
+
+export type AccountListQuotaWindowInput = Omit<
+  AccountListQuotaWindowPresentation,
+  'resetAtMs' | 'resetAccuracy'
+> & {
+  resetAtMs?: number | null;
+  resetAccuracy?: QuotaResetAccuracy;
+};
 
 export interface AccountListPresentationItem {
   identity: {
@@ -56,11 +74,14 @@ export interface AccountListPresentationItem {
     reasonParams: HealthTooltipParams;
     reasonTone: AccountListHealthReasonTone;
     cooldown: QuotaCooldownInfo | null;
+    resetAtMs: number | null;
   };
   quota: {
     remainingPercent: number | null;
     usedPercent: number | null;
     resetLabel: string;
+    resetAtMs: number | null;
+    resetAccuracy: QuotaResetAccuracy;
     statusLabelKey: string;
     sourceShortLabelKey: string;
   };
@@ -98,7 +119,7 @@ export interface AccountListPresentationOptions {
     source: UsageValueSource;
   } | null;
   codexStatus?: AuthFileCodexStatusSummary | null;
-  quotaWindows?: AccountListQuotaWindowPresentation[];
+  quotaWindows?: AccountListQuotaWindowInput[];
 }
 
 const DEFAULT_ESTIMATED_VALUE_PER_REQUEST = 0.018;
@@ -299,6 +320,23 @@ const resolveQuotaWindowLimitKind = (
   return hasUnknownLimitedWindow ? 'unknown' : null;
 };
 
+const resolveAntigravityAvailability = (
+  row: AccountRow,
+  quotaWindows: AccountListQuotaWindowPresentation[]
+): AccountGroupedQuotaAvailabilitySummary | null => {
+  if (row.provider !== 'antigravity') return null;
+  return summarizeGroupedQuotaAvailability(
+    quotaWindows.map((window) => ({
+      groupLabel: window.groupLabel,
+      kind: window.kind,
+      remainingPercent: window.remainingPercent,
+      resetLabel: window.resetLabel,
+      resetAtMs: window.resetAtMs,
+      resetAccuracy: window.resetAccuracy,
+    }))
+  );
+};
+
 const resolveCodexLimitKind = (
   codexStatus?: AuthFileCodexStatusSummary | null
 ): AccountListQuotaLimitKind | null => {
@@ -326,25 +364,75 @@ const getExhaustedStatusForWindow = (
   return 'five_hour_exhausted';
 };
 
-const getResetLabelForLimitKind = (
+type AccountListQuotaReset = Pick<
+  AccountListQuotaWindowPresentation,
+  'resetLabel' | 'resetAtMs' | 'resetAccuracy'
+>;
+
+const getResetForLimitKind = (
   kind: AccountListQuotaLimitKind | null,
   codexStatus?: AuthFileCodexStatusSummary | null,
   quotaWindows: AccountListQuotaWindowPresentation[] = [],
-  fallbackResetLabel = '-'
-): string => {
-  if (kind === 'monthly') return codexStatus?.monthlyResetLabel ?? fallbackResetLabel;
-  if (kind === 'weekly') return codexStatus?.weeklyResetLabel ?? fallbackResetLabel;
-  if (kind === 'five_hour') return codexStatus?.fiveHourResetLabel ?? fallbackResetLabel;
-  const matchedWindow = quotaWindows.find(
-    (window) => window.remainingPercent !== null && window.remainingPercent <= 0
+  fallback: AccountListQuotaReset = {
+    resetLabel: '-',
+    resetAtMs: null,
+    resetAccuracy: 'unknown',
+  }
+): AccountListQuotaReset => {
+  const matchedWindows = quotaWindows.filter(
+    (window) =>
+      window.remainingPercent !== null &&
+      window.remainingPercent <= 0 &&
+      (kind === null || kind === 'unknown' || inferQuotaWindowKind(window) === kind)
   );
-  return matchedWindow?.resetLabel || fallbackResetLabel;
+  if (matchedWindows.length > 0) {
+    const unknownResetWindow = matchedWindows.find((window) => window.resetAtMs === null);
+    if (unknownResetWindow) {
+      return {
+        resetLabel: unknownResetWindow.resetLabel || fallback.resetLabel,
+        resetAtMs: null,
+        resetAccuracy: 'unknown',
+      };
+    }
+    const matchedWindow = matchedWindows.reduce((current, next) =>
+      (next.resetAtMs ?? 0) > (current.resetAtMs ?? 0) ? next : current
+    );
+    const resetAccuracy = matchedWindows.some((window) => window.resetAccuracy === 'unknown')
+      ? 'unknown'
+      : matchedWindows.some((window) => window.resetAccuracy === 'estimated')
+        ? 'estimated'
+        : 'exact';
+    return {
+      resetLabel: matchedWindow.resetLabel || fallback.resetLabel,
+      resetAtMs: matchedWindow.resetAtMs,
+      resetAccuracy,
+    };
+  }
+
+  const codexResetLabel =
+    kind === 'monthly'
+      ? codexStatus?.monthlyResetLabel
+      : kind === 'weekly'
+        ? codexStatus?.weeklyResetLabel
+        : kind === 'five_hour'
+          ? codexStatus?.fiveHourResetLabel
+          : null;
+  if (codexResetLabel) {
+    return { resetLabel: codexResetLabel, resetAtMs: null, resetAccuracy: 'unknown' };
+  }
+  return fallback;
 };
 
 const hasKnownAvailableQuota = (
   row: AccountRow,
-  quotaWindows: AccountListQuotaWindowPresentation[]
+  quotaWindows: AccountListQuotaWindowPresentation[],
+  antigravityAvailability: AccountGroupedQuotaAvailabilitySummary | null
 ): boolean => {
+  if (antigravityAvailability) {
+    return (
+      antigravityAvailability.state === 'available' || antigravityAvailability.state === 'partial'
+    );
+  }
   const hasPaygRemaining = hasAvailablePaygWindow(quotaWindows);
   const knownWindowRemaining = quotaWindows
     .filter((window) => !isCoveredBillingWindow(window, hasPaygRemaining))
@@ -365,6 +453,7 @@ type HealthStatusResolution = {
   reasonKey: string;
   reasonParams?: HealthTooltipParams;
   reasonTone: AccountListHealthReasonTone;
+  resetAtMs?: number | null;
 };
 
 const resolveHealthStatus = (
@@ -374,6 +463,18 @@ const resolveHealthStatus = (
   codexStatus?: AuthFileCodexStatusSummary | null,
   quotaWindows: AccountListQuotaWindowPresentation[] = []
 ): HealthStatusResolution => {
+  const antigravityAvailability = resolveAntigravityAvailability(row, quotaWindows);
+  const resolveEffectiveQuotaWindowLimitKind = () =>
+    antigravityAvailability
+      ? antigravityAvailability.state !== 'exhausted'
+        ? null
+        : isSupportedLimitWindowKind(
+              (antigravityAvailability.resetKind as AccountListQuotaWindowKind | undefined) ?? null
+            )
+          ? (antigravityAvailability.resetKind as AccountListSupportedLimitKind)
+          : 'unknown'
+      : resolveQuotaWindowLimitKind(quotaWindows);
+
   if (codexStatus?.needsReauth || isAuthProblem(row, recommendation)) {
     const quotaRefreshStatusCode = extractHttpStatusCode(row.quota.error);
     return {
@@ -400,23 +501,23 @@ const resolveHealthStatus = (
   }
 
   if (quotaCooldown) {
-    const windowKind =
-      resolveCodexLimitKind(codexStatus) ?? resolveQuotaWindowLimitKind(quotaWindows);
+    const windowKind = resolveCodexLimitKind(codexStatus) ?? resolveEffectiveQuotaWindowLimitKind();
     if (windowKind && windowKind !== 'unknown') {
+      const reset = getResetForLimitKind(windowKind, codexStatus, quotaWindows, {
+        resetLabel: row.quota.resetLabel,
+        resetAtMs: row.quota.resetAtMs,
+        resetAccuracy: row.quota.resetAccuracy,
+      });
       return {
         status: getCooldownStatusForWindow(windowKind),
         tooltipKey: `accounts.health_tip_${getCooldownStatusForWindow(windowKind)}`,
         tooltipParams: {
           recoverAt: getCooldownRecoverAtLabel(quotaCooldown),
-          resetAt: getResetLabelForLimitKind(
-            windowKind,
-            codexStatus,
-            quotaWindows,
-            row.quota.resetLabel
-          ),
+          resetAt: reset.resetLabel,
         },
         reasonKey: 'accounts.health_reason_cooldown',
         reasonTone: 'warning',
+        resetAtMs: reset.resetAtMs,
       };
     }
     return {
@@ -433,19 +534,18 @@ const resolveHealthStatus = (
   const codexLimitKind = resolveCodexLimitKind(codexStatus);
   if (codexLimitKind) {
     if (codexLimitKind !== 'unknown') {
+      const reset = getResetForLimitKind(codexLimitKind, codexStatus, quotaWindows, {
+        resetLabel: row.quota.resetLabel,
+        resetAtMs: row.quota.resetAtMs,
+        resetAccuracy: row.quota.resetAccuracy,
+      });
       return {
         status: getExhaustedStatusForWindow(codexLimitKind),
         tooltipKey: `accounts.health_tip_${getExhaustedStatusForWindow(codexLimitKind)}`,
-        tooltipParams: {
-          resetAt: getResetLabelForLimitKind(
-            codexLimitKind,
-            codexStatus,
-            quotaWindows,
-            row.quota.resetLabel
-          ),
-        },
+        tooltipParams: { resetAt: reset.resetLabel },
         reasonKey: `accounts.health_reason_${getExhaustedStatusForWindow(codexLimitKind)}`,
         reasonTone: 'warning',
+        resetAtMs: reset.resetAtMs,
       };
     }
     return {
@@ -457,22 +557,28 @@ const resolveHealthStatus = (
     };
   }
 
-  const quotaWindowLimitKind = resolveQuotaWindowLimitKind(quotaWindows);
+  const quotaWindowLimitKind = resolveEffectiveQuotaWindowLimitKind();
   if (quotaWindowLimitKind) {
     if (quotaWindowLimitKind !== 'unknown') {
+      const reset =
+        antigravityAvailability?.state === 'exhausted'
+          ? {
+              resetLabel: antigravityAvailability.resetLabel,
+              resetAtMs: antigravityAvailability.resetAtMs,
+              resetAccuracy: antigravityAvailability.resetAccuracy,
+            }
+          : getResetForLimitKind(quotaWindowLimitKind, null, quotaWindows, {
+              resetLabel: row.quota.resetLabel,
+              resetAtMs: row.quota.resetAtMs,
+              resetAccuracy: row.quota.resetAccuracy,
+            });
       return {
         status: getExhaustedStatusForWindow(quotaWindowLimitKind),
         tooltipKey: `accounts.health_tip_${getExhaustedStatusForWindow(quotaWindowLimitKind)}`,
-        tooltipParams: {
-          resetAt: getResetLabelForLimitKind(
-            quotaWindowLimitKind,
-            null,
-            quotaWindows,
-            row.quota.resetLabel
-          ),
-        },
+        tooltipParams: { resetAt: reset.resetLabel },
         reasonKey: `accounts.health_reason_${getExhaustedStatusForWindow(quotaWindowLimitKind)}`,
         reasonTone: 'warning',
+        resetAtMs: reset.resetAtMs,
       };
     }
     return {
@@ -508,7 +614,7 @@ const resolveHealthStatus = (
 
   if (
     row.quota.status === 'error' ||
-    row.statusMessage ||
+    (row.statusMessage && antigravityAvailability?.state !== 'partial') ||
     row.quota.error ||
     row.quota.observedErrorKind ||
     row.quota.observedErrorCode ||
@@ -524,7 +630,29 @@ const resolveHealthStatus = (
     };
   }
 
-  if (hasKnownAvailableQuota(row, quotaWindows)) {
+  if (antigravityAvailability?.state === 'partial') {
+    const limitedGroups = antigravityAvailability.groups
+      .filter((group) => group.remainingPercent <= 0)
+      .map((group) => group.label)
+      .join(', ');
+    return {
+      status: 'partial',
+      tooltipKey: 'accounts.health_tip_partial',
+      tooltipParams: {
+        available: antigravityAvailability.availableGroupCount,
+        total: antigravityAvailability.totalGroupCount,
+        limited: limitedGroups || '-',
+      },
+      reasonKey: 'accounts.health_reason_partial',
+      reasonParams: {
+        available: antigravityAvailability.availableGroupCount,
+        total: antigravityAvailability.totalGroupCount,
+      },
+      reasonTone: 'warning',
+    };
+  }
+
+  if (hasKnownAvailableQuota(row, quotaWindows, antigravityAvailability)) {
     return {
       status: 'available',
       tooltipKey: 'accounts.health_tip_available',
@@ -610,12 +738,22 @@ export const buildAccountListItem = (
   const estimatedValue =
     activity?.estimatedCost ??
     fallbackRecentTotal * (options.estimatedValuePerRequest ?? DEFAULT_ESTIMATED_VALUE_PER_REQUEST);
+  const quotaWindows: AccountListQuotaWindowPresentation[] = (options.quotaWindows ?? []).map(
+    (window) => {
+      const resetAtMs = isValidQuotaResetAtMs(window.resetAtMs) ? window.resetAtMs : null;
+      return {
+        ...window,
+        resetAtMs,
+        resetAccuracy: resetAtMs !== null ? (window.resetAccuracy ?? 'unknown') : 'unknown',
+      };
+    }
+  );
   const health = resolveHealthStatus(
     row,
     recommendation,
     quotaCooldown,
     options.codexStatus ?? null,
-    options.quotaWindows ?? []
+    quotaWindows
   );
 
   return {
@@ -637,11 +775,14 @@ export const buildAccountListItem = (
       reasonParams: health.reasonParams ?? {},
       reasonTone: health.reasonTone,
       cooldown: quotaCooldown,
+      resetAtMs: health.resetAtMs ?? null,
     },
     quota: {
       remainingPercent: row.quota.remainingPercent,
       usedPercent: row.quota.usedPercent,
       resetLabel: row.quota.resetLabel,
+      resetAtMs: row.quota.resetAtMs,
+      resetAccuracy: row.quota.resetAccuracy,
       statusLabelKey: quotaStatusLabelKey(row.quota.status),
       sourceShortLabelKey: quotaSourceShortLabelKey(row.quota.source),
     },

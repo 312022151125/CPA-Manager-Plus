@@ -3,8 +3,10 @@ import type { TFunction } from 'i18next';
 import type { AuthFileItem, CodexQuotaState } from '@/types';
 import { buildAccountRows, type AccountQuotaStores } from './accountRows';
 import {
+  buildAccountQuotaDisplayWindow,
   buildAccountQuotaDisplayWindows,
   getQuotaWindowShortLabel,
+  parseQuotaResetLabelMs,
   type TranslateQuotaWindowLabel,
 } from './accountQuotaDisplayWindows';
 
@@ -39,7 +41,52 @@ const buildRow = (file: AuthFileItem, stores: AccountQuotaStores = emptyStores()
   buildAccountRows([file], stores)[0];
 
 describe('accountQuotaDisplayWindows', () => {
+  it('rolls legacy yearless reset labels into the next calendar year', () => {
+    const nowMs = new Date(2026, 11, 31, 23, 0, 0, 0).getTime();
+
+    expect(parseQuotaResetLabelMs('01/01 01:30', nowMs)).toBe(
+      new Date(2027, 0, 1, 1, 30, 0, 0).getTime()
+    );
+    expect(parseQuotaResetLabelMs('02/31 10:00', nowMs)).toBeNull();
+  });
+
+  it('parses ambiguous legacy reset labels using the formatter locale order', () => {
+    const nowMs = new Date(2026, 0, 1, 0, 0, 0, 0).getTime();
+
+    expect(parseQuotaResetLabelMs('04/05, 10:30', nowMs, 'en-US')).toBe(
+      new Date(2026, 3, 5, 10, 30, 0, 0).getTime()
+    );
+    expect(parseQuotaResetLabelMs('04/05, 10:30', nowMs, 'en-GB')).toBe(
+      new Date(2026, 4, 4, 10, 30, 0, 0).getTime()
+    );
+    expect(parseQuotaResetLabelMs('04.05., 10:30', nowMs, 'ru-RU')).toBe(
+      new Date(2026, 4, 4, 10, 30, 0, 0).getTime()
+    );
+  });
+
+  it('rejects numeric reset labels outside the JavaScript date range', () => {
+    expect(parseQuotaResetLabelMs(String(Number.MAX_VALUE))).toBeNull();
+  });
+
+  it('rejects an invalid normalized reset timestamp and falls back to a parseable label', () => {
+    const nowMs = new Date(2026, 11, 31, 23, 0, 0, 0).getTime();
+    const window = buildAccountQuotaDisplayWindow({
+      key: 'legacy',
+      label: 'Legacy window',
+      remainingPercent: 50,
+      usedPercent: 50,
+      resetLabel: '01/01 01:30',
+      resetAtMs: Number.MAX_VALUE,
+      resetAccuracy: 'exact',
+      nowMs,
+    });
+
+    expect(window.resetAtMs).toBe(new Date(2027, 0, 1, 1, 30, 0, 0).getTime());
+    expect(window.resetAccuracy).toBe('unknown');
+  });
+
   it('uses auth-index scoped Codex quota and preserves request window ranges', () => {
+    const resetAtMs = Date.parse('2026-07-09T14:00:00Z');
     const quota: CodexQuotaState = {
       status: 'success',
       windows: [
@@ -48,6 +95,8 @@ describe('accountQuotaDisplayWindows', () => {
           label: 'Primary',
           usedPercent: 75,
           resetLabel: '2026-07-09T14:00:00Z',
+          resetAtMs,
+          resetAccuracy: 'exact',
           limitWindowSeconds: 18_000,
         },
       ],
@@ -68,6 +117,8 @@ describe('accountQuotaDisplayWindows', () => {
       kind: 'five_hour',
       remainingPercent: 25,
       usedPercent: 75,
+      resetAtMs,
+      resetAccuracy: 'exact',
       limitWindowSeconds: 18_000,
       source: 'codex',
     });
@@ -89,6 +140,8 @@ describe('accountQuotaDisplayWindows', () => {
               labelKey: 'kimi_quota.weekly_limit',
               usedPercent: 40,
               resetLabel: '07/10, 12:00',
+              resetAtMs: Date.parse('2026-07-10T12:00:00Z'),
+              resetAccuracy: 'exact',
             },
           ],
           extraUsage: {
@@ -114,6 +167,8 @@ describe('accountQuotaDisplayWindows', () => {
       label: 'Weekly limit',
       kind: 'weekly',
       remainingPercent: 60,
+      resetAtMs: Date.parse('2026-07-10T12:00:00Z'),
+      resetAccuracy: 'exact',
       source: 'claude',
     });
     expect(windows[1]).toMatchObject({
@@ -176,6 +231,8 @@ describe('accountQuotaDisplayWindows', () => {
       usedPercent: 58,
       groupLabel: 'Gemini models',
       description: 'Daily model quota',
+      resetAtMs: Date.parse('2026-07-10T00:00:00Z'),
+      resetAccuracy: 'exact',
       source: 'antigravity',
     });
     expect(getQuotaWindowShortLabel(windows[0])).toBe('24H');
@@ -201,6 +258,8 @@ describe('accountQuotaDisplayWindows', () => {
               used: 3,
               limit: 10,
               resetHint: '2d',
+              resetAtMs: Date.parse('2026-07-31T10:00:00Z'),
+              resetAccuracy: 'estimated',
             },
           ],
         },
@@ -221,6 +280,8 @@ describe('accountQuotaDisplayWindows', () => {
       remainingPercent: 70,
       usedPercent: 30,
       resetLabel: 'resets in 2d',
+      resetAtMs: Date.parse('2026-07-31T10:00:00Z'),
+      resetAccuracy: 'estimated',
       amountLabel: '3 / 10',
       source: 'kimi',
     });
@@ -277,6 +338,7 @@ describe('accountQuotaDisplayWindows', () => {
   });
 
   it('shows xAI weekly credits as a separate quota window', () => {
+    const billingPeriodEndMs = Date.parse('2026-07-08T00:00:00Z');
     const stores = {
       ...emptyStores(),
       xaiQuota: {
@@ -286,7 +348,7 @@ describe('accountQuotaDisplayWindows', () => {
             periodType: 'weekly',
             usagePercent: 42,
             periodStart: '2026-07-01T00:00:00Z',
-            periodEnd: '2026-07-08T00:00:00Z',
+            billingPeriodEnd: String(billingPeriodEndMs / 1000),
             productUsage: [{ product: 'Grok Code Fast', usagePercent: 37 }],
             monthlyLimitCents: 10_000,
             usedCents: 4_000,
@@ -314,12 +376,16 @@ describe('accountQuotaDisplayWindows', () => {
       kind: 'weekly',
       remainingPercent: 58,
       usedPercent: 42,
+      resetAtMs: billingPeriodEndMs,
+      resetAccuracy: 'exact',
       source: 'xai',
     });
     expect(windows[1]).toMatchObject({
       key: 'billing',
       label: 'Monthly credits',
       remainingPercent: 60,
+      resetAtMs: billingPeriodEndMs,
+      resetAccuracy: 'exact',
       source: 'xai',
     });
     expect(windows[2]).toMatchObject({
@@ -328,6 +394,8 @@ describe('accountQuotaDisplayWindows', () => {
       kind: 'product',
       remainingPercent: 63,
       usedPercent: 37,
+      resetAtMs: billingPeriodEndMs,
+      resetAccuracy: 'exact',
       source: 'xai',
     });
   });

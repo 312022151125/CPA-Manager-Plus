@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AuthFileItem, CodexQuotaState } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import {
@@ -50,6 +50,125 @@ describe('accountRows', () => {
     expect(rows[0].quota.usedPercent).toBe(87);
     expect(rows[0].quota.status).toBe('low');
     expect(rows[0].planType).toBe('plus');
+  });
+
+  it('reads the Codex plan from a nested ID token payload', () => {
+    const [row] = buildAccountRows(
+      [
+        {
+          name: 'nested-plan.codex.json',
+          type: 'codex',
+          metadata: {
+            id_token: JSON.stringify({ plan_type: 'plus' }),
+          },
+        },
+      ],
+      emptyStores()
+    );
+
+    expect(row.planType).toBe('plus');
+    expect(row.quota.planType).toBe('plus');
+  });
+
+  it('uses the latest recovery across equally exhausted Codex windows', () => {
+    const earlierResetAtMs = Date.parse('2026-07-30T04:00:00Z');
+    const laterResetAtMs = Date.parse('2026-07-30T06:00:00Z');
+    const rows = buildAccountRows([{ name: 'codex.json', type: 'codex' }], {
+      ...emptyStores(),
+      codexQuota: {
+        'codex.json': {
+          status: 'success',
+          windows: [
+            {
+              id: 'weekly-base',
+              label: 'Weekly base',
+              usedPercent: 100,
+              resetLabel: '2026-07-30T04:00:00Z',
+              resetAtMs: earlierResetAtMs,
+              resetAccuracy: 'exact',
+            },
+            {
+              id: 'weekly-model',
+              label: 'Weekly model',
+              usedPercent: 100,
+              resetLabel: '2026-07-30T06:00:00Z',
+              resetAtMs: laterResetAtMs,
+              resetAccuracy: 'exact',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(rows[0].quota).toMatchObject({
+      status: 'exhausted',
+      resetLabel: '2026-07-30T06:00:00Z',
+      resetAtMs: laterResetAtMs,
+      resetAccuracy: 'exact',
+    });
+  });
+
+  it('does not promise recovery when an equally exhausted Codex window has no reset time', () => {
+    const rows = buildAccountRows([{ name: 'codex.json', type: 'codex' }], {
+      ...emptyStores(),
+      codexQuota: {
+        'codex.json': {
+          status: 'success',
+          windows: [
+            {
+              id: 'weekly-known',
+              label: 'Weekly known',
+              usedPercent: 100,
+              resetLabel: '2026-07-30T04:00:00Z',
+              resetAtMs: Date.parse('2026-07-30T04:00:00Z'),
+              resetAccuracy: 'exact',
+            },
+            {
+              id: 'weekly-unknown',
+              label: 'Weekly unknown',
+              usedPercent: 100,
+              resetLabel: '-',
+              resetAtMs: null,
+              resetAccuracy: 'unknown',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(rows[0].quota).toMatchObject({
+      status: 'exhausted',
+      resetLabel: '-',
+      resetAtMs: null,
+      resetAccuracy: 'unknown',
+    });
+  });
+
+  it('rejects an out-of-range cached reset timestamp and recovers from its ISO label', () => {
+    const resetAtMs = Date.parse('2026-07-30T04:00:00Z');
+    const [row] = buildAccountRows([{ name: 'codex.json', type: 'codex' }], {
+      ...emptyStores(),
+      codexQuota: {
+        'codex.json': {
+          status: 'success',
+          windows: [
+            {
+              id: 'weekly',
+              label: 'Weekly',
+              usedPercent: 100,
+              resetLabel: '2026-07-30T04:00:00Z',
+              resetAtMs: Number.MAX_VALUE,
+              resetAccuracy: 'exact',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(row.quota).toMatchObject({
+      resetAtMs,
+      resetAccuracy: 'unknown',
+    });
   });
 
   it('keeps the last successful Codex windows visible after a refresh failure', () => {
@@ -431,6 +550,232 @@ describe('accountRows', () => {
     expect(rows[0].quota.remainingPercent).toBe(42);
     expect(rows[0].quota.usedPercent).toBe(58);
     expect(rows[0].quota.resetLabel).toBe('07-11 12:00');
+  });
+
+  it('normalizes legacy yearless reset labels against the next recovery year', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 11, 31, 23, 0, 0, 0));
+    try {
+      const [row] = buildAccountRows([{ name: 'legacy-reset.json', type: 'codex' }], {
+        ...emptyStores(),
+        codexQuota: {
+          'legacy-reset.json': {
+            status: 'success',
+            windows: [
+              {
+                id: 'weekly',
+                label: 'Weekly',
+                usedPercent: 50,
+                resetLabel: '01/01 01:30',
+              },
+            ],
+          },
+        },
+      });
+
+      expect(row.quota.resetAtMs).toBe(new Date(2027, 0, 1, 1, 30, 0, 0).getTime());
+      expect(row.quota.resetAccuracy).toBe('unknown');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps Antigravity available while at least one model group can serve requests', () => {
+    const rows = buildAccountRows(
+      [
+        { name: 'codex-healthy.json', type: 'codex' },
+        {
+          name: 'antigravity-mixed.json',
+          type: 'antigravity',
+          status: 'cooldown',
+          statusMessage: 'Gemini 5-hour pool exhausted; waiting for Antigravity reset',
+        },
+      ],
+      {
+        ...emptyStores(),
+        codexQuota: {
+          'codex-healthy.json': {
+            status: 'success',
+            windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 20, resetLabel: 'Mon' }],
+          },
+        },
+        antigravityQuota: {
+          'antigravity-mixed.json': {
+            status: 'success',
+            groups: [
+              {
+                id: 'gemini',
+                label: 'Gemini models',
+                buckets: [
+                  {
+                    id: 'five-hour',
+                    label: 'Five hour',
+                    remainingFraction: 0,
+                    resetTime: '2026-07-30T02:00:00Z',
+                  },
+                  {
+                    id: 'weekly',
+                    label: 'Weekly',
+                    remainingFraction: 0.44,
+                    resetTime: '2026-08-02T02:00:00Z',
+                  },
+                ],
+              },
+              {
+                id: 'claude-gpt',
+                label: 'Claude and GPT models',
+                buckets: [
+                  {
+                    id: 'five-hour',
+                    label: 'Five hour',
+                    remainingFraction: 0.82,
+                    resetTime: '2026-07-30T01:00:00Z',
+                  },
+                  {
+                    id: 'weekly',
+                    label: 'Weekly',
+                    remainingFraction: 0.66,
+                    resetTime: '2026-08-04T02:00:00Z',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      }
+    );
+    const row = rows.find((candidate) => candidate.fileName === 'antigravity-mixed.json');
+
+    expect(row?.quota).toMatchObject({
+      status: 'ok',
+      remainingPercent: 66,
+      usedPercent: 34,
+      resetLabel: '2026-07-30T02:00:00Z',
+      groupedAvailabilityState: 'partial',
+    });
+    expect(buildAccountMetrics(rows)).toMatchObject({
+      available: 1,
+      needsAttention: 0,
+      quotaRisk: 1,
+    });
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'available',
+        plan: 'all',
+        quotaBand: 'all',
+        search: '',
+      }).map((candidate) => candidate.fileName)
+    ).toEqual(['codex-healthy.json', 'antigravity-mixed.json']);
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'problem',
+        plan: 'all',
+        quotaBand: 'all',
+        search: '',
+      })
+    ).toHaveLength(0);
+    expect(sortAccountRows(rows).map((candidate) => candidate.fileName)).toEqual([
+      'antigravity-mixed.json',
+      'codex-healthy.json',
+    ]);
+  });
+
+  it('uses the latest blocking window when summarizing an unavailable Antigravity group', () => {
+    const [row] = buildAccountRows([{ name: 'antigravity-recovery.json', type: 'antigravity' }], {
+      ...emptyStores(),
+      antigravityQuota: {
+        'antigravity-recovery.json': {
+          status: 'success',
+          groups: [
+            {
+              id: 'gemini',
+              label: 'Gemini models',
+              buckets: [
+                {
+                  id: 'five-hour',
+                  label: 'Five hour',
+                  remainingFraction: 0,
+                  resetTime: '2026-07-30T02:00:00Z',
+                },
+                {
+                  id: 'weekly',
+                  label: 'Weekly',
+                  remainingFraction: 0,
+                  resetTime: '2026-08-02T02:00:00Z',
+                },
+              ],
+            },
+            {
+              id: 'claude-gpt',
+              label: 'Claude and GPT models',
+              buckets: [
+                {
+                  id: 'weekly',
+                  label: 'Weekly',
+                  remainingFraction: 0.66,
+                  resetTime: '2026-08-04T02:00:00Z',
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(row.quota).toMatchObject({
+      status: 'ok',
+      remainingPercent: 66,
+      resetLabel: '2026-08-02T02:00:00Z',
+    });
+  });
+
+  it('marks Antigravity exhausted only after every known model group is exhausted', () => {
+    const rows = buildAccountRows([{ name: 'antigravity-empty.json', type: 'antigravity' }], {
+      ...emptyStores(),
+      antigravityQuota: {
+        'antigravity-empty.json': {
+          status: 'success',
+          groups: [
+            {
+              id: 'gemini',
+              label: 'Gemini models',
+              buckets: [
+                { id: 'weekly', label: 'Weekly', remainingFraction: 0, resetTime: 'later' },
+              ],
+            },
+            {
+              id: 'claude-gpt',
+              label: 'Claude and GPT models',
+              buckets: [
+                { id: 'weekly', label: 'Weekly', remainingFraction: 0, resetTime: 'later' },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(rows[0].quota.status).toBe('exhausted');
+    expect(rows[0].quota.remainingPercent).toBe(0);
+  });
+
+  it('keeps credential update time separate and uses the latest update signal', () => {
+    const [row] = buildAccountRows(
+      [
+        {
+          name: 'updated.json',
+          type: 'codex',
+          updatedAtMs: 1_700_000_000_000,
+          modified: 1_700_000_100_000,
+          lastRefresh: 1_700_000_200_000,
+        },
+      ],
+      emptyStores()
+    );
+
+    expect(row.updatedAtMs).toBe(1_700_000_200_000);
   });
 
   it('uses the tightest Kimi quota row for account summary and reset label', () => {

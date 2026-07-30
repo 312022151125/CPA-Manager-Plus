@@ -1,6 +1,18 @@
 import type { TFunction } from 'i18next';
-import type { AuthFileItem, ClaudeExtraUsage, CodexQuotaState, XaiBillingSummary } from '@/types';
-import { formatKimiResetHint, formatQuotaResetTime } from '@/utils/quota/formatters';
+import type {
+  AuthFileItem,
+  ClaudeExtraUsage,
+  CodexQuotaState,
+  QuotaResetAccuracy,
+  XaiBillingSummary,
+} from '@/types';
+import {
+  formatKimiResetHint,
+  formatQuotaResetTime,
+  isValidQuotaResetAtMs,
+  parseQuotaResetLabelMs,
+  resolveAbsoluteQuotaReset,
+} from '@/utils/quota/formatters';
 import type { AccountRow } from './accountRows';
 import type { AccountQuotaStores } from './accountQuotaSummary';
 
@@ -30,6 +42,7 @@ export interface AccountQuotaDisplayWindow {
   remainingPercent: number | null;
   usedPercent: number | null;
   resetLabel: string;
+  resetAccuracy: QuotaResetAccuracy;
   limitWindowSeconds: number | null;
   resetAtMs: number | null;
   fromMs: number | null;
@@ -73,25 +86,7 @@ export const clampDisplayPercent = (value: number) => Math.max(0, Math.min(100, 
 export const remainingPercentFromUsed = (value: number | null | undefined) =>
   typeof value === 'number' && Number.isFinite(value) ? clampDisplayPercent(100 - value) : null;
 
-const formatTimestamp = (value: number | null, locale: string) => {
-  if (!value) return '-';
-  return new Intl.DateTimeFormat(locale, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
-};
-
-export const formatQuotaResetInlineLabel = (value: string, locale: string) => {
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === '-') return '';
-  const timestamp = Date.parse(trimmed);
-  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed) && Number.isFinite(timestamp)) {
-    return formatTimestamp(timestamp, locale);
-  }
-  return trimmed;
-};
+export { parseQuotaResetLabelMs };
 
 const normalizeText = (value: string): string => value.trim().toLowerCase().replace(/\s+/g, ' ');
 
@@ -226,44 +221,15 @@ export const getQuotaWindowShortLabel = (window: AccountQuotaDisplayWindow) => {
   return window.label.slice(0, 3).toUpperCase();
 };
 
-export const parseQuotaResetLabelMs = (value: string, nowMs = Date.now()) => {
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === '-') return null;
-  if (/^\d{4}[-/]/.test(trimmed)) {
-    const parsed = Date.parse(trimmed);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  const compactMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})(?:,)?\s+(\d{1,2}):(\d{2})/);
-  if (compactMatch) {
-    const [, month, day, hourValue, minuteValue] = compactMatch;
-    const now = new Date(nowMs);
-    const candidate = new Date(
-      now.getFullYear(),
-      Number(month) - 1,
-      Number(day),
-      Number(hourValue),
-      Number(minuteValue),
-      0,
-      0
-    );
-    if (Number.isNaN(candidate.getTime())) return null;
-    if (candidate.getTime() < nowMs - 30 * 24 * 60 * 60 * 1000) {
-      candidate.setFullYear(candidate.getFullYear() + 1);
-    }
-    return candidate.getTime();
-  }
-
-  const parsed = Date.parse(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
 export const buildQuotaWindowRange = (
   resetLabel: string,
   limitWindowSeconds: number | null | undefined,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  normalizedResetAtMs?: number | null
 ) => {
-  const resetAtMs = parseQuotaResetLabelMs(resetLabel, nowMs);
+  const resetAtMs = isValidQuotaResetAtMs(normalizedResetAtMs)
+    ? normalizedResetAtMs
+    : parseQuotaResetLabelMs(resetLabel, nowMs);
   if (!limitWindowSeconds || limitWindowSeconds <= 0) {
     return { resetAtMs, fromMs: null, toMs: null };
   }
@@ -284,6 +250,8 @@ export const buildAccountQuotaDisplayWindow = ({
   remainingPercent,
   usedPercent,
   resetLabel,
+  resetAtMs,
+  resetAccuracy = 'unknown',
   limitWindowSeconds = null,
   amountLabel,
   description,
@@ -297,6 +265,8 @@ export const buildAccountQuotaDisplayWindow = ({
   remainingPercent: number | null;
   usedPercent: number | null;
   resetLabel: string;
+  resetAtMs?: number | null;
+  resetAccuracy?: QuotaResetAccuracy;
   limitWindowSeconds?: number | null;
   amountLabel?: string;
   description?: string;
@@ -306,7 +276,13 @@ export const buildAccountQuotaDisplayWindow = ({
 }): AccountQuotaDisplayWindow => {
   const normalizedResetLabel = resetLabel || '-';
   const normalizedLimitWindowSeconds = limitWindowSeconds ?? null;
-  const range = buildQuotaWindowRange(normalizedResetLabel, normalizedLimitWindowSeconds, nowMs);
+  const hasNormalizedResetAt = isValidQuotaResetAtMs(resetAtMs);
+  const range = buildQuotaWindowRange(
+    normalizedResetLabel,
+    normalizedLimitWindowSeconds,
+    nowMs,
+    resetAtMs
+  );
   return {
     key,
     label,
@@ -321,6 +297,7 @@ export const buildAccountQuotaDisplayWindow = ({
     remainingPercent,
     usedPercent,
     resetLabel: normalizedResetLabel,
+    resetAccuracy: range.resetAtMs === null || !hasNormalizedResetAt ? 'unknown' : resetAccuracy,
     limitWindowSeconds: normalizedLimitWindowSeconds,
     amountLabel,
     description,
@@ -343,6 +320,8 @@ const buildCodexQuotaDisplayWindows = (
       remainingPercent: remainingPercentFromUsed(window.usedPercent),
       usedPercent: window.usedPercent,
       resetLabel: window.resetLabel || '-',
+      resetAtMs: window.resetAtMs,
+      resetAccuracy: window.resetAccuracy,
       limitWindowSeconds: window.limitWindowSeconds ?? null,
       source: 'codex',
       nowMs: options.nowMs,
@@ -364,6 +343,8 @@ const buildClaudeQuotaDisplayWindows = (
         remainingPercent: remainingPercentFromUsed(window.usedPercent),
         usedPercent: window.usedPercent,
         resetLabel: window.resetLabel || '-',
+        resetAtMs: window.resetAtMs,
+        resetAccuracy: window.resetAccuracy,
         source: 'claude',
         nowMs: options.nowMs,
       })
@@ -404,6 +385,7 @@ const buildAntigravityQuotaDisplayWindows = (
     const groupDescription = translateAntigravityQuotaDescription(group.description, options.t);
 
     return group.buckets.map((bucket) => {
+      const reset = resolveAbsoluteQuotaReset(bucket.resetTime);
       const remainingPercent = clampDisplayPercent(bucket.remainingFraction * 100);
       const label = translateAntigravityQuotaLabel(
         bucket.label || bucket.id,
@@ -429,6 +411,8 @@ const buildAntigravityQuotaDisplayWindows = (
         remainingPercent,
         usedPercent: clampDisplayPercent(100 - remainingPercent),
         resetLabel: formatDisplayResetTime(bucket.resetTime),
+        resetAtMs: reset.resetAtMs,
+        resetAccuracy: reset.resetAccuracy,
         description,
         groupLabel,
         source: 'antigravity',
@@ -460,6 +444,8 @@ const buildKimiQuotaDisplayWindows = (
       remainingPercent,
       usedPercent: remainingPercent === null ? null : clampDisplayPercent(100 - remainingPercent),
       resetLabel: formatKimiResetHint(options.t, quotaRow.resetHint) || '-',
+      resetAtMs: quotaRow.resetAtMs,
+      resetAccuracy: quotaRow.resetAccuracy,
       amountLabel: `${quotaRow.used} / ${quotaRow.limit}`,
       source: 'kimi',
       nowMs: options.nowMs,
@@ -477,6 +463,10 @@ const buildXaiQuotaDisplayWindows = (
   const resetLabel = billing.billingPeriodEnd
     ? formatDisplayResetTime(billing.billingPeriodEnd)
     : '-';
+  const billingReset = resolveAbsoluteQuotaReset(billing.billingPeriodEnd);
+  const periodResetValue = billing.periodEnd ?? billing.billingPeriodEnd;
+  const periodResetLabel = periodResetValue ? formatDisplayResetTime(periodResetValue) : '-';
+  const periodReset = resolveAbsoluteQuotaReset(periodResetValue);
   const windows: AccountQuotaDisplayWindow[] = [];
   const periodUsedPercent =
     typeof billing.usagePercent === 'number' && Number.isFinite(billing.usagePercent)
@@ -491,7 +481,9 @@ const buildXaiQuotaDisplayWindows = (
         kind: billing.periodType === 'weekly' ? 'weekly' : 'billing',
         remainingPercent: remainingPercentFromUsed(periodUsedPercent),
         usedPercent: periodUsedPercent,
-        resetLabel: billing.periodEnd ? formatDisplayResetTime(billing.periodEnd) : '-',
+        resetLabel: periodResetLabel,
+        resetAtMs: periodReset.resetAtMs,
+        resetAccuracy: periodReset.resetAccuracy,
         source: 'xai',
         nowMs: options.nowMs,
       })
@@ -517,6 +509,8 @@ const buildXaiQuotaDisplayWindows = (
         remainingPercent: remainingPercentFromUsed(monthlyUsedPercent),
         usedPercent: monthlyUsedPercent,
         resetLabel,
+        resetAtMs: billingReset.resetAtMs,
+        resetAccuracy: billingReset.resetAccuracy,
         amountLabel: formatXaiMonthlyAmount(billing, options.t),
         source: 'xai',
         nowMs: options.nowMs,
@@ -539,6 +533,8 @@ const buildXaiQuotaDisplayWindows = (
         remainingPercent: remainingPercentFromUsed(paygUsedPercent),
         usedPercent: paygUsedPercent,
         resetLabel,
+        resetAtMs: billingReset.resetAtMs,
+        resetAccuracy: billingReset.resetAccuracy,
         amountLabel: formatXaiPaygAmount(billing, options.t),
         source: 'xai',
         nowMs: options.nowMs,
@@ -561,7 +557,9 @@ const buildXaiQuotaDisplayWindows = (
         kind: 'product',
         remainingPercent: remainingPercentFromUsed(productUsedPercent),
         usedPercent: productUsedPercent,
-        resetLabel: billing.periodEnd ? formatDisplayResetTime(billing.periodEnd) : '-',
+        resetLabel: periodResetLabel,
+        resetAtMs: periodReset.resetAtMs,
+        resetAccuracy: periodReset.resetAccuracy,
         source: 'xai',
         nowMs: options.nowMs,
       })
@@ -584,6 +582,8 @@ const buildSummaryQuotaDisplayWindow = (
       remainingPercent: row.quota.remainingPercent,
       usedPercent: row.quota.usedPercent,
       resetLabel: row.quota.resetLabel,
+      resetAtMs: row.quota.resetAtMs,
+      resetAccuracy: row.quota.resetAccuracy,
       source: 'summary',
       nowMs: options.nowMs,
     }),

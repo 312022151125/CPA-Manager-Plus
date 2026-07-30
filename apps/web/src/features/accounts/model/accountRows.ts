@@ -9,10 +9,13 @@ import {
   getAuthFileCodexInspectionKey,
   getAuthFileSelectionKey,
 } from '@/features/authFiles/model/authFilesPageModel';
+import { resolveCodexPlanType } from '@/utils/quota/resolvers';
 import {
   compareQuotaResetLabels,
+  compareQuotaResets,
   normalizeAccountProvider,
   readAuthFileCreatedAtMs,
+  readAuthFileUpdatedAtMs,
   resolveAccountQuota,
   type AccountQuotaOverrides,
   type AccountQuotaSortDirection,
@@ -22,8 +25,10 @@ import {
 
 export {
   compareQuotaResetLabels,
+  compareQuotaResets,
   normalizeAccountProvider,
   readAuthFileCreatedAtMs,
+  readAuthFileUpdatedAtMs,
   resolveAccountQuota,
 };
 export type {
@@ -99,6 +104,7 @@ export interface AccountRow {
   note?: string;
   priority: number | null;
   createdAtMs: number | null;
+  updatedAtMs: number | null;
   quota: AccountQuotaSummary;
   usage: AccountUsageSummary;
   inspection: AccountInspectionSummary | null;
@@ -160,6 +166,10 @@ const readProjectId = (file: AuthFileItem): string =>
   );
 
 const readPlanType = (file: AuthFileItem): string | null => {
+  if (normalizeAccountProvider(file) === 'codex') {
+    const codexPlanType = resolveCodexPlanType(file);
+    if (codexPlanType) return codexPlanType;
+  }
   const idToken = file.id_token;
   const idTokenPlan =
     idToken && typeof idToken === 'object' && !Array.isArray(idToken)
@@ -252,6 +262,7 @@ export const buildAccountRows = (
       note: readString(file.note),
       priority: readNumber(file.priority),
       createdAtMs: readAuthFileCreatedAtMs(file),
+      updatedAtMs: readAuthFileUpdatedAtMs(file),
       quota,
       usage: buildUsageSummary(file),
       inspection:
@@ -289,12 +300,15 @@ const hasOperationalItems = (
   rowKey: string
 ): boolean => (itemsByRowKey?.get(rowKey)?.length ?? 0) > 0;
 
+const hasPartialGroupedQuota = (row: AccountRow): boolean =>
+  row.quota.groupedAvailabilityState === 'partial';
+
 const needsAccountAttention = (
   row: AccountRow,
   context: AccountMetricOperationalContext
 ): boolean =>
   Boolean(
-    row.statusMessage ||
+    (row.statusMessage && !hasPartialGroupedQuota(row)) ||
     row.quota.status === 'error' ||
     row.quota.error ||
     (row.inspection && row.inspection.action !== 'keep') ||
@@ -304,6 +318,7 @@ const needsAccountAttention = (
 const hasAccountQuotaRisk = (row: AccountRow, context: AccountMetricOperationalContext): boolean =>
   row.quota.status === 'low' ||
   row.quota.status === 'exhausted' ||
+  hasPartialGroupedQuota(row) ||
   hasOperationalItems(context.quotaCooldownsByRowKey, row.selectionKey);
 
 const hasConfirmedAvailableEvidence = (row: AccountRow): boolean =>
@@ -354,7 +369,7 @@ export const buildAccountMetrics = (
 
 const isAccountRowAvailable = (row: AccountRow): boolean =>
   !row.disabled &&
-  !row.statusMessage &&
+  (!row.statusMessage || hasPartialGroupedQuota(row)) &&
   !row.quota.error &&
   row.quota.status !== 'error' &&
   row.quota.status !== 'exhausted' &&
@@ -431,7 +446,10 @@ const matchesStatusFilter = (row: AccountRow, status: AccountStatusFilter) => {
   if (status === 'available') return isAccountRowAvailable(row);
   if (status === 'disabled') return row.disabled;
   if (status === 'problem') {
-    return Boolean(row.statusMessage || row.quota.error) || row.quota.status === 'error';
+    return (
+      Boolean((row.statusMessage && !hasPartialGroupedQuota(row)) || row.quota.error) ||
+      row.quota.status === 'error'
+    );
   }
   if (status === 'low') return row.quota.status === 'low';
   if (status === 'exhausted') return row.quota.status === 'exhausted';
@@ -453,10 +471,11 @@ const matchesQuotaBand = (row: AccountRow, band: AccountQuotaBand) => {
 };
 
 const getRiskRank = (row: AccountRow) => {
-  if (row.inspection && row.inspection.action !== 'keep') return 6;
-  if (row.quota.status === 'exhausted') return 5;
-  if (row.quota.status === 'low') return 4;
-  if (row.quota.status === 'error' || row.quota.error) return 3;
+  if (row.inspection && row.inspection.action !== 'keep') return 7;
+  if (row.quota.status === 'exhausted') return 6;
+  if (row.quota.status === 'low') return 5;
+  if (row.quota.status === 'error' || row.quota.error) return 4;
+  if (hasPartialGroupedQuota(row)) return 3;
   if (row.disabled) return 2;
   if (row.statusMessage) return 1;
   return 0;
@@ -503,7 +522,7 @@ const compareAccountRowsBySort = (left: AccountRow, right: AccountRow, sort: Acc
     return compareNullableNumbers(left.createdAtMs, right.createdAtMs, sort.direction);
   }
   if (sort.key === 'reset') {
-    return compareQuotaResetLabels(left.quota.resetLabel, right.quota.resetLabel, sort.direction);
+    return compareQuotaResets(left.quota, right.quota, sort.direction);
   }
   return 0;
 };

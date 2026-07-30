@@ -7,7 +7,12 @@ import {
   getRecommendationRank,
 } from './quotaRecommendations';
 
-const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
+type AccountRowOverrides = Omit<Partial<AccountRow>, 'quota'> & {
+  quota?: Partial<AccountRow['quota']>;
+};
+
+const makeRow = (overrides: AccountRowOverrides = {}): AccountRow => {
+  const { quota: quotaOverrides, ...rowOverrides } = overrides;
   const raw: AuthFileItem = {
     name: overrides.fileName ?? 'codex-1.json',
     type: overrides.provider ?? 'codex',
@@ -27,13 +32,17 @@ const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
     projectId: '',
     priority: null,
     createdAtMs: null,
+    updatedAtMs: null,
     quota: {
       status: 'ok',
       remainingPercent: 80,
       usedPercent: 20,
       resetLabel: '-',
+      resetAtMs: null,
+      resetAccuracy: 'unknown',
       planType: null,
       source: 'cache',
+      ...quotaOverrides,
     },
     usage: {
       success: 0,
@@ -43,7 +52,7 @@ const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
     },
     inspection: null,
     raw,
-    ...overrides,
+    ...rowOverrides,
   };
 };
 

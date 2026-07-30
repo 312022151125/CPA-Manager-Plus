@@ -8,8 +8,14 @@ import type {
 import type { AccountRow } from './accountRows';
 import { buildAccountDetailViewModel } from './accountDetailViewModel';
 import { accountWindowUsageRequestKey } from './accountWindowUsageRows';
+import type { UsageValueRow } from './usageValueRows';
 
-const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
+type AccountRowOverrides = Omit<Partial<AccountRow>, 'quota'> & {
+  quota?: Partial<AccountRow['quota']>;
+};
+
+const makeRow = (overrides: AccountRowOverrides = {}): AccountRow => {
+  const { quota: quotaOverrides, ...rowOverrides } = overrides;
   const raw: AuthFileItem = {
     name: overrides.fileName ?? 'shared.codex.json',
     type: overrides.provider ?? 'codex',
@@ -32,13 +38,17 @@ const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
     projectId: '',
     priority: 0,
     createdAtMs: null,
+    updatedAtMs: null,
     quota: {
       status: 'ok',
       remainingPercent: 80,
       usedPercent: 20,
       resetLabel: 'later',
+      resetAtMs: null,
+      resetAccuracy: 'unknown',
       planType: 'plus',
       source: 'cache',
+      ...quotaOverrides,
     },
     usage: {
       success: 9,
@@ -48,7 +58,7 @@ const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
     },
     inspection: null,
     raw,
-    ...overrides,
+    ...rowOverrides,
   };
 };
 
@@ -105,6 +115,26 @@ const makeHistory = (
   first_seen_ms: 100,
   last_seen_ms: 200,
   sync_status: 'ready',
+  ...overrides,
+});
+
+const makeMonitoringValue = (
+  row: AccountRow,
+  overrides: Partial<UsageValueRow> = {}
+): UsageValueRow => ({
+  key: `monitoring:${row.selectionKey}`,
+  accountLabel: row.accountLabel,
+  fileName: row.fileName,
+  provider: row.provider,
+  requests: 7,
+  successRate: 85.7,
+  inputTokens: 800,
+  outputTokens: 400,
+  estimatedCost: 0.42,
+  lastSeenMs: 1_700_000_000_000,
+  rating: 'normal',
+  source: 'monitoring',
+  row,
   ...overrides,
 });
 
@@ -324,22 +354,664 @@ describe('accountDetailViewModel', () => {
     expect(serialized).not.toContain('failure-body-secret');
   });
 
-  it('uses account history as overview evidence when available', () => {
-    const viewModel = buildAccountDetailViewModel(makeRow(), {
+  it('keeps overview activity scoped to matched seven-day monitoring data', () => {
+    const row = makeRow();
+    const viewModel = buildAccountDetailViewModel(row, {
       history: makeHistory({
         total_requests: 99,
         total_tokens: 12345,
         total_cost: 6.78,
       }),
+      valueRow: makeMonitoringValue(row),
     });
 
     expect(viewModel.history?.successRate).toBeCloseTo(83.333, 2);
-    expect(viewModel.overview.metrics).toEqual(
+    expect(viewModel.overview.activity).toMatchObject({
+      scope: 'monitoring_7d',
+      scopeDays: 7,
+      sourceLabelKey: 'accounts.value_source_monitoring',
+      hasActivity: true,
+    });
+    expect(viewModel.overview.activity.metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'requests', value: 7 }),
+        expect.objectContaining({ key: 'tokens', value: 1200 }),
+        expect.objectContaining({ key: 'cost', value: 0.42 }),
+        expect.objectContaining({
+          key: 'lastSeenMs',
+          labelKey: 'accounts.detail_overview_activity_last_active',
+          value: 1_700_000_000_000,
+        }),
+      ])
+    );
+    expect(viewModel.overview.activity.metrics).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: 'requests', value: 99 }),
         expect.objectContaining({ key: 'tokens', value: 12345 }),
         expect.objectContaining({ key: 'cost', value: 6.78 }),
       ])
     );
+    expect(viewModel.overview.decision).toMatchObject({
+      basisLabelKey: 'accounts.quota_source_cache',
+      observedAtMs: null,
+    });
+  });
+
+  it('keeps the overview basis aligned with a quota-refresh reauth reason', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        quota: {
+          status: 'error',
+          error: 'quota refresh failed: HTTP 401',
+          fetchedAtMs: 1_700_000_100_000,
+          source: 'cache',
+        },
+        inspection: {
+          source: 'server',
+          action: 'reauth',
+          actionReason: 'monitoring.codex_inspection_reason_reauth',
+          actionStatus: 'none',
+          statusCode: 401,
+          usedPercent: null,
+          runId: 1,
+          resultId: 1,
+          createdAtMs: 1_700_000_200_000,
+        },
+      })
+    );
+
+    expect(viewModel.health.reasonKey).toBe('accounts.health_reason_reauth_quota_refresh');
+    expect(viewModel.overview.decision).toMatchObject({
+      basisLabelKey: 'accounts.quota_source_cache',
+      observedAtMs: 1_700_000_100_000,
+    });
+  });
+
+  it('attributes merged header failures to the observed header instead of cached quota', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        quota: {
+          status: 'ok',
+          source: 'cache',
+          fetchedAtMs: 1_700_000_100_000,
+          observedAtMs: 1_700_000_300_000,
+          observedErrorKind: 'rate_limit',
+          observedErrorCode: 'usage_limit_reached',
+        },
+        inspection: {
+          source: 'server',
+          action: 'disable',
+          actionReason: 'monitoring.codex_inspection_reason_disable',
+          actionStatus: 'none',
+          statusCode: 429,
+          usedPercent: null,
+          runId: 1,
+          resultId: 1,
+          createdAtMs: 1_700_000_200_000,
+        },
+      })
+    );
+
+    expect(viewModel.health.reasonKey).toBe('accounts.health_reason_exception_header');
+    expect(viewModel.overview.decision).toMatchObject({
+      basisLabelKey: 'accounts.quota_source_observed_header',
+      observedAtMs: 1_700_000_300_000,
+    });
+  });
+
+  it('uses the cooldown record and disable time as the overview decision basis', () => {
+    const viewModel = buildAccountDetailViewModel(makeRow(), {
+      quotaCooldown: {
+        authFileName: 'shared.codex.json',
+        authIndex: '0',
+        recoverAtMs: 1_700_001_000_000,
+        createdAtMs: 1_700_000_100_000,
+        disabledAtMs: 1_700_000_200_000,
+      },
+    });
+
+    expect(viewModel.health.reasonKey).toBe('accounts.health_reason_limited_cooldown');
+    expect(viewModel.overview.decision).toMatchObject({
+      basisLabelKey: 'accounts.detail_overview_basis_cooldown',
+      observedAtMs: 1_700_000_200_000,
+    });
+  });
+
+  it('summarizes mixed Antigravity model groups without marking the credential unavailable', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        provider: 'antigravity',
+        quota: {
+          status: 'ok',
+          remainingPercent: 66,
+          usedPercent: 34,
+          resetLabel: '2026-07-30T02:00:00Z',
+          planType: 'pro',
+          source: 'cache',
+        },
+      }),
+      {
+        quotaWindows: [
+          {
+            key: 'gemini:five-hour',
+            label: 'Five hour',
+            groupLabel: 'Gemini models',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: '2026-07-30T02:00:00Z',
+            resetAtMs: Date.parse('2026-07-30T02:00:00Z'),
+          },
+          {
+            key: 'claude:five-hour',
+            label: 'Five hour',
+            groupLabel: 'Claude and GPT models',
+            remainingPercent: 82,
+            usedPercent: 18,
+            resetLabel: '2026-07-30T01:00:00Z',
+            resetAtMs: Date.parse('2026-07-30T01:00:00Z'),
+          },
+          {
+            key: 'claude:weekly',
+            label: 'Weekly',
+            groupLabel: 'Claude and GPT models',
+            remainingPercent: 66,
+            usedPercent: 34,
+            resetLabel: '2026-08-04T02:00:00Z',
+            resetAtMs: Date.parse('2026-08-04T02:00:00Z'),
+          },
+        ],
+      }
+    );
+
+    expect(viewModel.overview.decision.status).toBe('partial');
+    expect(viewModel.overview.capacity).toMatchObject({
+      kind: 'group_availability',
+      statusLabelKey: 'accounts.health_partial',
+      availableGroupCount: 1,
+      totalGroupCount: 2,
+    });
+    expect(viewModel.overview.capacity.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'overviewLimitedGroups',
+          value: 'Gemini models',
+        }),
+        expect.objectContaining({
+          key: 'overviewGroupRecovery',
+          value: Date.parse('2026-07-30T02:00:00Z'),
+          valueKind: 'quota_reset',
+        }),
+      ])
+    );
+  });
+
+  it('uses the conservative recovery window in overview capacity', () => {
+    const earlierResetAtMs = Date.parse('2026-07-30T04:00:00Z');
+    const laterResetAtMs = Date.parse('2026-07-30T06:00:00Z');
+    const viewModel = buildAccountDetailViewModel(makeRow(), {
+      quotaWindows: [
+        {
+          key: 'weekly-base',
+          label: 'Weekly base',
+          kind: 'weekly',
+          remainingPercent: 0,
+          usedPercent: 100,
+          resetLabel: '2026-07-30T04:00:00Z',
+          resetAtMs: earlierResetAtMs,
+          resetAccuracy: 'exact',
+        },
+        {
+          key: 'weekly-model',
+          label: 'Weekly model',
+          kind: 'weekly',
+          remainingPercent: 0,
+          usedPercent: 100,
+          resetLabel: '2026-07-30T06:00:00Z',
+          resetAtMs: laterResetAtMs,
+          resetAccuracy: 'exact',
+        },
+      ],
+    });
+
+    expect(viewModel.overview.decision.status).toBe('weekly_exhausted');
+    expect(viewModel.overview.capacity.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'overviewQuotaWindow', value: 'Weekly model' }),
+        expect.objectContaining({
+          key: 'reset',
+          value: laterResetAtMs,
+          valueKind: 'quota_reset',
+        }),
+      ])
+    );
+  });
+
+  it('does not fall back to a stale summary reset when the limiting window is unknown', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        quota: {
+          status: 'exhausted',
+          remainingPercent: 0,
+          usedPercent: 100,
+          resetLabel: '2026-07-30T04:00:00Z',
+          resetAtMs: Date.parse('2026-07-30T04:00:00Z'),
+          resetAccuracy: 'exact',
+        },
+      }),
+      {
+        quotaWindows: [
+          {
+            key: 'weekly-known',
+            label: 'Weekly known',
+            kind: 'weekly',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: '2026-07-30T04:00:00Z',
+            resetAtMs: Date.parse('2026-07-30T04:00:00Z'),
+            resetAccuracy: 'exact',
+          },
+          {
+            key: 'weekly-unknown',
+            label: 'Weekly unknown',
+            kind: 'weekly',
+            remainingPercent: 0,
+            usedPercent: 100,
+            resetLabel: '-',
+            resetAtMs: null,
+            resetAccuracy: 'unknown',
+          },
+        ],
+      }
+    );
+
+    expect(viewModel.overview.capacity.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'overviewQuotaWindow', value: 'Weekly unknown' }),
+      ])
+    );
+    expect(viewModel.overview.capacity.fields).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'reset' })])
+    );
+  });
+
+  it('uses credential update time and prefers a live subscription end time', () => {
+    const liveSubscriptionUntil = '2026-08-31T23:59:59Z';
+    const liveSubscriptionUntilSeconds = Date.parse(liveSubscriptionUntil) / 1000;
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        createdAtMs: 1_700_000_000_000,
+        updatedAtMs: 1_700_100_000_000,
+        raw: {
+          name: 'shared.codex.json',
+          type: 'codex',
+          provider: 'codex',
+          authIndex: '0',
+          id_token: {
+            plan_type: 'pro',
+            chatgpt_subscription_active_until: '2026-09-30T23:59:59Z',
+          },
+        },
+      }),
+      {
+        codexQuota: {
+          status: 'success',
+          windows: [],
+          planType: 'pro',
+          subscriptionActiveUntil: liveSubscriptionUntilSeconds,
+        },
+      }
+    );
+
+    expect(viewModel.overview.credential.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'updatedAtMs',
+          labelKey: 'accounts.detail_updated_at',
+          value: 1_700_100_000_000,
+        }),
+        expect.objectContaining({
+          key: 'subscriptionUntilMs',
+          labelKey: 'accounts.detail_subscription_until',
+          value: Date.parse(liveSubscriptionUntil),
+          valueKind: 'quota_reset',
+        }),
+      ])
+    );
+    expect(viewModel.overview.credential.fields.map((item) => item.key)).not.toContain(
+      'createdAtMs'
+    );
+  });
+
+  it('falls back to the Codex ID token subscription end time and marks its source', () => {
+    const tokenSubscriptionUntil = '2026-09-30T23:59:59Z';
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        raw: {
+          name: 'shared.codex.json',
+          type: 'codex',
+          provider: 'codex',
+          authIndex: '0',
+          id_token: {
+            plan_type: 'plus',
+            chatgpt_subscription_active_until: tokenSubscriptionUntil,
+          },
+        },
+      }),
+      {
+        codexQuota: {
+          status: 'success',
+          windows: [],
+          planType: 'plus',
+          subscriptionActiveUntil: 'invalid-date',
+        },
+      }
+    );
+
+    expect(viewModel.overview.credential.fields).toContainEqual(
+      expect.objectContaining({
+        key: 'subscriptionUntilMs',
+        labelKey: 'accounts.detail_subscription_until_token',
+        value: Date.parse(tokenSubscriptionUntil),
+      })
+    );
+  });
+
+  it('reads subscription end claims from JSON and JWT id_token containers', () => {
+    const jsonSubscriptionUntil = '2026-09-30T23:59:59Z';
+    const jwtSubscriptionUntil = '2026-10-31T23:59:59Z';
+    const jwtPayload = globalThis
+      .btoa(
+        JSON.stringify({
+          plan_type: 'plus',
+          chatgpt_subscription_active_until: jwtSubscriptionUntil,
+        })
+      )
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+    const jsonViewModel = buildAccountDetailViewModel(
+      makeRow({
+        planType: null,
+        quota: { planType: null },
+        raw: {
+          name: 'json-token.codex.json',
+          type: 'codex',
+          provider: 'codex',
+          authIndex: '0',
+          metadata: {
+            id_token: JSON.stringify({
+              plan_type: 'plus',
+              chatgpt_subscription_active_until: jsonSubscriptionUntil,
+            }),
+          },
+        },
+      })
+    );
+    const jwtViewModel = buildAccountDetailViewModel(
+      makeRow({
+        planType: null,
+        quota: { planType: null },
+        raw: {
+          name: 'jwt-token.codex.json',
+          type: 'codex',
+          provider: 'codex',
+          authIndex: '0',
+          attributes: {
+            id_token: `e30.${jwtPayload}.signature`,
+          },
+        },
+      })
+    );
+
+    expect(jsonViewModel.overview.credential.fields).toContainEqual(
+      expect.objectContaining({
+        key: 'subscriptionUntilMs',
+        labelKey: 'accounts.detail_subscription_until_token',
+        value: Date.parse(jsonSubscriptionUntil),
+      })
+    );
+    expect(jwtViewModel.overview.credential.fields).toContainEqual(
+      expect.objectContaining({
+        key: 'subscriptionUntilMs',
+        labelKey: 'accounts.detail_subscription_until_token',
+        value: Date.parse(jwtSubscriptionUntil),
+      })
+    );
+  });
+
+  it('does not infer subscription validity from another provider or an invalid token claim', () => {
+    const invalidCodex = buildAccountDetailViewModel(
+      makeRow({
+        raw: {
+          name: 'shared.codex.json',
+          type: 'codex',
+          provider: 'codex',
+          authIndex: '0',
+          id_token: {
+            plan_type: 'plus',
+            chatgpt_subscription_active_until: 'not-a-date',
+          },
+        },
+      })
+    );
+    const claude = buildAccountDetailViewModel(
+      makeRow({
+        provider: 'claude',
+        raw: {
+          name: 'claude.json',
+          type: 'claude',
+          provider: 'claude',
+          authIndex: '0',
+          id_token: {
+            chatgpt_subscription_active_until: '2026-09-30T23:59:59Z',
+          },
+        },
+      }),
+      {
+        codexQuota: {
+          status: 'success',
+          windows: [],
+          subscriptionActiveUntil: '2026-10-31T23:59:59Z',
+        },
+      }
+    );
+
+    expect(invalidCodex.overview.credential.fields.map((item) => item.key)).not.toContain(
+      'subscriptionUntilMs'
+    );
+    expect(claude.overview.credential.fields.map((item) => item.key)).not.toContain(
+      'subscriptionUntilMs'
+    );
+  });
+
+  it('does not present a stale subscription end time for a Free Codex plan', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        planType: 'plus',
+        raw: {
+          name: 'free.codex.json',
+          type: 'codex',
+          provider: 'codex',
+          authIndex: '0',
+          id_token: {
+            plan_type: 'plus',
+            chatgpt_subscription_active_until: '2026-09-30T23:59:59Z',
+          },
+        },
+      }),
+      {
+        codexQuota: {
+          status: 'success',
+          windows: [],
+          planType: 'FREE',
+          subscriptionActiveUntil: '2026-10-31T23:59:59Z',
+        },
+      }
+    );
+
+    expect(viewModel.overview.credential.fields.map((item) => item.key)).not.toContain(
+      'subscriptionUntilMs'
+    );
+  });
+
+  it('drops subscription timestamps outside the JavaScript date range', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        raw: {
+          name: 'shared.codex.json',
+          type: 'codex',
+          provider: 'codex',
+          authIndex: '0',
+          id_token: {
+            plan_type: 'plus',
+            chatgpt_subscription_active_until: Number.MAX_VALUE,
+          },
+        },
+      }),
+      {
+        codexQuota: {
+          status: 'success',
+          windows: [],
+          subscriptionActiveUntil: Number.MAX_VALUE,
+        },
+      }
+    );
+
+    expect(viewModel.overview.credential.fields.map((item) => item.key)).not.toContain(
+      'subscriptionUntilMs'
+    );
+  });
+
+  it('drops unmatched lifetime history instead of presenting it as credential evidence', () => {
+    const viewModel = buildAccountDetailViewModel(makeRow(), {
+      history: makeHistory({
+        matched: false,
+        total_requests: 999,
+        total_tokens: 99999,
+        total_cost: 99,
+      }),
+    });
+
+    expect(viewModel.history).toBeNull();
+    expect(viewModel.overview.activity.scope).toBe('recent_snapshot');
+    expect(viewModel.overview.activity.metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'requests', value: 10 }),
+        expect.objectContaining({ key: 'successCalls', value: 9 }),
+        expect.objectContaining({ key: 'failureCalls', value: 1 }),
+      ])
+    );
+    expect(viewModel.overview.activity.metrics).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: 999 })])
+    );
+  });
+
+  it('labels recent request data as fallback and omits synthetic cost and token metrics', () => {
+    const viewModel = buildAccountDetailViewModel(makeRow());
+    const metricKeys = viewModel.overview.activity.metrics.map((metric) => metric.key);
+
+    expect(viewModel.value).toMatchObject({
+      source: 'recent',
+      requests: 10,
+      estimatedCost: null,
+    });
+    expect(viewModel.overview.activity).toMatchObject({
+      scope: 'recent_snapshot',
+      scopeDays: null,
+      sourceLabelKey: 'accounts.value_source_recent',
+    });
+    expect(metricKeys).not.toContain('cost');
+    expect(metricKeys).not.toContain('tokens');
+  });
+
+  it('falls back to the selected credential when monitoring data belongs to another row', () => {
+    const row = makeRow();
+    const otherRow = makeRow({
+      selectionKey: 'shared.codex.json\u00001',
+      authIndex: '1',
+      accountLabel: 'other@example.com',
+    });
+    const viewModel = buildAccountDetailViewModel(row, {
+      valueRow: makeMonitoringValue(otherRow, { requests: 77 }),
+    });
+
+    expect(viewModel.value.source).toBe('recent');
+    expect(viewModel.overview.activity.scope).toBe('recent_snapshot');
+    expect(viewModel.overview.activity.metrics).toContainEqual(
+      expect.objectContaining({ key: 'requests', value: 10 })
+    );
+  });
+
+  it('exposes explicit missing states without inventing quota or activity evidence', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        quota: {
+          status: 'unknown',
+          remainingPercent: null,
+          usedPercent: null,
+          resetLabel: '-',
+          planType: null,
+          source: 'none',
+        },
+        usage: {
+          success: 0,
+          failure: 0,
+          successRate: null,
+          recentRequests: [],
+        },
+      })
+    );
+
+    expect(viewModel.overview.capacity).toMatchObject({
+      remainingPercent: null,
+      hasData: false,
+    });
+    expect(viewModel.overview.activity.hasActivity).toBe(false);
+    expect(viewModel.overview.decision.observedAtMs).toBeNull();
+    expect(viewModel.overview.decision.basisLabelKey).toBe(
+      'accounts.detail_overview_basis_credential_state'
+    );
+  });
+
+  it('treats a failed cached quota lookup without values or windows as missing capacity data', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        quota: {
+          status: 'error',
+          remainingPercent: null,
+          usedPercent: null,
+          resetLabel: '-',
+          resetAtMs: null,
+          source: 'cache',
+          error: 'quota refresh failed',
+        },
+      })
+    );
+
+    expect(viewModel.overview.capacity).toMatchObject({
+      hasData: false,
+      descriptionKey: 'accounts.detail_overview_capacity_missing_desc',
+    });
+  });
+
+  it('only adds the attention block when an action is available', () => {
+    const row = makeRow();
+    const normalViewModel = buildAccountDetailViewModel(row);
+    const attentionViewModel = buildAccountDetailViewModel(row, {
+      recommendation: {
+        row,
+        action: 'refresh',
+        priority: 'high',
+        reasonKey: 'accounts.recommend_reason_low',
+      },
+    });
+
+    expect(normalViewModel.overview.attention).toBeNull();
+    expect(attentionViewModel.overview.attention).toEqual({
+      priority: 'high',
+      actionLabelKey: 'accounts.recommend_action_refresh',
+      reasonKey: 'accounts.recommend_reason_low',
+      targetTab: 'quota',
+    });
   });
 });

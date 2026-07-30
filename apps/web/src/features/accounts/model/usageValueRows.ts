@@ -1,5 +1,6 @@
 import type {
   MonitoringAnalyticsAccountStatRow,
+  MonitoringAnalyticsSummary,
   MonitoringAnalyticsTimelinePoint,
 } from '@/services/api/usageService';
 import type { AccountRow } from './accountRows';
@@ -17,6 +18,7 @@ export interface UsageValueRow {
   successRate: number | null;
   inputTokens: number;
   outputTokens: number;
+  totalTokens?: number;
   estimatedCost: number;
   lastSeenMs: number | null;
   rating: 'high' | 'normal' | 'low';
@@ -65,11 +67,117 @@ const buildMonitoringKeyCandidates = (stat: MonitoringAnalyticsAccountStatRow): 
 
 const resolveRating = (requests: number, successRate: number | null, cost: number) => {
   if (requests === 0) return 'low';
-  if (cost >= 1 || requests >= 100 || (successRate !== null && successRate >= 95 && requests >= 20)) {
+  if (
+    cost >= 1 ||
+    requests >= 100 ||
+    (successRate !== null && successRate >= 95 && requests >= 20)
+  ) {
     return 'high';
   }
   if (requests < 3 || (successRate !== null && successRate < 60)) return 'low';
   return 'normal';
+};
+
+const finiteNumberOrZero = (value: number | null | undefined): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : 0;
+
+const resolveLatestSeenMs = (stats: MonitoringAnalyticsAccountStatRow[]): number | null =>
+  stats.reduce<number | null>((latest, stat) => {
+    const candidate = finiteNumberOrZero(stat.last_seen_ms);
+    if (candidate <= 0) return latest;
+    return latest === null || candidate > latest ? candidate : latest;
+  }, null);
+
+const buildMonitoringUsageValueRow = ({
+  row,
+  requests,
+  successRate,
+  inputTokens,
+  outputTokens,
+  totalTokens,
+  estimatedCost,
+  lastSeenMs,
+}: {
+  row: AccountRow;
+  requests: number;
+  successRate: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCost: number;
+  lastSeenMs: number | null;
+}): UsageValueRow => ({
+  key: `monitoring:${row.selectionKey}`,
+  accountLabel: row.accountLabel,
+  fileName: row.fileName,
+  provider: row.provider,
+  requests,
+  successRate,
+  inputTokens,
+  outputTokens,
+  totalTokens,
+  estimatedCost,
+  lastSeenMs,
+  rating: resolveRating(requests, successRate, estimatedCost),
+  source: 'monitoring',
+  row,
+});
+
+export const buildUsageValueRowFromMonitoringSummary = (
+  row: AccountRow,
+  summary: MonitoringAnalyticsSummary | null | undefined,
+  stats: MonitoringAnalyticsAccountStatRow[]
+): UsageValueRow => {
+  const lastSeenMs = resolveLatestSeenMs(stats);
+  if (summary) {
+    const requests = finiteNumberOrZero(summary.total_calls);
+    const successRate =
+      requests > 0 && Number.isFinite(summary.success_rate) ? summary.success_rate * 100 : null;
+    return buildMonitoringUsageValueRow({
+      row,
+      requests,
+      successRate,
+      inputTokens: finiteNumberOrZero(summary.input_tokens),
+      outputTokens: finiteNumberOrZero(summary.output_tokens),
+      totalTokens: finiteNumberOrZero(summary.total_tokens),
+      estimatedCost: finiteNumberOrZero(summary.total_cost),
+      lastSeenMs,
+    });
+  }
+  const aggregate = stats.reduce(
+    (totals, stat) => {
+      const calls = finiteNumberOrZero(stat.calls);
+      totals.requests += calls;
+      totals.successCalls +=
+        typeof stat.success_calls === 'number' && Number.isFinite(stat.success_calls)
+          ? stat.success_calls
+          : calls * finiteNumberOrZero(stat.success_rate);
+      totals.inputTokens += finiteNumberOrZero(stat.input_tokens);
+      totals.outputTokens += finiteNumberOrZero(stat.output_tokens);
+      totals.totalTokens +=
+        typeof stat.total_tokens === 'number' && Number.isFinite(stat.total_tokens)
+          ? stat.total_tokens
+          : finiteNumberOrZero(stat.input_tokens) + finiteNumberOrZero(stat.output_tokens);
+      totals.estimatedCost += finiteNumberOrZero(stat.cost);
+      return totals;
+    },
+    {
+      requests: 0,
+      successCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      estimatedCost: 0,
+    }
+  );
+  const successRate =
+    aggregate.requests > 0 ? (aggregate.successCalls / aggregate.requests) * 100 : null;
+  return buildMonitoringUsageValueRow({
+    row,
+    ...aggregate,
+    successRate,
+    lastSeenMs,
+  });
 };
 
 export const buildUsageValueRowsFromMonitoring = (
@@ -89,7 +197,8 @@ export const buildUsageValueRowsFromMonitoring = (
     const successRate = Number.isFinite(stat.success_rate) ? stat.success_rate * 100 : null;
     const provider =
       row?.provider || normalizeText(stat.auth_provider_snapshot) || stat.sources?.[0] || 'unknown';
-    const accountLabel = row?.accountLabel || stat.account_snapshot || stat.auth_label_snapshot || stat.id;
+    const accountLabel =
+      row?.accountLabel || stat.account_snapshot || stat.auth_label_snapshot || stat.id;
     const fileName = row?.fileName || stat.auth_indices?.[0] || stat.id;
     return {
       key: `monitoring:${stat.id}`,
@@ -100,6 +209,7 @@ export const buildUsageValueRowsFromMonitoring = (
       successRate,
       inputTokens: stat.input_tokens,
       outputTokens: stat.output_tokens,
+      totalTokens: stat.total_tokens,
       estimatedCost: stat.cost,
       lastSeenMs: stat.last_seen_ms || null,
       rating: resolveRating(requests, successRate, stat.cost),
@@ -122,6 +232,7 @@ export const buildUsageValueRowsFromRecent = (accountRows: AccountRow[]): UsageV
       successRate: row.usage.successRate,
       inputTokens: 0,
       outputTokens: 0,
+      totalTokens: 0,
       estimatedCost,
       lastSeenMs: null,
       rating: resolveRating(requests, row.usage.successRate, estimatedCost),
@@ -174,19 +285,27 @@ export const filterUsageValueRows = (
   });
 };
 
-export const buildFallbackTimeline = (rows: UsageValueRow[]): MonitoringAnalyticsTimelinePoint[] => [
+export const buildFallbackTimeline = (
+  rows: UsageValueRow[]
+): MonitoringAnalyticsTimelinePoint[] => [
   {
     bucket_ms: Date.now(),
     label: 'current',
     calls: rows.reduce((total, row) => total + row.requests, 0),
-    tokens: rows.reduce((total, row) => total + row.inputTokens + row.outputTokens, 0),
+    tokens: rows.reduce(
+      (total, row) => total + (row.totalTokens ?? row.inputTokens + row.outputTokens),
+      0
+    ),
     success: rows.reduce((total, row) => {
       if (row.successRate === null) return total;
       return total + Math.round((row.requests * row.successRate) / 100);
     }, 0),
     failure: rows.reduce((total, row) => {
       if (row.successRate === null) return total;
-      return total + row.requests;
+      const success = Math.round(
+        (row.requests * Math.max(0, Math.min(100, row.successRate))) / 100
+      );
+      return total + Math.max(0, row.requests - success);
     }, 0),
   },
 ];
