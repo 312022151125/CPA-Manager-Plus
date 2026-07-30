@@ -55,6 +55,22 @@ func TestAnalyticsQueryGroupBoundsConcurrency(t *testing.T) {
 	}
 }
 
+func TestBuildEventsIncludesRequestMetadata(t *testing.T) {
+	response := buildEvents(store.EventsPage{Items: []store.EventPageItem{{
+		EventHash:     "request-metadata",
+		ClientIP:      "192.0.2.10",
+		XForwardedFor: "203.0.113.5, 198.51.100.8",
+		UserAgent:     "test-client/1.0",
+	}}}, 1)
+	if response == nil || len(response.Items) != 1 {
+		t.Fatalf("events response = %#v", response)
+	}
+	item := response.Items[0]
+	if item.ClientIP != "192.0.2.10" || item.XForwardedFor != "203.0.113.5, 198.51.100.8" || item.UserAgent != "test-client/1.0" {
+		t.Fatalf("request metadata = client:%q forwarded:%q agent:%q", item.ClientIP, item.XForwardedFor, item.UserAgent)
+	}
+}
+
 func TestAnalyticsQueryGroupCancelsSiblingsOnError(t *testing.T) {
 	group := newAnalyticsQueryGroup(context.Background(), 2)
 	started := make(chan struct{})
