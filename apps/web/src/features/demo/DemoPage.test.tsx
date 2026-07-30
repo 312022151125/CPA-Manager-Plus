@@ -314,9 +314,26 @@ describe('DemoPage', () => {
         'codex-expired-oauth-03.json',
       ])
     );
+    expect(authFiles.files.find((file) => file.name === 'codex-email-user.json')).toMatchObject({
+      id_token: {
+        plan_type: 'plus',
+        chatgpt_subscription_active_until: expect.any(String),
+      },
+    });
+    expect(quota.codexQuota['codex-team-01.json']?.subscriptionActiveUntil).toEqual(
+      expect.any(String)
+    );
+    expect(quota.codexQuota['codex-team-01.json']?.windows[0]).toMatchObject({
+      resetAtMs: expect.any(Number),
+      resetAccuracy: 'estimated',
+    });
     expect(quota.codexQuota['codex-expired-oauth-03.json']?.status).toBe('error');
     expect(quota.codexQuota['codex-expired-oauth-03.json']?.errorStatus).toBe(401);
     expect(quota.claudeQuota['claude-research-02.json']?.windows).toHaveLength(3);
+    expect(quota.claudeQuota['claude-research-02.json']?.windows[0]).toMatchObject({
+      resetAtMs: expect.any(Number),
+      resetAccuracy: 'estimated',
+    });
     expect(quota.claudeQuota['claude-extra-usage-03.json']?.extraUsage?.is_enabled).toBe(true);
     expect(quota.antigravityQuota['antigravity-builder.json']?.groups).toHaveLength(2);
     expect(quota.antigravityQuota['antigravity-builder.json']?.groups[0]?.buckets).toHaveLength(2);
@@ -342,6 +359,10 @@ describe('DemoPage', () => {
       remainingFraction: 0.11,
     });
     expect(quota.kimiQuota['kimi-coding.json']?.rows[0]?.used).toBe(214);
+    expect(quota.kimiQuota['kimi-coding.json']?.rows[0]).toMatchObject({
+      resetAtMs: expect.any(Number),
+      resetAccuracy: 'estimated',
+    });
     expect(quota.kimiQuota['kimi-healthy.json']?.rows[0]?.used).toBe(320);
     expect(quota.kimiQuota['kimi-exhausted.json']?.rows[1]?.used).toBe(200);
     expect(quota.xaiQuota['xai-ops.json']?.billing?.periodType).toBe('weekly');
@@ -422,6 +443,97 @@ describe('DemoPage', () => {
     expect(secondPage.events?.items.every((event) => !firstHashes.has(event.event_hash))).toBe(
       true
     );
+  });
+
+  it('filters credential overview analytics instead of returning the global demo summary', () => {
+    const request = {
+      from_ms: Date.now() - 7 * 24 * 60 * 60 * 1000,
+      to_ms: Date.now(),
+      filters: {
+        auth_files: ['antigravity-daily-exhausted.json'],
+        auth_indices: ['antigravity-daily-02'],
+      },
+      include: {
+        summary: true,
+        account_stats: true,
+      },
+    };
+    const filtered = getDemoMonitoringAnalytics(request);
+
+    expect(filtered.summary).toMatchObject({
+      total_calls: 540,
+      success_calls: 496,
+      failure_calls: 44,
+      total_tokens: 460_000,
+      total_cost: 8.7,
+    });
+    expect(filtered.credential_stats?.map((row) => row.auth_file_snapshot)).toEqual([
+      'antigravity-daily-exhausted.json',
+    ]);
+    expect(filtered.account_stats).toHaveLength(1);
+    expect(filtered.account_stats?.[0]?.auth_indices).toContain('antigravity-daily-02');
+
+    const empty = getDemoMonitoringAnalytics({
+      ...request,
+      filters: {
+        auth_files: ['missing.json'],
+        auth_indices: ['missing'],
+      },
+    });
+    expect(empty.summary).toMatchObject({
+      total_calls: 0,
+      success_calls: 0,
+      failure_calls: 0,
+      total_tokens: 0,
+      total_cost: 0,
+    });
+    expect(empty.account_stats).toEqual([]);
+    expect(empty.credential_stats).toEqual([]);
+
+    const byCredentialId = getDemoMonitoringAnalytics({
+      ...request,
+      filters: {
+        credential_ids: ['codex-team-01.json'],
+      },
+    });
+    expect(byCredentialId.summary).toMatchObject({
+      total_calls: 5200,
+      total_tokens: 4_220_000,
+      total_cost: 88.1,
+    });
+    expect(byCredentialId.account_stats).toHaveLength(1);
+    expect(byCredentialId.account_stats?.[0]?.auth_indices).toEqual(['codex-team-01']);
+    expect(byCredentialId.credential_stats?.[0]?.id).toBe('codex-team-01.json');
+    expect(byCredentialId.account_stats?.[0]?.last_seen_ms).toBe(
+      byCredentialId.credential_stats?.[0]?.last_seen_ms
+    );
+
+    const authIndexIsNotCredentialId = getDemoMonitoringAnalytics({
+      ...request,
+      filters: {
+        credential_ids: ['codex-team-01'],
+      },
+    });
+    expect(authIndexIsNotCredentialId.credential_stats).toEqual([]);
+    expect(authIndexIsNotCredentialId.account_stats).toEqual([]);
+
+    const scopedEvents = getDemoMonitoringAnalytics({
+      from_ms: 0,
+      to_ms: Date.now(),
+      filters: request.filters,
+      include: {
+        events_page: { limit: 50 },
+      },
+    });
+    expect(scopedEvents.events?.items.length).toBeGreaterThan(0);
+    expect(
+      scopedEvents.events?.items.every(
+        (event) =>
+          event.auth_file_snapshot === 'antigravity-daily-exhausted.json' &&
+          event.auth_index === 'antigravity-daily-02'
+      )
+    ).toBe(true);
+    expect(scopedEvents.events?.total_count).toBe(scopedEvents.events?.items.length);
   });
 
   it('returns exact API key trend fixtures for selected client keys', () => {

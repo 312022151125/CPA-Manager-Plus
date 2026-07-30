@@ -72,17 +72,120 @@ const hour = 60 * minute;
 const day = 24 * hour;
 const demoOAuthAccountProviders = new Set(['codex', 'claude', 'antigravity', 'kimi', 'xai']);
 
+type DemoCredentialFilterable = {
+  id?: string;
+  auth_file_snapshot?: string;
+  auth_index?: string;
+  source?: string;
+  source_hash?: string;
+};
+
+type DemoCredentialFilters = {
+  authFiles: Set<string>;
+  authIndices: Set<string>;
+  credentialIds: Set<string>;
+};
+
+const normalizeDemoCredentialFilterValues = (values: string[] | undefined) =>
+  new Set((values ?? []).map((value) => value.trim()).filter(Boolean));
+
+const resolveDemoCredentialId = (row: DemoCredentialFilterable): string => {
+  for (const value of [
+    row.auth_file_snapshot,
+    row.auth_index,
+    row.source_hash,
+    row.source,
+    row.id,
+  ]) {
+    const normalized = value?.trim() ?? '';
+    if (normalized) return normalized;
+  }
+  return '-';
+};
+
+const buildDemoCredentialFilters = (
+  request?: MonitoringAnalyticsRequest
+): DemoCredentialFilters | null => {
+  const filters = {
+    authFiles: normalizeDemoCredentialFilterValues(request?.filters?.auth_files),
+    authIndices: normalizeDemoCredentialFilterValues(request?.filters?.auth_indices),
+    credentialIds: normalizeDemoCredentialFilterValues(request?.filters?.credential_ids),
+  };
+  return filters.authFiles.size > 0 ||
+    filters.authIndices.size > 0 ||
+    filters.credentialIds.size > 0
+    ? filters
+    : null;
+};
+
+const matchesDemoCredentialFilters = (
+  row: DemoCredentialFilterable,
+  filters: DemoCredentialFilters
+) => {
+  const authFile = row.auth_file_snapshot?.trim() ?? '';
+  const authIndex = row.auth_index?.trim() ?? '';
+  if (filters.authFiles.size > 0 && !filters.authFiles.has(authFile)) return false;
+  if (filters.authIndices.size > 0 && !filters.authIndices.has(authIndex)) return false;
+  if (filters.credentialIds.size > 0 && !filters.credentialIds.has(resolveDemoCredentialId(row))) {
+    return false;
+  }
+  return true;
+};
+
+const buildDemoScopedAccountStats = (
+  credentialStats: NonNullable<MonitoringAnalyticsResponse['credential_stats']>
+): NonNullable<MonitoringAnalyticsResponse['account_stats']> =>
+  credentialStats.map((row) => ({
+    id:
+      row.account_snapshot?.trim() ||
+      row.auth_label_snapshot?.trim() ||
+      row.source?.trim() ||
+      row.auth_index?.trim() ||
+      row.id,
+    account_snapshot: row.account_snapshot,
+    auth_label_snapshot: row.auth_label_snapshot,
+    auth_provider_snapshot: row.auth_provider_snapshot,
+    auth_indices: row.auth_index ? [row.auth_index] : [],
+    sources: row.source ? [row.source] : [],
+    source_hashes: row.source_hash ? [row.source_hash] : [],
+    calls: row.calls,
+    success_calls: row.success_calls,
+    failure_calls: row.failure_calls,
+    success_rate: row.success_rate,
+    input_tokens: row.input_tokens,
+    output_tokens: row.output_tokens,
+    cached_tokens: row.cached_tokens,
+    cache_read_tokens: row.cache_read_tokens,
+    cache_creation_tokens: row.cache_creation_tokens,
+    total_tokens: row.total_tokens,
+    cost: row.cost,
+    average_latency_ms: row.average_latency_ms,
+    last_seen_ms: row.last_seen_ms,
+    models: row.models,
+  }));
+
 const isDemoOAuthAccountProvider = (provider: unknown) =>
   typeof provider === 'string' && demoOAuthAccountProviders.has(provider);
 
 const demoResetIso = (offsetMs: number) => new Date(now() + offsetMs).toISOString();
-const formatDemoQuotaResetLabel = (offsetMs: number) => {
-  const value = new Date(now() + offsetMs);
+const formatDemoQuotaResetAtMs = (resetAtMs: number) => {
+  const value = new Date(resetAtMs);
   const month = String(value.getMonth() + 1).padStart(2, '0');
   const dayOfMonth = String(value.getDate()).padStart(2, '0');
   const hours = String(value.getHours()).padStart(2, '0');
   const minutes = String(value.getMinutes()).padStart(2, '0');
   return `${month}/${dayOfMonth} ${hours}:${minutes}`;
+};
+const demoQuotaResetMetadata = (offsetMs: number) => ({
+  resetAtMs: now() + offsetMs,
+  resetAccuracy: 'estimated' as const,
+});
+const demoQuotaReset = (offsetMs: number) => {
+  const metadata = demoQuotaResetMetadata(offsetMs);
+  return {
+    resetLabel: formatDemoQuotaResetAtMs(metadata.resetAtMs),
+    ...metadata,
+  };
 };
 
 const demoRecentRequests = (
@@ -372,7 +475,6 @@ const demoAuthFiles: AuthFilesResponse = {
       authIndex: 'codex-upgrade-demo-01',
       disabled: false,
       status: 'healthy',
-      statusMessage: 'Ready',
       size: 4612,
       modified: now() - 4 * hour,
       last_refresh: new Date(now() - 4 * hour).toISOString(),
@@ -400,7 +502,10 @@ const demoAuthFiles: AuthFilesResponse = {
       account_snapshot: 'Platform Team',
       account_id: 'acct_codex_team',
       priority: 90,
-      id_token: { plan_type: 'team' },
+      id_token: {
+        plan_type: 'team',
+        chatgpt_subscription_active_until: demoResetIso(23 * day),
+      },
       plan_type: 'team',
       success: 1842,
       failed: 18,
@@ -414,7 +519,6 @@ const demoAuthFiles: AuthFilesResponse = {
       authIndex: 'codex-email-user-01',
       disabled: false,
       status: 'healthy',
-      statusMessage: 'Ready',
       size: 4680,
       modified: now() - 90 * minute,
       account_snapshot: 'fbcabcdef@vip.qq.com',
@@ -423,7 +527,10 @@ const demoAuthFiles: AuthFilesResponse = {
       label: 'codex',
       account_id: 'acct_codex_email',
       priority: 88,
-      id_token: { plan_type: 'plus' },
+      id_token: {
+        plan_type: 'plus',
+        chatgpt_subscription_active_until: demoResetIso(18 * day),
+      },
       plan_type: 'plus',
       success: 640,
       failed: 6,
@@ -436,7 +543,6 @@ const demoAuthFiles: AuthFilesResponse = {
       authIndex: 'codex-pro-20x-01',
       disabled: false,
       status: 'healthy',
-      statusMessage: 'Ready',
       size: 4960,
       modified: now() - hour,
       account: 'Pro 20x Workspace',
@@ -444,7 +550,10 @@ const demoAuthFiles: AuthFilesResponse = {
       account_snapshot: 'Pro 20x Workspace',
       account_id: 'acct_codex_pro_20x',
       priority: 84,
-      id_token: { plan_type: 'pro' },
+      id_token: {
+        plan_type: 'pro',
+        chatgpt_subscription_active_until: demoResetIso(45 * day),
+      },
       plan_type: 'pro',
       success: 1260,
       failed: 8,
@@ -465,7 +574,10 @@ const demoAuthFiles: AuthFilesResponse = {
       account_snapshot: 'Automation Pool',
       account_id: 'acct_codex_auto',
       priority: 45,
-      id_token: { plan_type: 'team' },
+      id_token: {
+        plan_type: 'team',
+        chatgpt_subscription_active_until: demoResetIso(12 * day),
+      },
       plan_type: 'team',
       success: 934,
       failed: 42,
@@ -2586,6 +2698,7 @@ const buildMonitoringAnalytics = (
       const successCalls = row.calls - row.failure_calls;
       return {
         ...row,
+        id: resolveDemoCredentialId(row),
         success_calls: successCalls,
         success_rate: safeRate(successCalls, row.calls),
         input_tokens: tokenSplit.input_tokens,
@@ -3836,7 +3949,12 @@ const buildMonitoringAnalytics = (
     }),
   ];
 
-  const recentFailures = events
+  const credentialFilters = buildDemoCredentialFilters(request);
+  const scopedEvents = credentialFilters
+    ? events.filter((event) => matchesDemoCredentialFilters(event, credentialFilters))
+    : events;
+
+  const recentFailures = scopedEvents
     .filter((event) => event.failed)
     .slice(0, 8)
     .map((event) => ({
@@ -3999,12 +4117,12 @@ const buildMonitoringAnalytics = (
 
   const eventsPageRequest = request?.include?.events_page;
   const eventsPage = paginateDemoEvents(
-    events,
-    eventsPageRequest?.limit ?? events.length,
+    scopedEvents,
+    eventsPageRequest?.limit ?? scopedEvents.length,
     eventsPageRequest?.before_ms
   );
   const drilldownRequest = request?.include?.drilldown_preview;
-  const drilldownPreview = paginateDemoEvents(events, drilldownRequest?.limit ?? 12, null);
+  const drilldownPreview = paginateDemoEvents(scopedEvents, drilldownRequest?.limit ?? 12, null);
 
   return {
     generated_at_ms: analyticsNow,
@@ -5154,23 +5272,114 @@ export const getDemoAuthFiles = (): AuthFilesResponse => {
   const response = clone(demoAuthFiles);
   response.total = response.files.length;
   if (!demoCodexUpgradeCompletedAt) return response;
+  const upgradeCompletedAtMs = Date.parse(demoCodexUpgradeCompletedAt);
+  if (!Number.isFinite(upgradeCompletedAtMs)) return response;
 
   const target = response.files.find((file) => file.id === DEMO_CODEX_UPGRADE_AUTH_ID);
   if (!target) return response;
 
   target.plan_type = 'plus';
-  target.id_token = { plan_type: 'plus' };
+  target.id_token = {
+    plan_type: 'plus',
+    chatgpt_subscription_active_until: new Date(upgradeCompletedAtMs + 30 * day).toISOString(),
+  };
   target.last_refresh = demoCodexUpgradeCompletedAt;
-  target.modified = Date.parse(demoCodexUpgradeCompletedAt);
-  target.statusMessage = 'Ready';
+  target.modified = upgradeCompletedAtMs;
+  delete target.statusMessage;
   return response;
 };
 export const getDemoPlugins = () => clone(demoPlugins);
 export const getDemoPluginStore = () => clone(demoPluginStore);
 export const getDemoManagerConfig = () => clone(demoManagerConfig);
 export const getDemoDashboardSummary = () => clone(dashboardBase());
+
+const filterDemoMonitoringAnalyticsByCredential = (
+  response: MonitoringAnalyticsResponse,
+  request?: MonitoringAnalyticsRequest
+): MonitoringAnalyticsResponse => {
+  const filters = buildDemoCredentialFilters(request);
+  if (!filters) return response;
+
+  const credentialStats = (response.credential_stats ?? []).filter((row) =>
+    matchesDemoCredentialFilters(row, filters)
+  );
+  const accountStats = buildDemoScopedAccountStats(credentialStats);
+  const credentialTimeline = (response.credential_timeline ?? []).filter((row) =>
+    matchesDemoCredentialFilters(row, filters)
+  );
+
+  const totalCalls = credentialStats.reduce((sum, row) => sum + row.calls, 0);
+  const successCalls = credentialStats.reduce((sum, row) => sum + row.success_calls, 0);
+  const failureCalls = credentialStats.reduce((sum, row) => sum + row.failure_calls, 0);
+  const inputTokens = credentialStats.reduce((sum, row) => sum + row.input_tokens, 0);
+  const outputTokens = credentialStats.reduce((sum, row) => sum + row.output_tokens, 0);
+  const cachedTokens = credentialStats.reduce((sum, row) => sum + row.cached_tokens, 0);
+  const cacheReadTokens = credentialStats.reduce((sum, row) => sum + row.cache_read_tokens, 0);
+  const cacheCreationTokens = credentialStats.reduce(
+    (sum, row) => sum + row.cache_creation_tokens,
+    0
+  );
+  const totalTokens = credentialStats.reduce((sum, row) => sum + row.total_tokens, 0);
+  const totalCost = round2(credentialStats.reduce((sum, row) => sum + row.cost, 0));
+  const latencyCallCount = credentialStats.reduce(
+    (sum, row) => sum + (row.average_latency_ms === null ? 0 : row.calls),
+    0
+  );
+  const averageLatencyMs =
+    latencyCallCount > 0
+      ? Math.round(
+          credentialStats.reduce((sum, row) => sum + (row.average_latency_ms ?? 0) * row.calls, 0) /
+            latencyCallCount
+        )
+      : null;
+  const rangeDays = Math.max(
+    1,
+    Math.ceil(Math.max(0, (request?.to_ms ?? 0) - (request?.from_ms ?? 0)) / day)
+  );
+  const summary = response.summary
+    ? {
+        ...response.summary,
+        total_calls: totalCalls,
+        success_calls: successCalls,
+        failure_calls: failureCalls,
+        success_rate: safeRate(successCalls, totalCalls),
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cached_tokens: cachedTokens,
+        cache_read_tokens: cacheReadTokens,
+        cache_creation_tokens: cacheCreationTokens,
+        reasoning_tokens: Math.max(0, totalTokens - inputTokens - outputTokens - cachedTokens),
+        total_tokens: totalTokens,
+        total_cost: totalCost,
+        average_cost_per_call: safeRate(totalCost, totalCalls),
+        average_latency_ms: averageLatencyMs,
+        p95_latency_ms: averageLatencyMs,
+        p95_ttft_ms: null,
+        zero_token_calls: 0,
+        rpm_30m: 0,
+        tpm_30m: 0,
+        avg_daily_requests: Math.round(totalCalls / rangeDays),
+        avg_daily_tokens: Math.round(totalTokens / rangeDays),
+        approx_tasks: totalCalls,
+        approx_task_failures: failureCalls,
+        approx_task_success_rate: safeRate(successCalls, totalCalls),
+        zero_token_models: [],
+      }
+    : undefined;
+
+  return {
+    ...response,
+    summary,
+    account_stats: accountStats,
+    credential_stats: credentialStats,
+    credential_timeline: credentialTimeline,
+  };
+};
+
 export const getDemoMonitoringAnalytics = (request?: MonitoringAnalyticsRequest) =>
-  clone(buildMonitoringAnalytics(undefined, request));
+  clone(
+    filterDemoMonitoringAnalyticsByCredential(buildMonitoringAnalytics(undefined, request), request)
+  );
 export const getDemoAccountHistory = (
   request: MonitoringAccountHistoryRequest
 ): MonitoringAccountHistoryResponse => {
@@ -5342,19 +5551,20 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
       authFileName: 'codex-team-01.json',
       authIndex: 'codex-team-01',
       fetchedAtMs: now() - 8 * minute,
+      subscriptionActiveUntil: demoResetIso(23 * day),
       windows: [
         {
           id: 'five-hour',
           label: '5 小时限额',
           usedPercent: 36,
-          resetLabel: formatDemoQuotaResetLabel(2 * hour + 18 * minute),
+          ...demoQuotaReset(2 * hour + 18 * minute),
           limitWindowSeconds: 18_000,
         },
         {
           id: 'weekly',
           label: '周限额',
           usedPercent: 41,
-          resetLabel: formatDemoQuotaResetLabel(3 * day + 8 * hour),
+          ...demoQuotaReset(3 * day + 8 * hour),
           limitWindowSeconds: 604_800,
         },
       ],
@@ -5371,14 +5581,14 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           id: 'five-hour',
           label: '5 小时限额',
           usedPercent: 100,
-          resetLabel: formatDemoQuotaResetLabel(68 * minute),
+          ...demoQuotaReset(68 * minute),
           limitWindowSeconds: 18_000,
         },
         {
           id: 'weekly',
           label: '周限额',
           usedPercent: 72,
-          resetLabel: formatDemoQuotaResetLabel(2 * day + 4 * hour),
+          ...demoQuotaReset(2 * day + 4 * hour),
           limitWindowSeconds: 604_800,
         },
       ],
@@ -5407,6 +5617,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           labelKey: 'claude_quota.five_hour',
           usedPercent: 44,
           resetLabel: '2h',
+          ...demoQuotaResetMetadata(2 * hour),
         },
         {
           id: 'seven-day',
@@ -5414,6 +5625,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           labelKey: 'claude_quota.seven_day',
           usedPercent: 31,
           resetLabel: '3d',
+          ...demoQuotaResetMetadata(3 * day),
         },
       ],
     },
@@ -5427,6 +5639,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           labelKey: 'claude_quota.five_hour',
           usedPercent: 88,
           resetLabel: '1h 12m',
+          ...demoQuotaResetMetadata(hour + 12 * minute),
         },
         {
           id: 'seven-day',
@@ -5434,6 +5647,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           labelKey: 'claude_quota.seven_day',
           usedPercent: 48,
           resetLabel: '3d 04h',
+          ...demoQuotaResetMetadata(3 * day + 4 * hour),
         },
         {
           id: 'seven-day-sonnet',
@@ -5441,6 +5655,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           labelKey: 'claude_quota.seven_day_sonnet',
           usedPercent: 74,
           resetLabel: '2d 09h',
+          ...demoQuotaResetMetadata(2 * day + 9 * hour),
         },
       ],
     },
@@ -5454,6 +5669,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           labelKey: 'claude_quota.five_hour',
           usedPercent: 62,
           resetLabel: '2h 35m',
+          ...demoQuotaResetMetadata(2 * hour + 35 * minute),
         },
         {
           id: 'seven-day',
@@ -5461,6 +5677,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           labelKey: 'claude_quota.seven_day',
           usedPercent: 58,
           resetLabel: '4d 06h',
+          ...demoQuotaResetMetadata(4 * day + 6 * hour),
         },
         {
           id: 'seven-day-opus',
@@ -5468,6 +5685,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           labelKey: 'claude_quota.seven_day_opus',
           usedPercent: 91,
           resetLabel: '1d 12h',
+          ...demoQuotaResetMetadata(day + 12 * hour),
         },
       ],
       extraUsage: {
@@ -5730,6 +5948,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           used: 214,
           limit: 2048,
           resetHint: '6d 4h',
+          ...demoQuotaResetMetadata(6 * day + 4 * hour),
         },
         {
           id: 'limit-0',
@@ -5738,6 +5957,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           used: 139,
           limit: 200,
           resetHint: '3h 12m',
+          ...demoQuotaResetMetadata(3 * hour + 12 * minute),
         },
       ],
     },
@@ -5750,6 +5970,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           used: 320,
           limit: 7168,
           resetHint: '5d 18h',
+          ...demoQuotaResetMetadata(5 * day + 18 * hour),
         },
         {
           id: 'limit-0',
@@ -5758,6 +5979,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           used: 18,
           limit: 200,
           resetHint: '4h 26m',
+          ...demoQuotaResetMetadata(4 * hour + 26 * minute),
         },
       ],
     },
@@ -5770,6 +5992,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           used: 1810,
           limit: 2048,
           resetHint: '2d 03h',
+          ...demoQuotaResetMetadata(2 * day + 3 * hour),
         },
         {
           id: 'limit-0',
@@ -5778,6 +6001,7 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
           used: 200,
           limit: 200,
           resetHint: '2h',
+          ...demoQuotaResetMetadata(2 * hour),
         },
       ],
     },
@@ -6379,6 +6603,31 @@ export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
         },
       };
     } else {
+      const shouldUseMatchedAuthFile = isCodexUpgrade || isCodexPro20x || isCodexRecovered;
+      const matchedAuthFile = shouldUseMatchedAuthFile
+        ? getDemoAuthFiles().files.find(
+            (file) => String(file.authIndex ?? file['auth_index'] ?? '') === authIndex
+          )
+        : undefined;
+      const idToken =
+        matchedAuthFile?.id_token &&
+        typeof matchedAuthFile.id_token === 'object' &&
+        !Array.isArray(matchedAuthFile.id_token)
+          ? (matchedAuthFile.id_token as Record<string, unknown>)
+          : null;
+      const rawPlanType = matchedAuthFile?.plan_type ?? idToken?.plan_type;
+      const matchedPlanType =
+        typeof rawPlanType === 'string' && rawPlanType.trim()
+          ? rawPlanType.trim().toLowerCase()
+          : null;
+      const rawSubscriptionActiveUntil =
+        idToken?.chatgpt_subscription_active_until ?? idToken?.chatgptSubscriptionActiveUntil;
+      const matchedSubscriptionActiveUntil =
+        typeof rawSubscriptionActiveUntil === 'string' ||
+        (typeof rawSubscriptionActiveUntil === 'number' &&
+          Number.isFinite(rawSubscriptionActiveUntil))
+          ? rawSubscriptionActiveUntil
+          : null;
       const primaryUsedPercent = isCodexPro20x ? 84 : isCodexRecovered ? 24 : 63;
       const secondaryUsedPercent = isCodexPro20x ? 96 : isCodexRecovered ? 18 : 42;
       const accountId = isCodexPro20x
@@ -6399,7 +6648,7 @@ export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
         user_id: isCodexPro20x ? 'demo-pro-user' : 'demo-user',
         account_id: accountId,
         email,
-        plan_type: isCodexPro20x ? 'pro' : isCodexUpgrade ? 'free' : 'team',
+        plan_type: matchedPlanType ?? (isCodexPro20x ? 'pro' : isCodexUpgrade ? 'free' : 'team'),
         rate_limit: {
           allowed: true,
           primary_window: {
@@ -6429,7 +6678,9 @@ export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
         rate_limit_reset_credits: {
           available_count: isCodexPro20x ? 3 : 2,
         },
-        subscription_active_until: new Date(now() + 23 * day).toISOString(),
+        subscription_active_until: matchedAuthFile
+          ? matchedSubscriptionActiveUntil
+          : new Date(now() + 23 * day).toISOString(),
       };
     }
   } else if (requestUrl.includes('/rate-limit-reset-credits')) {
