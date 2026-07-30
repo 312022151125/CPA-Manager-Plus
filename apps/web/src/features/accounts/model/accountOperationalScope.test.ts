@@ -49,4 +49,62 @@ describe('buildAccountOperationalItemsByRowKey', () => {
     expect(result.get(rows[0].selectionKey)).toEqual([]);
     expect(result.get(rows[1].selectionKey)).toEqual([item]);
   });
+
+  it('scopes same-file cooldowns by provider and account snapshot', () => {
+    const files: AuthFileItem[] = [
+      {
+        id: 'runtime-first',
+        name: 'shared.json',
+        type: 'codex',
+        provider: 'codex',
+        account: 'first@example.com',
+      },
+      {
+        id: 'runtime-second',
+        name: 'shared.json',
+        type: 'codex',
+        provider: 'codex',
+        account: 'second@example.com',
+      },
+    ];
+    const rows = buildAccountRows(files, emptyStores());
+    const item = {
+      id: 1,
+      authFileName: 'shared.json',
+      provider: 'codex',
+      accountSnapshot: 'second@example.com',
+    };
+    const result = buildAccountOperationalItemsByRowKey(rows, [item]);
+
+    expect(result.get(rows[0].selectionKey)).toEqual([]);
+    expect(result.get(rows[1].selectionKey)).toEqual([item]);
+  });
+
+  it('scopes same-file action candidates by account ID snapshot', () => {
+    const files: AuthFileItem[] = [
+      {
+        name: 'shared.json',
+        type: 'codex',
+        provider: 'codex',
+        id_token: { account_id: 'account-first' },
+      },
+      {
+        name: 'shared.json',
+        type: 'codex',
+        provider: 'codex',
+        id_token: { account_id: 'account-second' },
+      },
+    ];
+    const rows = buildAccountRows(files, emptyStores());
+    const item = {
+      id: 2,
+      authFileName: 'shared.json',
+      provider: 'codex',
+      accountIdSnapshot: 'account-second',
+    };
+    const result = buildAccountOperationalItemsByRowKey(rows, [item]);
+
+    expect(result.get(rows[0].selectionKey)).toEqual([]);
+    expect(result.get(rows[1].selectionKey)).toEqual([item]);
+  });
 });

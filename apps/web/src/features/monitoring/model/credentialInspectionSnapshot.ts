@@ -13,7 +13,11 @@ export type CredentialHealthInspectionMode = 'local' | 'server';
 
 export interface CredentialInspectionTarget {
   fileName: string;
+  runtimeId?: string | null;
+  provider?: string | null;
   authIndex: string | null;
+  accountId?: string | null;
+  accountSnapshot?: string | null;
 }
 
 export type CredentialInspectionResult = CodexInspectionResult & {
@@ -37,6 +41,8 @@ const toLocalInspectionResult = (
   accountKey: item.key,
   fileName: item.fileName,
   displayAccount: item.displayAccount,
+  runtimeId: item.runtimeId ?? undefined,
+  accountSnapshot: item.accountSnapshot ?? undefined,
   authIndex: item.authIndex ?? undefined,
   accountId: item.accountId ?? undefined,
   provider: item.provider,

@@ -594,8 +594,10 @@ function toServerResultItem(
   const observedHeaderEvidence = buildObservedHeaderEvidence(snapshot, locale, t);
   return {
     key: `server-${item.id || item.accountKey}`,
+    runtimeId: item.runtimeId ?? null,
     fileName: item.fileName,
     displayAccount: item.displayAccount,
+    accountSnapshot: item.accountSnapshot ?? null,
     authIndex: item.authIndex ?? null,
     accountId: item.accountId ?? null,
     provider: item.provider,
@@ -2075,7 +2077,11 @@ export function ServerCodexInspectionPage({
             ? (item) =>
                 onOpenCredential({
                   fileName: item.fileName,
+                  runtimeId: item.runtimeId ?? null,
+                  provider: item.provider,
                   authIndex: item.authIndex ?? null,
+                  accountId: item.accountId ?? null,
+                  accountSnapshot: item.accountSnapshot ?? null,
                 })
             : undefined
         }

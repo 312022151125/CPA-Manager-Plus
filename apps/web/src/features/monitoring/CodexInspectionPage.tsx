@@ -1244,7 +1244,11 @@ export function CodexInspectionPage({
             ? (item) =>
                 onOpenCredential({
                   fileName: item.fileName,
+                  runtimeId: item.runtimeId ?? null,
+                  provider: item.provider,
                   authIndex: item.authIndex ?? null,
+                  accountId: item.accountId ?? null,
+                  accountSnapshot: item.accountSnapshot ?? null,
                 })
             : undefined
         }

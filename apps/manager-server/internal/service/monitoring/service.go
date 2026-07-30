@@ -777,6 +777,16 @@ type EventRow struct {
 }
 
 func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) {
+	var response Response
+	err := s.store.WithModelPriceSnapshot(func() error {
+		var analyticsErr error
+		response, analyticsErr = s.analytics(ctx, req)
+		return analyticsErr
+	})
+	return response, err
+}
+
+func (s *Service) analytics(ctx context.Context, req Request) (Response, error) {
 	if req.FromMS <= 0 || req.ToMS <= 0 || req.FromMS >= req.ToMS {
 		return Response{}, errors.New("from_ms and to_ms are required and from_ms must be less than to_ms")
 	}
@@ -790,10 +800,7 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 		return Response{}, err
 	}
 	filter := buildFilter(req)
-	prices, err := s.store.LoadModelPrices(ctx)
-	if err != nil {
-		return Response{}, err
-	}
+	var prices map[string]store.ModelPrice
 
 	response := Response{
 		GeneratedAtMS: time.Now().UnixMilli(),
@@ -821,6 +828,14 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 			location,
 			hourlyTimelineRepresentable,
 		)
+	}
+	if hourlySnapshotAvailable {
+		prices = hourlySnapshot.Prices
+	} else {
+		prices, err = s.store.LoadModelPrices(ctx)
+		if err != nil {
+			return Response{}, err
+		}
 	}
 
 	var modelStats []store.ModelStat
@@ -1235,6 +1250,16 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 }
 
 func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest) (AccountHistoryResponse, error) {
+	var response AccountHistoryResponse
+	err := s.store.WithModelPriceSnapshot(func() error {
+		var historyErr error
+		response, historyErr = s.accountHistory(ctx, req)
+		return historyErr
+	})
+	return response, err
+}
+
+func (s *Service) accountHistory(ctx context.Context, req AccountHistoryRequest) (AccountHistoryResponse, error) {
 	if len(req.Accounts) == 0 {
 		return AccountHistoryResponse{}, errors.New("accounts are required")
 	}
@@ -1249,6 +1274,9 @@ func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest)
 			return AccountHistoryResponse{}, err
 		}
 		processed = result.Processed
+		if _, err := s.store.CatchUpUsagePricing(ctx, accountHistoryCatchUpLimit, generatedAtMS); err != nil {
+			return AccountHistoryResponse{}, err
+		}
 	}
 	checkpoint, err := s.store.AccountHistoryRollupCheckpoint(ctx)
 	if err != nil {
@@ -1278,9 +1306,20 @@ func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest)
 			})
 		}
 	}
-	rows, err := s.store.AccountHistoryRollupRows(ctx, keys)
+	pricingSnapshot, err := s.store.LoadUsagePricingAccountSnapshot(ctx, keys)
 	if err != nil {
 		return AccountHistoryResponse{}, err
+	}
+	prices := pricingSnapshot.Prices
+	var totals map[string]*accountHistoryTotal
+	if pricingSnapshot.Available {
+		totals = buildPricingAccountHistoryTotals(pricingSnapshot.Rows, prices)
+	} else {
+		rows, err := s.store.AccountHistoryRollupRows(ctx, keys)
+		if err != nil {
+			return AccountHistoryResponse{}, err
+		}
+		totals = buildAccountHistoryTotals(rows, prices)
 	}
 	recentRequests, err := s.store.RecentAccountRequests(
 		ctx,
@@ -1290,11 +1329,6 @@ func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest)
 	if err != nil {
 		return AccountHistoryResponse{}, err
 	}
-	prices, err := s.store.LoadModelPrices(ctx)
-	if err != nil {
-		return AccountHistoryResponse{}, err
-	}
-	totals := buildAccountHistoryTotals(rows, prices)
 	recentRequestsByTargetIndex := make(map[int][]AccountLatestRequest, len(recentRequests))
 	for _, request := range recentRequests {
 		mapped := accountLatestRequestFromStore(request)
@@ -1372,6 +1406,16 @@ func (s *Service) AccountHistory(ctx context.Context, req AccountHistoryRequest)
 }
 
 func (s *Service) AccountWindowUsage(ctx context.Context, req AccountWindowUsageRequest) (AccountWindowUsageResponse, error) {
+	var response AccountWindowUsageResponse
+	err := s.store.WithModelPriceSnapshot(func() error {
+		var usageErr error
+		response, usageErr = s.accountWindowUsage(ctx, req)
+		return usageErr
+	})
+	return response, err
+}
+
+func (s *Service) accountWindowUsage(ctx context.Context, req AccountWindowUsageRequest) (AccountWindowUsageResponse, error) {
 	if len(req.Windows) == 0 {
 		return AccountWindowUsageResponse{}, errors.New("windows are required")
 	}
@@ -3228,6 +3272,47 @@ func buildAccountHistoryTotals(rows []store.AccountHistoryRollupRow, prices map[
 	return totals
 }
 
+func buildPricingAccountHistoryTotals(rows []store.UsagePricingAccountRow, prices map[string]store.ModelPrice) map[string]*accountHistoryTotal {
+	totals := map[string]*accountHistoryTotal{}
+	for _, row := range rows {
+		total := totals[row.AccountKey]
+		if total == nil {
+			total = &accountHistoryTotal{}
+			totals[row.AccountKey] = total
+		}
+		total.requests += row.Calls
+		total.successCalls += row.SuccessCalls
+		total.failureCalls += row.FailureCalls
+		total.totalTokens += row.TotalTokens
+		total.cost += pricing.CostForModelCandidatesWithServiceTier(
+			[]string{row.BillingModel, row.Model},
+			row.ServiceTier,
+			pricing.ModelTokens{
+				PricingModel:            row.PricingModel,
+				ContextThresholdTokens:  row.ContextThresholdTokens,
+				InputTokens:             row.InputTokens,
+				OutputTokens:            row.OutputTokens,
+				CachedTokens:            row.CachedTokens,
+				CacheReadTokens:         row.CacheReadTokens,
+				CacheCreationTokens:     row.CacheCreationTokens,
+				LongInputTokens:         row.LongInputTokens,
+				LongOutputTokens:        row.LongOutputTokens,
+				LongCachedTokens:        row.LongCachedTokens,
+				LongCacheReadTokens:     row.LongCacheReadTokens,
+				LongCacheCreationTokens: row.LongCacheCreationTokens,
+			},
+			prices,
+		)
+		if total.firstSeenMS == 0 || (row.FirstSeenMS > 0 && row.FirstSeenMS < total.firstSeenMS) {
+			total.firstSeenMS = row.FirstSeenMS
+		}
+		if row.LastSeenMS > total.lastSeenMS {
+			total.lastSeenMS = row.LastSeenMS
+		}
+	}
+	return totals
+}
+
 func accountWindowUsageTargetValid(target AccountWindowUsageTarget) bool {
 	return strings.TrimSpace(target.AccountSnapshot) != "" ||
 		strings.TrimSpace(target.AuthLabelSnapshot) != "" ||
@@ -3251,11 +3336,18 @@ func buildAccountWindowUsageTotals(rows []store.AccountWindowModelStat, prices m
 			[]string{row.BillingModel, row.Model},
 			row.ServiceTier,
 			pricing.ModelTokens{
-				InputTokens:         row.InputTokens,
-				OutputTokens:        row.OutputTokens,
-				CachedTokens:        row.CachedTokens,
-				CacheReadTokens:     row.CacheReadTokens,
-				CacheCreationTokens: row.CacheCreationTokens,
+				PricingModel:            row.PricingModel,
+				ContextThresholdTokens:  row.ContextThresholdTokens,
+				InputTokens:             row.InputTokens,
+				OutputTokens:            row.OutputTokens,
+				CachedTokens:            row.CachedTokens,
+				CacheReadTokens:         row.CacheReadTokens,
+				CacheCreationTokens:     row.CacheCreationTokens,
+				LongInputTokens:         row.LongInputTokens,
+				LongOutputTokens:        row.LongOutputTokens,
+				LongCachedTokens:        row.LongCachedTokens,
+				LongCacheReadTokens:     row.LongCacheReadTokens,
+				LongCacheCreationTokens: row.LongCacheCreationTokens,
 			},
 			prices,
 		)
@@ -3293,6 +3385,8 @@ func sumCost(stats []store.ModelStat, prices map[string]store.ModelPrice) float6
 
 func costForStat(stat store.ModelStat, prices map[string]store.ModelPrice) float64 {
 	return pricing.CostForModelCandidatesWithServiceTier([]string{stat.BillingModel, stat.Model}, stat.ServiceTier, pricing.ModelTokens{
+		PricingModel:            stat.PricingModel,
+		ContextThresholdTokens:  stat.ContextThresholdTokens,
 		InputTokens:             stat.InputTokens,
 		OutputTokens:            stat.OutputTokens,
 		CachedTokens:            stat.CachedTokens,
@@ -3308,6 +3402,8 @@ func costForStat(stat store.ModelStat, prices map[string]store.ModelPrice) float
 
 func costForTimelinePoint(point store.TimelinePoint, prices map[string]store.ModelPrice) float64 {
 	return pricing.CostForModelCandidatesWithServiceTier([]string{point.BillingModel, point.Model}, point.ServiceTier, pricing.ModelTokens{
+		PricingModel:            point.PricingModel,
+		ContextThresholdTokens:  point.ContextThresholdTokens,
 		InputTokens:             point.InputTokens,
 		OutputTokens:            point.OutputTokens,
 		CachedTokens:            point.CachedTokens,
@@ -3323,6 +3419,8 @@ func costForTimelinePoint(point store.TimelinePoint, prices map[string]store.Mod
 
 func costForHeatmapPoint(point store.HeatmapPoint, prices map[string]store.ModelPrice) float64 {
 	return pricing.CostForModelCandidatesWithServiceTier([]string{point.BillingModel, point.Model}, point.ServiceTier, pricing.ModelTokens{
+		PricingModel:            point.PricingModel,
+		ContextThresholdTokens:  point.ContextThresholdTokens,
 		InputTokens:             point.InputTokens,
 		OutputTokens:            point.OutputTokens,
 		CachedTokens:            point.CachedTokens,
@@ -3338,6 +3436,8 @@ func costForHeatmapPoint(point store.HeatmapPoint, prices map[string]store.Model
 
 func costForChannelStat(stat store.ChannelModelStat, prices map[string]store.ModelPrice) float64 {
 	return pricing.CostForModelCandidatesWithServiceTier([]string{stat.BillingModel, stat.Model}, stat.ServiceTier, pricing.ModelTokens{
+		PricingModel:            stat.PricingModel,
+		ContextThresholdTokens:  stat.ContextThresholdTokens,
 		InputTokens:             stat.InputTokens,
 		OutputTokens:            stat.OutputTokens,
 		CachedTokens:            stat.CachedTokens,
@@ -3353,6 +3453,8 @@ func costForChannelStat(stat store.ChannelModelStat, prices map[string]store.Mod
 
 func costForAccountModelStat(stat store.AccountModelStat, prices map[string]store.ModelPrice) float64 {
 	return pricing.CostForModelCandidatesWithServiceTier([]string{stat.BillingModel, stat.Model}, stat.ServiceTier, pricing.ModelTokens{
+		PricingModel:            stat.PricingModel,
+		ContextThresholdTokens:  stat.ContextThresholdTokens,
 		InputTokens:             stat.InputTokens,
 		OutputTokens:            stat.OutputTokens,
 		CachedTokens:            stat.CachedTokens,
@@ -3368,6 +3470,8 @@ func costForAccountModelStat(stat store.AccountModelStat, prices map[string]stor
 
 func costForAPIKeyModelStat(stat store.APIKeyModelStat, prices map[string]store.ModelPrice) float64 {
 	return pricing.CostForModelCandidatesWithServiceTier([]string{stat.BillingModel, stat.Model}, stat.ServiceTier, pricing.ModelTokens{
+		PricingModel:            stat.PricingModel,
+		ContextThresholdTokens:  stat.ContextThresholdTokens,
 		InputTokens:             stat.InputTokens,
 		OutputTokens:            stat.OutputTokens,
 		CachedTokens:            stat.CachedTokens,
@@ -3383,6 +3487,8 @@ func costForAPIKeyModelStat(stat store.APIKeyModelStat, prices map[string]store.
 
 func costForCredentialModelStat(stat store.CredentialModelStat, prices map[string]store.ModelPrice) float64 {
 	return pricing.CostForModelCandidatesWithServiceTier([]string{stat.BillingModel, stat.Model}, stat.ServiceTier, pricing.ModelTokens{
+		PricingModel:            stat.PricingModel,
+		ContextThresholdTokens:  stat.ContextThresholdTokens,
 		InputTokens:             stat.InputTokens,
 		OutputTokens:            stat.OutputTokens,
 		CachedTokens:            stat.CachedTokens,
@@ -3398,6 +3504,8 @@ func costForCredentialModelStat(stat store.CredentialModelStat, prices map[strin
 
 func costForCredentialTimelinePoint(point store.CredentialTimelinePoint, prices map[string]store.ModelPrice) float64 {
 	return pricing.CostForModelCandidatesWithServiceTier([]string{point.BillingModel, point.Model}, point.ServiceTier, pricing.ModelTokens{
+		PricingModel:            point.PricingModel,
+		ContextThresholdTokens:  point.ContextThresholdTokens,
 		InputTokens:             point.InputTokens,
 		OutputTokens:            point.OutputTokens,
 		CachedTokens:            point.CachedTokens,
@@ -3413,6 +3521,8 @@ func costForCredentialTimelinePoint(point store.CredentialTimelinePoint, prices 
 
 func costForAPIKeyTimelinePoint(point store.APIKeyTimelinePoint, prices map[string]store.ModelPrice) float64 {
 	return pricing.CostForModelCandidatesWithServiceTier([]string{point.BillingModel, point.Model}, point.ServiceTier, pricing.ModelTokens{
+		PricingModel:            point.PricingModel,
+		ContextThresholdTokens:  point.ContextThresholdTokens,
 		InputTokens:             point.InputTokens,
 		OutputTokens:            point.OutputTokens,
 		CachedTokens:            point.CachedTokens,

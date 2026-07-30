@@ -489,6 +489,7 @@ const demoAuthFiles: AuthFilesResponse = {
       recent_requests: demoRecentRequests(3, { failureEvery: 9 }),
     },
     {
+      id: 'codex-team-01.json',
       name: 'codex-team-01.json',
       type: 'codex',
       provider: 'codex',
@@ -513,6 +514,7 @@ const demoAuthFiles: AuthFilesResponse = {
     },
     {
       // Codex OAuth-style email identity: primary should be the email, secondary "codex".
+      id: 'codex-email-user.json',
       name: 'codex-email-user.json',
       type: 'codex',
       provider: 'codex',
@@ -537,6 +539,7 @@ const demoAuthFiles: AuthFilesResponse = {
       recent_requests: demoRecentRequests(8, { failureEvery: 15, surgeEvery: 7 }),
     },
     {
+      id: 'codex-pro-20x-01.json',
       name: 'codex-pro-20x-01.json',
       type: 'codex',
       provider: 'codex',
@@ -560,6 +563,7 @@ const demoAuthFiles: AuthFilesResponse = {
       recent_requests: demoRecentRequests(10, { failureEvery: 19, surgeEvery: 6 }),
     },
     {
+      id: 'codex-fallback-02.json',
       name: 'codex-fallback-02.json',
       type: 'codex',
       provider: 'codex',
@@ -681,6 +685,7 @@ const demoAuthFiles: AuthFilesResponse = {
     },
     {
       // xAI OAuth-style email identity: primary should be the email, secondary "xai".
+      id: 'xai-ops.json',
       name: 'xai-ops.json',
       type: 'xai',
       provider: 'xai',
@@ -701,6 +706,7 @@ const demoAuthFiles: AuthFilesResponse = {
       recent_requests: demoRecentRequests(5, { failureEvery: 11 }),
     },
     {
+      id: 'xai-email-user.json',
       name: 'xai-email-user.json',
       type: 'xai',
       provider: 'xai',
@@ -720,6 +726,7 @@ const demoAuthFiles: AuthFilesResponse = {
       recent_requests: demoRecentRequests(6, { failureEvery: 16, surgeEvery: 8 }),
     },
     {
+      id: 'xai-expired.json',
       name: 'xai-expired.json',
       type: 'xai',
       provider: 'xai',
@@ -916,7 +923,13 @@ const demoAuthFiles: AuthFilesResponse = {
       failed: 32,
       recent_requests: demoRecentRequests(2, { failureEvery: 3, failureSize: 2, idlePrefix: 1 }),
     },
-  ],
+  ].map((file) => ({
+    ...file,
+    id:
+      typeof file.id === 'string' && file.id.trim()
+        ? file.id
+        : `demo-auth-${String(file.authIndex ?? file.name).trim()}`,
+  })),
 };
 
 const getDemoAuthFileItems = (): AuthFileItem[] => demoAuthFiles.files;
@@ -6307,8 +6320,10 @@ export const getDemoCodexInspectionLocalRun = (baseNow = now()): CodexInspection
       } as AuthFilesResponse['files'][number]);
     return {
       key: `${item.fileName}::${item.authIndex || '-'}`,
+      runtimeId: typeof raw.id === 'string' ? raw.id : null,
       fileName: item.fileName,
       displayAccount: item.displayAccount,
+      accountSnapshot: item.accountSnapshot ?? null,
       authIndex: item.authIndex ?? null,
       accountId: item.accountId ?? null,
       provider: item.provider,

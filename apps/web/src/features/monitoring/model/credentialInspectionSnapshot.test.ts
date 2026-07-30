@@ -38,8 +38,10 @@ const localResult = {
   results: [
     {
       key: 'local.json::auth-1',
+      runtimeId: 'runtime-local-1',
       fileName: 'local.json',
       displayAccount: 'local@example.com',
+      accountSnapshot: 'local@example.com',
       authIndex: 'auth-1',
       accountId: null,
       provider: 'codex',
@@ -47,7 +49,7 @@ const localResult = {
       autoRecoverOwned: false,
       status: 'error',
       state: 'error',
-      raw: { name: 'local.json' },
+      raw: { id: 'runtime-local-1', name: 'local.json', account: 'local@example.com' },
       action: 'reauth',
       actionReason: 'expired',
       statusCode: 401,
@@ -105,6 +107,8 @@ describe('credentialInspectionSnapshot', () => {
 
     expect(local.results[0]).toMatchObject({
       fileName: 'local.json',
+      runtimeId: 'runtime-local-1',
+      accountSnapshot: 'local@example.com',
       inspectionSource: 'local',
       actionStatus: 'pending',
     });

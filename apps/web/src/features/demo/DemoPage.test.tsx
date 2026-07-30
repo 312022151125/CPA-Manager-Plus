@@ -211,6 +211,10 @@ describe('DemoPage', () => {
 
     expect(authFiles.total).toBe(authFiles.files.length);
     expect(authFiles.files.length).toBe(23);
+    expect(authFiles.files.every((file) => typeof file.id === 'string' && file.id.length > 0)).toBe(
+      true
+    );
+    expect(new Set(authFiles.files.map((file) => file.id)).size).toBe(authFiles.files.length);
     expect(visibleAccountText).not.toMatch(/\bui[-.]/i);
     expect(
       authFiles.files.every((file) =>

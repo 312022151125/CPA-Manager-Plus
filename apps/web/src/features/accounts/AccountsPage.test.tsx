@@ -14,6 +14,10 @@ import type {
   UsageHeaderSnapshot,
 } from '@/services/api/usageService';
 import { copyToClipboard } from '@/utils/clipboard';
+import {
+  getAuthFilePatchTarget,
+  getAuthFileSelectionKey,
+} from '@/features/authFiles/model/authFilesPageModel';
 import { formatQuotaResetTimestamp } from './model/accountsPagePresentation';
 import { AccountsPage } from './AccountsPage';
 
@@ -857,6 +861,27 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.lastAliasEditorProps?.provider).toBe('codex');
   });
 
+  it('reloads credentials when the CPA connection fingerprint changes', async () => {
+    const renderer = await renderAccountsPage();
+
+    expect(mocks.loadFiles).toHaveBeenCalledTimes(1);
+
+    mocks.apiBase = 'http://cpa-b.local:8317';
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+
+    expect(mocks.loadFiles).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+
+    expect(mocks.loadFiles).toHaveBeenCalledTimes(2);
+  });
+
   it('initializes the active view from the accounts view query', async () => {
     mocks.location = { pathname: '/accounts', search: '?view=oauth' };
 
@@ -971,9 +996,11 @@ describe('AccountsPage replacement flows', () => {
     expect(
       renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
     ).toHaveLength(1);
-    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
-      0
-    );
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
+      })
+    ).toHaveLength(0);
     expect(findHostButtonByText(renderer, 'accounts.detail_tab_quota').props['aria-selected']).toBe(
       true
     );
@@ -1012,9 +1039,11 @@ describe('AccountsPage replacement flows', () => {
     expect(
       renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
     ).toHaveLength(0);
-    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
-      1
-    );
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
+      })
+    ).toHaveLength(1);
     expect(mocks.navigate).toHaveBeenCalledWith(
       { pathname: '/accounts', search: '?provider=xai' },
       { replace: true }
@@ -1053,9 +1082,11 @@ describe('AccountsPage replacement flows', () => {
     expect(
       renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
     ).toHaveLength(1);
-    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
-      0
-    );
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
+      })
+    ).toHaveLength(0);
 
     mocks.location = { pathname: '/accounts', search: '?provider=xai' };
     await act(async () => {
@@ -1065,9 +1096,11 @@ describe('AccountsPage replacement flows', () => {
     expect(
       renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
     ).toHaveLength(0);
-    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
-      1
-    );
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
+      })
+    ).toHaveLength(1);
 
     mocks.location = { pathname: '/accounts', search: '' };
     await act(async () => {
@@ -1077,9 +1110,11 @@ describe('AccountsPage replacement flows', () => {
     expect(
       renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
     ).toHaveLength(1);
-    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
-      1
-    );
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
+      })
+    ).toHaveLength(1);
   });
 
   it('resets omitted filters when the hash changes outside React Router navigation', async () => {
@@ -1113,9 +1148,11 @@ describe('AccountsPage replacement flows', () => {
     expect(
       renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
     ).toHaveLength(1);
-    expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
-      0
-    );
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
+      })
+    ).toHaveLength(0);
 
     try {
       await act(async () => {
@@ -1127,9 +1164,11 @@ describe('AccountsPage replacement flows', () => {
       expect(
         renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
       ).toHaveLength(1);
-      expect(renderer.root.findAllByProps({ 'data-account-card': 'xai.json\u0000-' })).toHaveLength(
-        1
-      );
+      expect(
+        renderer.root.findAllByProps({
+          'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
+        })
+      ).toHaveLength(1);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1323,7 +1362,7 @@ describe('AccountsPage replacement flows', () => {
     });
 
     expect(mocks.batchPatchFields).toHaveBeenCalledWith(
-      [{ name: 'codex.json', authIndex: 'auth-1' }],
+      [getAuthFilePatchTarget(mocks.files[0])],
       { websockets: true }
     );
   });
@@ -1365,6 +1404,7 @@ describe('AccountsPage replacement flows', () => {
     });
 
     expect(mocks.batchDelete).toHaveBeenCalledTimes(1);
+    expect(mocks.batchDelete.mock.calls[0]?.[0]).toEqual([mocks.files[0]]);
     const options = mocks.batchDelete.mock.calls[0]?.[1] as
       | { message?: unknown; confirmText?: string }
       | undefined;
@@ -1404,7 +1444,7 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
     const modelsButton = findAccountCardButtonByAriaLabel(
       renderer,
-      'runtime-aistudio.json\u0000-',
+      getAuthFileSelectionKey(mocks.files[0]),
       'auth_files.models_button'
     );
 
@@ -2167,7 +2207,7 @@ describe('AccountsPage replacement flows', () => {
         'auth_files.delete_button'
       ).props.onClick();
     });
-    expect(mocks.handleDelete).toHaveBeenCalledWith('codex.json');
+    expect(mocks.handleDelete).toHaveBeenCalledWith(mocks.files[0]);
 
     await act(async () => {
       const statusToggle = findAccountCardInputByAriaLabel(
@@ -2179,7 +2219,10 @@ describe('AccountsPage replacement flows', () => {
       statusToggle.props.onChange({ target: { checked: false } });
       await Promise.resolve();
     });
-    expect(mocks.batchSetStatus).toHaveBeenCalledWith(['codex.json'], false);
+    expect(mocks.batchSetStatus).toHaveBeenCalledWith(
+      [getAuthFilePatchTarget(mocks.files[0])],
+      false
+    );
 
     await act(async () => {
       findDetailButtonByName(renderer, 'codex.json').props.onClick();

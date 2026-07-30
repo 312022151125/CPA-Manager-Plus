@@ -135,7 +135,7 @@ import {
   type DetailTab,
 } from '@/features/accounts/model/accountsPagePresentation';
 import {
-  getAuthFileCodexInspectionKey,
+  getAuthFileCodexInspectionKeyForIdentity,
   getAuthFileCodexStatus,
   getAuthFilePatchTarget,
   getAuthFileSelectionKey,
@@ -517,7 +517,7 @@ export function AccountsPage() {
   const lastWorkspaceNavigationRef = useRef<string | null>(null);
   const syncingWorkspaceLocationRef = useRef(false);
   const hasProcessedInitialWorkspaceLocationRef = useRef(false);
-  const hasLoadedInitialFilesRef = useRef(false);
+  const loadedFilesConnectionFingerprintRef = useRef<string | null>(null);
   const quotaRequestVersionsRef = useRef<Map<string, number>>(new Map());
   const identityCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accountSortDropdownRef = useRef<HTMLDivElement | null>(null);
@@ -546,7 +546,12 @@ export function AccountsPage() {
       const next = new Map<string, QuotaCooldownInfo>();
       for (const item of items) {
         if (!item.authFileName) continue;
-        const key = getAuthFileCodexInspectionKey(item.authFileName, item.authIndex ?? null);
+        const key = getAuthFileCodexInspectionKeyForIdentity({
+          fileName: item.authFileName,
+          provider: item.provider,
+          authIndex: item.authIndex ?? null,
+          accountSnapshot: item.accountSnapshot,
+        });
         const existing = next.get(key);
         if (!existing || (item.recoverAtMs ?? 0) > (existing.recoverAtMs ?? 0)) {
           next.set(key, item);
@@ -663,10 +668,10 @@ export function AccountsPage() {
   useHeaderRefresh(refreshActiveWorkspace);
 
   useEffect(() => {
-    if (hasLoadedInitialFilesRef.current) return;
-    hasLoadedInitialFilesRef.current = true;
+    if (loadedFilesConnectionFingerprintRef.current === connectionFingerprint) return;
+    loadedFilesConnectionFingerprintRef.current = connectionFingerprint;
     void loadFiles();
-  }, [loadFiles]);
+  }, [connectionFingerprint, loadFiles]);
 
   useEffect(() => {
     if (activeView === 'accounts') return;
@@ -903,12 +908,16 @@ export function AccountsPage() {
     () => rows.filter((row) => selectedFiles.has(row.selectionKey)),
     [rows, selectedFiles]
   );
+  const selectedTargetFiles = useMemo(
+    () => selectedRows.filter((row) => !row.runtimeOnly).map((row) => row.raw),
+    [selectedRows]
+  );
   const selectedFileNames = useMemo(
     () =>
       Array.from(
-        new Set(selectedRows.filter((row) => !row.runtimeOnly).map((row) => row.fileName))
+        new Set(selectedTargetFiles.map((file) => file.name))
       ),
-    [selectedRows]
+    [selectedTargetFiles]
   );
   const selectedHasPartialSharedAuthFile = useMemo(
     () => hasPartialSharedAuthFileSelection(files, selectedFiles),
@@ -1832,11 +1841,13 @@ export function AccountsPage() {
 
   const handleBatchStatus = useCallback(
     async (enabled: boolean, targets = selectedRows) => {
-      const names = targets.filter((row) => !row.runtimeOnly).map((row) => row.fileName);
-      if (names.length === 0) return;
+      const patchTargets = targets
+        .filter((row) => !row.runtimeOnly)
+        .map((row) => getAuthFilePatchTarget(row.raw));
+      if (patchTargets.length === 0) return;
       setStatusUpdating(true);
       try {
-        await batchSetStatus(names, enabled);
+        await batchSetStatus(patchTargets, enabled);
         await loadFiles();
         deselectAll();
       } finally {
@@ -2534,7 +2545,7 @@ export function AccountsPage() {
         icon: <IconTrash2 size={15} />,
         onClick: () => {
           if (selectedHasPartialSharedAuthFile) return;
-          batchDelete(selectedFileNames, {
+          batchDelete(selectedTargetFiles, {
             title: t('auth_files.batch_delete_title'),
             confirmText: t('common.delete'),
             message: (
@@ -2696,7 +2707,7 @@ export function AccountsPage() {
           size="sm"
           iconOnly
           className={`${styles.accountIconButton} ${styles.accountIconButtonDelete}`}
-          onClick={() => handleDelete(row.fileName)}
+          onClick={() => handleDelete(row.raw)}
           disabled={disableControls || row.runtimeOnly || deleting === row.fileName}
           title={t('auth_files.delete_button')}
           aria-label={t('auth_files.delete_button')}
@@ -3290,7 +3301,7 @@ export function AccountsPage() {
         key: 'delete',
         label: t('auth_files.delete_button'),
         icon: <IconTrash2 size={15} />,
-        onClick: () => handleDelete(selectedRow.fileName),
+        onClick: () => handleDelete(selectedRow.raw),
         disabled: disableControls || selectedRow.runtimeOnly || deleting === selectedRow.fileName,
         tone: 'danger',
       },

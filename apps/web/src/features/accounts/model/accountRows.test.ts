@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthFileItem, CodexQuotaState } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
+import { getAuthFileSelectionKey } from '@/features/authFiles/model/authFilesPageModel';
 import {
   buildAccountMetrics,
   buildAccountRows,
@@ -322,7 +323,9 @@ describe('accountRows', () => {
     );
 
     expect(rows[0].selectionKey).toBe('shared.codex.json\u00000');
-    expect(rows[1].selectionKey).toBe('plain.codex.json\u0000-');
+    expect(rows[1].selectionKey).toBe(
+      getAuthFileSelectionKey({ name: 'plain.codex.json', type: 'codex' })
+    );
   });
 
   it('uses selection-key Codex quota overrides for shared auth rows', () => {
@@ -390,6 +393,7 @@ describe('accountRows', () => {
     expect(
       findAccountRowForInspectionTarget(uniqueRows, {
         fileName: 'unique.codex.json',
+        provider: 'codex',
         authIndex: null,
       })?.selectionKey
     ).toBe('unique.codex.json\u00002');
@@ -425,6 +429,54 @@ describe('accountRows', () => {
     expect(rows[1].inspection?.action).toBe('reauth');
     expect(rows[1].inspection?.statusCode).toBe(401);
     expect(rows[1].inspection?.source).toBe('server');
+  });
+
+  it('matches same-file inspection results by canonical identity without auth indexes', () => {
+    const files: AuthFileItem[] = [
+      {
+        id: 'runtime-first',
+        name: 'shared.codex.json',
+        type: 'codex',
+        provider: 'codex',
+        account: 'first@example.com',
+      },
+      {
+        id: 'runtime-second',
+        name: 'shared.codex.json',
+        type: 'codex',
+        provider: 'codex',
+        account: 'second@example.com',
+      },
+    ];
+    const inspection: AccountInspectionResult = {
+      id: 11,
+      runId: 2,
+      accountKey: 'second',
+      fileName: 'shared.codex.json',
+      displayAccount: 'second@example.com',
+      runtimeId: 'runtime-second',
+      provider: 'codex',
+      accountSnapshot: 'second@example.com',
+      disabled: false,
+      action: 'reauth',
+      actionReason: 'expired',
+      statusCode: 401,
+      isQuota: false,
+      createdAtMs: 1000,
+      inspectionSource: 'server',
+    };
+    const rows = buildAccountRows(files, emptyStores(), [inspection]);
+
+    expect(rows[0].inspection).toBeNull();
+    expect(rows[1].inspection).toMatchObject({ action: 'reauth', statusCode: 401 });
+    expect(
+      findAccountRowForInspectionTarget(rows, {
+        fileName: 'shared.codex.json',
+        runtimeId: 'runtime-second',
+        provider: 'codex',
+        accountSnapshot: 'second@example.com',
+      })?.selectionKey
+    ).toBe(rows[1].selectionKey);
   });
 
   it('uses missing-auth-index inspection results only for unique file names', () => {

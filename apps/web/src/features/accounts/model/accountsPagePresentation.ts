@@ -10,7 +10,10 @@ import type {
   AccountRowSortDirection,
   AccountRowSortKey,
 } from '@/features/accounts/model/accountRows';
-import type { AuthFileCodexInspectionSnapshot } from '@/features/authFiles/model/authFilesPageModel';
+import {
+  getAuthFilePatchTarget,
+  type AuthFileCodexInspectionSnapshot,
+} from '@/features/authFiles/model/authFilesPageModel';
 import type { MonitoringAccountHistoryItem, MonitoringAnalyticsEventRow } from '@/services/api';
 import { parseQuotaResetLabelMs } from '@/utils/quota/formatters';
 
@@ -360,9 +363,14 @@ export const toAuthFileCodexInspectionSnapshot = (
   row: AccountRow
 ): AuthFileCodexInspectionSnapshot | undefined => {
   if (!row.inspection) return undefined;
+  const identity = getAuthFilePatchTarget(row.raw);
   return {
     fileName: row.fileName,
+    runtimeId: identity.runtimeId,
+    provider: identity.provider,
     authIndex: row.authIndex || null,
+    accountId: identity.accountId,
+    accountSnapshot: identity.accountSnapshot,
     statusCode: row.inspection.statusCode,
     action: row.inspection.action,
     usedPercent: row.inspection.usedPercent,

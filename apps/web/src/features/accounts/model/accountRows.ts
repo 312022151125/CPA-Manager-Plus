@@ -7,6 +7,8 @@ import {
 } from '@/utils/recentRequests';
 import {
   getAuthFileCodexInspectionKey,
+  getAuthFileCodexInspectionKeyForFile,
+  getAuthFileCodexInspectionKeyForIdentity,
   getAuthFileSelectionKey,
 } from '@/features/authFiles/model/authFilesPageModel';
 import { resolveCodexPlanType } from '@/utils/quota/resolvers';
@@ -113,7 +115,11 @@ export interface AccountRow {
 
 export interface AccountInspectionTarget {
   fileName: string;
+  runtimeId?: string | null;
+  provider?: string | null;
   authIndex?: string | null;
+  accountId?: string | null;
+  accountSnapshot?: string | null;
 }
 
 export interface AccountMetrics {
@@ -199,7 +205,14 @@ const buildInspectionMap = (
   results.forEach((result) => {
     const fileName = result.fileName.trim();
     if (!fileName) return;
-    const key = getAuthFileCodexInspectionKey(fileName, result.authIndex);
+    const key = getAuthFileCodexInspectionKeyForIdentity({
+      fileName,
+      runtimeId: result.runtimeId,
+      provider: result.provider,
+      authIndex: result.authIndex,
+      accountId: result.accountId,
+      accountSnapshot: result.accountSnapshot,
+    });
     const current = map.get(key);
     if (current && current.createdAtMs >= result.createdAtMs) return;
     map.set(key, {
@@ -266,7 +279,7 @@ export const buildAccountRows = (
       quota,
       usage: buildUsageSummary(file),
       inspection:
-        inspectionByFile.get(getAuthFileCodexInspectionKey(file.name, authIndex)) ??
+        inspectionByFile.get(getAuthFileCodexInspectionKeyForFile(file)) ??
         (fileNameCounts.get(file.name) === 1
           ? inspectionByFile.get(getAuthFileCodexInspectionKey(file.name, null))
           : undefined) ??
@@ -280,11 +293,22 @@ export const findAccountRowForInspectionTarget = (
   rows: AccountRow[],
   target: AccountInspectionTarget
 ): AccountRow | null => {
+  const targetKey = getAuthFileCodexInspectionKeyForIdentity(target);
+  const exactMatches = rows.filter(
+    (row) => getAuthFileCodexInspectionKeyForFile(row.raw) === targetKey
+  );
+  if (exactMatches.length === 1) return exactMatches[0];
+  if (exactMatches.length > 1) return null;
+
+  const hasStableIdentity = Boolean(
+    String(target.runtimeId ?? '').trim() ||
+      String(target.authIndex ?? '').trim() ||
+      String(target.accountId ?? '').trim() ||
+      String(target.accountSnapshot ?? '').trim()
+  );
+  if (hasStableIdentity) return null;
+
   const matchingFileRows = rows.filter((row) => row.fileName === target.fileName);
-  const authIndex = String(target.authIndex ?? '').trim();
-  if (authIndex) {
-    return matchingFileRows.find((row) => row.authIndex === authIndex) ?? null;
-  }
   return matchingFileRows.length === 1 ? matchingFileRows[0] : null;
 };
 

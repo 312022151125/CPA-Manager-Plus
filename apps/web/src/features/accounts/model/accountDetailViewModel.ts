@@ -28,6 +28,7 @@ import {
   type AccountQuotaWindowKind,
 } from './accountQuotaDisplayWindows';
 import { accountWindowUsageRequestKey } from './accountWindowUsageRows';
+import { accountOperationalItemMatchesRow } from './accountOperationalScope';
 import type { AccountRecommendation, AccountRecommendationPriority } from './quotaRecommendations';
 import type { UsageValueRow, UsageValueSource } from './usageValueRows';
 
@@ -325,8 +326,7 @@ const compactFields = (
   fields.filter((item): item is AccountDetailField => item !== null && item !== undefined);
 
 const isMatchingActionCandidate = (row: AccountRow, candidate: AccountActionCandidate): boolean =>
-  candidate.authFileName === row.fileName &&
-  normalizeAuthIndexKey(candidate.authIndex) === normalizeAuthIndexKey(row.authIndex);
+  accountOperationalItemMatchesRow(row, candidate);
 
 const toActionCandidateSummary = (
   candidate: AccountActionCandidate

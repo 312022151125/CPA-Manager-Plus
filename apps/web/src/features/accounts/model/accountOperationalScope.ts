@@ -1,10 +1,43 @@
-import { getAuthFileCodexInspectionKey } from '@/features/authFiles/model/authFilesPageModel';
+import {
+  getAuthFileCodexInspectionKey,
+  getAuthFileCodexInspectionKeyForFile,
+  getAuthFileCodexInspectionKeyForIdentity,
+} from '@/features/authFiles/model/authFilesPageModel';
 import type { AccountRow } from './accountRows';
 
 export interface AccountOperationalItem {
   authFileName: string;
+  runtimeId?: unknown;
+  provider?: unknown;
   authIndex?: unknown;
+  accountId?: unknown;
+  accountIdSnapshot?: unknown;
+  accountSnapshot?: unknown;
 }
+
+const getAccountOperationalItemIdentityKey = (item: AccountOperationalItem): string =>
+  getAuthFileCodexInspectionKeyForIdentity({
+    fileName: item.authFileName,
+    runtimeId: typeof item.runtimeId === 'string' ? item.runtimeId : null,
+    provider: typeof item.provider === 'string' ? item.provider : null,
+    authIndex:
+      typeof item.authIndex === 'string' || typeof item.authIndex === 'number'
+        ? item.authIndex
+        : null,
+    accountId:
+      typeof item.accountId === 'string'
+        ? item.accountId
+        : typeof item.accountIdSnapshot === 'string'
+          ? item.accountIdSnapshot
+          : null,
+    accountSnapshot: typeof item.accountSnapshot === 'string' ? item.accountSnapshot : null,
+  });
+
+export const accountOperationalItemMatchesRow = (
+  row: AccountRow,
+  item: AccountOperationalItem
+): boolean =>
+  getAuthFileCodexInspectionKeyForFile(row.raw) === getAccountOperationalItemIdentityKey(item);
 
 export const buildAccountOperationalScopeKeys = (rows: AccountRow[]): Map<string, string[]> => {
   const eligibleRows = rows.filter((row) => !row.runtimeOnly);
@@ -16,7 +49,7 @@ export const buildAccountOperationalScopeKeys = (rows: AccountRow[]): Map<string
 
   return new Map(
     eligibleRows.map((row) => {
-      const exactKey = getAuthFileCodexInspectionKey(row.fileName, row.authIndex || null);
+      const exactKey = getAuthFileCodexInspectionKeyForFile(row.raw);
       const fallbackKey = getAuthFileCodexInspectionKey(row.fileName, null);
       const keys = [exactKey];
       if (fallbackKey !== exactKey && fallbackCounts.get(fallbackKey) === 1) {
@@ -34,7 +67,7 @@ export const buildAccountOperationalItemsByRowKey = <T extends AccountOperationa
   const itemsByScopeKey = new Map<string, T[]>();
   items.forEach((item) => {
     if (!item.authFileName) return;
-    const key = getAuthFileCodexInspectionKey(item.authFileName, item.authIndex ?? null);
+    const key = getAccountOperationalItemIdentityKey(item);
     itemsByScopeKey.set(key, [...(itemsByScopeKey.get(key) ?? []), item]);
   });
 

@@ -135,6 +135,7 @@ type APIKeySelectorValue struct {
 
 type TimelinePoint struct {
 	usage.LongContextTokens
+	usage.PricingBand
 	BucketMS            int64
 	Model               string
 	BillingModel        string
@@ -161,6 +162,7 @@ type HourlyPoint struct {
 
 type HeatmapPoint struct {
 	usage.LongContextTokens
+	usage.PricingBand
 	Weekday             int
 	Hour                int
 	Model               string
@@ -181,6 +183,7 @@ type HeatmapPoint struct {
 
 type ChannelModelStat struct {
 	usage.LongContextTokens
+	usage.PricingBand
 	AuthIndex            string
 	Source               string
 	AccountSnapshot      string
@@ -217,6 +220,7 @@ type FailureSourceStat struct {
 
 type AccountModelStat struct {
 	usage.LongContextTokens
+	usage.PricingBand
 	AccountSnapshot      string
 	AuthLabelSnapshot    string
 	AuthProviderSnapshot string
@@ -251,6 +255,8 @@ type AccountWindowUsageQuery struct {
 }
 
 type AccountWindowModelStat struct {
+	usage.LongContextTokens
+	usage.PricingBand
 	RequestIndex        int
 	Model               string
 	BillingModel        string
@@ -269,6 +275,7 @@ type AccountWindowModelStat struct {
 
 type CredentialModelStat struct {
 	usage.LongContextTokens
+	usage.PricingBand
 	ID                    string
 	AuthFileSnapshot      string
 	AuthIndex             string
@@ -297,6 +304,7 @@ type CredentialModelStat struct {
 
 type CredentialTimelinePoint struct {
 	usage.LongContextTokens
+	usage.PricingBand
 	ID                    string
 	AuthFileSnapshot      string
 	AuthIndex             string
@@ -326,6 +334,7 @@ type CredentialTimelinePoint struct {
 
 type APIKeyTimelinePoint struct {
 	usage.LongContextTokens
+	usage.PricingBand
 	APIKeyHash          string
 	BucketMS            int64
 	Model               string
@@ -347,6 +356,7 @@ type APIKeyTimelinePoint struct {
 
 type APIKeyModelStat struct {
 	usage.LongContextTokens
+	usage.PricingBand
 	APIKeyHash           string
 	AccountSnapshot      string
 	AuthLabelSnapshot    string
@@ -507,9 +517,12 @@ from usage_events `+where, args...)
 
 func (r *repository) ModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter, limit int) ([]ModelStat, error) {
 	where, args := analyticsWhere(filter)
-	query := `select
+	query := pricingBandedUsageEventsCTE + `
+select
 	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	billing_model_value as billing_model,
+	pricing_model_value,
+	context_threshold_tokens_value,
 	coalesce(service_tier, '') as service_tier,
 	count(*) as calls,
 	sum(case when failed = 0 then 1 else 0 end) as success,
@@ -525,12 +538,12 @@ func (r *repository) ModelStatsWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(sum(` + longCacheReadExpr + `), 0),
 	coalesce(sum(` + longCacheCreationExpr + `), 0),
 	coalesce(sum(total_tokens), 0)
-from usage_events ` + where + `
-group by model, billing_model, coalesce(service_tier, '')
+from banded_usage_events ` + where + `
+group by model, billing_model, pricing_model_value, context_threshold_tokens_value, coalesce(service_tier, '')
 order by calls desc`
 	if limit > 0 {
-		query = `with filtered as (
-	select * from usage_events ` + where + `
+		query = pricingBandedUsageEventsCTE + `, filtered as (
+	select * from banded_usage_events ` + where + `
 ),
 top_models as (
 	select model, count(*) as model_calls
@@ -541,7 +554,9 @@ top_models as (
 )
 select
 	f.model,
-	coalesce(nullif(f.resolved_model, ''), f.model) as billing_model,
+	f.billing_model_value as billing_model,
+	f.pricing_model_value,
+	f.context_threshold_tokens_value,
 	coalesce(f.service_tier, '') as service_tier,
 	count(*) as calls,
 	sum(case when f.failed = 0 then 1 else 0 end) as success,
@@ -559,7 +574,7 @@ select
 	coalesce(sum(f.total_tokens), 0)
 from filtered f
 join top_models t on t.model = f.model
-group by f.model, billing_model, coalesce(f.service_tier, '')
+group by f.model, billing_model, f.pricing_model_value, f.context_threshold_tokens_value, coalesce(f.service_tier, '')
 order by max(t.model_calls) desc, f.model, calls desc`
 		args = append(args, limit)
 	}
@@ -575,6 +590,8 @@ order by max(t.model_calls) desc, f.model, calls desc`
 		if err := rows.Scan(
 			&stat.Model,
 			&stat.BillingModel,
+			&stat.PricingModel,
+			&stat.ContextThresholdTokens,
 			&stat.ServiceTier,
 			&stat.Calls,
 			&stat.SuccessCalls,
@@ -600,11 +617,14 @@ order by max(t.model_calls) desc, f.model, calls desc`
 
 func (r *repository) TimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]TimelinePoint, error) {
 	where, args := analyticsWhere(filter)
-	query := fmt.Sprintf(`select
+	query := fmt.Sprintf(pricingBandedUsageEventsCTE+`
+select
 	timestamp_ms,
 	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
-		coalesce(service_tier, '') as service_tier,
+	billing_model_value as billing_model,
+	pricing_model_value,
+	context_threshold_tokens_value,
+	coalesce(service_tier, '') as service_tier,
 		failed,
 		`+normalizedInputExpr+`,
 	output_tokens,
@@ -614,7 +634,7 @@ func (r *repository) TimelineWithFilter(ctx context.Context, filter AnalyticsFil
 	cache_creation_tokens,
 	total_tokens,
 	latency_ms
-from usage_events %s
+from banded_usage_events %s
 order by timestamp_ms, model`, where)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -623,10 +643,12 @@ order by timestamp_ms, model`, where)
 	defer rows.Close()
 
 	type key struct {
-		bucketMS     int64
-		model        string
-		billingModel string
-		serviceTier  string
+		bucketMS               int64
+		model                  string
+		billingModel           string
+		pricingModel           string
+		serviceTier            string
+		contextThresholdTokens int64
 	}
 	grouped := map[key]*TimelinePoint{}
 	order := make([]key, 0)
@@ -634,7 +656,9 @@ order by timestamp_ms, model`, where)
 		var timestampMS int64
 		var model string
 		var billingModel string
+		var pricingModel string
 		var serviceTier string
+		var contextThresholdTokens int64
 		var failed int
 		var latency sql.NullFloat64
 		var inputTokens int64
@@ -648,6 +672,8 @@ order by timestamp_ms, model`, where)
 			&timestampMS,
 			&model,
 			&billingModel,
+			&pricingModel,
+			&contextThresholdTokens,
 			&serviceTier,
 			&failed,
 			&inputTokens,
@@ -662,14 +688,20 @@ order by timestamp_ms, model`, where)
 			return nil, err
 		}
 		mapKey := key{
-			bucketMS:     usage.AnalyticsBucketMS(timestampMS, granularity, location),
-			model:        model,
-			billingModel: billingModel,
-			serviceTier:  serviceTier,
+			bucketMS:               usage.AnalyticsBucketMS(timestampMS, granularity, location),
+			model:                  model,
+			billingModel:           billingModel,
+			pricingModel:           pricingModel,
+			serviceTier:            serviceTier,
+			contextThresholdTokens: contextThresholdTokens,
 		}
 		point := grouped[mapKey]
 		if point == nil {
 			point = &TimelinePoint{
+				PricingBand: usage.PricingBand{
+					PricingModel:           pricingModel,
+					ContextThresholdTokens: contextThresholdTokens,
+				},
 				BucketMS:     mapKey.bucketMS,
 				Model:        model,
 				BillingModel: billingModel,
@@ -717,11 +749,14 @@ func (r *repository) APIKeyTimelineWithFilter(ctx context.Context, filter Analyt
 		return nil, nil
 	}
 	where, args := analyticsWhere(filter)
-	query := fmt.Sprintf(`select
+	query := fmt.Sprintf(pricingBandedUsageEventsCTE+`
+select
 	timestamp_ms,
 	coalesce(api_key_hash, ''),
 	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	billing_model_value as billing_model,
+	pricing_model_value,
+	context_threshold_tokens_value,
 	coalesce(service_tier, '') as service_tier,
 	failed,
 	`+normalizedInputExpr+`,
@@ -732,7 +767,7 @@ func (r *repository) APIKeyTimelineWithFilter(ctx context.Context, filter Analyt
 	cache_creation_tokens,
 	total_tokens,
 	latency_ms
-from usage_events %s
+from banded_usage_events %s
 order by timestamp_ms, api_key_hash, model`, where)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -741,11 +776,13 @@ order by timestamp_ms, api_key_hash, model`, where)
 	defer rows.Close()
 
 	type key struct {
-		apiKeyHash   string
-		bucketMS     int64
-		model        string
-		billingModel string
-		serviceTier  string
+		apiKeyHash             string
+		bucketMS               int64
+		model                  string
+		billingModel           string
+		pricingModel           string
+		serviceTier            string
+		contextThresholdTokens int64
 	}
 	grouped := map[key]*APIKeyTimelinePoint{}
 	order := make([]key, 0)
@@ -760,6 +797,8 @@ order by timestamp_ms, api_key_hash, model`, where)
 			&point.APIKeyHash,
 			&point.Model,
 			&point.BillingModel,
+			&point.PricingModel,
+			&point.ContextThresholdTokens,
 			&point.ServiceTier,
 			&failed,
 			&point.InputTokens,
@@ -774,15 +813,18 @@ order by timestamp_ms, api_key_hash, model`, where)
 			return nil, err
 		}
 		mapKey := key{
-			apiKeyHash:   point.APIKeyHash,
-			bucketMS:     usage.AnalyticsBucketMS(timestampMS, granularity, location),
-			model:        point.Model,
-			billingModel: point.BillingModel,
-			serviceTier:  point.ServiceTier,
+			apiKeyHash:             point.APIKeyHash,
+			bucketMS:               usage.AnalyticsBucketMS(timestampMS, granularity, location),
+			model:                  point.Model,
+			billingModel:           point.BillingModel,
+			pricingModel:           point.PricingModel,
+			serviceTier:            point.ServiceTier,
+			contextThresholdTokens: point.ContextThresholdTokens,
 		}
 		entry := grouped[mapKey]
 		if entry == nil {
 			entry = &APIKeyTimelinePoint{
+				PricingBand:  point.PricingBand,
 				APIKeyHash:   point.APIKeyHash,
 				BucketMS:     mapKey.bucketMS,
 				Model:        point.Model,
@@ -1210,10 +1252,13 @@ order by value`, args...)
 
 func (r *repository) HeatmapWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) ([]HeatmapPoint, error) {
 	where, args := analyticsWhere(filter)
-	rows, err := r.db.QueryContext(ctx, `select
+	rows, err := r.db.QueryContext(ctx, pricingBandedUsageEventsCTE+`
+select
 	timestamp_ms,
 	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	billing_model_value as billing_model,
+	pricing_model_value,
+	context_threshold_tokens_value,
 	coalesce(service_tier, '') as service_tier,
 	coalesce(api_key_hash, ''),
 		coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
@@ -1224,7 +1269,7 @@ func (r *repository) HeatmapWithFilter(ctx context.Context, filter AnalyticsFilt
 	cache_read_tokens,
 	cache_creation_tokens,
 	total_tokens
-from usage_events `+where+`
+from banded_usage_events `+where+`
 order by timestamp_ms, model`, args...)
 	if err != nil {
 		return nil, err
@@ -1235,13 +1280,15 @@ order by timestamp_ms, model`, args...)
 		location = time.UTC
 	}
 	type key struct {
-		weekday      int
-		hour         int
-		model        string
-		billingModel string
-		serviceTier  string
-		apiKeyHash   string
-		provider     string
+		weekday                int
+		hour                   int
+		model                  string
+		billingModel           string
+		pricingModel           string
+		serviceTier            string
+		contextThresholdTokens int64
+		apiKeyHash             string
+		provider               string
 	}
 	grouped := map[key]*HeatmapPoint{}
 	order := make([]key, 0)
@@ -1249,7 +1296,9 @@ order by timestamp_ms, model`, args...)
 		var timestampMS int64
 		var model string
 		var billingModel string
+		var pricingModel string
 		var serviceTier string
+		var contextThresholdTokens int64
 		var apiKeyHash string
 		var provider string
 		var failed int
@@ -1263,6 +1312,8 @@ order by timestamp_ms, model`, args...)
 			&timestampMS,
 			&model,
 			&billingModel,
+			&pricingModel,
+			&contextThresholdTokens,
 			&serviceTier,
 			&apiKeyHash,
 			&provider,
@@ -1278,17 +1329,23 @@ order by timestamp_ms, model`, args...)
 		}
 		tm := time.UnixMilli(timestampMS).In(location)
 		mapKey := key{
-			weekday:      int(tm.Weekday()),
-			hour:         tm.Hour(),
-			model:        model,
-			billingModel: billingModel,
-			serviceTier:  serviceTier,
-			apiKeyHash:   apiKeyHash,
-			provider:     provider,
+			weekday:                int(tm.Weekday()),
+			hour:                   tm.Hour(),
+			model:                  model,
+			billingModel:           billingModel,
+			pricingModel:           pricingModel,
+			serviceTier:            serviceTier,
+			contextThresholdTokens: contextThresholdTokens,
+			apiKeyHash:             apiKeyHash,
+			provider:               provider,
 		}
 		point := grouped[mapKey]
 		if point == nil {
 			point = &HeatmapPoint{
+				PricingBand: usage.PricingBand{
+					PricingModel:           pricingModel,
+					ContextThresholdTokens: contextThresholdTokens,
+				},
 				Weekday:      mapKey.weekday,
 				Hour:         mapKey.hour,
 				Model:        model,
@@ -1326,14 +1383,17 @@ order by timestamp_ms, model`, args...)
 
 func (r *repository) ChannelModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]ChannelModelStat, error) {
 	where, args := analyticsWhere(filter)
-	rows, err := r.db.QueryContext(ctx, `select
+	rows, err := r.db.QueryContext(ctx, pricingBandedUsageEventsCTE+`
+select
 	coalesce(auth_index, ''),
 	coalesce(max(source), ''),
 	coalesce(max(account_snapshot), ''),
 	coalesce(max(auth_label_snapshot), ''),
 	coalesce(nullif(max(auth_provider_snapshot), ''), max(provider), ''),
 	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	billing_model_value as billing_model,
+	pricing_model_value,
+	context_threshold_tokens_value,
 	coalesce(service_tier, '') as service_tier,
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
@@ -1351,8 +1411,8 @@ func (r *repository) ChannelModelStatsWithFilter(ctx context.Context, filter Ana
 	coalesce(sum(total_tokens), 0),
 	avg(nullif(latency_ms, 0)),
 	count(nullif(latency_ms, 0))
-from usage_events `+where+`
-group by auth_index, model, billing_model, coalesce(service_tier, '')
+from banded_usage_events `+where+`
+group by auth_index, model, billing_model, pricing_model_value, context_threshold_tokens_value, coalesce(service_tier, '')
 order by count(*) desc`, args...)
 	if err != nil {
 		return nil, err
@@ -1370,6 +1430,8 @@ order by count(*) desc`, args...)
 			&stat.AuthProviderSnapshot,
 			&stat.Model,
 			&stat.BillingModel,
+			&stat.PricingModel,
+			&stat.ContextThresholdTokens,
 			&stat.ServiceTier,
 			&stat.Calls,
 			&stat.SuccessCalls,
@@ -1441,7 +1503,8 @@ order by sum(case when failed = 1 then 1 else 0 end) desc, max(timestamp_ms) des
 
 func (r *repository) AccountModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]AccountModelStat, error) {
 	where, args := analyticsWhere(filter)
-	rows, err := r.db.QueryContext(ctx, `select
+	rows, err := r.db.QueryContext(ctx, pricingBandedUsageEventsCTE+`
+select
 	coalesce(account_snapshot, ''),
 	coalesce(auth_label_snapshot, ''),
 	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
@@ -1449,7 +1512,9 @@ func (r *repository) AccountModelStatsWithFilter(ctx context.Context, filter Ana
 	coalesce(max(source), ''),
 	coalesce(source_hash, ''),
 	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	billing_model_value as billing_model,
+	pricing_model_value,
+	context_threshold_tokens_value,
 	coalesce(service_tier, '') as service_tier,
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
@@ -1468,8 +1533,8 @@ func (r *repository) AccountModelStatsWithFilter(ctx context.Context, filter Ana
 	max(timestamp_ms),
 	avg(nullif(latency_ms, 0)),
 	count(nullif(latency_ms, 0))
-from usage_events `+where+`
-group by account_snapshot, auth_label_snapshot, coalesce(nullif(auth_provider_snapshot, ''), provider, ''), auth_index, source_hash, model, billing_model, coalesce(service_tier, '')
+from banded_usage_events `+where+`
+group by account_snapshot, auth_label_snapshot, coalesce(nullif(auth_provider_snapshot, ''), provider, ''), auth_index, source_hash, model, billing_model, pricing_model_value, context_threshold_tokens_value, coalesce(service_tier, '')
 order by max(timestamp_ms) desc, count(*) desc`, args...)
 	if err != nil {
 		return nil, err
@@ -1488,6 +1553,8 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 			&stat.SourceHash,
 			&stat.Model,
 			&stat.BillingModel,
+			&stat.PricingModel,
+			&stat.ContextThresholdTokens,
 			&stat.ServiceTier,
 			&stat.Calls,
 			&stat.SuccessCalls,
@@ -1535,7 +1602,7 @@ func (r *repository) AccountWindowModelStats(ctx context.Context, windows []Acco
 		)
 	}
 
-	rows, err := r.db.QueryContext(ctx, `with window_targets(
+	rows, err := r.db.QueryContext(ctx, pricingBandedUsageEventsCTE+`, window_targets(
 	request_index, from_ms, to_ms, account_snapshot, auth_label_snapshot, source, auth_index
 ) as (
 	values `+strings.Join(values, ",")+`
@@ -1543,20 +1610,27 @@ func (r *repository) AccountWindowModelStats(ctx context.Context, windows []Acco
 select
 	w.request_index,
 	e.model,
-	coalesce(nullif(e.resolved_model, ''), e.model) as billing_model,
+	e.billing_model_value as billing_model,
+	e.pricing_model_value,
+	e.context_threshold_tokens_value,
 	coalesce(e.service_tier, '') as service_tier,
 	count(*),
 	sum(case when e.failed = 0 then 1 else 0 end),
 	sum(case when e.failed = 1 then 1 else 0 end),
-	coalesce(sum(e.input_tokens), 0),
+	coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(e.output_tokens), 0),
-	coalesce(sum(max(max(e.cached_tokens, e.cache_tokens) - max(e.cache_read_tokens, 0) - max(e.cache_creation_tokens, 0), 0)), 0),
+	coalesce(sum(`+compatCachedExpr+`), 0),
 	coalesce(sum(e.cache_read_tokens), 0),
 	coalesce(sum(e.cache_creation_tokens), 0),
+	coalesce(sum(`+longInputExpr+`), 0),
+	coalesce(sum(`+longOutputExpr+`), 0),
+	coalesce(sum(`+longCachedExpr+`), 0),
+	coalesce(sum(`+longCacheReadExpr+`), 0),
+	coalesce(sum(`+longCacheCreationExpr+`), 0),
 	coalesce(sum(e.total_tokens), 0),
 	max(e.timestamp_ms)
 from window_targets w
-join usage_events e
+join banded_usage_events e
 	on e.timestamp_ms >= w.from_ms
 	and e.timestamp_ms < w.to_ms
 	and (
@@ -1570,7 +1644,7 @@ join usage_events e
 		end
 	)
 	and (w.auth_index = '' or lower(coalesce(e.auth_index, '')) = lower(w.auth_index))
-group by w.request_index, e.model, billing_model, service_tier
+group by w.request_index, e.model, billing_model, e.pricing_model_value, e.context_threshold_tokens_value, coalesce(e.service_tier, '')
 order by w.request_index, max(e.timestamp_ms) desc`, args...)
 	if err != nil {
 		return nil, err
@@ -1584,6 +1658,8 @@ order by w.request_index, max(e.timestamp_ms) desc`, args...)
 			&stat.RequestIndex,
 			&stat.Model,
 			&stat.BillingModel,
+			&stat.PricingModel,
+			&stat.ContextThresholdTokens,
 			&stat.ServiceTier,
 			&stat.Calls,
 			&stat.SuccessCalls,
@@ -1593,6 +1669,11 @@ order by w.request_index, max(e.timestamp_ms) desc`, args...)
 			&stat.CachedTokens,
 			&stat.CacheReadTokens,
 			&stat.CacheCreationTokens,
+			&stat.LongInputTokens,
+			&stat.LongOutputTokens,
+			&stat.LongCachedTokens,
+			&stat.LongCacheReadTokens,
+			&stat.LongCacheCreationTokens,
 			&stat.TotalTokens,
 			&stat.LastSeenMS,
 		); err != nil {
@@ -1605,7 +1686,8 @@ order by w.request_index, max(e.timestamp_ms) desc`, args...)
 
 func (r *repository) CredentialModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]CredentialModelStat, error) {
 	where, args := analyticsWhere(filter)
-	rows, err := r.db.QueryContext(ctx, `select
+	rows, err := r.db.QueryContext(ctx, pricingBandedUsageEventsCTE+`
+select
 	`+credentialIDExpr+` as credential_id,
 	coalesce(auth_file_snapshot, ''),
 	coalesce(auth_index, ''),
@@ -1616,7 +1698,9 @@ func (r *repository) CredentialModelStatsWithFilter(ctx context.Context, filter 
 	coalesce(nullif(max(auth_provider_snapshot), ''), max(provider), ''),
 	coalesce(max(auth_project_id_snapshot), ''),
 	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	billing_model_value as billing_model,
+	pricing_model_value,
+	context_threshold_tokens_value,
 	coalesce(service_tier, '') as service_tier,
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
@@ -1635,8 +1719,8 @@ func (r *repository) CredentialModelStatsWithFilter(ctx context.Context, filter 
 	max(timestamp_ms),
 	avg(nullif(latency_ms, 0)),
 	count(nullif(latency_ms, 0))
-from usage_events `+where+`
-group by credential_id, auth_file_snapshot, auth_index, source_hash, model, billing_model, coalesce(service_tier, '')
+from banded_usage_events `+where+`
+group by credential_id, auth_file_snapshot, auth_index, source_hash, model, billing_model, pricing_model_value, context_threshold_tokens_value, coalesce(service_tier, '')
 order by max(timestamp_ms) desc, count(*) desc`, args...)
 	if err != nil {
 		return nil, err
@@ -1658,6 +1742,8 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 			&stat.AuthProjectIDSnapshot,
 			&stat.Model,
 			&stat.BillingModel,
+			&stat.PricingModel,
+			&stat.ContextThresholdTokens,
 			&stat.ServiceTier,
 			&stat.Calls,
 			&stat.SuccessCalls,
@@ -1722,7 +1808,8 @@ func (r *repository) CredentialTimelineWithFilter(ctx context.Context, filter An
 
 func (r *repository) credentialTimelineRawWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]CredentialTimelinePoint, error) {
 	where, args := analyticsWhere(filter)
-	query := fmt.Sprintf(`select
+	query := fmt.Sprintf(pricingBandedUsageEventsCTE+`
+select
 	timestamp_ms,
 	`+credentialIDExpr+` as credential_id,
 	coalesce(auth_file_snapshot, ''),
@@ -1734,8 +1821,10 @@ func (r *repository) credentialTimelineRawWithFilter(ctx context.Context, filter
 	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
 	coalesce(auth_project_id_snapshot, ''),
 	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
-		coalesce(service_tier, '') as service_tier,
+	billing_model_value as billing_model,
+	pricing_model_value,
+	context_threshold_tokens_value,
+	coalesce(service_tier, '') as service_tier,
 		failed,
 		`+normalizedInputExpr+`,
 	output_tokens,
@@ -1745,7 +1834,7 @@ func (r *repository) credentialTimelineRawWithFilter(ctx context.Context, filter
 	cache_creation_tokens,
 	total_tokens,
 	latency_ms
-from usage_events %s
+from banded_usage_events %s
 order by timestamp_ms, credential_id, model`, where)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1754,14 +1843,16 @@ order by timestamp_ms, credential_id, model`, where)
 	defer rows.Close()
 
 	type key struct {
-		id               string
-		authFileSnapshot string
-		authIndex        string
-		sourceHash       string
-		bucketMS         int64
-		model            string
-		billingModel     string
-		serviceTier      string
+		id                     string
+		authFileSnapshot       string
+		authIndex              string
+		sourceHash             string
+		bucketMS               int64
+		model                  string
+		billingModel           string
+		pricingModel           string
+		serviceTier            string
+		contextThresholdTokens int64
 	}
 	grouped := map[key]*CredentialTimelinePoint{}
 	order := make([]key, 0)
@@ -1784,6 +1875,8 @@ order by timestamp_ms, credential_id, model`, where)
 			&point.AuthProjectIDSnapshot,
 			&point.Model,
 			&point.BillingModel,
+			&point.PricingModel,
+			&point.ContextThresholdTokens,
 			&point.ServiceTier,
 			&failed,
 			&point.InputTokens,
@@ -1799,18 +1892,21 @@ order by timestamp_ms, credential_id, model`, where)
 		}
 		bucketMS := usage.AnalyticsBucketMS(timestampMS, granularity, location)
 		mapKey := key{
-			id:               point.ID,
-			authFileSnapshot: point.AuthFileSnapshot,
-			authIndex:        point.AuthIndex,
-			sourceHash:       point.SourceHash,
-			bucketMS:         bucketMS,
-			model:            point.Model,
-			billingModel:     point.BillingModel,
-			serviceTier:      point.ServiceTier,
+			id:                     point.ID,
+			authFileSnapshot:       point.AuthFileSnapshot,
+			authIndex:              point.AuthIndex,
+			sourceHash:             point.SourceHash,
+			bucketMS:               bucketMS,
+			model:                  point.Model,
+			billingModel:           point.BillingModel,
+			pricingModel:           point.PricingModel,
+			serviceTier:            point.ServiceTier,
+			contextThresholdTokens: point.ContextThresholdTokens,
 		}
 		entry := grouped[mapKey]
 		if entry == nil {
 			entry = &CredentialTimelinePoint{
+				PricingBand:           point.PricingBand,
 				ID:                    point.ID,
 				AuthFileSnapshot:      point.AuthFileSnapshot,
 				AuthIndex:             point.AuthIndex,
@@ -1865,8 +1961,8 @@ order by timestamp_ms, credential_id, model`, where)
 func (r *repository) credentialTimelineHourlyWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]CredentialTimelinePoint, error) {
 	where, args := analyticsWhere(filter)
 	const hourBucketExpr = "(timestamp_ms / 3600000) * 3600000"
-	queryPrefix := ""
-	queryFrom := "from usage_events\n"
+	queryPrefix := pricingBandedUsageEventsCTE + "\n"
+	queryFrom := "from banded_usage_events\n"
 	bucketExpr := "bucket_map.bucket_ms"
 	queryArgs := args
 	if offsetMS, ok := analyticsConstantOffsetMS(filter.FromMS, filter.ToMS, location); ok {
@@ -1880,7 +1976,7 @@ func (r *repository) credentialTimelineHourlyWithFilter(ctx context.Context, fil
 		if !ok {
 			return r.credentialTimelineRawWithFilter(ctx, filter, granularity, location)
 		}
-		queryPrefix = "with bucket_map(hour_bucket, bucket_ms) as (values " + mapSQL + ")\n"
+		queryPrefix = pricingBandedUsageEventsCTE + ", bucket_map(hour_bucket, bucket_ms) as (values " + mapSQL + ")\n"
 		queryFrom += "join bucket_map on " + hourBucketExpr + " = bucket_map.hour_bucket\n"
 		queryArgs = append(mapArgs, args...)
 	}
@@ -1896,7 +1992,9 @@ func (r *repository) credentialTimelineHourlyWithFilter(ctx context.Context, fil
 	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
 	coalesce(auth_project_id_snapshot, ''),
 	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	billing_model_value as billing_model,
+	pricing_model_value,
+	context_threshold_tokens_value,
 	coalesce(service_tier, '') as service_tier,
 	count(*),
 	coalesce(sum(total_tokens), 0),
@@ -1920,7 +2018,7 @@ group by ` + bucketExpr + `, credential_id,
 	coalesce(auth_file_snapshot, ''), coalesce(auth_index, ''), coalesce(source, ''), coalesce(source_hash, ''),
 	coalesce(account_snapshot, ''), coalesce(auth_label_snapshot, ''),
 	coalesce(nullif(auth_provider_snapshot, ''), provider, ''), coalesce(auth_project_id_snapshot, ''),
-	model, billing_model, service_tier
+	model, billing_model, pricing_model_value, context_threshold_tokens_value, service_tier
 order by min(timestamp_ms), credential_id, model`
 	rows, err := r.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
@@ -1944,6 +2042,8 @@ order by min(timestamp_ms), credential_id, model`
 			&point.AuthProjectIDSnapshot,
 			&point.Model,
 			&point.BillingModel,
+			&point.PricingModel,
+			&point.ContextThresholdTokens,
 			&point.ServiceTier,
 			&point.Calls,
 			&point.Tokens,
@@ -2011,20 +2111,33 @@ func credentialBucketMapSQL(fromMS, toMS int64, granularity string, location *ti
 
 func mergeCredentialTimelineParts(parts [][]CredentialTimelinePoint) []CredentialTimelinePoint {
 	type key struct {
-		id               string
-		authFileSnapshot string
-		authIndex        string
-		sourceHash       string
-		bucketMS         int64
-		model            string
-		billingModel     string
-		serviceTier      string
+		id                     string
+		authFileSnapshot       string
+		authIndex              string
+		sourceHash             string
+		bucketMS               int64
+		model                  string
+		billingModel           string
+		pricingModel           string
+		serviceTier            string
+		contextThresholdTokens int64
 	}
 	grouped := make(map[key]*CredentialTimelinePoint)
 	order := make([]key, 0)
 	for _, points := range parts {
 		for _, point := range points {
-			mapKey := key{point.ID, point.AuthFileSnapshot, point.AuthIndex, point.SourceHash, point.BucketMS, point.Model, point.BillingModel, point.ServiceTier}
+			mapKey := key{
+				id:                     point.ID,
+				authFileSnapshot:       point.AuthFileSnapshot,
+				authIndex:              point.AuthIndex,
+				sourceHash:             point.SourceHash,
+				bucketMS:               point.BucketMS,
+				model:                  point.Model,
+				billingModel:           point.BillingModel,
+				pricingModel:           point.PricingModel,
+				serviceTier:            point.ServiceTier,
+				contextThresholdTokens: point.ContextThresholdTokens,
+			}
 			entry := grouped[mapKey]
 			if entry == nil {
 				next := point
@@ -2079,7 +2192,8 @@ func mergeCredentialTimelineParts(parts [][]CredentialTimelinePoint) []Credentia
 
 func (r *repository) APIKeyModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]APIKeyModelStat, error) {
 	where, args := analyticsWhere(filter)
-	rows, err := r.db.QueryContext(ctx, `select
+	rows, err := r.db.QueryContext(ctx, pricingBandedUsageEventsCTE+`
+select
 	coalesce(api_key_hash, ''),
 	coalesce(account_snapshot, ''),
 	coalesce(auth_label_snapshot, ''),
@@ -2088,7 +2202,9 @@ func (r *repository) APIKeyModelStatsWithFilter(ctx context.Context, filter Anal
 	coalesce(max(source), ''),
 	coalesce(source_hash, ''),
 	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	billing_model_value as billing_model,
+	pricing_model_value,
+	context_threshold_tokens_value,
 	coalesce(service_tier, '') as service_tier,
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
@@ -2107,8 +2223,8 @@ func (r *repository) APIKeyModelStatsWithFilter(ctx context.Context, filter Anal
 	max(timestamp_ms),
 	avg(nullif(latency_ms, 0)),
 	count(nullif(latency_ms, 0))
-from usage_events `+where+`
-group by api_key_hash, account_snapshot, auth_label_snapshot, coalesce(nullif(auth_provider_snapshot, ''), provider, ''), auth_index, source_hash, model, billing_model, coalesce(service_tier, '')
+from banded_usage_events `+where+`
+group by api_key_hash, account_snapshot, auth_label_snapshot, coalesce(nullif(auth_provider_snapshot, ''), provider, ''), auth_index, source_hash, model, billing_model, pricing_model_value, context_threshold_tokens_value, coalesce(service_tier, '')
 order by max(timestamp_ms) desc, count(*) desc`, args...)
 	if err != nil {
 		return nil, err
@@ -2128,6 +2244,8 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 			&stat.SourceHash,
 			&stat.Model,
 			&stat.BillingModel,
+			&stat.PricingModel,
+			&stat.ContextThresholdTokens,
 			&stat.ServiceTier,
 			&stat.Calls,
 			&stat.SuccessCalls,
