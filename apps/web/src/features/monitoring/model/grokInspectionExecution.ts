@@ -96,7 +96,7 @@ const executeStatusChange = async (
   disabled: boolean
 ): Promise<GrokInspectionExecutionOutcome> => {
   try {
-    await authFilesApi.setStatusWithFallback(item.fileName, disabled);
+    await authFilesApi.setStatusWithFallback({ name: item.fileName }, disabled);
     return {
       action: disabled ? 'disable' : 'enable',
       fileName: item.fileName,
