@@ -1513,6 +1513,9 @@ export function AccountsPage() {
         setAccountHistoryByRowKey((current) => {
           if (!mergeResult) return nextHistory;
           const merged = new Map(current);
+          entries.forEach((entry) => {
+            merged.delete(entry.rowKey);
+          });
           nextHistory.forEach((item, rowKey) => {
             merged.set(rowKey, item);
           });

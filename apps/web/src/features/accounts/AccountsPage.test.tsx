@@ -87,6 +87,7 @@ type AccountHistoryResponseForTest = {
     processed: number;
   };
   items: Array<{
+    row_key: string;
     account_key: string;
     matched: boolean;
     total_requests: number;
@@ -2622,14 +2623,90 @@ describe('AccountsPage replacement flows', () => {
       {
         accounts: [
           {
+            row_key: 'generic.json\u0000auth-generic',
             account_snapshot: 'generic@example.com',
             auth_label_snapshot: undefined,
-            source: 'generic.json',
+            auth_file_snapshot: 'generic.json',
+            auth_provider_snapshot: 'generic',
+            auth_project_id_snapshot: undefined,
             auth_index: 'auth-generic',
+            source: 'generic.json',
           },
         ],
       }
     );
+  });
+
+  it('clears stale single-account history when the refresh response cannot be correlated', async () => {
+    mocks.files = [
+      {
+        ...makeCodexFile('stale.json', 'auth-stale', 'stale@example.com'),
+        type: 'generic',
+        provider: 'generic',
+      } as AuthFileItem,
+    ];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory
+      .mockResolvedValueOnce(
+        makeAccountHistoryResponse([
+          {
+            row_key: 'stale.json\u0000auth-stale',
+            account_key: 'opaque-stale',
+            matched: true,
+            total_requests: 777,
+            success_calls: 700,
+            failure_calls: 77,
+            total_tokens: 123456,
+            total_cost: 7.77,
+            success_rate: 0.9,
+            first_seen_ms: 1,
+            last_seen_ms: 2,
+            sync_status: 'ready',
+          },
+        ])
+      )
+      .mockResolvedValueOnce(
+        makeAccountHistoryResponse([
+          {
+            row_key: 'unexpected-row',
+            account_key: 'opaque-unexpected',
+            matched: true,
+            total_requests: 999,
+            success_calls: 999,
+            failure_calls: 0,
+            total_tokens: 999999,
+            total_cost: 9.99,
+            success_rate: 1,
+            first_seen_ms: 1,
+            last_seen_ms: 2,
+            sync_status: 'ready',
+          },
+        ])
+      );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    expect(getAccountListItemTexts(renderer).join('\n')).toContain('777');
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        'stale.json\u0000auth-stale',
+        'accounts.refresh_quota'
+      ).props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    const cardText = getAccountListItemTexts(renderer).join('\n');
+    expect(cardText).not.toContain('777');
+    expect(cardText).not.toContain('999');
   });
 
   it('keeps auth-file selection helpers in accounts selection mode', async () => {
@@ -2705,6 +2782,7 @@ describe('AccountsPage replacement flows', () => {
     mocks.getAccountHistory.mockResolvedValue(
       makeAccountHistoryResponse([
         {
+          row_key: 'healthy.json\u0000auth-1',
           account_key: 'healthy@example.com',
           matched: true,
           total_requests: 1234,
@@ -2730,10 +2808,14 @@ describe('AccountsPage replacement flows', () => {
       {
         accounts: [
           {
+            row_key: 'healthy.json\u0000auth-1',
             account_snapshot: 'healthy@example.com',
             auth_label_snapshot: undefined,
-            source: 'healthy.json',
+            auth_file_snapshot: 'healthy.json',
+            auth_provider_snapshot: 'codex',
+            auth_project_id_snapshot: undefined,
             auth_index: 'auth-1',
+            source: 'healthy.json',
           },
         ],
       }
@@ -2766,6 +2848,7 @@ describe('AccountsPage replacement flows', () => {
     mocks.getAccountHistory.mockResolvedValue(
       makeAccountHistoryResponse([
         {
+          row_key: 'latest.json\u0000auth-latest',
           account_key: 'latest@example.com',
           matched: true,
           total_requests: 1,
@@ -2830,6 +2913,7 @@ describe('AccountsPage replacement flows', () => {
     mocks.getAccountHistory.mockResolvedValue(
       makeAccountHistoryResponse([
         {
+          row_key: 'pending.json\u0000auth-1',
           account_key: 'pending@example.com',
           matched: true,
           total_requests: 5,

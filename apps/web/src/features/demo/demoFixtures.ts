@@ -5090,6 +5090,7 @@ const demoAccountCandidates: AccountActionCandidate[] = [
 
 type DemoAccountHistoryTarget = MonitoringAccountHistoryRequest['accounts'][number];
 type DemoAccountHistoryItem = MonitoringAccountHistoryResponse['items'][number];
+type DemoAccountHistoryRecord = Omit<DemoAccountHistoryItem, 'row_key'>;
 type DemoAccountLatestRequest = NonNullable<DemoAccountHistoryItem['latest_request']>;
 type DemoAccountWindowUsageTarget = MonitoringAccountWindowUsageRequest['windows'][number];
 
@@ -5102,36 +5103,62 @@ const readDemoAccountHistoryKey = (value: unknown): string => {
 const demoAccountHistoryTargetKey = (
   target: DemoAccountHistoryTarget | DemoAccountWindowUsageTarget
 ): { key: string; valid: boolean } => {
-  const explicitKey = 'account_key' in target ? readDemoAccountHistoryKey(target.account_key) : '';
-  if (explicitKey) return { key: explicitKey, valid: true };
-
-  const key =
-    readDemoAccountHistoryKey(target.account_snapshot) ||
-    readDemoAccountHistoryKey(target.auth_label_snapshot) ||
-    readDemoAccountHistoryKey(target.source) ||
-    readDemoAccountHistoryKey(target.auth_index);
+  const record = target as unknown as Record<string, unknown>;
+  const explicitKey = readDemoAccountHistoryKey(record.account_key);
+  const provider = readDemoAccountHistoryKey(record.auth_provider_snapshot)
+    .toLowerCase()
+    .replace(/_/g, '-')
+    .replace(/^(x-ai|grok)$/, 'xai');
+  const account = readDemoAccountHistoryKey(record.account_snapshot);
+  const label = readDemoAccountHistoryKey(record.auth_label_snapshot);
+  const source = readDemoAccountHistoryKey(record.source);
+  const authFileSnapshot = readDemoAccountHistoryKey(record.auth_file_snapshot);
+  const authFile =
+    authFileSnapshot || (source && source !== account && source !== label ? source : '');
+  const authIndex = readDemoAccountHistoryKey(record.auth_index);
+  const projectId = readDemoAccountHistoryKey(record.auth_project_id_snapshot);
+  let key = '';
+  if (authFile && authIndex) key = `file-index:${authFile}:${authIndex}`;
+  else if (authFile && projectId) key = `file-project:${authFile}:${provider}:${projectId}`;
+  else if (authFile && account) key = `file-account:${authFile}:${provider}:${account}`;
+  else if (authFile && label) key = `file-label:${authFile}:${provider}:${label}`;
+  else if (authFile) key = `file:${authFile}:${provider}`;
+  else if (authIndex) key = `auth-index:${provider}:${authIndex}`;
+  else if (projectId) key = `project:${provider}:${projectId}`;
+  else if (account) key = `account:${provider}:${account}`;
+  else if (label) key = `label:${provider}:${label}`;
+  else key = explicitKey;
 
   return { key, valid: Boolean(key) };
 };
 
 const demoAccountHistoryRowKey = (row: {
+  auth_file_snapshot?: string;
+  auth_provider_snapshot?: string;
+  auth_project_id_snapshot?: string;
   account_snapshot?: string;
   auth_label_snapshot?: string;
   source?: string;
   auth_index?: string;
-}) =>
-  readDemoAccountHistoryKey(row.account_snapshot) ||
-  readDemoAccountHistoryKey(row.auth_label_snapshot) ||
-  readDemoAccountHistoryKey(row.source) ||
-  readDemoAccountHistoryKey(row.auth_index);
+}) => demoAccountHistoryTargetKey(row as DemoAccountHistoryTarget).key;
 
 const demoAccountHistoryFileKey = (file: AuthFileItem) =>
-  readDemoAccountHistoryKey(file.account_snapshot) ||
-  readDemoAccountHistoryKey(file.account) ||
-  readDemoAccountHistoryKey(file.email) ||
-  readDemoAccountHistoryKey(file.label) ||
-  readDemoAccountHistoryKey(file.note) ||
-  file.name;
+  demoAccountHistoryTargetKey({
+    row_key: file.name,
+    auth_file_snapshot: file.name,
+    auth_provider_snapshot:
+      readDemoAccountHistoryKey(file.provider) || readDemoAccountHistoryKey(file.type),
+    auth_project_id_snapshot:
+      readDemoAccountHistoryKey(file.project_id) || readDemoAccountHistoryKey(file.projectId),
+    account_snapshot:
+      readDemoAccountHistoryKey(file.account_snapshot) ||
+      readDemoAccountHistoryKey(file.account) ||
+      readDemoAccountHistoryKey(file.email),
+    auth_label_snapshot:
+      readDemoAccountHistoryKey(file.label) || readDemoAccountHistoryKey(file.note),
+    auth_index: readDemoAccountHistoryKey(file.authIndex),
+    source: file.name,
+  }).key;
 
 const readDemoRequestCount = (value: unknown): number => {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -5216,10 +5243,10 @@ const buildDemoRecentAccountRequests = (
   };
 };
 
-const buildDemoAccountHistoryIndex = (baseNow = now()): Map<string, DemoAccountHistoryItem> => {
+const buildDemoAccountHistoryIndex = (baseNow = now()): Map<string, DemoAccountHistoryRecord> => {
   const analytics = buildMonitoringAnalytics(baseNow);
   const rows = analytics.credential_stats ?? [];
-  const result = new Map<string, DemoAccountHistoryItem>();
+  const result = new Map<string, DemoAccountHistoryRecord>();
 
   rows.forEach((row, index) => {
     const accountKey = demoAccountHistoryRowKey(row);
@@ -5417,9 +5444,10 @@ export const getDemoAccountHistory = (
     items: request.accounts.map((account) => {
       const { key, valid } = demoAccountHistoryTargetKey(account);
       const history = historyByKey.get(key);
-      if (valid && history) return history;
+      if (valid && history) return { ...history, row_key: account.row_key };
 
       return {
+        row_key: account.row_key,
         account_key: key,
         matched: false,
         total_requests: 0,

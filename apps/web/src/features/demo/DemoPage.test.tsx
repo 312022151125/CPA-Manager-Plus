@@ -154,11 +154,17 @@ describe('DemoPage', () => {
     };
     const accountHistory = getDemoAccountHistory({
       accounts: authFiles.files.map((file) => ({
+        row_key: String(file.id ?? `${file.name}:${historyTargetString(file.authIndex) ?? '-'}`),
         account_snapshot:
           historyTargetString(file.account_snapshot) ??
           historyTargetString(file.account) ??
           historyTargetString(file.email),
         auth_label_snapshot: historyTargetString(file.label) ?? historyTargetString(file.note),
+        auth_file_snapshot: file.name,
+        auth_provider_snapshot:
+          historyTargetString(file.provider) ?? historyTargetString(file.type),
+        auth_project_id_snapshot:
+          historyTargetString(file.project_id) ?? historyTargetString(file.projectId),
         source: file.name,
         auth_index: historyTargetString(file.authIndex),
       })),
@@ -276,13 +282,13 @@ describe('DemoPage', () => {
           item.sync_status === 'ready'
       )
     ).toBe(true);
-    expect(accountHistory.items.find((item) => item.account_key === 'Platform Team')).toMatchObject(
-      {
-        total_requests: 5200,
-        total_tokens: 4_220_000,
-        total_cost: 88.1,
-      }
-    );
+    expect(
+      accountHistory.items.find((item) => item.row_key === 'codex-team-01.json')
+    ).toMatchObject({
+      total_requests: 5200,
+      total_tokens: 4_220_000,
+      total_cost: 88.1,
+    });
     expect(Array.from(fileNames).sort()).toEqual(
       [
         'antigravity-daily-exhausted.json',
@@ -388,6 +394,31 @@ describe('DemoPage', () => {
         'xai-expired.json',
       ])
     );
+  });
+
+  it('prefers structured account-history identity over a stale opaque account key', () => {
+    const response = getDemoAccountHistory({
+      accounts: [
+        {
+          row_key: 'platform-team-row',
+          account_key: 'stale-account-key',
+          auth_file_snapshot: 'codex-team-01.json',
+          auth_provider_snapshot: 'codex',
+          auth_index: 'codex-team-01',
+          account_snapshot: 'Platform Team',
+          source: 'codex-team-01.json',
+        },
+      ],
+    });
+
+    expect(response.items[0]).toMatchObject({
+      row_key: 'platform-team-row',
+      matched: true,
+      total_requests: 5200,
+      total_tokens: 4_220_000,
+      total_cost: 88.1,
+    });
+    expect(response.items[0]?.account_key).not.toBe('stale-account-key');
   });
 
   it('fills the dashboard request health timeline with real dashboard granularity', () => {

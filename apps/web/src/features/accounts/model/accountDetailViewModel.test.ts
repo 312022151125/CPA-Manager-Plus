@@ -107,6 +107,7 @@ const makeWindowUsage = (
 const makeHistory = (
   overrides: Partial<MonitoringAccountHistoryItem> = {}
 ): MonitoringAccountHistoryItem => ({
+  row_key: 'shared.codex.json\u00000',
   account_key: 'codex@example.com',
   matched: true,
   total_requests: 12,
