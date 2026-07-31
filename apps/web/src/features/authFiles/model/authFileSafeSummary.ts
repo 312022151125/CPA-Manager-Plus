@@ -1,4 +1,5 @@
 import type { AuthFileItem } from '@/types';
+import { normalizeAuthIndex } from '@/utils/authIndex';
 
 export interface AuthFileSafeSummary {
   accountId: string;
@@ -69,12 +70,12 @@ const maskProxyUrl = (value: string): string => {
     const parsed = new URL(value);
     parsed.username = '';
     parsed.password = '';
+    parsed.pathname = '';
     parsed.search = '';
     parsed.hash = '';
     return parsed.toString().replace(/\/$/, '');
   } catch {
-    const protocol = value.match(/^([a-z][a-z0-9+.-]*):\/\//i)?.[1];
-    return protocol ? `${protocol}://已配置` : '已配置';
+    return '';
   }
 };
 
@@ -86,17 +87,50 @@ const readHeaderNames = (value: unknown): string[] => {
     .sort((left, right) => left.localeCompare(right));
 };
 
-export const buildAuthFileSafeSummary = (
+const readContentAuthIndex = (content: Record<string, unknown>): string | null =>
+  normalizeAuthIndex(content.authIndex ?? content.auth_index ?? content['auth-index']);
+
+export const selectAuthFileCredentialContent = (
+  file: AuthFileItem,
+  parsed: unknown
+): Record<string, unknown> | null => {
+  if (isRecord(parsed)) {
+    const targetAuthIndex = normalizeAuthIndex(
+      file.authIndex ?? file.auth_index ?? file['auth-index']
+    );
+    const contentAuthIndex = readContentAuthIndex(parsed);
+    if (targetAuthIndex && contentAuthIndex && targetAuthIndex !== contentAuthIndex) return null;
+    return parsed;
+  }
+
+  if (!Array.isArray(parsed)) return null;
+  const targetAuthIndex = normalizeAuthIndex(
+    file.authIndex ?? file.auth_index ?? file['auth-index']
+  );
+  if (!targetAuthIndex) return null;
+  const matches = parsed.filter(
+    (entry): entry is Record<string, unknown> =>
+      isRecord(entry) && readContentAuthIndex(entry) === targetAuthIndex
+  );
+  return matches.length === 1 ? matches[0] : null;
+};
+
+export const parseAuthFileCredentialContent = (
   file: AuthFileItem,
   rawText: string
-): AuthFileSafeSummary => {
-  let content: Record<string, unknown> = {};
+): Record<string, unknown> | null => {
   try {
-    const parsed = JSON.parse(rawText) as unknown;
-    if (isRecord(parsed)) content = parsed;
+    return selectAuthFileCredentialContent(file, JSON.parse(rawText) as unknown);
   } catch {
-    content = {};
+    return null;
   }
+};
+
+export const buildAuthFileSafeSummaryFromContent = (
+  file: AuthFileItem,
+  selectedContent: Record<string, unknown> | null
+): AuthFileSafeSummary => {
+  const content = selectedContent ?? {};
 
   const proxyUrl = readString(content.proxy_url, content.proxyUrl);
   const headers = content.headers;
@@ -143,3 +177,9 @@ export const buildAuthFileSafeSummary = (
     statusMessage: readString(file.statusMessage, file.status_message, content.status_message),
   };
 };
+
+export const buildAuthFileSafeSummary = (
+  file: AuthFileItem,
+  rawText: string
+): AuthFileSafeSummary =>
+  buildAuthFileSafeSummaryFromContent(file, parseAuthFileCredentialContent(file, rawText));

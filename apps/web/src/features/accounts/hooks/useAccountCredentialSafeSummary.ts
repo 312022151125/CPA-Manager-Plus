@@ -5,9 +5,11 @@ import {
   buildAuthFileSafeSummary,
   type AuthFileSafeSummary,
 } from '@/features/authFiles/model/authFileSafeSummary';
+import { getAuthFileStatusIdentityKey } from '@/utils/authFileStatusMutation';
 
 export interface AccountCredentialSafeSummaryState {
   fileName: string;
+  credentialKey: string;
   loading: boolean;
   error: string;
   summary: AuthFileSafeSummary | null;
@@ -15,13 +17,16 @@ export interface AccountCredentialSafeSummaryState {
 
 const EMPTY_STATE: AccountCredentialSafeSummaryState = {
   fileName: '',
+  credentialKey: '',
   loading: false,
   error: '',
   summary: null,
 };
 
 export const useAccountCredentialSafeSummary = (file: AuthFileItem | null, enabled: boolean) => {
-  const cacheRef = useRef(new Map<string, AuthFileSafeSummary>());
+  const cacheRef = useRef(
+    new Map<string, { fileName: string; summary: AuthFileSafeSummary }>()
+  );
   const requestIdRef = useRef(0);
   const [state, setState] = useState<AccountCredentialSafeSummaryState>(EMPTY_STATE);
 
@@ -33,26 +38,34 @@ export const useAccountCredentialSafeSummary = (file: AuthFileItem | null, enabl
       }
 
       const fileName = file.name;
-      const cached = !force ? cacheRef.current.get(fileName) : undefined;
+      const credentialKey = getAuthFileStatusIdentityKey(file);
+      const requestId = requestIdRef.current + 1;
+      requestIdRef.current = requestId;
+      const cached = !force ? cacheRef.current.get(credentialKey) : undefined;
       if (cached) {
-        setState({ fileName, loading: false, error: '', summary: cached });
+        setState({
+          fileName,
+          credentialKey,
+          loading: false,
+          error: '',
+          summary: cached.summary,
+        });
         return;
       }
 
-      const requestId = requestIdRef.current + 1;
-      requestIdRef.current = requestId;
-      setState({ fileName, loading: true, error: '', summary: null });
+      setState({ fileName, credentialKey, loading: true, error: '', summary: null });
 
       try {
         const rawText = await authFilesApi.downloadText(fileName);
         if (requestIdRef.current !== requestId) return;
         const summary = buildAuthFileSafeSummary(file, rawText);
-        cacheRef.current.set(fileName, summary);
-        setState({ fileName, loading: false, error: '', summary });
+        cacheRef.current.set(credentialKey, { fileName, summary });
+        setState({ fileName, credentialKey, loading: false, error: '', summary });
       } catch (error: unknown) {
         if (requestIdRef.current !== requestId) return;
         setState({
           fileName,
+          credentialKey,
           loading: false,
           error: error instanceof Error ? error.message : 'Failed to load credential details',
           summary: null,
@@ -64,8 +77,13 @@ export const useAccountCredentialSafeSummary = (file: AuthFileItem | null, enabl
 
   const invalidate = useCallback(
     (fileName?: string) => {
-      if (fileName) cacheRef.current.delete(fileName);
-      else cacheRef.current.clear();
+      if (fileName) {
+        Array.from(cacheRef.current.entries()).forEach(([credentialKey, cached]) => {
+          if (cached.fileName === fileName) cacheRef.current.delete(credentialKey);
+        });
+      } else {
+        cacheRef.current.clear();
+      }
       if (enabled && file && (!fileName || file.name === fileName)) {
         void load(true);
       }

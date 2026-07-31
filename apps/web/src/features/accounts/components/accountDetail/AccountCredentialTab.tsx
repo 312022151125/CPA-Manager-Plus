@@ -12,7 +12,8 @@ import { formatFileSize } from '@/utils/format';
 import { AccountDetailFieldList } from './AccountDetailFieldList';
 import styles from '@/features/accounts/AccountsPage.module.scss';
 
-interface AccountCredentialTabProps extends AccountCredentialSafeSummaryState {
+interface AccountCredentialTabProps
+  extends Omit<AccountCredentialSafeSummaryState, 'credentialKey'> {
   row: AccountRow;
   detailView: AccountDetailViewModel;
   healthStatusClass: string;

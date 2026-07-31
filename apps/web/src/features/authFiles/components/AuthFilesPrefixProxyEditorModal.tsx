@@ -43,7 +43,25 @@ const isSensitiveKey = (key: string) => {
   );
 };
 
+const redactProxyUrl = (value: string): string => {
+  try {
+    const parsed = new URL(value);
+    parsed.username = '';
+    parsed.password = '';
+    parsed.pathname = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return value ? REDACTED_VALUE : '';
+  }
+};
+
 const redactJsonValue = (value: unknown, key = ''): unknown => {
+  const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (normalizedKey === 'proxyurl' && typeof value === 'string') {
+    return redactProxyUrl(value);
+  }
   if (key && isSensitiveKey(key)) {
     return REDACTED_VALUE;
   }
@@ -100,7 +118,6 @@ export function AuthFilesPrefixProxyEditorModal(props: AuthFilesPrefixProxyEdito
   } = props;
   const previewText = formatJsonText(updatedText, true);
   const fileInfoPreviewText = formatJsonText(editor?.fileInfoText ?? '', true);
-  const invalidContentPreview = editor?.invalidContentPreview ?? '';
 
   return (
     <Modal
@@ -180,25 +197,19 @@ export function AuthFilesPrefixProxyEditorModal(props: AuthFilesPrefixProxyEdito
                   value={fileInfoPreviewText}
                 />
               </div>
-              <div className={styles.prefixProxyJsonWrapper}>
-                <label className={styles.prefixProxyLabel}>
-                  {editor.json
-                    ? t('auth_files.prefix_proxy_source_label')
-                    : t('auth_files.prefix_proxy_invalid_content_label')}
-                </label>
-                {editor.json ? (
+              {editor.json && (
+                <div className={styles.prefixProxyJsonWrapper}>
+                  <label className={styles.prefixProxyLabel}>
+                    {t('auth_files.prefix_proxy_source_label')}
+                  </label>
                   <textarea
                     className={styles.prefixProxyTextarea}
                     rows={10}
                     readOnly
                     value={previewText}
                   />
-                ) : (
-                  <pre className={styles.prefixProxyInvalidContentPreview}>
-                    {invalidContentPreview}
-                  </pre>
-                )}
-              </div>
+                </div>
+              )}
               {editor.json && (
                 <div className={styles.prefixProxySecurityNote}>
                   {t('auth_files.prefix_proxy_redacted_hint')}
