@@ -287,7 +287,16 @@ export interface ClaudeQuotaWindow {
   resetAccuracy?: QuotaResetAccuracy;
 }
 
-export interface ClaudeQuotaState {
+export interface CredentialScopedQuotaState {
+  authFileKey?: string;
+  authFileName?: string;
+  authIndex?: string | null;
+  authFileIdentityVerified?: boolean;
+  fetchedAtMs?: number;
+  failedAtMs?: number;
+}
+
+export interface ClaudeQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   windows: ClaudeQuotaWindow[];
   extraUsage?: ClaudeExtraUsage | null;
@@ -320,7 +329,7 @@ export interface AntigravityQuotaBucket {
   description?: string;
 }
 
-export interface AntigravityQuotaState {
+export interface AntigravityQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   groups: AntigravityQuotaGroup[];
   subscription?: AntigravityQuotaSubscription | null;
@@ -341,7 +350,7 @@ export interface CodexQuotaWindow {
   limitWindowSeconds?: number | null;
 }
 
-export interface CodexQuotaState {
+export interface CodexQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   windows: CodexQuotaWindow[];
   planType?: string | null;
@@ -360,11 +369,6 @@ export interface CodexQuotaState {
   rateLimitResetCreditsAvailableCount?: number | null;
   rateLimitResetCredits?: CodexRateLimitResetCredit[];
   rateLimitResetCreditsError?: string | null;
-  authFileKey?: string;
-  authFileName?: string;
-  authIndex?: string | null;
-  fetchedAtMs?: number;
-  failedAtMs?: number;
   error?: string;
   errorStatus?: number;
   observedFromUsageHeaders?: boolean;
@@ -440,7 +444,7 @@ export interface KimiQuotaRow {
   resetAccuracy?: QuotaResetAccuracy;
 }
 
-export interface KimiQuotaState {
+export interface KimiQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   rows: KimiQuotaRow[];
   error?: string;
@@ -573,7 +577,7 @@ export interface XaiBillingSummary {
   diagnostics?: XaiBillingDiagnostic[];
 }
 
-export interface XaiQuotaState {
+export interface XaiQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   billing: XaiBillingSummary | null;
   error?: string;

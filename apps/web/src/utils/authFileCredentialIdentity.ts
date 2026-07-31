@@ -128,3 +128,19 @@ export const resolveCredentialIdentity = (
     authLabelSnapshot: directAuthLabelSnapshot || readAuthFileStatusAuthLabelSnapshot(record),
   };
 };
+
+export const isCredentialIdentityVerified = (
+  target: AuthFileItem | CredentialIdentityTarget
+): boolean => {
+  const identity = resolveCredentialIdentity(target);
+  const accountSnapshot =
+    identity.accountSnapshot && identity.accountSnapshot !== identity.physicalName
+      ? identity.accountSnapshot
+      : '';
+  return Boolean(
+    identity.authIndex ||
+      identity.accountId ||
+      accountSnapshot ||
+      (identity.runtimeId && identity.runtimeId !== identity.physicalName)
+  );
+};

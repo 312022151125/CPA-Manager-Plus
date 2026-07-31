@@ -155,7 +155,6 @@ import {
 import { resolveAccountReauthAction } from '@/features/accounts/model/accountReauth';
 import { beginAccountQuotaRequest } from '@/features/accounts/model/accountQuotaRequestGate';
 import { buildAccountOperationalItemsByRowKey } from '@/features/accounts/model/accountOperationalScope';
-import { mapWithConcurrency } from '@/features/accounts/model/asyncPool';
 import {
   DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE,
   readAccountsWorkspaceUiState,
@@ -215,6 +214,11 @@ import {
   buildUsageHeaderSnapshotLookup,
   getHighConfidenceUsageHeaderSnapshotForAuthFile,
 } from '@/utils/usageHeaderSnapshots';
+import { getCredentialScopedQuotaState, getQuotaCredentialStoreKey } from '@/utils/quota/credentialScope';
+import {
+  buildProviderCredentialTaskPlan,
+  runProviderCredentialTaskPlan,
+} from '@/utils/quota/providerRefreshScheduler';
 import { createCodexInspectionConnectionFingerprint } from '@/features/monitoring/codexInspection';
 import type {
   CredentialHealthInspectionMode,
@@ -225,7 +229,8 @@ import styles from './AccountsPage.module.scss';
 type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
 
-const MAX_CONCURRENT_QUOTA_REFRESHES = 3;
+const MAX_CONCURRENT_QUOTA_REFRESHES_PER_PROVIDER = 1;
+const MAX_CONCURRENT_QUOTA_REFRESH_PROVIDERS = 3;
 
 const readAccountsSearchFromHash = (hash: string): string => {
   const queryIndex = hash.indexOf('?');
@@ -1719,20 +1724,27 @@ export function AccountsPage() {
         showNotification(t('accounts.no_refreshable_accounts'), 'warning');
         return;
       }
+      const taskPlan = buildProviderCredentialTaskPlan(refreshable, {
+        getProviderKey: (row) => row.provider,
+        getCredentialKey: (row) => getQuotaCredentialStoreKey(row.raw),
+      });
       setQuotaRefreshing(true);
       try {
-        const results = await mapWithConcurrency(
-          refreshable,
-          MAX_CONCURRENT_QUOTA_REFRESHES,
-          refreshQuotaForRow
+        const results = await runProviderCredentialTaskPlan(
+          taskPlan,
+          {
+            perProviderConcurrency: MAX_CONCURRENT_QUOTA_REFRESHES_PER_PROVIDER,
+            maxConcurrentProviders: MAX_CONCURRENT_QUOTA_REFRESH_PROVIDERS,
+          },
+          ({ item }) => refreshQuotaForRow(item)
         );
         const successCount = results.filter(Boolean).length;
         showNotification(
           t('accounts.quota_refresh_result', {
             success: successCount,
-            total: refreshable.length,
+            total: taskPlan.length,
           }),
-          successCount === refreshable.length ? 'success' : 'warning'
+          successCount === taskPlan.length ? 'success' : 'warning'
         );
       } finally {
         setQuotaRefreshing(false);
@@ -3175,7 +3187,9 @@ export function AccountsPage() {
       valueRow,
       codexQuota: selectedCodexQuota,
       xaiQuota:
-        selectedRow.provider === XAI_CONFIG.type ? xaiQuota[selectedRow.fileName] : undefined,
+        selectedRow.provider === XAI_CONFIG.type
+          ? getCredentialScopedQuotaState(xaiQuota, selectedRow.raw)
+          : undefined,
       diagnosticsSummary: rowEventsSummary,
       diagnosticsRecentFailure: rowEventsRecentFailure,
       diagnosticsEvents: rowEvents,

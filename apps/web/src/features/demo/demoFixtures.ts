@@ -32,11 +32,13 @@ import type {
   AntigravityQuotaState,
   ClaudeQuotaState,
   CodexQuotaState,
+  CredentialScopedQuotaState,
   KimiQuotaState,
   XaiQuotaState,
 } from '@/types';
 import type { ModelInfo } from '@/utils/models';
 import { formatXaiProbeIssue } from '@/utils/quota/xaiPresentation';
+import { buildQuotaCredentialIdentity } from '@/utils/quota/credentialScope';
 import type { TFunction } from 'i18next';
 import {
   DEMO_API_BASE,
@@ -5589,7 +5591,7 @@ export const getDemoUsageServiceStatus = (): UsageServiceStatus => ({
   },
 });
 
-export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
+const getDemoQuotaStoreStateByFileName = (): DemoQuotaStoreState => ({
   codexQuota: {
     'codex-team-01.json': {
       status: 'success',
@@ -6116,6 +6118,45 @@ export const getDemoQuotaStoreState = (): DemoQuotaStoreState => ({
     },
   },
 });
+
+const scopeDemoQuotaRecord = <TState extends CredentialScopedQuotaState>(
+  record: Record<string, TState>,
+  filesByName: ReadonlyMap<string, AuthFileItem[]>
+): Record<string, TState> => {
+  const scoped: Record<string, TState> = {};
+  Object.entries(record).forEach(([fileName, state]) => {
+    const candidates = filesByName.get(fileName) ?? [];
+    const stateAuthIndex = String(state.authIndex ?? '').trim();
+    const file =
+      candidates.find(
+        (candidate) =>
+          stateAuthIndex &&
+          String(candidate.authIndex ?? candidate['auth_index'] ?? '').trim() === stateAuthIndex
+      ) ?? (candidates.length === 1 ? candidates[0] : undefined);
+    if (!file) return;
+    const identity = buildQuotaCredentialIdentity(file);
+    const storeKey = identity.authFileKey ?? fileName;
+    scoped[storeKey] = { ...state, ...identity };
+  });
+  return scoped;
+};
+
+export const getDemoQuotaStoreState = (): DemoQuotaStoreState => {
+  const raw = getDemoQuotaStoreStateByFileName();
+  const filesByName = new Map<string, AuthFileItem[]>();
+  getDemoAuthFiles().files.forEach((file) => {
+    const candidates = filesByName.get(file.name) ?? [];
+    candidates.push(file);
+    filesByName.set(file.name, candidates);
+  });
+  return {
+    antigravityQuota: scopeDemoQuotaRecord(raw.antigravityQuota, filesByName),
+    claudeQuota: scopeDemoQuotaRecord(raw.claudeQuota, filesByName),
+    codexQuota: scopeDemoQuotaRecord(raw.codexQuota, filesByName),
+    kimiQuota: scopeDemoQuotaRecord(raw.kimiQuota, filesByName),
+    xaiQuota: scopeDemoQuotaRecord(raw.xaiQuota, filesByName),
+  };
+};
 
 export const getDemoAccountProcessingPolicy = (): AccountProcessingPolicy => ({
   source: 'db',

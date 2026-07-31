@@ -1,16 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AuthFileItem, CodexQuotaState } from '@/types';
+import type {
+  AuthFileItem,
+  CodexQuotaState,
+  CredentialScopedQuotaState,
+} from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import { getAuthFileSelectionKey } from '@/features/authFiles/model/authFilesPageModel';
 import {
   buildAccountMetrics,
-  buildAccountRows,
+  buildAccountRows as buildAccountRowsBase,
   findAccountRowForInspectionTarget,
   filterAccountRows,
   sortAccountRows,
   type AccountInspectionResult,
   type AccountQuotaStores,
 } from './accountRows';
+import {
+  buildQuotaCredentialIdentity,
+  getQuotaCredentialStoreKey,
+} from '@/utils/quota/credentialScope';
 
 const emptyStores = (): AccountQuotaStores => ({
   antigravityQuota: {},
@@ -19,6 +27,38 @@ const emptyStores = (): AccountQuotaStores => ({
   kimiQuota: {},
   xaiQuota: {},
 });
+
+const scopeTestQuotaStores = (files: AuthFileItem[], stores: AccountQuotaStores) => {
+  const fileNameCounts = files.reduce((counts, file) => {
+    counts.set(file.name, (counts.get(file.name) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>());
+  const records = [
+    stores.antigravityQuota,
+    stores.claudeQuota,
+    stores.codexQuota,
+    stores.kimiQuota,
+    stores.xaiQuota,
+  ] as Array<Record<string, CredentialScopedQuotaState>>;
+
+  files.forEach((file) => {
+    records.forEach((record) => {
+      const legacy = record[file.name];
+      if (!legacy || (!legacy.authFileKey && fileNameCounts.get(file.name) !== 1)) return;
+      const identity = buildQuotaCredentialIdentity(file);
+      const storeKey = legacy.authFileKey || getQuotaCredentialStoreKey(file);
+      record[storeKey] = { ...legacy, ...identity, authFileKey: storeKey };
+    });
+  });
+  return stores;
+};
+
+const buildAccountRows = (
+  files: AuthFileItem[],
+  stores: AccountQuotaStores,
+  inspectionResults?: Parameters<typeof buildAccountRowsBase>[2],
+  overrides?: Parameters<typeof buildAccountRowsBase>[3]
+) => buildAccountRowsBase(files, scopeTestQuotaStores(files, stores), inspectionResults, overrides);
 
 describe('accountRows', () => {
   it('normalizes Codex quota usage into remaining percent and risk status', () => {

@@ -24,6 +24,7 @@ import {
   hasUsageHeaderDiagnosticSignal,
 } from '@/utils/usageHeaderSnapshots';
 import { resolveCodexPlanType } from '@/utils/quota/resolvers';
+import { getCredentialScopedQuotaState } from '@/utils/quota/credentialScope';
 
 export type AccountQuotaStatus =
   | 'unknown'
@@ -782,7 +783,8 @@ export const resolveAccountQuota = (
   if (provider === 'codex') {
     const selectionKey = getAuthFileSelectionKey(file);
     const quota =
-      overrides?.codexQuotaBySelectionKey?.get(selectionKey) ?? stores.codexQuota[file.name];
+      overrides?.codexQuotaBySelectionKey?.get(selectionKey) ??
+      getCredentialScopedQuotaState(stores.codexQuota, file);
     const headerSnapshot = overrides?.codexHeaderSnapshotBySelectionKey?.get(selectionKey);
     const headerObservationFields = quotaObservationFieldsFromSnapshot(headerSnapshot);
     const headerPlanType = readString(getHeaderSnapshotPlanType(headerSnapshot)).toLowerCase();
@@ -824,7 +826,7 @@ export const resolveAccountQuota = (
   }
 
   if (provider === 'claude') {
-    const quota = stores.claudeQuota[file.name];
+    const quota = getCredentialScopedQuotaState(stores.claudeQuota, file);
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(quota.planType ?? filePlanType);
     if (quota.status === 'error')
@@ -833,7 +835,7 @@ export const resolveAccountQuota = (
   }
 
   if (provider === 'antigravity') {
-    const quota = stores.antigravityQuota[file.name];
+    const quota = getCredentialScopedQuotaState(stores.antigravityQuota, file);
     if (!quota) return emptyQuota(filePlanType);
     const subscriptionPlan =
       readString(quota.subscription?.plan) ||
@@ -875,7 +877,7 @@ export const resolveAccountQuota = (
   }
 
   if (provider === 'kimi') {
-    const quota = stores.kimiQuota[file.name];
+    const quota = getCredentialScopedQuotaState(stores.kimiQuota, file);
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(filePlanType);
     if (quota.status === 'error')
@@ -893,7 +895,7 @@ export const resolveAccountQuota = (
   }
 
   if (provider === 'xai') {
-    const quota = stores.xaiQuota[file.name];
+    const quota = getCredentialScopedQuotaState(stores.xaiQuota, file);
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(filePlanType);
     if (quota.status === 'error')

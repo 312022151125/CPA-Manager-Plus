@@ -15,6 +15,10 @@ import type {
 } from '@/services/api/usageService';
 import { copyToClipboard } from '@/utils/clipboard';
 import {
+  buildQuotaCredentialIdentity,
+  getQuotaCredentialStoreKey,
+} from '@/utils/quota/credentialScope';
+import {
   getAuthFilePatchTarget,
   getAuthFileSelectionKey,
 } from '@/features/authFiles/model/authFilesPageModel';
@@ -158,6 +162,16 @@ const makeCodexFile = (name: string, authIndex: string, account: string): AuthFi
     priority: 0,
     disabled: false,
   }) as AuthFileItem;
+
+const buildCredentialScopedQuotaRecord = <TState extends object>(
+  file: AuthFileItem,
+  state: TState
+) => ({
+  [getQuotaCredentialStoreKey(file)]: {
+    ...state,
+    ...buildQuotaCredentialIdentity(file),
+  },
+});
 
 const makeAnalyticsEvent = (
   overrides: Partial<Record<string, unknown>>
@@ -1791,18 +1805,18 @@ describe('AccountsPage replacement flows', () => {
       },
     ];
     mocks.quotaState.codexQuota = {
-      'low.json': {
+      ...buildCredentialScopedQuotaRecord(mocks.files[0], {
         status: 'success',
         windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 10, resetLabel: '2026-01-10' }],
-      },
-      'middle.json': {
+      }),
+      ...buildCredentialScopedQuotaRecord(mocks.files[1], {
         status: 'success',
         windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 40, resetLabel: '2026-01-02' }],
-      },
-      'high.json': {
+      }),
+      ...buildCredentialScopedQuotaRecord(mocks.files[2], {
         status: 'success',
         windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 70, resetLabel: '2026-01-05' }],
-      },
+      }),
     };
 
     const renderer = await renderAccountsPage();
@@ -1870,21 +1884,19 @@ describe('AccountsPage replacement flows', () => {
         disabled: false,
       } as AuthFileItem,
     ];
-    mocks.quotaState.xaiQuota = {
-      'xai.json': {
-        status: 'success',
-        billing: {
-          monthlyLimitCents: 10_000,
-          usedCents: 12_500,
-          includedUsedCents: 10_000,
-          onDemandCapCents: 5_000,
-          onDemandUsedCents: 2_500,
-          onDemandUsedPercent: 50,
-          billingPeriodEnd: '2026-07-31T00:00:00Z',
-          usedPercent: 100,
-        },
+    mocks.quotaState.xaiQuota = buildCredentialScopedQuotaRecord(mocks.files[0], {
+      status: 'success',
+      billing: {
+        monthlyLimitCents: 10_000,
+        usedCents: 12_500,
+        includedUsedCents: 10_000,
+        onDemandCapCents: 5_000,
+        onDemandUsedCents: 2_500,
+        onDemandUsedPercent: 50,
+        billingPeriodEnd: '2026-07-31T00:00:00Z',
+        usedPercent: 100,
       },
-    };
+    });
 
     const renderer = await renderAccountsPage();
     const text = treeText(renderer);
@@ -1906,58 +1918,56 @@ describe('AccountsPage replacement flows', () => {
         disabled: false,
       } as AuthFileItem,
     ];
-    mocks.quotaState.antigravityQuota = {
-      'antigravity-pro-matrix.json': {
-        status: 'success',
-        subscription: { plan: 'pro', tierName: 'Pro', tierId: 'g1-pro' },
-        groups: [
-          {
-            id: 'gemini-models',
-            label: 'Gemini Models',
-            description: 'Models within this group: Gemini Flash, Gemini Pro',
-            models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
-            buckets: [
-              {
-                id: 'gemini-5h',
-                label: 'Five Hour Limit',
-                window: '5h',
-                remainingFraction: 0.96,
-                resetTime: '2026-07-09T12:00:00Z',
-              },
-              {
-                id: 'gemini-weekly',
-                label: 'Weekly Limit',
-                window: 'weekly',
-                remainingFraction: 0.04,
-                resetTime: '2026-07-15T12:00:00Z',
-              },
-            ],
-          },
-          {
-            id: 'claude-gpt-models',
-            label: 'Claude and GPT models',
-            description: 'Models within this group: Claude Sonnet, GPT-OSS',
-            models: ['claude-sonnet-4-5', 'gpt-oss-120b-medium'],
-            buckets: [
-              {
-                id: '3p-5h',
-                label: 'Five Hour Limit',
-                window: '5h',
-                remainingFraction: 0.11,
-                resetTime: '2026-07-09T11:00:00Z',
-              },
-              {
-                id: '3p-weekly',
-                label: 'Weekly Limit',
-                window: 'weekly',
-                remainingFraction: 0.19,
-                resetTime: '2026-07-13T12:00:00Z',
-              },
-            ],
-          },
-        ],
-      },
-    };
+    mocks.quotaState.antigravityQuota = buildCredentialScopedQuotaRecord(mocks.files[0], {
+      status: 'success',
+      subscription: { plan: 'pro', tierName: 'Pro', tierId: 'g1-pro' },
+      groups: [
+        {
+          id: 'gemini-models',
+          label: 'Gemini Models',
+          description: 'Models within this group: Gemini Flash, Gemini Pro',
+          models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+          buckets: [
+            {
+              id: 'gemini-5h',
+              label: 'Five Hour Limit',
+              window: '5h',
+              remainingFraction: 0.96,
+              resetTime: '2026-07-09T12:00:00Z',
+            },
+            {
+              id: 'gemini-weekly',
+              label: 'Weekly Limit',
+              window: 'weekly',
+              remainingFraction: 0.04,
+              resetTime: '2026-07-15T12:00:00Z',
+            },
+          ],
+        },
+        {
+          id: 'claude-gpt-models',
+          label: 'Claude and GPT models',
+          description: 'Models within this group: Claude Sonnet, GPT-OSS',
+          models: ['claude-sonnet-4-5', 'gpt-oss-120b-medium'],
+          buckets: [
+            {
+              id: '3p-5h',
+              label: 'Five Hour Limit',
+              window: '5h',
+              remainingFraction: 0.11,
+              resetTime: '2026-07-09T11:00:00Z',
+            },
+            {
+              id: '3p-weekly',
+              label: 'Weekly Limit',
+              window: 'weekly',
+              remainingFraction: 0.19,
+              resetTime: '2026-07-13T12:00:00Z',
+            },
+          ],
+        },
+      ],
+    });
 
     const renderer = await renderAccountsPage();
     const matrices = renderer.root.findAll(
@@ -2002,44 +2012,42 @@ describe('AccountsPage replacement flows', () => {
         disabled: false,
       } as AuthFileItem,
     ];
-    mocks.quotaState.antigravityQuota = {
-      'antigravity-free-weekly.json': {
-        status: 'success',
-        subscription: { plan: 'free', tierName: 'Free', tierId: 'g1-free' },
-        groups: [
-          {
-            id: 'gemini-models',
-            label: 'Gemini Models',
-            description: 'Models within this group: Gemini Flash, Gemini Pro',
-            models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
-            buckets: [
-              {
-                id: 'gemini-weekly',
-                label: 'Weekly Limit',
-                window: 'weekly',
-                remainingFraction: 0.76,
-                resetTime: '2026-07-15T12:00:00Z',
-              },
-            ],
-          },
-          {
-            id: 'claude-gpt-models',
-            label: 'Claude and GPT models',
-            description: 'Models within this group: Claude Sonnet, GPT-OSS',
-            models: ['claude-sonnet-4-5', 'gpt-oss-120b-medium'],
-            buckets: [
-              {
-                id: '3p-weekly',
-                label: 'Weekly Limit',
-                window: 'weekly',
-                remainingFraction: 0.31,
-                resetTime: '2026-07-13T12:00:00Z',
-              },
-            ],
-          },
-        ],
-      },
-    };
+    mocks.quotaState.antigravityQuota = buildCredentialScopedQuotaRecord(mocks.files[0], {
+      status: 'success',
+      subscription: { plan: 'free', tierName: 'Free', tierId: 'g1-free' },
+      groups: [
+        {
+          id: 'gemini-models',
+          label: 'Gemini Models',
+          description: 'Models within this group: Gemini Flash, Gemini Pro',
+          models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+          buckets: [
+            {
+              id: 'gemini-weekly',
+              label: 'Weekly Limit',
+              window: 'weekly',
+              remainingFraction: 0.76,
+              resetTime: '2026-07-15T12:00:00Z',
+            },
+          ],
+        },
+        {
+          id: 'claude-gpt-models',
+          label: 'Claude and GPT models',
+          description: 'Models within this group: Claude Sonnet, GPT-OSS',
+          models: ['claude-sonnet-4-5', 'gpt-oss-120b-medium'],
+          buckets: [
+            {
+              id: '3p-weekly',
+              label: 'Weekly Limit',
+              window: 'weekly',
+              remainingFraction: 0.31,
+              resetTime: '2026-07-13T12:00:00Z',
+            },
+          ],
+        },
+      ],
+    });
 
     const renderer = await renderAccountsPage();
     const matrices = renderer.root.findAll(
@@ -3040,7 +3048,7 @@ describe('AccountsPage replacement flows', () => {
     };
     const resetLabel = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     mocks.quotaState.codexQuota = {
-      'codex-a.json': {
+      ...buildCredentialScopedQuotaRecord(mocks.files[0], {
         status: 'success',
         windows: [
           {
@@ -3051,8 +3059,8 @@ describe('AccountsPage replacement flows', () => {
             limitWindowSeconds: 5 * 60 * 60,
           },
         ],
-      },
-      'codex-b.json': {
+      }),
+      ...buildCredentialScopedQuotaRecord(mocks.files[1], {
         status: 'success',
         windows: [
           {
@@ -3063,7 +3071,7 @@ describe('AccountsPage replacement flows', () => {
             limitWindowSeconds: 5 * 60 * 60,
           },
         ],
-      },
+      }),
     };
     mocks.getActiveQuotaCooldowns.mockResolvedValue([
       {

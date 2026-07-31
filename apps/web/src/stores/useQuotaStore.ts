@@ -8,6 +8,7 @@ import type {
   AntigravityQuotaState,
   ClaudeQuotaState,
   CodexQuotaState,
+  CredentialScopedQuotaState,
   KimiQuotaState,
   XaiQuotaState,
 } from '@/types';
@@ -48,13 +49,19 @@ const emptyQuotaState = {
   xaiQuota: {},
 };
 
-type PersistableQuotaState = {
+type PersistableQuotaState = CredentialScopedQuotaState & {
   status?: string;
   observedFromUsageHeaders?: boolean;
 };
 
-const isPersistableQuotaState = (item: PersistableQuotaState | undefined): boolean =>
-  item?.status === 'success' || item?.status === 'error';
+const isPersistableQuotaState = (
+  item: PersistableQuotaState | undefined
+): item is PersistableQuotaState & { authFileKey: string } =>
+  Boolean(
+    item?.authFileKey?.trim() &&
+      item.authFileIdentityVerified === true &&
+      (item.status === 'success' || item.status === 'error')
+  );
 
 const filterPersistableQuotaStates = <TState extends PersistableQuotaState>(
   quota: Record<string, TState> | undefined
@@ -62,7 +69,9 @@ const filterPersistableQuotaStates = <TState extends PersistableQuotaState>(
   if (!quota) return {};
 
   return Object.fromEntries(
-    Object.entries(quota).filter(([, item]) => isPersistableQuotaState(item))
+    Object.values(quota)
+      .filter(isPersistableQuotaState)
+      .map((item) => [item.authFileKey, item])
   );
 };
 
@@ -78,10 +87,13 @@ const filterPersistableCodexQuota = (
   if (!quota) return {};
 
   return Object.fromEntries(
-    Object.entries(quota).filter(([, item]) => {
-      if (!isPersistableQuotaState(item)) return false;
-      return item.status !== 'success' || item.observedFromUsageHeaders !== true;
-    })
+    Object.values(quota)
+      .filter(
+        (item): item is CodexQuotaState & { authFileKey: string } =>
+          isPersistableQuotaState(item) &&
+          (item.status !== 'success' || item.observedFromUsageHeaders !== true)
+      )
+      .map((item) => [item.authFileKey, item])
   );
 };
 
