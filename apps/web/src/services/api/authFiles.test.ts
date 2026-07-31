@@ -32,7 +32,7 @@ beforeEach(() => {
 });
 
 describe('authFilesApi OAuth model alias normalization', () => {
-  it('preserves force-mapping returned by CPA', async () => {
+  it('preserves display-name and force-mapping returned by CPA', async () => {
     mocks.get.mockResolvedValue({
       'oauth-model-alias': {
         codex: [
@@ -40,6 +40,7 @@ describe('authFilesApi OAuth model alias normalization', () => {
             name: 'gpt-5-codex',
             alias: 'team-codex',
             fork: true,
+            'display-name': 'Team Codex',
             'force-mapping': true,
           },
         ],
@@ -52,19 +53,21 @@ describe('authFilesApi OAuth model alias normalization', () => {
           name: 'gpt-5-codex',
           alias: 'team-codex',
           fork: true,
+          displayName: 'Team Codex',
           forceMapping: true,
         },
       ],
     });
   });
 
-  it('serializes forceMapping using the CPA force-mapping field', async () => {
+  it('serializes optional alias fields using CPA field names', async () => {
     mocks.patch.mockResolvedValue({ status: 'ok' });
 
     await authFilesApi.saveOauthModelAlias('codex', [
       {
         name: 'gpt-5-codex',
         alias: 'team-codex',
+        displayName: 'Team Codex',
         forceMapping: true,
       },
     ]);
@@ -75,6 +78,7 @@ describe('authFilesApi OAuth model alias normalization', () => {
         {
           name: 'gpt-5-codex',
           alias: 'team-codex',
+          'display-name': 'Team Codex',
           'force-mapping': true,
         },
       ],

@@ -4,12 +4,19 @@ import i18n from '@/i18n';
 import { apiClient } from '@/services/api/client';
 import { normalizeConfigResponse } from '@/services/api/transformers';
 import { resetDemoCodexInspectionRunState } from '@/services/api/usageService';
-import { useAuthStore, useConfigStore, useModelsStore, useUsageServiceStore } from '@/stores';
+import {
+  useAuthStore,
+  useConfigStore,
+  useModelsStore,
+  useQuotaStore,
+  useUsageServiceStore,
+} from '@/stores';
 import { DemoRouteAdapter } from './DemoRouteAdapter';
 import {
   getDemoCodexInspectionLocalLogs,
   getDemoCodexInspectionLocalRun,
   getDemoProviderModels,
+  getDemoQuotaStoreState,
   getDemoRawConfig,
   resetDemoCredentialRefresh,
 } from '@/features/demo/demoFixtures';
@@ -35,6 +42,7 @@ import { enableDemoPersistIsolation } from './demoPersistIsolation';
 type AuthStoreState = ReturnType<typeof useAuthStore.getState>;
 type ConfigStoreState = ReturnType<typeof useConfigStore.getState>;
 type ModelsStoreState = ReturnType<typeof useModelsStore.getState>;
+type QuotaStoreState = ReturnType<typeof useQuotaStore.getState>;
 type UsageServiceStoreState = ReturnType<typeof useUsageServiceStore.getState>;
 
 const createDemoConfigCache = (config: ReturnType<typeof normalizeConfigResponse>) => {
@@ -124,6 +132,14 @@ const captureModelsSnapshot = (state: ModelsStoreState) => ({
   cache: state.cache,
 });
 
+const captureQuotaSnapshot = (state: QuotaStoreState) => ({
+  antigravityQuota: state.antigravityQuota,
+  claudeQuota: state.claudeQuota,
+  codexQuota: state.codexQuota,
+  kimiQuota: state.kimiQuota,
+  xaiQuota: state.xaiQuota,
+});
+
 const captureUsageServiceSnapshot = (state: UsageServiceStoreState) => ({
   enabled: state.enabled,
   serviceBase: state.serviceBase,
@@ -137,6 +153,7 @@ export function DemoPage() {
     const authSnapshot = captureAuthSnapshot(useAuthStore.getState());
     const configSnapshot = captureConfigSnapshot(useConfigStore.getState());
     const modelsSnapshot = captureModelsSnapshot(useModelsStore.getState());
+    const quotaSnapshot = captureQuotaSnapshot(useQuotaStore.getState());
     const usageServiceSnapshot = captureUsageServiceSnapshot(useUsageServiceStore.getState());
     const loggedInSnapshot =
       typeof window !== 'undefined' ? window.localStorage.getItem('isLoggedIn') : null;
@@ -185,6 +202,7 @@ export function DemoPage() {
         apiKey: '',
       },
     });
+    useQuotaStore.setState(getDemoQuotaStoreState());
     useUsageServiceStore.setState((state) => ({
       enabled: true,
       serviceBase: DEMO_API_BASE,
@@ -200,6 +218,7 @@ export function DemoPage() {
       useAuthStore.setState(authSnapshot);
       useConfigStore.setState(configSnapshot);
       useModelsStore.setState(modelsSnapshot);
+      useQuotaStore.setState(quotaSnapshot);
       useUsageServiceStore.setState(usageServiceSnapshot);
       apiClient.setConfig({
         apiBase: authSnapshot.apiBase,

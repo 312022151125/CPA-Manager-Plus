@@ -81,12 +81,13 @@ describe('normalizeOAuthAliasEntries', () => {
     ]);
   });
 
-  it('preserves fork and forceMapping flags', () => {
+  it('preserves all optional CPA alias fields', () => {
     const result = normalizeOAuthAliasEntries([
       {
         name: 'gpt-5',
         alias: 'g5',
         fork: true,
+        displayName: 'GPT Five',
         forceMapping: true,
       },
     ]);
@@ -96,6 +97,7 @@ describe('normalizeOAuthAliasEntries', () => {
         name: 'gpt-5',
         alias: 'g5',
         fork: true,
+        displayName: 'GPT Five',
         forceMapping: true,
       },
     ]);
@@ -189,6 +191,42 @@ describe('mergeOAuthAliasLink', () => {
 });
 
 describe('planOAuthAliasRename', () => {
+  it('preserves CPA optional fields while renaming an alias', () => {
+    const result = planOAuthAliasRename(
+      {
+        codex: [
+          {
+            name: 'gpt-5-codex',
+            alias: 'team-codex',
+            fork: true,
+            displayName: 'Team Codex',
+            forceMapping: true,
+          },
+        ],
+      },
+      'team-codex',
+      'company-codex'
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      plans: [
+        {
+          channel: 'codex',
+          nextMappings: [
+            {
+              name: 'gpt-5-codex',
+              alias: 'company-codex',
+              fork: true,
+              displayName: 'Team Codex',
+              forceMapping: true,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it('validates all channels before returning plans', () => {
     const ok = planOAuthAliasRename(
       {

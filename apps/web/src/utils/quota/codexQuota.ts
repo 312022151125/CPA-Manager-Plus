@@ -4,7 +4,7 @@ import type {
   CodexUsagePayload,
   CodexUsageWindow,
 } from '@/types';
-import { formatCodexResetLabel } from './formatters';
+import { formatCodexResetLabel, resolveCodexQuotaReset } from './formatters';
 import { normalizeNumberValue, normalizePlanType, normalizeStringValue } from './parsers';
 
 const FIVE_HOUR_SECONDS = 18_000;
@@ -42,6 +42,8 @@ export type CodexQuotaWindowInfo = {
   labelParams?: Record<string, string | number>;
   usedPercent: number | null;
   resetLabel: string;
+  resetAtMs: number | null;
+  resetAccuracy: 'exact' | 'estimated' | 'unknown';
   limitWindowSeconds: number | null;
 };
 
@@ -183,11 +185,13 @@ const addCodexWindowInfo = (
   labelParams: Record<string, string | number> | undefined,
   window?: CodexUsageWindow | null,
   limitReached?: boolean,
-  allowed?: boolean
+  allowed?: boolean,
+  observedAtMs = Date.now()
 ) => {
   if (!window) return;
 
-  const resetLabel = formatCodexResetLabel(window);
+  const reset = resolveCodexQuotaReset(window, observedAtMs);
+  const resetLabel = formatCodexResetLabel(window, observedAtMs);
   const usedPercentRaw = getCodexQuotaWindowUsedPercent(window);
   const isLimitReached = Boolean(limitReached) || allowed === false;
   const usedPercent = usedPercentRaw ?? (isLimitReached && resetLabel !== '-' ? 100 : null);
@@ -198,6 +202,8 @@ const addCodexWindowInfo = (
     labelParams,
     usedPercent,
     resetLabel,
+    resetAtMs: reset.resetAtMs,
+    resetAccuracy: reset.resetAccuracy,
     limitWindowSeconds: getWindowSeconds(window),
   });
 };
@@ -210,7 +216,7 @@ const addCodexRateLimitWindows = (
   monthlyMeta: CodexQuotaWindowMeta,
   genericLabelKey: string,
   genericLabelParams?: Record<string, string | number>,
-  options?: { teamPlan?: boolean }
+  options?: { teamPlan?: boolean; observedAtMs?: number }
 ) => {
   const limitReached = limitInfo?.limit_reached ?? limitInfo?.limitReached;
   const allowed = limitInfo?.allowed;
@@ -224,7 +230,8 @@ const addCodexRateLimitWindows = (
     genericLabelParams,
     classified.fiveHourWindow,
     limitReached,
-    allowed
+    allowed,
+    options?.observedAtMs
   );
   if (classified.fiveHourWindow) added.add(classified.fiveHourWindow);
   addCodexWindowInfo(
@@ -234,7 +241,8 @@ const addCodexRateLimitWindows = (
     genericLabelParams,
     classified.weeklyWindow,
     limitReached,
-    allowed
+    allowed,
+    options?.observedAtMs
   );
   if (classified.weeklyWindow) added.add(classified.weeklyWindow);
   addCodexWindowInfo(
@@ -244,7 +252,8 @@ const addCodexRateLimitWindows = (
     genericLabelParams,
     classified.monthlyWindow,
     limitReached,
-    allowed
+    allowed,
+    options?.observedAtMs
   );
   if (classified.monthlyWindow) added.add(classified.monthlyWindow);
 
@@ -259,7 +268,8 @@ const addCodexRateLimitWindows = (
       { ...genericLabelParams, duration },
       window,
       limitReached,
-      allowed
+      allowed,
+      options?.observedAtMs
     );
   });
 };
@@ -267,7 +277,7 @@ const addCodexRateLimitWindows = (
 const addAdditionalRateLimitWindows = (
   windows: CodexQuotaWindowInfo[],
   additionalRateLimits: CodexAdditionalRateLimit[] | null | undefined,
-  options?: { teamPlan?: boolean }
+  options?: { teamPlan?: boolean; observedAtMs?: number }
 ) => {
   if (!Array.isArray(additionalRateLimits)) return;
 
@@ -305,7 +315,7 @@ const addAdditionalRateLimitWindows = (
 
 export const buildCodexQuotaWindowInfos = (
   payload: CodexUsagePayload,
-  options?: { planType?: string | null }
+  options?: { planType?: string | null; observedAtMs?: number }
 ): CodexQuotaWindowInfo[] => {
   const windows: CodexQuotaWindowInfo[] = [];
   const rateLimit = payload.rate_limit ?? payload.rateLimit ?? undefined;
@@ -314,6 +324,7 @@ export const buildCodexQuotaWindowInfos = (
   const additionalRateLimits = payload.additional_rate_limits ?? payload.additionalRateLimits;
   const planType = normalizePlanType(options?.planType ?? payload.plan_type ?? payload.planType);
   const teamPlan = planType === 'team';
+  const observedAtMs = options?.observedAtMs ?? Date.now();
 
   addCodexRateLimitWindows(
     windows,
@@ -323,7 +334,7 @@ export const buildCodexQuotaWindowInfos = (
     CODEX_WINDOW_META.codeMonthly,
     'codex_quota.generic_window',
     undefined,
-    { teamPlan }
+    { teamPlan, observedAtMs }
   );
   addCodexRateLimitWindows(
     windows,
@@ -333,9 +344,9 @@ export const buildCodexQuotaWindowInfos = (
     CODEX_WINDOW_META.codeReviewMonthly,
     'codex_quota.code_review_generic_window',
     undefined,
-    { teamPlan }
+    { teamPlan, observedAtMs }
   );
-  addAdditionalRateLimitWindows(windows, additionalRateLimits, { teamPlan });
+  addAdditionalRateLimitWindows(windows, additionalRateLimits, { teamPlan, observedAtMs });
 
   return windows;
 };

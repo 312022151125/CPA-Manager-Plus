@@ -31,6 +31,7 @@ import {
   resolveCodexPlanType,
   formatQuotaResetTime,
   formatKimiResetHint,
+  isValidQuotaResetAtMs,
   fetchAntigravityQuota,
   fetchClaudeQuota,
   fetchCodexQuota,
@@ -357,7 +358,7 @@ const getCodexPlanLabel = (planType: string | null | undefined, t: TFunction): s
 };
 
 const getCodexEffectivePlanType = (file: AuthFileItem, quota?: CodexQuotaState): string | null =>
-  resolveCodexPlanType(file) ?? quota?.planType ?? null;
+  quota?.planType ?? resolveCodexPlanType(file) ?? null;
 
 const getCodexPlanSortRank = (file: AuthFileItem, quota?: CodexQuotaState): number | null => {
   const normalized = normalizePlanType(getCodexEffectivePlanType(file, quota));
@@ -389,6 +390,11 @@ const getCodexSearchText = (
     quota?.creditsHasCredits,
     quota?.creditsUnlimited,
     quota?.creditsBalance,
+    quota?.creditsOverageLimitReached,
+    quota?.creditsApproxLocalMessages,
+    quota?.creditsApproxCloudMessages,
+    quota?.spendControlReached,
+    quota?.spendControlIndividualLimit,
     quota?.rateLimitReachedType,
     quota?.primaryOverSecondaryLimitPercent,
     quota?.observedAtMs,
@@ -425,27 +431,43 @@ const hasKnownResetLabel = (value: unknown): value is string => {
 const mergeCodexQuotaWindow = (
   activeWindow: CodexQuotaWindow,
   observedWindow: CodexQuotaWindow
-): CodexQuotaWindow => ({
-  ...activeWindow,
-  ...(hasHeaderValue(observedWindow.label) ? { label: observedWindow.label } : {}),
-  ...(hasHeaderValue(observedWindow.labelKey) ? { labelKey: observedWindow.labelKey } : {}),
-  ...(observedWindow.labelParams && Object.keys(observedWindow.labelParams).length > 0
-    ? { labelParams: observedWindow.labelParams }
-    : {}),
-  ...(observedWindow.usedPercent !== null &&
-  observedWindow.usedPercent !== undefined &&
-  Number.isFinite(observedWindow.usedPercent)
-    ? { usedPercent: observedWindow.usedPercent }
-    : {}),
-  ...(hasKnownResetLabel(observedWindow.resetLabel)
-    ? { resetLabel: observedWindow.resetLabel }
-    : {}),
-  ...(observedWindow.limitWindowSeconds !== null &&
-  observedWindow.limitWindowSeconds !== undefined &&
-  observedWindow.limitWindowSeconds > 0
-    ? { limitWindowSeconds: observedWindow.limitWindowSeconds }
-    : {}),
-});
+): CodexQuotaWindow => {
+  const hasObservedResetLabel = hasKnownResetLabel(observedWindow.resetLabel);
+  const hasObservedResetAt = isValidQuotaResetAtMs(observedWindow.resetAtMs);
+  const resetMetadata = hasObservedResetAt
+    ? {
+        resetLabel: hasObservedResetLabel ? observedWindow.resetLabel : '-',
+        resetAtMs: observedWindow.resetAtMs ?? null,
+        resetAccuracy: observedWindow.resetAccuracy ?? 'unknown',
+      }
+    : hasObservedResetLabel
+      ? {
+          resetLabel: observedWindow.resetLabel,
+          resetAtMs: null,
+          resetAccuracy: 'unknown' as const,
+        }
+      : {};
+
+  return {
+    ...activeWindow,
+    ...(hasHeaderValue(observedWindow.label) ? { label: observedWindow.label } : {}),
+    ...(hasHeaderValue(observedWindow.labelKey) ? { labelKey: observedWindow.labelKey } : {}),
+    ...(observedWindow.labelParams && Object.keys(observedWindow.labelParams).length > 0
+      ? { labelParams: observedWindow.labelParams }
+      : {}),
+    ...(observedWindow.usedPercent !== null &&
+    observedWindow.usedPercent !== undefined &&
+    Number.isFinite(observedWindow.usedPercent)
+      ? { usedPercent: observedWindow.usedPercent }
+      : {}),
+    ...resetMetadata,
+    ...(observedWindow.limitWindowSeconds !== null &&
+    observedWindow.limitWindowSeconds !== undefined &&
+    observedWindow.limitWindowSeconds > 0
+      ? { limitWindowSeconds: observedWindow.limitWindowSeconds }
+      : {}),
+  };
+};
 
 const mergeCodexQuotaWindows = (
   activeWindows: CodexQuotaWindow[] | undefined,
@@ -485,6 +507,11 @@ const mergeObservedQuotaIntoActive = <TState extends DisplayQuotaState>(
     'creditsHasCredits',
     'creditsUnlimited',
     'creditsBalance',
+    'creditsOverageLimitReached',
+    'creditsApproxLocalMessages',
+    'creditsApproxCloudMessages',
+    'spendControlReached',
+    'spendControlIndividualLimit',
     'rateLimitReachedType',
     'primaryOverSecondaryLimitPercent',
     'observedAtMs',
@@ -611,9 +638,14 @@ export const buildObservedCodexQuotaState = (
   const recoverAtMS = getHeaderSnapshotRecoverAtMs(snapshot);
   const recoverLabel = recoverAtMS ? new Date(recoverAtMS).toLocaleString() : '-';
   const headerPlanType = observedQuota?.planType || getHeaderSnapshotPlanType(snapshot);
-  const planType = resolveCodexPlanType(file) ?? (headerPlanType || null);
+  const planType = headerPlanType || resolveCodexPlanType(file) || null;
   const observedWindows = observedQuota?.payload
-    ? buildCodexQuotaWindows(observedQuota.payload, t, planType)
+    ? buildCodexQuotaWindows(
+        observedQuota.payload,
+        t,
+        planType,
+        snapshot?.timestamp_ms ?? Date.now()
+      )
     : [];
   const windows: CodexQuotaWindow[] =
     observedWindows.length > 0
@@ -627,6 +659,8 @@ export const buildObservedCodexQuotaState = (
               }),
               usedPercent,
               resetLabel: recoverLabel,
+              resetAtMs: recoverAtMS,
+              resetAccuracy: recoverAtMS ? 'estimated' : 'unknown',
             },
           ]
         : [];
@@ -793,6 +827,68 @@ const renderCodexWindowInfo = (
   });
 };
 
+const getCodexBooleanLabel = (value: boolean | null | undefined, t: TFunction): string | null => {
+  if (value === undefined || value === null) return null;
+  return value ? t('common.yes') : t('common.no');
+};
+
+const buildCodexDiagnosticRows = (quota: CodexQuotaState, t: TFunction): ReactNode[] => {
+  const { createElement: h } = React;
+  const rows: ReactNode[] = [];
+  const creditsParts = [
+    quota.creditsUnlimited === true
+      ? t('codex_quota.credits_unlimited')
+      : quota.creditsHasCredits === true
+        ? t('codex_quota.credits_available')
+        : quota.creditsHasCredits === false
+          ? t('codex_quota.credits_unavailable')
+          : '',
+    quota.creditsBalance ? `${t('codex_quota.credits_balance')}: ${quota.creditsBalance}` : '',
+    typeof quota.creditsApproxLocalMessages === 'number'
+      ? t('codex_quota.approx_local_messages', { count: quota.creditsApproxLocalMessages })
+      : '',
+    typeof quota.creditsApproxCloudMessages === 'number'
+      ? t('codex_quota.approx_cloud_messages', { count: quota.creditsApproxCloudMessages })
+      : '',
+  ].filter(Boolean);
+
+  if (creditsParts.length > 0) {
+    rows.push(
+      h(
+        'div',
+        { key: 'credits-diagnostics', className: styles.codexPlan },
+        h('span', { className: styles.codexPlanLabel }, t('codex_quota.credits_label')),
+        h('span', { className: styles.codexPlanValue }, creditsParts.join(' · '))
+      )
+    );
+  }
+
+  const spendParts = [
+    getCodexBooleanLabel(quota.spendControlReached, t)
+      ? `${t('codex_quota.spend_control_reached')}: ${getCodexBooleanLabel(quota.spendControlReached, t)}`
+      : '',
+    typeof quota.spendControlIndividualLimit === 'number'
+      ? `${t('codex_quota.spend_control_individual_limit')}: ${quota.spendControlIndividualLimit}`
+      : '',
+    getCodexBooleanLabel(quota.creditsOverageLimitReached, t)
+      ? `${t('codex_quota.credits_overage_reached')}: ${getCodexBooleanLabel(quota.creditsOverageLimitReached, t)}`
+      : '',
+  ].filter(Boolean);
+
+  if (spendParts.length > 0) {
+    rows.push(
+      h(
+        'div',
+        { key: 'spend-diagnostics', className: styles.codexPlan },
+        h('span', { className: styles.codexPlanLabel }, t('codex_quota.spend_control_label')),
+        h('span', { className: styles.codexPlanValue }, spendParts.join(' · '))
+      )
+    );
+  }
+
+  return rows;
+};
+
 const renderCodexItems = (
   quota: CodexQuotaState,
   t: TFunction,
@@ -849,6 +945,8 @@ const renderCodexItems = (
 
     nodes.push(h('div', { key: 'plan', className: styleMap.codexPlan }, ...planNodes));
   }
+
+  nodes.push(...buildCodexDiagnosticRows(quota, t));
 
   if (windows.length === 0) {
     nodes.push(
@@ -1060,6 +1158,14 @@ export const CODEX_CONFIG: QuotaConfig<CodexQuotaState, CodexQuotaData> = {
     windows: data.windows,
     planType: data.planType,
     subscriptionActiveUntil: data.subscriptionActiveUntil,
+    creditsHasCredits: data.creditsHasCredits,
+    creditsUnlimited: data.creditsUnlimited,
+    creditsBalance: data.creditsBalance,
+    creditsOverageLimitReached: data.creditsOverageLimitReached,
+    creditsApproxLocalMessages: data.creditsApproxLocalMessages,
+    creditsApproxCloudMessages: data.creditsApproxCloudMessages,
+    spendControlReached: data.spendControlReached,
+    spendControlIndividualLimit: data.spendControlIndividualLimit,
     rateLimitResetCreditsAvailableCount: data.rateLimitResetCreditsAvailableCount,
     rateLimitResetCredits: data.rateLimitResetCredits,
     rateLimitResetCreditsError: data.rateLimitResetCreditsError,

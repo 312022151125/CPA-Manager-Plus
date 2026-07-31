@@ -14,6 +14,7 @@ import type {
   CodexUsagePayload,
   KimiQuotaRow,
   XaiBillingConfig,
+  XaiBillingPayload,
   XaiBillingDiagnostic,
   XaiBillingPeriod,
   XaiBillingPeriodType,
@@ -52,7 +53,12 @@ import {
   XAI_REQUEST_HEADERS,
 } from './constants';
 import { buildAntigravityQuotaGroups, buildKimiQuotaRows } from './builders';
-import { createStatusError, formatQuotaResetTime, getStatusFromError } from './formatters';
+import {
+  createStatusError,
+  formatQuotaResetTime,
+  getStatusFromError,
+  resolveAbsoluteQuotaReset,
+} from './formatters';
 import {
   normalizeAuthIndex,
   normalizeNumberValue,
@@ -79,7 +85,15 @@ const CODEX_RESET_CREDITS_REQUEST_TIMEOUT_MS = 8000;
 export type CodexQuotaData = {
   planType: string | null;
   windows: CodexQuotaWindow[];
-  subscriptionActiveUntil: string | null;
+  subscriptionActiveUntil: string | number | null;
+  creditsHasCredits?: boolean | null;
+  creditsUnlimited?: boolean | null;
+  creditsBalance?: string | null;
+  creditsOverageLimitReached?: boolean | null;
+  creditsApproxLocalMessages?: number | null;
+  creditsApproxCloudMessages?: number | null;
+  spendControlReached?: boolean | null;
+  spendControlIndividualLimit?: number | null;
   rateLimitResetCreditsAvailableCount: number | null;
   rateLimitResetCredits: CodexRateLimitResetCredit[];
   rateLimitResetCreditsError: string | null;
@@ -281,15 +295,18 @@ export const fetchAntigravityQuota = async (
 export const buildCodexQuotaWindows = (
   payload: CodexUsagePayload,
   t: TFunction,
-  planType?: string | null
+  planType?: string | null,
+  observedAtMs = Date.now()
 ): CodexQuotaWindow[] =>
-  buildCodexQuotaWindowInfos(payload, { planType }).map((window) => ({
+  buildCodexQuotaWindowInfos(payload, { planType, observedAtMs }).map((window) => ({
     id: window.id,
     label: t(window.labelKey, window.labelParams),
     labelKey: window.labelKey,
     labelParams: window.labelParams,
     usedPercent: window.usedPercent,
     resetLabel: window.resetLabel,
+    resetAtMs: window.resetAtMs,
+    resetAccuracy: window.resetAccuracy,
     limitWindowSeconds: window.limitWindowSeconds,
   }));
 
@@ -300,8 +317,53 @@ const resolveCodexRateLimitResetCreditsAvailableCount = (
   return normalizeNumberValue(credits?.available_count ?? credits?.availableCount);
 };
 
-const resolveCodexSubscriptionActiveUntil = (payload: CodexUsagePayload): string | null =>
-  normalizeStringValue(payload.subscription_active_until ?? payload.subscriptionActiveUntil);
+const resolveCodexSubscriptionActiveUntil = (
+  payload: CodexUsagePayload
+): string | number | null => {
+  const value = payload.subscription_active_until ?? payload.subscriptionActiveUntil;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return normalizeStringValue(value);
+};
+
+const normalizeBooleanValue = (value: unknown): boolean | null => {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
+  }
+  return null;
+};
+
+const resolveCodexCreditsInfo = (payload: CodexUsagePayload) => {
+  const credits = payload.credits;
+  return {
+    creditsHasCredits: normalizeBooleanValue(credits?.has_credits ?? credits?.hasCredits),
+    creditsUnlimited: normalizeBooleanValue(credits?.unlimited),
+    creditsBalance: normalizeStringValue(credits?.balance),
+    creditsOverageLimitReached: normalizeBooleanValue(
+      credits?.overage_limit_reached ?? credits?.overageLimitReached
+    ),
+    creditsApproxLocalMessages: normalizeNumberValue(
+      credits?.approx_local_messages ?? credits?.approxLocalMessages
+    ),
+    creditsApproxCloudMessages: normalizeNumberValue(
+      credits?.approx_cloud_messages ?? credits?.approxCloudMessages
+    ),
+  };
+};
+
+const resolveCodexSpendControlInfo = (payload: CodexUsagePayload) => {
+  const spendControl = payload.spend_control ?? payload.spendControl;
+  return {
+    spendControlReached: normalizeBooleanValue(spendControl?.reached),
+    spendControlIndividualLimit: normalizeNumberValue(
+      spendControl?.individual_limit ?? spendControl?.individualLimit
+    ),
+  };
+};
 
 type CodexResetCreditsData = {
   availableCount: number | null;
@@ -395,13 +457,16 @@ export const fetchCodexQuota = async (
 
   const planTypeFromUsage = normalizePlanType(payload.plan_type ?? payload.planType);
   const planType = planTypeFromUsage ?? planTypeFromFile;
-  const windows = buildCodexQuotaWindows(payload, t, planType);
+  const observedAtMs = Date.now();
+  const windows = buildCodexQuotaWindows(payload, t, planType, observedAtMs);
   const usageResetCreditsAvailableCount = resolveCodexRateLimitResetCreditsAvailableCount(payload);
   const resetCredits = await fetchCodexResetCredits(authIndex, accountId, t);
   return {
     planType,
     windows,
     subscriptionActiveUntil: resolveCodexSubscriptionActiveUntil(payload),
+    ...resolveCodexCreditsInfo(payload),
+    ...resolveCodexSpendControlInfo(payload),
     rateLimitResetCreditsAvailableCount: resolveCodexResetCreditsAvailableCount(
       resetCredits,
       usageResetCreditsAvailableCount
@@ -501,34 +566,43 @@ const resolveClaudeBaseLimitWindowId = (
   return null;
 };
 
-type ClaudeLimitWindowValues = Pick<ClaudeQuotaWindow, 'usedPercent' | 'resetLabel'>;
+type ClaudeLimitWindowValues = Pick<
+  ClaudeQuotaWindow,
+  'usedPercent' | 'resetLabel' | 'resetAtMs' | 'resetAccuracy'
+>;
 
-const resolveClaudeLimitResetAt = (limit: Record<string, unknown>): string => {
+const resolveClaudeLimitResetAt = (limit: Record<string, unknown>): string | number | null => {
   const rawResetAt = limit.resets_at ?? limit.resetsAt ?? limit.reset_at ?? limit.resetAt;
-  return typeof rawResetAt === 'string' ? rawResetAt.trim() : '';
+  if (typeof rawResetAt === 'string') return rawResetAt.trim() || null;
+  return typeof rawResetAt === 'number' && Number.isFinite(rawResetAt) ? rawResetAt : null;
 };
 
 const resolveClaudeLimitResetRank = (limit: Record<string, unknown>): number => {
-  const resetTimestamp = Date.parse(resolveClaudeLimitResetAt(limit));
-  return Number.isFinite(resetTimestamp) ? resetTimestamp : -1;
+  return resolveAbsoluteQuotaReset(resolveClaudeLimitResetAt(limit)).resetAtMs ?? -1;
 };
 
 const parseClaudeLimitWindowValues = (
   limit: Record<string, unknown>
 ): ClaudeLimitWindowValues | null => {
-  const rawPercent = normalizeNumberValue(limit.percent);
+  const rawPercent = normalizeNumberValue(limit.percent ?? limit.utilization);
   const usedPercent = rawPercent !== null && rawPercent >= 0 ? rawPercent : null;
   const resetAt = resolveClaudeLimitResetAt(limit);
-  const resetLabel = formatQuotaResetTime(resetAt || undefined);
+  const reset = resolveAbsoluteQuotaReset(resetAt);
+  const resetLabel = formatQuotaResetTime(resetAt);
   if (usedPercent === null && resetLabel === '-') return null;
-  return { usedPercent, resetLabel };
+  return {
+    usedPercent,
+    resetLabel,
+    resetAtMs: reset.resetAtMs,
+    resetAccuracy: reset.resetAccuracy,
+  };
 };
 
 const findClaudeModelDisplayName = (value: unknown): string | null => {
   if (!isRecord(value)) return null;
 
   const readDisplayName = (candidate: Record<string, unknown>): string | null => {
-    const rawDisplayName = candidate.display_name ?? candidate.displayName;
+    const rawDisplayName = candidate.display_name ?? candidate.displayName ?? candidate.name;
     if (typeof rawDisplayName !== 'string') return null;
     const normalized = rawDisplayName.trim().replace(/\s+/g, ' ');
     return normalized || null;
@@ -658,7 +732,7 @@ const buildClaudeBaseLimitFallbacks = (
       const kind = normalizeClaudeLimitToken(rawLimit.kind);
       const candidate: ClaudeBaseLimitCandidate = {
         completenessRank:
-          (values.usedPercent !== null ? 1 : 0) + (values.resetLabel !== '-' ? 1 : 0),
+          (values.usedPercent !== null ? 1 : 0) + (values.resetAtMs !== null ? 1 : 0),
         kindRank: windowId === 'seven-day' && kind === 'weekly_all' ? 1 : 0,
         resetAtRank: resolveClaudeLimitResetRank(rawLimit),
         usedPercentRank: values.usedPercent ?? -1,
@@ -785,6 +859,7 @@ const buildClaudeQuotaWindows = (
     if (window && typeof window === 'object' && 'utilization' in window) {
       const typedWindow = window as { utilization: number; resets_at: string };
       const usedPercent = normalizeNumberValue(typedWindow.utilization);
+      const reset = resolveAbsoluteQuotaReset(typedWindow.resets_at);
       const resetLabel = formatQuotaResetTime(typedWindow.resets_at);
       if (usedPercent !== null || resetLabel !== '-') {
         windows.push({
@@ -793,6 +868,8 @@ const buildClaudeQuotaWindows = (
           labelKey,
           usedPercent,
           resetLabel,
+          resetAtMs: reset.resetAtMs,
+          resetAccuracy: reset.resetAccuracy,
         });
         renderedTopLevelWindow = true;
       }
@@ -892,7 +969,7 @@ export const fetchKimiQuota = async (file: AuthFileItem, t: TFunction): Promise<
     throw new Error(t('kimi_quota.empty_data'));
   }
 
-  return buildKimiQuotaRows(payload);
+  return buildKimiQuotaRows(payload, { observedAtMs: Date.now() });
 };
 
 const normalizeXaiCentValue = (value: unknown): number | null => {
@@ -901,6 +978,11 @@ const normalizeXaiCentValue = (value: unknown): number | null => {
     return normalizeNumberValue((value as { val?: unknown }).val);
   }
   return normalizeNumberValue(value);
+};
+
+const resolveXaiBillingConfig = (payload: XaiBillingPayload | null): XaiBillingConfig | null => {
+  if (!payload || typeof payload !== 'object') return null;
+  return payload.config ?? (payload as XaiBillingConfig);
 };
 
 const resolveXaiPeriodType = (period?: XaiBillingPeriod | null): XaiBillingPeriodType => {
@@ -958,28 +1040,53 @@ export const buildXaiBillingSummary = (
     normalizeStringValue(currentPeriod?.end) ??
     normalizeStringValue(config.billingPeriodEnd ?? config.billing_period_end) ??
     undefined;
+  const billingCycle = config.billingCycle ?? config.billing_cycle ?? null;
+  const nestedUsage = config.usage ?? null;
   const productUsage = normalizeXaiProductUsage(
     config.productUsage ?? config.product_usage,
     'Product'
   );
-
   const monthlyLimitCents = normalizeXaiCentValue(config.monthlyLimit ?? config.monthly_limit);
-  const usedCents = normalizeXaiCentValue(config.used);
-  const onDemandCapCents = normalizeXaiCentValue(config.onDemandCap ?? config.on_demand_cap);
-  const explicitOnDemandUsedCents = normalizeXaiCentValue(
-    config.onDemandUsed ?? config.on_demand_used
+  const nestedIncludedUsedCents = normalizeXaiCentValue(
+    nestedUsage?.includedUsed ?? nestedUsage?.included_used
   );
+  const explicitOnDemandUsedCents = normalizeXaiCentValue(
+    config.onDemandUsed ??
+      config.on_demand_used ??
+      nestedUsage?.onDemandUsed ??
+      nestedUsage?.on_demand_used
+  );
+  const rawUsedCents = normalizeXaiCentValue(
+    config.used ?? nestedUsage?.totalUsed ?? nestedUsage?.total_used
+  );
+  const usedCents =
+    rawUsedCents ??
+    (nestedIncludedUsedCents !== null || explicitOnDemandUsedCents !== null
+      ? (nestedIncludedUsedCents ?? 0) + (explicitOnDemandUsedCents ?? 0)
+      : null);
+  const onDemandCapCents = normalizeXaiCentValue(config.onDemandCap ?? config.on_demand_cap);
   const billingPeriodStart =
-    normalizeStringValue(config.billingPeriodStart ?? config.billing_period_start) ?? undefined;
+    normalizeStringValue(
+      config.billingPeriodStart ??
+        config.billing_period_start ??
+        billingCycle?.billingPeriodStart ??
+        billingCycle?.billing_period_start
+    ) ?? undefined;
   const billingPeriodEnd =
-    normalizeStringValue(config.billingPeriodEnd ?? config.billing_period_end) ?? undefined;
+    normalizeStringValue(
+      config.billingPeriodEnd ??
+        config.billing_period_end ??
+        billingCycle?.billingPeriodEnd ??
+        billingCycle?.billing_period_end
+    ) ?? undefined;
 
   const includedUsedCents =
-    usedCents === null
+    nestedIncludedUsedCents ??
+    (usedCents === null
       ? null
       : monthlyLimitCents !== null && monthlyLimitCents > 0
         ? Math.min(usedCents, monthlyLimitCents)
-        : usedCents;
+        : usedCents);
   const derivedOnDemandUsedCents =
     usedCents !== null && monthlyLimitCents !== null
       ? Math.max(0, usedCents - monthlyLimitCents)
@@ -1211,7 +1318,7 @@ const requestXaiBilling = async (
   }
 
   const payload = parseXaiBillingPayload(result.body ?? result.bodyText);
-  const summary = buildXaiBillingSummary(payload?.config);
+  const summary = buildXaiBillingSummary(resolveXaiBillingConfig(payload));
   if (!summary) {
     const envelope = parseXaiErrorEnvelope({
       statusCode: result.hasStatusCode ? result.statusCode : null,

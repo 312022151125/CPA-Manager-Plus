@@ -160,6 +160,7 @@ export const buildMonitoringInitialStateFromQuery = (
   const status = params.get('status')?.trim();
   const provider = params.get('provider')?.trim();
   const authFile = params.get('auth_file')?.trim();
+  const authIndex = params.get('auth_index')?.trim();
   const projectId = params.get('project_id')?.trim();
   const requestType = params.get('request_type')?.trim();
   const searchQuery = params.get('search')?.trim();
@@ -168,7 +169,13 @@ export const buildMonitoringInitialStateFromQuery = (
   const headerTraceId = params.get('header_trace_id')?.trim();
   const hasRange = fromMs !== null && toMs !== null && fromMs < toMs;
   const hasStructuredScopeFilter = Boolean(
-    authFile || projectId || requestType || minLatencyMs || cacheStatus || headerTraceId
+    authFile ||
+    authIndex ||
+    projectId ||
+    requestType ||
+    minLatencyMs ||
+    cacheStatus ||
+    headerTraceId
   );
 
   return {
@@ -1015,31 +1022,15 @@ const buildClaudeAccountQuotaWindows = (
 const buildAntigravityAccountQuotaWindows = (
   groups: AntigravityQuotaGroup[]
 ): AccountQuotaWindow[] =>
-  groups
-    .map((group): AccountQuotaWindow | null => {
-      if (group.buckets.length === 0) return null;
-      const remainingFraction = Math.min(
-        ...group.buckets.map((bucket) => bucket.remainingFraction)
-      );
-      const resetTime = group.buckets.reduce<string | undefined>((current, bucket) => {
-        if (!current) return bucket.resetTime;
-        if (!bucket.resetTime) return current;
-        const currentTime = new Date(current).getTime();
-        const nextTime = new Date(bucket.resetTime).getTime();
-        if (Number.isNaN(currentTime)) return bucket.resetTime;
-        if (Number.isNaN(nextTime)) return current;
-        return currentTime <= nextTime ? current : bucket.resetTime;
-      }, undefined);
-
-      return {
-        id: group.id,
-        label: group.label,
-        remainingPercent: clampRemainingPercent(remainingFraction * 100),
-        resetLabel: formatQuotaResetTime(resetTime),
-        usageLabel: null,
-      };
-    })
-    .filter((window): window is AccountQuotaWindow => window !== null);
+  groups.flatMap((group) =>
+    group.buckets.map((bucket) => ({
+      id: `${group.id}:${bucket.id}`,
+      label: `${group.label} · ${bucket.label}`,
+      remainingPercent: clampRemainingPercent(bucket.remainingFraction * 100),
+      resetLabel: formatQuotaResetTime(bucket.resetTime),
+      usageLabel: bucket.description ?? group.description ?? null,
+    }))
+  );
 
 const buildKimiAccountQuotaWindows = (rows: KimiQuotaRow[], t: TFunction): AccountQuotaWindow[] =>
   rows.map((row) => {

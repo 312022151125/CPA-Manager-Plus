@@ -887,9 +887,16 @@ describe('monitoringCenterPageModel account quota', () => {
     expect(entry.metaLabels).toEqual(['Antigravity Quota']);
     expect(entry.windows).toMatchObject([
       {
-        id: 'agent',
-        label: 'Agent',
+        id: 'agent:daily',
+        label: 'Agent · Daily',
         remainingPercent: 25,
+        resetLabel: '-',
+        usageLabel: null,
+      },
+      {
+        id: 'agent:weekly',
+        label: 'Agent · Weekly',
+        remainingPercent: 50,
         resetLabel: '-',
         usageLabel: null,
       },

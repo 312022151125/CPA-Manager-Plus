@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { handleDemoApiRequest } from './demoApi';
-import { resetDemoCredentialRefresh } from './demoFixtures';
+import { getDemoApiCallResult, resetDemoCredentialRefresh } from './demoFixtures';
 import type { AuthFilesResponse } from '@/types/authFile';
 
 const DEMO_AUTH_ID = 'codex-upgrade-demo-runtime';
@@ -37,6 +37,15 @@ describe('auth file credential refresh demo API', () => {
       plan_type: 'free',
       id_token: { plan_type: 'free' },
     });
+    expect(
+      getDemoApiCallResult({
+        authIndex: 'codex-upgrade-demo-01',
+        url: 'https://chatgpt.com/backend-api/wham/usage',
+      }).body
+    ).toMatchObject({
+      plan_type: 'free',
+      subscription_active_until: null,
+    });
 
     await handleDemoApiRequest('patch', '/auth-files/fields', {
       name: DEMO_AUTH_ID,
@@ -51,11 +60,47 @@ describe('auth file credential refresh demo API', () => {
     const completed = await getUpgradeDemoAuth();
     expect(completed).toMatchObject({
       plan_type: 'plus',
-      id_token: { plan_type: 'plus' },
-      statusMessage: 'Ready',
+      id_token: {
+        plan_type: 'plus',
+        chatgpt_subscription_active_until: expect.any(String),
+      },
     });
+    expect(completed.statusMessage).toBeUndefined();
+    expect(
+      Date.parse(
+        String((completed.id_token as Record<string, unknown>).chatgpt_subscription_active_until)
+      )
+    ).toBeGreaterThan(Date.now());
+    const subscriptionActiveUntil = String(
+      (completed.id_token as Record<string, unknown>).chatgpt_subscription_active_until
+    );
+    expect(subscriptionActiveUntil).toBe('2026-08-21T01:30:00.000Z');
     expect(completed.last_refresh).toBe('2026-07-22T01:30:00.000Z');
     expect(completed.last_refresh).not.toBe(initialLastRefresh);
+    expect(
+      getDemoApiCallResult({
+        authIndex: 'codex-upgrade-demo-01',
+        url: 'https://chatgpt.com/backend-api/wham/usage',
+      }).body
+    ).toMatchObject({
+      plan_type: 'plus',
+      subscription_active_until: subscriptionActiveUntil,
+    });
+
+    vi.advanceTimersByTime(7 * 24 * 60 * 60 * 1000);
+    const later = await getUpgradeDemoAuth();
+    expect(
+      String((later.id_token as Record<string, unknown>).chatgpt_subscription_active_until)
+    ).toBe(subscriptionActiveUntil);
+    expect(
+      getDemoApiCallResult({
+        authIndex: 'codex-upgrade-demo-01',
+        url: 'https://chatgpt.com/backend-api/wham/usage',
+      }).body
+    ).toMatchObject({
+      plan_type: 'plus',
+      subscription_active_until: subscriptionActiveUntil,
+    });
   });
 
   it('does not upgrade the demo account for an ordinary fields patch', async () => {

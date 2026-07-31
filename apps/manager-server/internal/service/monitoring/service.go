@@ -25,7 +25,9 @@ const (
 	maxHeaderSnapshotDays      = 365
 	maxHeaderSnapshotLimit     = 5000
 	maxAccountHistoryTargets   = 200
+	maxAccountWindowUsageItems = 400
 	accountHistoryCatchUpLimit = 5000
+	accountRecentRequestLimit  = 10
 	recentWindowMS             = 30 * 60 * 1000
 	// analyticsPrefetchConcurrency limits background analytics reads. The
 	// foreground summary/task path may hold one additional SQLite connection.
@@ -240,7 +242,59 @@ type AccountHistoryCheckpointState struct {
 }
 
 type AccountHistoryItem struct {
-	AccountKey    string   `json:"account_key"`
+	AccountKey     string                 `json:"account_key"`
+	Matched        bool                   `json:"matched"`
+	TotalRequests  int64                  `json:"total_requests"`
+	SuccessCalls   int64                  `json:"success_calls"`
+	FailureCalls   int64                  `json:"failure_calls"`
+	TotalTokens    int64                  `json:"total_tokens"`
+	TotalCost      float64                `json:"total_cost"`
+	SuccessRate    *float64               `json:"success_rate"`
+	FirstSeenMS    *int64                 `json:"first_seen_ms"`
+	LastSeenMS     *int64                 `json:"last_seen_ms"`
+	LatestRequest  *AccountLatestRequest  `json:"latest_request,omitempty"`
+	RecentRequests []AccountLatestRequest `json:"recent_requests,omitempty"`
+	SyncStatus     string                 `json:"sync_status"`
+}
+
+// AccountLatestRequest is the most recent persisted request for an auth file.
+// It intentionally exposes only the already-sanitized diagnostic summary and
+// selected response-header metadata, never raw response bodies.
+type AccountLatestRequest struct {
+	TimestampMS     int64  `json:"timestamp_ms"`
+	Failed          bool   `json:"failed"`
+	FailStatusCode  *int   `json:"fail_status_code,omitempty"`
+	FailSummary     string `json:"fail_summary,omitempty"`
+	HeaderErrorKind string `json:"header_error_kind,omitempty"`
+	HeaderErrorCode string `json:"header_error_code,omitempty"`
+	HeaderTraceID   string `json:"header_trace_id,omitempty"`
+}
+
+type AccountWindowUsageRequest struct {
+	Windows []AccountWindowUsageTarget `json:"windows"`
+}
+
+type AccountWindowUsageTarget struct {
+	RowKey            string `json:"row_key"`
+	WindowKey         string `json:"window_key"`
+	FromMS            int64  `json:"from_ms"`
+	ToMS              int64  `json:"to_ms"`
+	AccountSnapshot   string `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot string `json:"auth_label_snapshot,omitempty"`
+	AuthIndex         string `json:"auth_index,omitempty"`
+	Source            string `json:"source,omitempty"`
+}
+
+type AccountWindowUsageResponse struct {
+	GeneratedAtMS int64                    `json:"generated_at_ms"`
+	Items         []AccountWindowUsageItem `json:"items"`
+}
+
+type AccountWindowUsageItem struct {
+	RowKey        string   `json:"row_key"`
+	WindowKey     string   `json:"window_key"`
+	FromMS        int64    `json:"from_ms"`
+	ToMS          int64    `json:"to_ms"`
 	Matched       bool     `json:"matched"`
 	TotalRequests int64    `json:"total_requests"`
 	SuccessCalls  int64    `json:"success_calls"`
@@ -248,7 +302,6 @@ type AccountHistoryItem struct {
 	TotalTokens   int64    `json:"total_tokens"`
 	TotalCost     float64  `json:"total_cost"`
 	SuccessRate   *float64 `json:"success_rate"`
-	FirstSeenMS   *int64   `json:"first_seen_ms"`
 	LastSeenMS    *int64   `json:"last_seen_ms"`
 	SyncStatus    string   `json:"sync_status"`
 }
@@ -1237,12 +1290,20 @@ func (s *Service) accountHistory(ctx context.Context, req AccountHistoryRequest)
 	keys := make([]string, 0, len(req.Accounts))
 	targetKeys := make([]string, len(req.Accounts))
 	validTargets := make([]bool, len(req.Accounts))
+	latestRequestTargets := make([]store.LatestAccountRequestQuery, 0, len(req.Accounts))
 	for index, account := range req.Accounts {
 		key, valid := accountHistoryTargetKey(account)
 		targetKeys[index] = key
 		validTargets[index] = valid
 		if valid {
 			keys = append(keys, key)
+		}
+		if latestAccountRequestTargetValid(account) {
+			latestRequestTargets = append(latestRequestTargets, store.LatestAccountRequestQuery{
+				RequestIndex:     index,
+				AuthFileSnapshot: account.Source,
+				AuthIndex:        account.AuthIndex,
+			})
 		}
 	}
 	pricingSnapshot, err := s.store.LoadUsagePricingAccountSnapshot(ctx, keys)
@@ -1260,24 +1321,53 @@ func (s *Service) accountHistory(ctx context.Context, req AccountHistoryRequest)
 		}
 		totals = buildAccountHistoryTotals(rows, prices)
 	}
+	recentRequests, err := s.store.RecentAccountRequests(
+		ctx,
+		latestRequestTargets,
+		accountRecentRequestLimit,
+	)
+	if err != nil {
+		return AccountHistoryResponse{}, err
+	}
+	recentRequestsByTargetIndex := make(map[int][]AccountLatestRequest, len(recentRequests))
+	for _, request := range recentRequests {
+		mapped := accountLatestRequestFromStore(request)
+		if mapped == nil {
+			continue
+		}
+		recentRequestsByTargetIndex[request.RequestIndex] = append(
+			recentRequestsByTargetIndex[request.RequestIndex],
+			*mapped,
+		)
+	}
 	pending := latestID > checkpoint.LastEventID
 	items := make([]AccountHistoryItem, 0, len(req.Accounts))
 	for index := range req.Accounts {
 		key := targetKeys[index]
+		targetRecentRequests := recentRequestsByTargetIndex[index]
+		var latestRequest *AccountLatestRequest
+		if len(targetRecentRequests) > 0 {
+			value := targetRecentRequests[0]
+			latestRequest = &value
+		}
 		if !validTargets[index] {
 			items = append(items, AccountHistoryItem{
-				AccountKey: key,
-				Matched:    false,
-				SyncStatus: accountHistorySyncStatus(false, false),
+				AccountKey:     key,
+				Matched:        false,
+				LatestRequest:  latestRequest,
+				RecentRequests: targetRecentRequests,
+				SyncStatus:     accountHistorySyncStatus(false, false),
 			})
 			continue
 		}
 		total := totals[key]
 		if total == nil {
 			items = append(items, AccountHistoryItem{
-				AccountKey: key,
-				Matched:    false,
-				SyncStatus: accountHistorySyncStatus(false, pending),
+				AccountKey:     key,
+				Matched:        false,
+				LatestRequest:  latestRequest,
+				RecentRequests: targetRecentRequests,
+				SyncStatus:     accountHistorySyncStatus(false, pending),
 			})
 			continue
 		}
@@ -1287,17 +1377,19 @@ func (s *Service) accountHistory(ctx context.Context, req AccountHistoryRequest)
 			successRate = &value
 		}
 		items = append(items, AccountHistoryItem{
-			AccountKey:    key,
-			Matched:       true,
-			TotalRequests: total.requests,
-			SuccessCalls:  total.successCalls,
-			FailureCalls:  total.failureCalls,
-			TotalTokens:   total.totalTokens,
-			TotalCost:     total.cost,
-			SuccessRate:   successRate,
-			FirstSeenMS:   nullableMSPointer(total.firstSeenMS),
-			LastSeenMS:    nullableMSPointer(total.lastSeenMS),
-			SyncStatus:    accountHistorySyncStatus(true, pending),
+			AccountKey:     key,
+			Matched:        true,
+			TotalRequests:  total.requests,
+			SuccessCalls:   total.successCalls,
+			FailureCalls:   total.failureCalls,
+			TotalTokens:    total.totalTokens,
+			TotalCost:      total.cost,
+			SuccessRate:    successRate,
+			FirstSeenMS:    nullableMSPointer(total.firstSeenMS),
+			LastSeenMS:     nullableMSPointer(total.lastSeenMS),
+			LatestRequest:  latestRequest,
+			RecentRequests: targetRecentRequests,
+			SyncStatus:     accountHistorySyncStatus(true, pending),
 		})
 	}
 
@@ -1310,6 +1402,101 @@ func (s *Service) accountHistory(ctx context.Context, req AccountHistoryRequest)
 			Processed:   processed,
 		},
 		Items: items,
+	}, nil
+}
+
+func (s *Service) AccountWindowUsage(ctx context.Context, req AccountWindowUsageRequest) (AccountWindowUsageResponse, error) {
+	var response AccountWindowUsageResponse
+	err := s.store.WithModelPriceSnapshot(func() error {
+		var usageErr error
+		response, usageErr = s.accountWindowUsage(ctx, req)
+		return usageErr
+	})
+	return response, err
+}
+
+func (s *Service) accountWindowUsage(ctx context.Context, req AccountWindowUsageRequest) (AccountWindowUsageResponse, error) {
+	if len(req.Windows) == 0 {
+		return AccountWindowUsageResponse{}, errors.New("windows are required")
+	}
+	if len(req.Windows) > maxAccountWindowUsageItems {
+		return AccountWindowUsageResponse{}, fmt.Errorf("windows must be less than or equal to %d", maxAccountWindowUsageItems)
+	}
+
+	queries := make([]store.AccountWindowUsageQuery, 0, len(req.Windows))
+	for index, window := range req.Windows {
+		if strings.TrimSpace(window.RowKey) == "" {
+			return AccountWindowUsageResponse{}, errors.New("row_key is required")
+		}
+		if strings.TrimSpace(window.WindowKey) == "" {
+			return AccountWindowUsageResponse{}, errors.New("window_key is required")
+		}
+		if window.FromMS <= 0 || window.ToMS <= 0 || window.FromMS >= window.ToMS {
+			return AccountWindowUsageResponse{}, errors.New("from_ms and to_ms are required and from_ms must be less than to_ms")
+		}
+		if !accountWindowUsageTargetValid(window) {
+			return AccountWindowUsageResponse{}, errors.New("at least one account target field is required")
+		}
+		queries = append(queries, store.AccountWindowUsageQuery{
+			RequestIndex:      index,
+			FromMS:            window.FromMS,
+			ToMS:              window.ToMS,
+			AccountSnapshot:   window.AccountSnapshot,
+			AuthLabelSnapshot: window.AuthLabelSnapshot,
+			Source:            window.Source,
+			AuthIndex:         window.AuthIndex,
+		})
+	}
+
+	stats, err := s.store.AccountWindowModelStats(ctx, queries)
+	if err != nil {
+		return AccountWindowUsageResponse{}, err
+	}
+	prices, err := s.store.LoadModelPrices(ctx)
+	if err != nil {
+		return AccountWindowUsageResponse{}, err
+	}
+
+	totals := buildAccountWindowUsageTotals(stats, prices)
+	items := make([]AccountWindowUsageItem, 0, len(req.Windows))
+	for index, window := range req.Windows {
+		total := totals[index]
+		if total == nil {
+			items = append(items, AccountWindowUsageItem{
+				RowKey:     window.RowKey,
+				WindowKey:  window.WindowKey,
+				FromMS:     window.FromMS,
+				ToMS:       window.ToMS,
+				Matched:    false,
+				SyncStatus: "empty",
+			})
+			continue
+		}
+		var successRate *float64
+		if total.requests > 0 {
+			value := ratio(total.successCalls, total.requests)
+			successRate = &value
+		}
+		items = append(items, AccountWindowUsageItem{
+			RowKey:        window.RowKey,
+			WindowKey:     window.WindowKey,
+			FromMS:        window.FromMS,
+			ToMS:          window.ToMS,
+			Matched:       true,
+			TotalRequests: total.requests,
+			SuccessCalls:  total.successCalls,
+			FailureCalls:  total.failureCalls,
+			TotalTokens:   total.totalTokens,
+			TotalCost:     total.cost,
+			SuccessRate:   successRate,
+			LastSeenMS:    nullableMSPointer(total.lastSeenMS),
+			SyncStatus:    "ready",
+		})
+	}
+
+	return AccountWindowUsageResponse{
+		GeneratedAtMS: time.Now().UnixMilli(),
+		Items:         items,
 	}, nil
 }
 
@@ -3022,6 +3209,30 @@ func accountHistoryTargetKey(target AccountHistoryTarget) (string, bool) {
 	), true
 }
 
+func latestAccountRequestTargetValid(target AccountHistoryTarget) bool {
+	return strings.TrimSpace(target.Source) != ""
+}
+
+func accountLatestRequestFromStore(request store.LatestAccountRequest) *AccountLatestRequest {
+	if request.TimestampMS <= 0 {
+		return nil
+	}
+	var failStatusCode *int
+	if request.FailStatusCode.Valid && request.FailStatusCode.Int64 > 0 {
+		value := int(request.FailStatusCode.Int64)
+		failStatusCode = &value
+	}
+	return &AccountLatestRequest{
+		TimestampMS:     request.TimestampMS,
+		Failed:          request.Failed,
+		FailStatusCode:  failStatusCode,
+		FailSummary:     request.FailSummary,
+		HeaderErrorKind: request.HeaderErrorKind,
+		HeaderErrorCode: request.HeaderErrorCode,
+		HeaderTraceID:   request.HeaderTraceID,
+	}
+}
+
 func buildAccountHistoryTotals(rows []store.AccountHistoryRollupRow, prices map[string]store.ModelPrice) map[string]*accountHistoryTotal {
 	totals := map[string]*accountHistoryTotal{}
 	for _, row := range rows {
@@ -3095,6 +3306,51 @@ func buildPricingAccountHistoryTotals(rows []store.UsagePricingAccountRow, price
 		if total.firstSeenMS == 0 || (row.FirstSeenMS > 0 && row.FirstSeenMS < total.firstSeenMS) {
 			total.firstSeenMS = row.FirstSeenMS
 		}
+		if row.LastSeenMS > total.lastSeenMS {
+			total.lastSeenMS = row.LastSeenMS
+		}
+	}
+	return totals
+}
+
+func accountWindowUsageTargetValid(target AccountWindowUsageTarget) bool {
+	return strings.TrimSpace(target.AccountSnapshot) != "" ||
+		strings.TrimSpace(target.AuthLabelSnapshot) != "" ||
+		strings.TrimSpace(target.Source) != "" ||
+		strings.TrimSpace(target.AuthIndex) != ""
+}
+
+func buildAccountWindowUsageTotals(rows []store.AccountWindowModelStat, prices map[string]store.ModelPrice) map[int]*accountHistoryTotal {
+	totals := map[int]*accountHistoryTotal{}
+	for _, row := range rows {
+		total := totals[row.RequestIndex]
+		if total == nil {
+			total = &accountHistoryTotal{}
+			totals[row.RequestIndex] = total
+		}
+		total.requests += row.Calls
+		total.successCalls += row.SuccessCalls
+		total.failureCalls += row.FailureCalls
+		total.totalTokens += row.TotalTokens
+		total.cost += pricing.CostForModelCandidatesWithServiceTier(
+			[]string{row.BillingModel, row.Model},
+			row.ServiceTier,
+			pricing.ModelTokens{
+				PricingModel:            row.PricingModel,
+				ContextThresholdTokens:  row.ContextThresholdTokens,
+				InputTokens:             row.InputTokens,
+				OutputTokens:            row.OutputTokens,
+				CachedTokens:            row.CachedTokens,
+				CacheReadTokens:         row.CacheReadTokens,
+				CacheCreationTokens:     row.CacheCreationTokens,
+				LongInputTokens:         row.LongInputTokens,
+				LongOutputTokens:        row.LongOutputTokens,
+				LongCachedTokens:        row.LongCachedTokens,
+				LongCacheReadTokens:     row.LongCacheReadTokens,
+				LongCacheCreationTokens: row.LongCacheCreationTokens,
+			},
+			prices,
+		)
 		if row.LastSeenMS > total.lastSeenMS {
 			total.lastSeenMS = row.LastSeenMS
 		}

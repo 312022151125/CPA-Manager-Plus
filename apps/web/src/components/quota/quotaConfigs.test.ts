@@ -5,7 +5,10 @@ import { describe, expect, it } from 'vitest';
 import type { ClaudeQuotaState, CodexQuotaState, XaiQuotaState } from '@/types';
 import type { QuotaRenderHelpers } from './QuotaCard';
 import {
+  buildObservedCodexQuotaState,
+  buildQuotaFailureState,
   CLAUDE_CONFIG,
+  CODEX_CONFIG,
   getCodexQuotaStoreKey,
   getSortedCodexResetCreditExpiries,
   resolveQuotaDisplayState,
@@ -47,6 +50,54 @@ type TestQuotaState = {
   observedFromUsageHeaders?: boolean;
   windows?: unknown[];
 };
+
+type FailureTestState = {
+  status: 'success' | 'error';
+  fetchedAtMs?: number;
+  windows?: Array<{ id: string; usedPercent: number }>;
+  error?: string;
+  lastError?: string;
+  errorStatus?: number;
+  failedAtMs?: number;
+};
+
+describe('buildQuotaFailureState', () => {
+  it('lets providers preserve the last successful quota while recording refresh failure', () => {
+    const activeState: FailureTestState = {
+      status: 'success' as const,
+      fetchedAtMs: 1_000,
+      windows: [{ id: 'weekly', usedPercent: 25 }],
+    };
+    const result = buildQuotaFailureState<FailureTestState, unknown>(
+      {
+        buildErrorState: (message: string, status?: number) => ({
+          status: 'error' as const,
+          error: message,
+          errorStatus: status,
+        }),
+        buildFailureState: (message, status, _file, previous, failedAtMs) => ({
+          ...previous,
+          status: 'success' as const,
+          lastError: message,
+          errorStatus: status,
+          failedAtMs,
+        }),
+      },
+      'temporary failure',
+      503,
+      { name: 'codex.json', type: 'codex' },
+      activeState,
+      2_000
+    );
+
+    expect(result).toEqual({
+      ...activeState,
+      lastError: 'temporary failure',
+      errorStatus: 503,
+      failedAtMs: 2_000,
+    });
+  });
+});
 
 describe('getSortedCodexResetCreditExpiries', () => {
   it('filters expired or invalid reset credits and sorts by expiry time', () => {
@@ -396,6 +447,46 @@ describe('resolveQuotaDisplayState', () => {
     });
   });
 
+  it('does not retain an older reset timestamp behind a newer reset label', () => {
+    const activeQuota: CodexQuotaState = {
+      status: 'success',
+      fetchedAtMs: 1_000,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5-hour limit',
+          usedPercent: 10,
+          resetLabel: '2026-07-01T01:00:00Z',
+          resetAtMs: Date.parse('2026-07-01T01:00:00Z'),
+          resetAccuracy: 'exact',
+        },
+      ],
+    };
+    const observedQuota: CodexQuotaState = {
+      status: 'success',
+      observedAtMs: 2_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5-hour limit',
+          usedPercent: 80,
+          resetLabel: 'resets after the next request window',
+          resetAtMs: null,
+          resetAccuracy: 'unknown',
+        },
+      ],
+    };
+
+    const result = resolveQuotaDisplayState(activeQuota, observedQuota) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      resetLabel: 'resets after the next request window',
+      resetAtMs: null,
+      resetAccuracy: 'unknown',
+    });
+  });
+
   it('keeps 401 quota errors so reauth controls stay visible', () => {
     const activeQuota: TestQuotaState = {
       status: 'error',
@@ -523,5 +614,44 @@ describe('resolveQuotaDisplayState', () => {
       usedPercent: 30,
       resetLabel: '07/01 01:00',
     });
+  });
+});
+
+describe('Codex plan precedence', () => {
+  const t = ((key: string) => key) as TFunction;
+
+  it('uses the live quota plan for sorting instead of a stale token plan', () => {
+    const file = {
+      name: 'stale-plan.codex.json',
+      type: 'codex',
+      id_token: { plan_type: 'plus' },
+    };
+    const quota: CodexQuotaState = {
+      status: 'success',
+      planType: 'free',
+      windows: [],
+    };
+
+    expect(CODEX_CONFIG.getPlanSortRank?.(file, quota)).toBe(10);
+    expect(CODEX_CONFIG.getSearchText?.(file, quota, t)).toContain('free');
+  });
+
+  it('uses a newer observed header plan before the credential token plan', () => {
+    const state = buildObservedCodexQuotaState(
+      {
+        name: 'stale-plan.codex.json',
+        type: 'codex',
+        id_token: { plan_type: 'plus' },
+      },
+      {
+        event_hash: 'event-1',
+        timestamp_ms: 2_000,
+        header_quota_plan_type: 'free',
+        header_quota_used_percent: 25,
+      },
+      t
+    );
+
+    expect(state?.planType).toBe('free');
   });
 });

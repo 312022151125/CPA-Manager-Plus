@@ -82,6 +82,10 @@ type TaskBucket = usageevent.TaskBucket
 type EventPageItem = usageevent.EventPageItem
 type EventsPage = usageevent.EventsPage
 type HeaderSnapshot = usageevent.HeaderSnapshot
+type AccountWindowUsageQuery = usageevent.AccountWindowUsageQuery
+type AccountWindowModelStat = usageevent.AccountWindowModelStat
+type LatestAccountRequestQuery = usageevent.LatestAccountRequestQuery
+type LatestAccountRequest = usageevent.LatestAccountRequest
 type UsageRollupCheckpoint = usagerollup.Checkpoint
 type UsageRollupCatchUpResult = usagerollup.CatchUpResult
 type AccountHistoryRollupRow = usagerollup.AccountHistoryRow
@@ -568,6 +572,10 @@ func (s *Store) AccountHistoryRollupRows(ctx context.Context, accountKeys []stri
 	return s.UsageRollups.AccountHistoryRows(ctx, accountKeys)
 }
 
+func (s *Store) RecentAccountRequests(ctx context.Context, targets []LatestAccountRequestQuery, limit int) ([]LatestAccountRequest, error) {
+	return s.UsageEvents.RecentAccountRequests(ctx, targets, limit)
+}
+
 func (s *Store) DashboardHourlyRollupRows(ctx context.Context, fromMS, toMS int64) ([]DashboardHourlyRollupRow, error) {
 	return s.UsageRollups.DashboardHourlyRows(ctx, fromMS, toMS)
 }
@@ -718,6 +726,10 @@ func (s *Store) FailureSourcesWithFilter(ctx context.Context, filter AnalyticsFi
 
 func (s *Store) AccountModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]AccountModelStat, error) {
 	return s.UsageEvents.AccountModelStatsWithFilter(ctx, filter)
+}
+
+func (s *Store) AccountWindowModelStats(ctx context.Context, windows []AccountWindowUsageQuery) ([]AccountWindowModelStat, error) {
+	return s.UsageEvents.AccountWindowModelStats(ctx, windows)
 }
 
 func (s *Store) CredentialModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]CredentialModelStat, error) {

@@ -49,6 +49,38 @@ func TestHandleAccountHistoryRejectsUnknownTargetFields(t *testing.T) {
 	}
 }
 
+func TestHandleAccountWindowUsageRejectsUnknownTargetFields(t *testing.T) {
+	st := newHandlerTestStore(t)
+	const adminKey = "cpamp_test_key"
+	credential, err := security.NewAdminCredential(adminKey, "test")
+	if err != nil {
+		t.Fatalf("create admin credential: %v", err)
+	}
+	if err := st.SaveAdminCredential(context.Background(), credential); err != nil {
+		t.Fatalf("save admin credential: %v", err)
+	}
+	handler := &Handler{App: &app.Context{
+		AdminAuthService:  adminauthsvc.New(config.Config{}, st),
+		MonitoringService: monitoringsvc.New(st),
+	}}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v0/management/monitoring/account-window-usage",
+		bytes.NewBufferString(`{"windows":[{"row_key":"row-1","window_key":"5h","from_ms":1,"to_ms":2,"source_hash":"source-only"}]}`),
+	)
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	recorder := httptest.NewRecorder()
+
+	handler.Handle(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "source_hash") {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
 func newHandlerTestStore(t testing.TB) *store.Store {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
