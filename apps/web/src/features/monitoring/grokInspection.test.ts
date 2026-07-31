@@ -222,7 +222,7 @@ describe('executeGrokInspectionActions', () => {
     });
 
     expect(statusSpy).toHaveBeenCalledTimes(1);
-    expect(statusSpy).toHaveBeenCalledWith('same.json', true);
+    expect(statusSpy).toHaveBeenCalledWith({ name: 'same.json' }, true);
     expect(deleteSpy).not.toHaveBeenCalled();
     expect(result.outcomes).toHaveLength(1);
     expect(result.outcomes[0]?.action).toBe('disable');
