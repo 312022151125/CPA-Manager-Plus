@@ -35,6 +35,7 @@ describe('accountsWorkspaceUiState', () => {
     const state = {
       ...DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE,
       search: 'team-*',
+      statusFilter: 'weekly_limited' as const,
       operationalFilter: 'cooldown' as const,
       accountSort: { key: 'name' as const, direction: 'asc' as const },
       pageSize: 20,

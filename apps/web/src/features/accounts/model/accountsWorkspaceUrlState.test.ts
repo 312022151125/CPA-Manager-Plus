@@ -8,7 +8,7 @@ import {
 describe('accountsWorkspaceUrlState', () => {
   it('reads validated workspace filters, detail deep links and OAuth editors', () => {
     const state = readAccountsWorkspaceUrlState(
-      '?view=oauth&healthMode=server&search=team%2A&provider=codex&status=problem&plan=pro&quota=lt20&operation=reauth&sort=name&direction=asc&pageSize=20&display=masked&account=file.json%00auth-1&tab=diagnostics&editor=alias&editorProvider=codex',
+      '?view=oauth&healthMode=server&search=team%2A&provider=codex&status=weekly_limited&plan=pro&quota=lt20&operation=reauth&sort=name&direction=asc&pageSize=20&display=masked&account=file.json%00auth-1&tab=diagnostics&editor=alias&editorProvider=codex',
       DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
     );
 
@@ -17,7 +17,7 @@ describe('accountsWorkspaceUrlState', () => {
       healthMode: 'server',
       search: 'team*',
       providerFilter: 'codex',
-      statusFilter: 'problem',
+      statusFilter: 'weekly_limited',
       planFilter: 'pro',
       quotaBandFilter: 'lt20',
       operationalFilter: 'reauth',
@@ -102,5 +102,27 @@ describe('accountsWorkspaceUrlState', () => {
 
     expect(search).toBe('?sort=name&direction=desc');
     expect(state.accountSort).toEqual({ key: 'name', direction: 'desc' });
+  });
+
+  it('round-trips precise Codex status filters', () => {
+    const search = writeAccountsWorkspaceUrlSearch(
+      '',
+      {
+        ...DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE,
+        view: 'accounts',
+        healthMode: 'local',
+        statusFilter: 'disabled_with_reset',
+        account: null,
+        detailTab: 'overview',
+        editor: null,
+        editorProvider: '',
+      },
+      DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
+    );
+
+    expect(search).toBe('?status=disabled_with_reset');
+    expect(
+      readAccountsWorkspaceUrlState(search, DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE).statusFilter
+    ).toBe('disabled_with_reset');
   });
 });

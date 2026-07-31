@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
-import type {
-  AuthFileItem,
-  CodexQuotaState,
-  CredentialScopedQuotaState,
-} from '@/types';
+import type { AuthFileItem, CodexQuotaState, CredentialScopedQuotaState } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
-import { getAuthFileSelectionKey } from '@/features/authFiles/model/authFilesPageModel';
+import {
+  getAuthFileCodexStatus,
+  getAuthFileSelectionKey,
+} from '@/features/authFiles/model/authFilesPageModel';
 import {
   buildAccountMetrics,
   buildAccountRows as buildAccountRowsBase,
   findAccountRowForInspectionTarget,
   filterAccountRows,
+  getPlanOptions,
   sortAccountRows,
   type AccountInspectionResult,
   type AccountQuotaStores,
@@ -1237,6 +1237,128 @@ describe('accountRows', () => {
         search: 'ok@example',
       }).map((row) => row.fileName)
     ).toEqual(['claude-ok.json']);
+  });
+
+  it('filters rows by credential-scoped Codex status evidence', () => {
+    const weeklyQuota: CodexQuotaState = {
+      status: 'success',
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly',
+          usedPercent: 100,
+          resetLabel: 'Mon',
+        },
+      ],
+    };
+    const rows = buildAccountRows(
+      [
+        { name: 'weekly.json', type: 'codex', authIndex: 'weekly' },
+        { name: 'reauth.json', type: 'codex', authIndex: 'reauth' },
+      ],
+      emptyStores()
+    );
+    const codexStatusBySelectionKey = new Map([
+      [rows[0].selectionKey, getAuthFileCodexStatus(rows[0].raw, weeklyQuota)],
+      [
+        rows[1].selectionKey,
+        getAuthFileCodexStatus(rows[1].raw, undefined, {
+          fileName: rows[1].fileName,
+          authIndex: rows[1].authIndex,
+          statusCode: 401,
+          action: 'reauth',
+        }),
+      ],
+    ]);
+
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'weekly_limited',
+        plan: 'all',
+        quotaBand: 'all',
+        search: '',
+        codexStatusBySelectionKey,
+      }).map((row) => row.fileName)
+    ).toEqual(['weekly.json']);
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'reauth',
+        plan: 'all',
+        quotaBand: 'all',
+        search: '',
+        codexStatusBySelectionKey,
+      }).map((row) => row.fileName)
+    ).toEqual(['reauth.json']);
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'quota_limited',
+        plan: 'all',
+        quotaBand: 'all',
+        search: '',
+      })
+    ).toHaveLength(0);
+  });
+
+  it('exposes unknown plans and orders Codex plans by tier with unknown last', () => {
+    const rows = buildAccountRows(
+      [
+        { name: 'pro.json', type: 'codex', planType: 'pro' },
+        { name: 'pro-lite.json', type: 'codex', planType: 'prolite' },
+        { name: 'team.json', type: 'codex', planType: 'team' },
+        { name: 'plus.json', type: 'codex', planType: 'plus' },
+        { name: 'free.json', type: 'codex', planType: 'free' },
+        { name: 'enterprise.json', type: 'codex', planType: 'enterprise' },
+        { name: 'unknown.json', type: 'codex' },
+      ],
+      emptyStores()
+    );
+    const plusRow = rows.find((row) => row.fileName === 'plus.json');
+    if (!plusRow) throw new Error('Plus plan row not found');
+    plusRow.planType = ' plus ';
+
+    expect(getPlanOptions(rows)).toEqual([
+      'enterprise',
+      'free',
+      'plus',
+      'team',
+      'prolite',
+      'pro',
+      'unknown',
+    ]);
+    expect(
+      sortAccountRows(rows, { key: 'plan', direction: 'asc' }).map((row) => row.fileName)
+    ).toEqual([
+      'enterprise.json',
+      'free.json',
+      'plus.json',
+      'team.json',
+      'pro-lite.json',
+      'pro.json',
+      'unknown.json',
+    ]);
+    expect(
+      sortAccountRows(rows, { key: 'plan', direction: 'desc' }).map((row) => row.fileName)
+    ).toEqual([
+      'pro.json',
+      'pro-lite.json',
+      'team.json',
+      'plus.json',
+      'free.json',
+      'enterprise.json',
+      'unknown.json',
+    ]);
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'all',
+        plan: 'plus',
+        quotaBand: 'all',
+        search: '',
+      }).map((row) => row.fileName)
+    ).toEqual(['plus.json']);
   });
 
   it('sorts rows by priority, recent requests, and reset label', () => {

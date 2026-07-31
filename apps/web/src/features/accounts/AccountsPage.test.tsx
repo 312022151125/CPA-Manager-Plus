@@ -1213,6 +1213,131 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
   });
 
+  it('loads precise Codex status evidence on demand and filters by quota window', async () => {
+    mocks.files = [
+      makeCodexFile('weekly.json', 'weekly-auth', 'weekly@example.com'),
+      makeCodexFile('available.json', 'available-auth', 'available@example.com'),
+    ];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: true,
+    };
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 1_700_000_000_000,
+      from_ms: 0,
+      to_ms: 1_700_000_000_000,
+      items: [
+        {
+          event_hash: 'weekly-limit',
+          timestamp_ms: 1_700_000_000_000,
+          auth_file_snapshot: 'weekly.json',
+          auth_index: 'weekly-auth',
+          account_snapshot: 'weekly@example.com',
+          auth_provider_snapshot: 'codex',
+          response_metadata: {
+            quota: {
+              rate_limit_reached_type: 'secondary',
+              reached_window_kind: 'weekly',
+              reached_window_source: 'secondary',
+              recover_at_ms: 1_700_604_800_000,
+            },
+            errors: {
+              kind: 'rate_limit',
+              code: 'usage_limit_reached',
+            },
+          },
+        },
+        {
+          event_hash: 'expired-weekly-limit',
+          timestamp_ms: 1_699_000_000_000,
+          auth_file_snapshot: 'available.json',
+          auth_index: 'available-auth',
+          account_snapshot: 'available@example.com',
+          auth_provider_snapshot: 'codex',
+          response_metadata: {
+            quota: {
+              rate_limit_reached_type: 'secondary',
+              reached_window_kind: 'weekly',
+              reached_window_source: 'secondary',
+              recover_at_ms: 1_699_999_999_999,
+            },
+            errors: {
+              kind: 'rate_limit',
+              code: 'usage_limit_reached',
+            },
+          },
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(mocks.getHeaderSnapshots).not.toHaveBeenCalled();
+    expect(mocks.listCodexInspectionRuns).not.toHaveBeenCalled();
+
+    const statusSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.status_filter');
+    if (!statusSelect) throw new Error('Accounts status filter not found');
+    await act(async () => {
+      statusSelect.props.onChange('weekly_limited');
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
+    expect(mocks.listCodexInspectionRuns).toHaveBeenCalledTimes(1);
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[0]),
+      })
+    ).toHaveLength(1);
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
+      })
+    ).toHaveLength(0);
+  });
+
+  it('offers and applies the unknown plan filter', async () => {
+    mocks.files = [
+      {
+        ...makeCodexFile('plus.json', 'plus-auth', 'plus@example.com'),
+        planType: 'plus',
+      } as AuthFileItem,
+      makeCodexFile('unknown.json', 'unknown-auth', 'unknown@example.com'),
+    ];
+
+    const renderer = await renderAccountsPage();
+    const planSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.plan_filter');
+    if (!planSelect) throw new Error('Accounts plan filter not found');
+
+    expect(planSelect.props.options).toContainEqual({
+      value: 'unknown',
+      label: 'auth_files.codex_plan_filter_unknown',
+    });
+    await act(async () => {
+      planSelect.props.onChange('unknown');
+      await Promise.resolve();
+    });
+
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[0]),
+      })
+    ).toHaveLength(0);
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
+      })
+    ).toHaveLength(1);
+  });
+
   it('updates the accounts view query when switching views', async () => {
     const renderer = await renderAccountsPage();
 
@@ -1376,10 +1501,9 @@ describe('AccountsPage replacement flows', () => {
       await findBatchMoreItem(renderer, 'websockets-enable').onClick();
     });
 
-    expect(mocks.batchPatchFields).toHaveBeenCalledWith(
-      [getAuthFilePatchTarget(mocks.files[0])],
-      { websockets: true }
-    );
+    expect(mocks.batchPatchFields).toHaveBeenCalledWith([getAuthFilePatchTarget(mocks.files[0])], {
+      websockets: true,
+    });
   });
 
   it('disables batch delete for partial shared auth-file selections', async () => {

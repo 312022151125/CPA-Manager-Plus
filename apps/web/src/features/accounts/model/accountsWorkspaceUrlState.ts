@@ -1,5 +1,6 @@
 import type { DetailTab, AccountsView } from './accountsPagePresentation';
 import type { AccountsWorkspaceUiState } from './accountsWorkspaceUiState';
+import { ACCOUNT_STATUS_FILTERS } from './accountRows';
 import type { CredentialHealthInspectionMode } from '@/features/monitoring/model/credentialInspectionSnapshot';
 
 export type AccountsOAuthEditor = 'excluded' | 'alias';
@@ -22,15 +23,9 @@ const DETAIL_TAB_SET = new Set<DetailTab>([
   'models',
   'diagnostics',
 ]);
-const STATUS_FILTER_SET: ReadonlySet<AccountsWorkspaceUiState['statusFilter']> = new Set([
-  'all',
-  'available',
-  'disabled',
-  'problem',
-  'low',
-  'exhausted',
-  'inspection',
-]);
+const STATUS_FILTER_SET: ReadonlySet<AccountsWorkspaceUiState['statusFilter']> = new Set(
+  ACCOUNT_STATUS_FILTERS
+);
 const QUOTA_BAND_SET: ReadonlySet<AccountsWorkspaceUiState['quotaBandFilter']> = new Set([
   'all',
   'ge50',
