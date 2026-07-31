@@ -154,6 +154,25 @@ func validateAccountHistoryRequest(req monitoringsvc.AccountHistoryRequest) erro
 	if len(req.Accounts) > 200 {
 		return errors.New("accounts must be less than or equal to 200")
 	}
+	rowKeys := make(map[string]struct{}, len(req.Accounts))
+	for _, account := range req.Accounts {
+		if strings.TrimSpace(account.RowKey) == "" {
+			return errors.New("row_key is required")
+		}
+		if _, exists := rowKeys[account.RowKey]; exists {
+			return errors.New("row_key must be unique")
+		}
+		rowKeys[account.RowKey] = struct{}{}
+		if strings.TrimSpace(account.AccountKey) == "" &&
+			strings.TrimSpace(account.AccountSnapshot) == "" &&
+			strings.TrimSpace(account.AuthLabelSnapshot) == "" &&
+			strings.TrimSpace(account.AuthFileSnapshot) == "" &&
+			strings.TrimSpace(account.AuthProjectIDSnapshot) == "" &&
+			strings.TrimSpace(account.AuthIndex) == "" &&
+			strings.TrimSpace(account.Source) == "" {
+			return errors.New("at least one account target field is required")
+		}
+	}
 	return nil
 }
 

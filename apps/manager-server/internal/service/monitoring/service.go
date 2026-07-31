@@ -13,6 +13,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/usagehourly"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 const (
@@ -221,11 +222,15 @@ type AccountHistoryRequest struct {
 }
 
 type AccountHistoryTarget struct {
-	AccountKey        string `json:"account_key,omitempty"`
-	AccountSnapshot   string `json:"account_snapshot,omitempty"`
-	AuthLabelSnapshot string `json:"auth_label_snapshot,omitempty"`
-	AuthIndex         string `json:"auth_index,omitempty"`
-	Source            string `json:"source,omitempty"`
+	RowKey                string `json:"row_key"`
+	AccountKey            string `json:"account_key,omitempty"`
+	AccountSnapshot       string `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot     string `json:"auth_label_snapshot,omitempty"`
+	AuthFileSnapshot      string `json:"auth_file_snapshot,omitempty"`
+	AuthProviderSnapshot  string `json:"auth_provider_snapshot,omitempty"`
+	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
+	AuthIndex             string `json:"auth_index,omitempty"`
+	Source                string `json:"source,omitempty"`
 }
 
 type AccountHistoryResponse struct {
@@ -242,6 +247,7 @@ type AccountHistoryCheckpointState struct {
 }
 
 type AccountHistoryItem struct {
+	RowKey         string                 `json:"row_key"`
 	AccountKey     string                 `json:"account_key"`
 	Matched        bool                   `json:"matched"`
 	TotalRequests  int64                  `json:"total_requests"`
@@ -1301,7 +1307,7 @@ func (s *Service) accountHistory(ctx context.Context, req AccountHistoryRequest)
 		if latestAccountRequestTargetValid(account) {
 			latestRequestTargets = append(latestRequestTargets, store.LatestAccountRequestQuery{
 				RequestIndex:     index,
-				AuthFileSnapshot: account.Source,
+				AuthFileSnapshot: accountHistoryAuthFileSnapshot(account),
 				AuthIndex:        account.AuthIndex,
 			})
 		}
@@ -1352,6 +1358,7 @@ func (s *Service) accountHistory(ctx context.Context, req AccountHistoryRequest)
 		}
 		if !validTargets[index] {
 			items = append(items, AccountHistoryItem{
+				RowKey:         req.Accounts[index].RowKey,
 				AccountKey:     key,
 				Matched:        false,
 				LatestRequest:  latestRequest,
@@ -1363,6 +1370,7 @@ func (s *Service) accountHistory(ctx context.Context, req AccountHistoryRequest)
 		total := totals[key]
 		if total == nil {
 			items = append(items, AccountHistoryItem{
+				RowKey:         req.Accounts[index].RowKey,
 				AccountKey:     key,
 				Matched:        false,
 				LatestRequest:  latestRequest,
@@ -1377,6 +1385,7 @@ func (s *Service) accountHistory(ctx context.Context, req AccountHistoryRequest)
 			successRate = &value
 		}
 		items = append(items, AccountHistoryItem{
+			RowKey:         req.Accounts[index].RowKey,
 			AccountKey:     key,
 			Matched:        true,
 			TotalRequests:  total.requests,
@@ -3192,25 +3201,30 @@ type accountHistoryTotal struct {
 }
 
 func accountHistoryTargetKey(target AccountHistoryTarget) (string, bool) {
-	if key := strings.TrimSpace(target.AccountKey); key != "" {
+	if key, valid := usageidentity.AccountKey(usageidentity.Fields{
+		AuthFileSnapshot:      target.AuthFileSnapshot,
+		AuthIndex:             target.AuthIndex,
+		AuthProviderSnapshot:  target.AuthProviderSnapshot,
+		AuthProjectIDSnapshot: target.AuthProjectIDSnapshot,
+		AccountSnapshot:       target.AccountSnapshot,
+		AuthLabelSnapshot:     target.AuthLabelSnapshot,
+		Source:                target.Source,
+	}); valid {
 		return key, true
 	}
-	if strings.TrimSpace(target.AccountSnapshot) == "" &&
-		strings.TrimSpace(target.AuthLabelSnapshot) == "" &&
-		strings.TrimSpace(target.Source) == "" &&
-		strings.TrimSpace(target.AuthIndex) == "" {
-		return "", false
-	}
-	return store.AccountHistoryKey(
-		target.AccountSnapshot,
-		target.AuthLabelSnapshot,
-		target.Source,
-		target.AuthIndex,
-	), true
+	key := strings.TrimSpace(target.AccountKey)
+	return key, key != ""
 }
 
 func latestAccountRequestTargetValid(target AccountHistoryTarget) bool {
-	return strings.TrimSpace(target.Source) != ""
+	return accountHistoryAuthFileSnapshot(target) != ""
+}
+
+func accountHistoryAuthFileSnapshot(target AccountHistoryTarget) string {
+	if value := strings.TrimSpace(target.AuthFileSnapshot); value != "" {
+		return value
+	}
+	return strings.TrimSpace(target.Source)
 }
 
 func accountLatestRequestFromStore(request store.LatestAccountRequest) *AccountLatestRequest {
