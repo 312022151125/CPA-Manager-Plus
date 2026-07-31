@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { AutocompleteInput } from '@/components/ui/AutocompleteInput';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Input } from '@/components/ui/Input';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { Modal } from '@/components/ui/Modal';
 import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
@@ -18,11 +19,25 @@ import {
 } from '@/features/authFiles/constants';
 import { isOAuthAliasDraftDirty } from '@/features/authFiles/oauthEditorState';
 import { normalizeOAuthAliasEntries } from '@/features/authFiles/oauthAliasValidation';
+import {
+  addOAuthExcludedRule,
+  serializeOAuthExcludedRules,
+} from '@/features/authFiles/oauthExcludedRules';
+import {
+  buildOAuthAliasModelOptions,
+  buildOAuthExcludedModelOptions,
+} from '@/features/authFiles/oauthProviderModelOptions';
 import { generateId } from '@/utils/helpers';
 import styles from './OAuthEditorModals.module.scss';
 
 type OAuthModelMappingFormEntry = OAuthModelAliasEntry & { id: string };
 type ProviderModelsError = 'unsupported' | 'failed' | null;
+type ProviderModelsSnapshot = {
+  providerKey: string;
+  models: AuthFileModelItem[];
+  loading: boolean;
+  error: ProviderModelsError;
+};
 
 type OAuthEditorBaseProps = {
   open: boolean;
@@ -135,9 +150,12 @@ function useProviderModels({
 }) {
   const { t } = useTranslation();
   const showNotification = useNotificationStore((state) => state.showNotification);
-  const [models, setModels] = useState<AuthFileModelItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<ProviderModelsError>(null);
+  const [snapshot, setSnapshot] = useState<ProviderModelsSnapshot>({
+    providerKey: '',
+    models: [],
+    loading: false,
+    error: null,
+  });
   const active = open && Boolean(providerKey) && !unsupported && !disabled;
 
   useEffect(() => {
@@ -146,27 +164,19 @@ function useProviderModels({
     let cancelled = false;
 
     const loadModels = async () => {
-      setLoading(true);
-      setError(null);
       try {
         const items = await authFilesApi.getModelDefinitions(providerKey);
         if (cancelled) return;
-        setModels(items);
+        setSnapshot({ providerKey, models: items, loading: false, error: null });
       } catch (err: unknown) {
         if (cancelled) return;
         if (readErrorStatus(err) === 404) {
-          setModels([]);
-          setError('unsupported');
+          setSnapshot({ providerKey, models: [], loading: false, error: 'unsupported' });
           return;
         }
-        setModels([]);
-        setError('failed');
+        setSnapshot({ providerKey, models: [], loading: false, error: 'failed' });
         const message = err instanceof Error ? err.message : '';
         showNotification(`${t('notification.load_failed')}: ${message}`, 'error');
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
       }
     };
 
@@ -177,10 +187,16 @@ function useProviderModels({
     };
   }, [active, providerKey, showNotification, t]);
 
+  if (!active) {
+    return { models: [], loading: false, error: null };
+  }
+  if (snapshot.providerKey !== providerKey) {
+    return { models: [], loading: true, error: null };
+  }
   return {
-    models: active ? models : [],
-    loading: active ? loading : false,
-    error: active ? error : null,
+    models: snapshot.models,
+    loading: snapshot.loading,
+    error: snapshot.error,
   };
 }
 
@@ -199,20 +215,25 @@ export function OAuthExcludedEditorModal({
   const showNotification = useNotificationStore((state) => state.showNotification);
   const [provider, setProvider] = useState(initialProvider);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+  const [customRule, setCustomRule] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setProvider(initialProvider);
+    setCustomRule('');
   }, [initialProvider, open]);
 
   const providerOptions = useProviderOptions({ files, excluded, modelAlias });
   const resolvedProviderKey = useMemo(() => normalizeProviderKey(provider), [provider]);
-  const existingModels = useMemo(
-    () => (resolvedProviderKey ? (findProviderEntries(excluded, resolvedProviderKey) ?? []) : []),
+  const existingRules = useMemo(
+    () =>
+      serializeOAuthExcludedRules(
+        resolvedProviderKey ? (findProviderEntries(excluded, resolvedProviderKey) ?? []) : []
+      ),
     [excluded, resolvedProviderKey]
   );
-  const isEditing = resolvedProviderKey ? existingModels.length > 0 : false;
+  const isEditing = resolvedProviderKey ? existingRules.length > 0 : false;
   const { models, loading, error } = useProviderModels({
     open,
     providerKey: resolvedProviderKey,
@@ -222,8 +243,36 @@ export function OAuthExcludedEditorModal({
 
   useEffect(() => {
     if (!open) return;
-    setSelectedModels(new Set(existingModels));
-  }, [existingModels, open]);
+    setSelectedModels(new Set(existingRules));
+    setCustomRule('');
+  }, [existingRules, open]);
+
+  const modelOptions = useMemo(
+    () => buildOAuthExcludedModelOptions(models, existingRules),
+    [existingRules, models]
+  );
+  const currentRules = useMemo(() => serializeOAuthExcludedRules(selectedModels), [selectedModels]);
+  const draftRules = useMemo(
+    () => serializeOAuthExcludedRules(addOAuthExcludedRule(selectedModels, customRule)),
+    [customRule, selectedModels]
+  );
+  const unlistedRules = useMemo(() => {
+    const optionIds = new Set(modelOptions.map((model) => model.id));
+    return currentRules.filter((rule) => !optionIds.has(rule));
+  }, [currentRules, modelOptions]);
+
+  const handleProviderChange = useCallback(
+    (value: string) => {
+      const providerKey = normalizeProviderKey(value);
+      const nextRules = serializeOAuthExcludedRules(
+        providerKey ? (findProviderEntries(excluded, providerKey) ?? []) : []
+      );
+      setProvider(value);
+      setSelectedModels(new Set(nextRules));
+      setCustomRule('');
+    },
+    [excluded]
+  );
 
   const toggleModel = useCallback((modelId: string, checked: boolean) => {
     setSelectedModels((prev) => {
@@ -238,13 +287,13 @@ export function OAuthExcludedEditorModal({
   }, []);
 
   const hasSelectionChanged = useMemo(() => {
-    const current = [...selectedModels].sort();
-    const existing = [...existingModels].sort();
+    const current = draftRules;
+    const existing = existingRules;
     return (
       current.length !== existing.length ||
       current.some((value, index) => value !== existing[index])
     );
-  }, [existingModels, selectedModels]);
+  }, [draftRules, existingRules]);
 
   const handleSave = useCallback(async () => {
     const providerKey = normalizeProviderKey(provider);
@@ -255,7 +304,7 @@ export function OAuthExcludedEditorModal({
 
     setSaving(true);
     try {
-      const modelIds = [...selectedModels];
+      const modelIds = draftRules;
       if (modelIds.length > 0) {
         await authFilesApi.saveOauthExcludedModels(providerKey, modelIds);
       } else {
@@ -270,7 +319,7 @@ export function OAuthExcludedEditorModal({
     } finally {
       setSaving(false);
     }
-  }, [onClose, onSaved, provider, selectedModels, showNotification, t]);
+  }, [draftRules, onClose, onSaved, provider, showNotification, t]);
 
   const canSave =
     !disabled && !saving && !unsupported && Boolean(resolvedProviderKey) && hasSelectionChanged;
@@ -322,7 +371,7 @@ export function OAuthExcludedEditorModal({
                     id="accounts-oauth-excluded-provider"
                     placeholder={t('oauth_excluded.provider_placeholder')}
                     value={provider}
-                    onChange={setProvider}
+                    onChange={handleProviderChange}
                     options={providerOptions}
                     disabled={disabled || saving}
                     wrapperStyle={{ marginBottom: 0 }}
@@ -337,7 +386,7 @@ export function OAuthExcludedEditorModal({
                       key={option}
                       type="button"
                       className={`${styles.tag} ${active ? styles.tagActive : ''}`}
-                      onClick={() => setProvider(option)}
+                      onClick={() => handleProviderChange(option)}
                       disabled={disabled || saving}
                     >
                       {getTypeLabel(t, option)}
@@ -372,14 +421,9 @@ export function OAuthExcludedEditorModal({
                 </div>
               ) : null}
             </div>
-            {loading ? (
-              <div className={styles.loadingModels}>
-                <LoadingSpinner size={16} />
-                <span>{t('common.loading')}</span>
-              </div>
-            ) : models.length > 0 ? (
+            {modelOptions.length > 0 ? (
               <div className={styles.modelList}>
-                {models.map((model) => (
+                {modelOptions.map((model) => (
                   <SelectionCheckbox
                     key={model.id}
                     checked={selectedModels.has(model.id)}
@@ -398,6 +442,11 @@ export function OAuthExcludedEditorModal({
                   />
                 ))}
               </div>
+            ) : loading ? (
+              <div className={styles.loadingModels}>
+                <LoadingSpinner size={16} />
+                <span>{t('common.loading')}</span>
+              </div>
             ) : resolvedProviderKey ? (
               <div className={styles.emptyModels}>
                 {error === 'unsupported'
@@ -409,6 +458,43 @@ export function OAuthExcludedEditorModal({
             ) : (
               <div className={styles.emptyModels}>{t('oauth_excluded.provider_required')}</div>
             )}
+            <div className={styles.settingsSection}>
+              <div className={styles.settingsRow}>
+                <div className={styles.settingsInfo}>
+                  <div className={styles.settingsLabel}>
+                    {t('oauth_excluded.custom_rule_label')}
+                  </div>
+                  <div className={styles.settingsDesc}>{t('oauth_excluded.custom_rule_hint')}</div>
+                </div>
+                <div className={styles.settingsControl}>
+                  <Input
+                    value={customRule}
+                    placeholder={t('oauth_excluded.custom_rule_placeholder')}
+                    disabled={disabled || saving}
+                    onChange={(event) => setCustomRule(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter') return;
+                      event.preventDefault();
+                      setSelectedModels((current) => addOAuthExcludedRule(current, customRule));
+                      setCustomRule('');
+                    }}
+                  />
+                </div>
+              </div>
+              <div className={styles.tagList}>
+                {unlistedRules.map((rule) => (
+                  <button
+                    key={rule}
+                    type="button"
+                    className={styles.tag}
+                    onClick={() => toggleModel(rule, false)}
+                    disabled={disabled || saving}
+                  >
+                    {rule} <IconX size={12} />
+                  </button>
+                ))}
+              </div>
+            </div>
           </section>
         </div>
       )}
@@ -452,11 +538,25 @@ export function OAuthModelAliasEditorModal({
     disabled,
     unsupported,
   });
+  const modelOptions = useMemo(
+    () => buildOAuthAliasModelOptions(models, existingMappings),
+    [existingMappings, models]
+  );
 
   useEffect(() => {
     if (!open) return;
     setMappings(normalizeMappingEntries(existingMappings));
   }, [existingMappings, open]);
+
+  const handleProviderChange = useCallback(
+    (value: string) => {
+      const providerKey = normalizeProviderKey(value);
+      const nextMappings = providerKey ? (findProviderEntries(modelAlias, providerKey) ?? []) : [];
+      setProvider(value);
+      setMappings(normalizeMappingEntries(nextMappings));
+    },
+    [modelAlias]
+  );
 
   const headerHint = useMemo(() => {
     if (!provider.trim()) {
@@ -599,7 +699,7 @@ export function OAuthModelAliasEditorModal({
                     id="accounts-oauth-model-alias-provider"
                     placeholder={t('oauth_model_alias.provider_placeholder')}
                     value={provider}
-                    onChange={setProvider}
+                    onChange={handleProviderChange}
                     options={providerOptions}
                     disabled={disabled || saving}
                     wrapperStyle={{ marginBottom: 0 }}
@@ -614,7 +714,7 @@ export function OAuthModelAliasEditorModal({
                       key={option}
                       type="button"
                       className={`${styles.tag} ${active ? styles.tagActive : ''}`}
-                      onClick={() => setProvider(option)}
+                      onClick={() => handleProviderChange(option)}
                       disabled={disabled || saving}
                     >
                       {getTypeLabel(t, option)}
@@ -648,7 +748,7 @@ export function OAuthModelAliasEditorModal({
                       value={entry.name}
                       onChange={(value) => updateMappingEntry(index, 'name', value)}
                       disabled={disabled || saving}
-                      options={models.map((model) => ({
+                      options={modelOptions.map((model) => ({
                         value: model.id,
                         label:
                           model.display_name && model.display_name !== model.id
@@ -668,7 +768,7 @@ export function OAuthModelAliasEditorModal({
                       variant="ghost"
                       size="sm"
                       onClick={() => removeMappingEntry(index)}
-                      disabled={disabled || saving || mappings.length <= 1}
+                      disabled={disabled || saving}
                       title={t('common.delete')}
                       aria-label={t('common.delete')}
                     >
