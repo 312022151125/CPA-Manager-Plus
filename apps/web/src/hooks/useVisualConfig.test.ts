@@ -42,6 +42,33 @@ const mountUseVisualConfig = (): UseVisualConfigHarness => {
 };
 
 describe('useVisualConfig', () => {
+  it('loads CPA weighted routing aliases and writes the canonical strategy', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = ['routing:', '  strategy: wrr', ''].join('\n');
+
+    act(() => {
+      expect(harness.getCurrent().loadVisualValuesFromYaml(yaml).ok).toBe(true);
+    });
+    expect(harness.getCurrent().visualValues.routingStrategy).toBe('weighted-round-robin');
+    harness.unmount();
+
+    const writeHarness = mountUseVisualConfig();
+    const roundRobinYaml = ['routing:', '  strategy: round-robin', ''].join('\n');
+
+    act(() => {
+      expect(writeHarness.getCurrent().loadVisualValuesFromYaml(roundRobinYaml).ok).toBe(true);
+      writeHarness.getCurrent().setVisualValues({ routingStrategy: 'weighted-round-robin' });
+    });
+
+    const parsed = parseYaml(
+      writeHarness.getCurrent().applyVisualChangesToYaml(roundRobinYaml)
+    ) as {
+      routing?: { strategy?: string };
+    };
+    expect(parsed.routing?.strategy).toBe('weighted-round-robin');
+    writeHarness.unmount();
+  });
+
   it('loads plugin system state from plugins.enabled', () => {
     const harness = mountUseVisualConfig();
     const yaml = ['plugins:', '  enabled: true', ''].join('\n');

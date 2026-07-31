@@ -188,6 +188,11 @@ export function ProviderDetailDrawer({
               <div key={getOpenAIEntryKey(entry, entryIndex)} className={styles.keyEntryCard}>
                 <span className={styles.keyEntryIndex}>{entryIndex + 1}</span>
                 <span className={styles.keyEntryKey}>{maskApiKey(entry.apiKey)}</span>
+                {entry.weight !== undefined && (
+                  <span className={styles.keyEntryWeight}>
+                    {t('ai_providers.weight_label')}: {entry.weight}
+                  </span>
+                )}
                 {entry.proxyUrl && <span className={styles.keyEntryProxy}>{entry.proxyUrl}</span>}
                 <span className={styles.keyEntryStats}>
                   <span className={styles.statSuccess}>
@@ -224,6 +229,9 @@ export function ProviderDetailDrawer({
           )}
           <FieldRow label={t('common.base_url')} value={row.baseUrl} />
           <FieldRow label={t('common.priority')} value={row.priority} />
+          {row.kind !== 'openai' && (
+            <FieldRow label={t('ai_providers.weight_label')} value={row.raw.weight} />
+          )}
           <FieldRow label={t('common.prefix')} value={row.raw.prefix} />
           {row.kind !== 'openai' && (
             <FieldRow label={t('common.proxy_url')} value={row.raw.proxyUrl} />

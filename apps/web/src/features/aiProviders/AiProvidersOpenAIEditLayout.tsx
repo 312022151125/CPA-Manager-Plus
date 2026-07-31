@@ -21,8 +21,18 @@ import {
   buildProviderDraftKey,
   parseProviderIndexParam,
 } from '@/features/aiProviders/model/routeParams';
-import type { ModelEntry, OpenAIFormState } from '@/components/providers/types';
+import type {
+  ModelEntry,
+  OpenAIFormApiKeyEntry,
+  OpenAIFormState,
+} from '@/components/providers/types';
 import type { KeyTestStatus, OpenAIEditBaseline } from '@/stores/useOpenAIEditDraftStore';
+import {
+  getCredentialWeightComparisonValue,
+  getCredentialWeightError,
+  normalizeCredentialWeight,
+  type CredentialWeightComparisonValue,
+} from '@/utils/credentialWeight';
 
 type LocationState = { fromAiProviders?: boolean } | null;
 
@@ -93,21 +103,23 @@ const normalizeKeyHeaders = (headers: ApiKeyEntry['headers']) => {
     });
 };
 
-const normalizeApiKeyEntries = (entries: ApiKeyEntry[]) =>
+const normalizeApiKeyEntries = (entries: OpenAIFormApiKeyEntry[]) =>
   (entries ?? []).reduce<
     Array<{
       apiKey: string;
+      weight: CredentialWeightComparisonValue;
       proxyUrl: string;
       authIndex: string;
       headers: Array<{ key: string; value: string }>;
     }>
   >((acc, entry) => {
     const apiKey = String(entry?.apiKey ?? '').trim();
+    const weight = getCredentialWeightComparisonValue(entry?.weight);
     const proxyUrl = String(entry?.proxyUrl ?? '').trim();
     const authIndex = normalizeAuthIndex(entry?.authIndex) ?? '';
     const headers = normalizeKeyHeaders(entry?.headers);
-    if (!apiKey && !proxyUrl && !authIndex && headers.length === 0) return acc;
-    acc.push({ apiKey, proxyUrl, authIndex, headers });
+    if (!apiKey && weight === null && !proxyUrl && !authIndex && headers.length === 0) return acc;
+    acc.push({ apiKey, weight, proxyUrl, authIndex, headers });
     return acc;
   }, []);
 
@@ -138,6 +150,7 @@ const areNormalizedApiKeyEntriesEqual = (
     if (!left || !right) return false;
     if (
       left.apiKey !== right.apiKey ||
+      left.weight !== right.weight ||
       left.proxyUrl !== right.proxyUrl ||
       left.authIndex !== right.authIndex
     ) {
@@ -487,11 +500,15 @@ export function AiProvidersOpenAIEditLayout() {
   const handleSave = useCallback(async () => {
     const name = form.name.trim();
     const baseUrl = form.baseUrl.trim();
+    const hasInvalidWeight = form.apiKeyEntries.some((entry) =>
+      getCredentialWeightError(entry.weight)
+    );
 
     if (!name || !baseUrl) {
       showNotification(t('notification.openai_provider_required'), 'error');
       return;
     }
+    if (hasInvalidWeight) return;
 
     setSaving(true);
     try {
@@ -500,8 +517,9 @@ export function AiProvidersOpenAIEditLayout() {
         prefix: form.prefix?.trim() || undefined,
         baseUrl,
         headers: buildHeaderObject(form.headers),
-        apiKeyEntries: form.apiKeyEntries.map((entry: ApiKeyEntry) => ({
+        apiKeyEntries: form.apiKeyEntries.map((entry) => ({
           apiKey: entry.apiKey.trim(),
+          weight: normalizeCredentialWeight(entry.weight),
           proxyUrl: entry.proxyUrl?.trim() || undefined,
           authIndex: normalizeAuthIndex(entry.authIndex) ?? undefined,
           headers: entry.headers,

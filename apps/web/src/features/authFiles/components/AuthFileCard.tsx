@@ -42,6 +42,7 @@ import { getAccountAutomationPresentation } from '@/features/authFiles/model/acc
 import { getQuotaCooldownPresentation } from '@/features/authFiles/model/quotaCooldownPresentation';
 import type { AccountActionCandidate, QuotaCooldownInfo } from '@/services/api/usageService';
 import { AuthFileQuotaSection } from '@/features/authFiles/components/AuthFileQuotaSection';
+import { normalizeCredentialWeight } from '@/utils/credentialWeight';
 import styles from '@/features/authFiles/AuthFilesPage.module.scss';
 
 export type AuthFileCardProps = {
@@ -179,6 +180,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
     Boolean(rawStatusMessage) && !isHealthyAuthFileStatusMessage(rawStatusMessage);
 
   const priorityValue = parsePriorityValue(file.priority ?? file['priority']);
+  const weightValue = normalizeCredentialWeight(file.weight ?? file['weight']);
   const projectIdValue = getProjectIdValue(file);
   const noteValue = typeof file.note === 'string' ? file.note.trim() : '';
   const subscription = isAntigravity && !isRuntimeOnly ? antigravitySubscription : undefined;
@@ -405,6 +407,12 @@ export function AuthFileCard(props: AuthFileCardProps) {
                 <span className={`${styles.metaValue} ${styles.priorityValue}`}>
                   {priorityValue}
                 </span>
+              </div>
+            )}
+            {weightValue !== undefined && (
+              <div className={`${styles.metaItem} ${styles.priorityBadge}`}>
+                <span className={styles.metaLabel}>{t('auth_files.weight_display')}</span>
+                <span className={`${styles.metaValue} ${styles.priorityValue}`}>{weightValue}</span>
               </div>
             )}
             {projectIdValue && (

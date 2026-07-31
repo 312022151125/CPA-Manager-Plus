@@ -45,6 +45,9 @@ const createEditor = (
   prefix: '',
   proxyUrl: '',
   priority: '',
+  weight: '',
+  weightTouched: false,
+  weightError: null,
   websockets: false,
   websocketsTouched: false,
   usingApi: false,
@@ -149,5 +152,29 @@ describe('AuthFilesPrefixProxyEditorModal credential refresh action', () => {
     expect(copyButton).toBeDefined();
     act(() => copyButton?.props.onClick());
     expect(onCopyText).toHaveBeenCalledWith(sourcePreview?.props.value);
+  });
+
+  it('renders weight validation and blocks saving an invalid value', () => {
+    const { renderer } = renderModal({
+      editor: {
+        ...createEditor(),
+        weight: '1000001',
+        weightTouched: true,
+        weightError: 'auth_files.weight_error_maximum',
+      },
+      dirty: true,
+    });
+    const weightInput = renderer.root
+      .findAllByType('input')
+      .find((input) => input.props.inputMode === 'text' && input.props.value === '1000001');
+    const saveButton = renderer.root
+      .findAllByType('button')
+      .find((button) =>
+        button.findAllByType('span').some((span) => span.children.includes('common.save'))
+      );
+
+    expect(weightInput?.props.value).toBe('1000001');
+    expect(weightInput?.props['aria-invalid']).toBe(true);
+    expect(saveButton?.props.disabled).toBe(true);
   });
 });

@@ -21,12 +21,19 @@ const file: AuthFileItem = {
   disabled: true,
 };
 
-const renderCard = (quotaCooldown: QuotaCooldownInfo): ReactTestRenderer => {
+const renderCard = (
+  quotaCooldown: QuotaCooldownInfo,
+  fileOverrides: Partial<AuthFileItem> = {}
+): ReactTestRenderer => {
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
       <AuthFileCard
-        file={{ ...file, type: quotaCooldown.provider ?? file.type }}
+        file={{
+          ...file,
+          ...fileOverrides,
+          type: quotaCooldown.provider ?? fileOverrides.type ?? file.type,
+        }}
         compact
         selected={false}
         resolvedTheme="dark"
@@ -160,5 +167,24 @@ describe('AuthFileCard quota cooldown presentation', () => {
 
     expect(badge.props.title).toContain('provider_usage_recovery_unknown');
     expect(badge.props.title).not.toContain('provider_usage_reported');
+  });
+
+  it('shows an explicitly configured zero credential weight', () => {
+    const renderer = renderCard(
+      {
+        authFileName: file.name,
+        provider: 'codex',
+        recoverAtMs: 2_000_000_000_000,
+      },
+      { weight: 0 }
+    );
+    const label = renderer.root
+      .findAllByType('span')
+      .find((node) => textContent(node) === 'auth_files.weight_display');
+
+    expect(label).toBeDefined();
+    expect(label?.parent?.findAllByType('span').some((node) => textContent(node) === '0')).toBe(
+      true
+    );
   });
 });

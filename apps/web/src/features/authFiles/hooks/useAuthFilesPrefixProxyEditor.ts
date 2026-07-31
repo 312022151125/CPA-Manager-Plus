@@ -22,6 +22,11 @@ import {
   getAuthFileStatusIdentityKey,
   resolveAuthFileStatusMutationTarget,
 } from '@/utils/authFileStatusMutation';
+import {
+  MAX_CREDENTIAL_WEIGHT,
+  getCredentialWeightError,
+  normalizeCredentialWeight,
+} from '@/utils/credentialWeight';
 
 type AuthFileHeaders = Record<string, string>;
 type AuthFileHeadersErrorKey =
@@ -31,11 +36,18 @@ type AuthFileHeadersErrorKey =
 type AuthFileContentErrorKey =
   | 'auth_files.prefix_proxy_invalid_json'
   | 'auth_files.prefix_proxy_html_challenge';
+type AuthFileWeightErrorKey = 'auth_files.weight_error_integer' | 'auth_files.weight_error_maximum';
+type AuthFileEditorErrorKey = AuthFileHeadersErrorKey | AuthFileWeightErrorKey;
+type ResolveAuthFileEditorError = (
+  key: AuthFileEditorErrorKey,
+  options?: Record<string, unknown>
+) => string;
 
 export type PrefixProxyEditorField =
   | 'prefix'
   | 'proxyUrl'
   | 'priority'
+  | 'weight'
   | 'websockets'
   | 'usingApi'
   | 'note'
@@ -56,6 +68,9 @@ export type PrefixProxyEditorState = {
   prefix: string;
   proxyUrl: string;
   priority: string;
+  weight: string;
+  weightTouched: boolean;
+  weightError: string | null;
   websockets: boolean;
   websocketsTouched: boolean;
   usingApi: boolean;
@@ -124,6 +139,18 @@ const parseHeadersText = (
 const normalizeTextField = (value: unknown): string =>
   typeof value === 'string' ? value.trim() : '';
 
+const formatCredentialWeightEditorValue = (value: unknown): string => {
+  const normalized = normalizeCredentialWeight(value);
+  if (normalized !== undefined) return String(normalized);
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+};
 const getAuthFileContentErrorKey = (text: string): AuthFileContentErrorKey => {
   const head = text.trimStart().slice(0, 4096).toLowerCase();
   const looksLikeHtml =
@@ -171,6 +198,7 @@ const pickEditableAuthFileFields = (
     'prefix',
     'proxy_url',
     'priority',
+    'weight',
     'websocket',
     'websockets',
     'using_api',
@@ -251,7 +279,7 @@ const applyHeadersPatch = (
 
 const buildAuthFileFieldsPatch = (
   editor: PrefixProxyEditorState,
-  resolveHeadersError: (key: AuthFileHeadersErrorKey) => string
+  resolveEditorError: ResolveAuthFileEditorError
 ): AuthFileFieldsPatch => {
   const original = editor.json ?? {};
   const patch: AuthFileFieldsPatch = {};
@@ -260,6 +288,29 @@ const buildAuthFileFieldsPatch = (
   const nextPrefix = editor.prefix.trim();
   if (nextPrefix !== originalPrefix) {
     patch.prefix = nextPrefix;
+  }
+
+  if (editor.weightTouched) {
+    const originalHasWeight = Object.prototype.hasOwnProperty.call(original, 'weight');
+    const originalWeight = normalizeCredentialWeight(original.weight);
+    const weightText = editor.weight.trim();
+    const weightError = getCredentialWeightError(weightText);
+    if (weightError) {
+      throw new Error(
+        resolveEditorError(
+          weightError === 'maximum'
+            ? 'auth_files.weight_error_maximum'
+            : 'auth_files.weight_error_integer',
+          { max: MAX_CREDENTIAL_WEIGHT.toLocaleString() }
+        )
+      );
+    }
+    const nextWeight = normalizeCredentialWeight(weightText);
+    if (!weightText) {
+      if (originalHasWeight) patch.weight = null;
+    } else if (nextWeight !== originalWeight) {
+      patch.weight = nextWeight;
+    }
   }
 
   const originalProxyURL = normalizeTextField(original.proxy_url);
@@ -296,7 +347,7 @@ const buildAuthFileFieldsPatch = (
   if (editor.headersTouched) {
     const { value: parsedHeaders, errorKey } = parseHeadersText(editor.headersText);
     if (errorKey) {
-      throw new Error(resolveHeadersError(errorKey));
+      throw new Error(resolveEditorError(errorKey));
     }
     const headersPatch = buildHeadersPatch(
       normalizeHeaders(original.headers),
@@ -324,10 +375,10 @@ const buildAuthFileFieldsPatch = (
 
 const buildPrefixProxyUpdatedText = (
   editor: PrefixProxyEditorState | null,
-  resolveHeadersError: (key: AuthFileHeadersErrorKey) => string
+  resolveEditorError: ResolveAuthFileEditorError
 ): string => {
   if (!editor?.json) return '';
-  const patch = buildAuthFileFieldsPatch(editor, resolveHeadersError);
+  const patch = buildAuthFileFieldsPatch(editor, resolveEditorError);
   let next: Record<string, unknown> = { ...editor.json };
   if (patch.prefix !== undefined) {
     if (patch.prefix) {
@@ -349,6 +400,14 @@ const buildPrefixProxyUpdatedText = (
       delete next.priority;
     } else {
       next.priority = patch.priority;
+    }
+  }
+
+  if (patch.weight !== undefined) {
+    if (patch.weight === null) {
+      delete next.weight;
+    } else {
+      next.weight = patch.weight;
     }
   }
 
@@ -381,16 +440,17 @@ export function useAuthFilesPrefixProxyEditor(
   const editorGenerationRef = useRef(0);
 
   const hasBlockingValidationError = Boolean(
-    prefixProxyEditor?.headersTouched && prefixProxyEditor.headersError
+    (prefixProxyEditor?.headersTouched && prefixProxyEditor.headersError) ||
+    (prefixProxyEditor?.weightTouched && prefixProxyEditor.weightError)
   );
   const prefixProxyUpdatedText =
     prefixProxyEditor && !hasBlockingValidationError
-      ? buildPrefixProxyUpdatedText(prefixProxyEditor, (key) => t(key))
+      ? buildPrefixProxyUpdatedText(prefixProxyEditor, (key, options) => t(key, options))
       : '';
 
   const prefixProxyPatch =
     prefixProxyEditor?.json && !hasBlockingValidationError
-      ? buildAuthFileFieldsPatch(prefixProxyEditor, (key) => t(key))
+      ? buildAuthFileFieldsPatch(prefixProxyEditor, (key, options) => t(key, options))
       : null;
 
   const prefixProxyDirty = hasKeys(prefixProxyPatch);
@@ -428,6 +488,9 @@ export function useAuthFilesPrefixProxyEditor(
       prefix: '',
       proxyUrl: '',
       priority: '',
+      weight: '',
+      weightTouched: false,
+      weightError: null,
       websockets: false,
       websocketsTouched: false,
       usingApi: false,
@@ -472,6 +535,7 @@ export function useAuthFilesPrefixProxyEditor(
       const prefix = typeof json.prefix === 'string' ? json.prefix : '';
       const proxyUrl = typeof json.proxy_url === 'string' ? json.proxy_url : '';
       const priority = parsePriorityValue(json.priority);
+      const weight = formatCredentialWeightEditorValue(json.weight);
       const providerKey = parsed.providerKey;
       const websockets = supportsAuthFileWebsockets(providerKey)
         ? readAuthFileWebsockets(json)
@@ -504,6 +568,9 @@ export function useAuthFilesPrefixProxyEditor(
           prefix,
           proxyUrl,
           priority: priority !== undefined ? String(priority) : '',
+          weight,
+          weightTouched: false,
+          weightError: null,
           websockets,
           websocketsTouched: false,
           usingApi,
@@ -541,6 +608,23 @@ export function useAuthFilesPrefixProxyEditor(
       if (field === 'prefix') return { ...prev, prefix: String(value) };
       if (field === 'proxyUrl') return { ...prev, proxyUrl: String(value) };
       if (field === 'priority') return { ...prev, priority: String(value) };
+      if (field === 'weight') {
+        const weight = String(value);
+        const errorCode = getCredentialWeightError(weight);
+        return {
+          ...prev,
+          weight,
+          weightTouched: true,
+          weightError: errorCode
+            ? t(
+                errorCode === 'maximum'
+                  ? 'auth_files.weight_error_maximum'
+                  : 'auth_files.weight_error_integer',
+                { max: MAX_CREDENTIAL_WEIGHT.toLocaleString() }
+              )
+            : null,
+        };
+      }
       if (field === 'websockets') {
         return { ...prev, websockets: Boolean(value), websocketsTouched: true };
       }
@@ -571,7 +655,7 @@ export function useAuthFilesPrefixProxyEditor(
     const editorGeneration = editorGenerationRef.current;
     let payload: AuthFileFieldsPatch;
     try {
-      payload = buildAuthFileFieldsPatch(prefixProxyEditor, (key) => t(key));
+      payload = buildAuthFileFieldsPatch(prefixProxyEditor, (key, options) => t(key, options));
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Invalid format';
       showNotification(errorMessage, 'error');

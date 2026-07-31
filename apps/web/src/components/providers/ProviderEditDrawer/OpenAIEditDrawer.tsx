@@ -23,7 +23,15 @@ import {
   removeKeyTestStatusAtIndex,
 } from '@/features/aiProviders/model/keyTestStatuses';
 import type { ModelInfo } from '@/utils/models';
-import type { OpenAIFormState } from '@/components/providers';
+import type { OpenAIFormApiKeyEntry, OpenAIFormState } from '@/components/providers';
+import {
+  MAX_CREDENTIAL_WEIGHT,
+  getCredentialWeightComparisonValue,
+  getCredentialWeightError,
+  normalizeCredentialWeight,
+  toCredentialWeightInputValue,
+  type CredentialWeightComparisonValue,
+} from '@/utils/credentialWeight';
 import styles from '@/features/aiProviders/AiProvidersPage.module.scss';
 
 interface OpenAIEditDrawerProps {
@@ -70,21 +78,23 @@ const normalizeKeyHeaders = (headers: ApiKeyEntry['headers']) => {
     });
 };
 
-const normalizeApiKeyEntries = (entries: ApiKeyEntry[]) =>
+const normalizeApiKeyEntries = (entries: OpenAIFormApiKeyEntry[]) =>
   (entries ?? []).reduce<
     Array<{
       apiKey: string;
+      weight: CredentialWeightComparisonValue;
       proxyUrl: string;
       authIndex: string;
       headers: ReturnType<typeof normalizeKeyHeaders>;
     }>
   >((acc, entry) => {
     const apiKey = String(entry?.apiKey ?? '').trim();
+    const weight = getCredentialWeightComparisonValue(entry?.weight);
     const proxyUrl = String(entry?.proxyUrl ?? '').trim();
     const authIndex = normalizeAuthIndex(entry?.authIndex) ?? '';
     const headers = normalizeKeyHeaders(entry?.headers);
-    if (!apiKey && !proxyUrl && !authIndex && headers.length === 0) return acc;
-    acc.push({ apiKey, proxyUrl, authIndex, headers });
+    if (!apiKey && weight === null && !proxyUrl && !authIndex && headers.length === 0) return acc;
+    acc.push({ apiKey, weight, proxyUrl, authIndex, headers });
     return acc;
   }, []);
 
@@ -114,6 +124,7 @@ const areNormalizedApiKeyEntriesEqual = (
     if (!left || !right) return false;
     if (
       left.apiKey !== right.apiKey ||
+      left.weight !== right.weight ||
       left.proxyUrl !== right.proxyUrl ||
       left.authIndex !== right.authIndex
     )
@@ -264,7 +275,11 @@ export function OpenAIEditDrawer({
     }
   }, [availableModels, loaded, testModel]);
 
-  const canSave = !disabled && !loading && !saving && !invalidIndex && !isTestingKeys;
+  const hasInvalidWeight = form.apiKeyEntries.some((entry) =>
+    getCredentialWeightError(entry.weight)
+  );
+  const canSave =
+    !disabled && !loading && !saving && !invalidIndex && !isTestingKeys && !hasInvalidWeight;
 
   const isDirty = useMemo(() => {
     const normalizedPriority =
@@ -632,8 +647,9 @@ export function OpenAIEditDrawer({
         prefix: form.prefix?.trim() || undefined,
         baseUrl,
         headers: buildHeaderObject(form.headers),
-        apiKeyEntries: form.apiKeyEntries.map((entry: ApiKeyEntry) => ({
+        apiKeyEntries: form.apiKeyEntries.map((entry) => ({
           apiKey: entry.apiKey.trim(),
+          weight: normalizeCredentialWeight(entry.weight),
           proxyUrl: entry.proxyUrl?.trim() || undefined,
           authIndex: normalizeAuthIndex(entry.authIndex) ?? undefined,
           headers: entry.headers,
@@ -705,7 +721,7 @@ export function OpenAIEditDrawer({
 
   const renderKeyEntries = () => {
     const list = form.apiKeyEntries.length ? form.apiKeyEntries : [buildApiKeyEntry()];
-    const updateEntry = (idx: number, field: keyof ApiKeyEntry, value: string) => {
+    const updateEntry = (idx: number, field: keyof OpenAIFormApiKeyEntry, value: string) => {
       const next = list.map((entry, i) => (i === idx ? { ...entry, [field]: value } : entry));
       setForm((prev) => ({ ...prev, apiKeyEntries: next }));
       setKeyTestStatuses((prev) => {
@@ -713,6 +729,11 @@ export function OpenAIEditDrawer({
         nextStatuses[idx] = { status: 'idle', message: '' };
         return nextStatuses;
       });
+    };
+    const updateEntryWeight = (idx: number, raw: string) => {
+      const weight = toCredentialWeightInputValue(raw);
+      const next = list.map((entry, i) => (i === idx ? { ...entry, weight } : entry));
+      setForm((prev) => ({ ...prev, apiKeyEntries: next }));
     };
     const removeEntry = (idx: number) => {
       const next = list.filter((_, i) => i !== idx);
@@ -745,11 +766,13 @@ export function OpenAIEditDrawer({
             <div className={styles.keyTableColIndex}>#</div>
             <div className={styles.keyTableColStatus}>{t('common.status')}</div>
             <div className={styles.keyTableColKey}>{t('common.api_key')}</div>
+            <div className={styles.keyTableColWeight}>{t('ai_providers.weight_label')}</div>
             <div className={styles.keyTableColProxy}>{t('common.proxy_url')}</div>
             <div className={styles.keyTableColAction}>{t('common.action')}</div>
           </div>
           {list.map((entry, index) => {
             const keyStatus = keyTestStatuses[index]?.status ?? 'idle';
+            const weightError = getCredentialWeightError(entry.weight);
             const canTestKey =
               Boolean(entry.apiKey?.trim() || normalizeAuthIndex(entry.authIndex)) &&
               hasConfiguredModels;
@@ -771,6 +794,31 @@ export function OpenAIEditDrawer({
                     className={`input ${styles.keyTableInput}`}
                     placeholder={t('ai_providers.openai_key_placeholder')}
                   />
+                </div>
+                <div className={styles.keyTableColWeight}>
+                  <div className={styles.keyTableWeightField}>
+                    <input
+                      type="text"
+                      inputMode="text"
+                      value={entry.weight ?? ''}
+                      onChange={(e) => updateEntryWeight(index, e.target.value)}
+                      disabled={saving || disabled || isTestingKeys}
+                      className={`input ${styles.keyTableInput}`}
+                      placeholder="1"
+                      aria-invalid={Boolean(weightError)}
+                      aria-label={`${t('ai_providers.weight_label')} ${index + 1}`}
+                    />
+                    {weightError && (
+                      <span className={styles.keyTableWeightError}>
+                        {t(
+                          weightError === 'maximum'
+                            ? 'ai_providers.weight_error_maximum'
+                            : 'ai_providers.weight_error_integer',
+                          { max: MAX_CREDENTIAL_WEIGHT.toLocaleString() }
+                        )}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className={styles.keyTableColProxy}>
                   <input
