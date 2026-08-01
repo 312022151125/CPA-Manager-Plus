@@ -18,7 +18,7 @@ import type { MonitoringAccountHistoryItem, MonitoringAnalyticsEventRow } from '
 import { parseQuotaResetLabelMs } from '@/utils/quota/formatters';
 
 export type AccountsView = 'accounts' | 'health' | 'oauth';
-export type DetailTab = 'overview' | 'quota' | 'credential' | 'models' | 'diagnostics';
+export type DetailTab = 'overview' | 'quota' | 'config' | 'models' | 'diagnostics';
 export type SortableAccountColumn = Extract<
   AccountRowSortKey,
   'name' | 'plan' | 'note' | 'reset' | 'priority' | 'recent' | 'quota' | 'created'

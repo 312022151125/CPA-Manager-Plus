@@ -20,7 +20,7 @@ vi.mock('./client', () => ({
   },
 }));
 
-import { authFilesApi } from './authFiles';
+import { applyAuthFileFieldsPatchToRecord, authFilesApi } from './authFiles';
 import { sha256RawTextHex } from '@/utils/apiKeyHash';
 
 beforeEach(() => {
@@ -102,6 +102,33 @@ describe('authFilesApi OAuth model alias normalization', () => {
         { name: 'claude-opus-4-1-20250805', alias: 'opus' },
       ],
     });
+  });
+});
+
+describe('authFilesApi model endpoints', () => {
+  it('normalizes malformed model payloads before exposing them to the UI', async () => {
+    mocks.get.mockResolvedValue({
+      models: [
+        { id: '  model-a  ', display_name: ' Model A ', type: 7 },
+        { id: 'MODEL-A', owned_by: ' team ' },
+        { id: '', display_name: 'ignored' },
+        { display_name: 'missing id' },
+        null,
+      ],
+    });
+
+    await expect(authFilesApi.getModelsForAuthFile('runtime-1')).resolves.toEqual([
+      { id: 'model-a', display_name: 'Model A' },
+    ]);
+  });
+
+  it("maps the gemini-cli definition alias to CPA's gemini channel", async () => {
+    mocks.get.mockResolvedValue({ models: [{ id: 'gemini-2.5-pro' }] });
+
+    await expect(authFilesApi.getModelDefinitions('gemini-cli')).resolves.toEqual([
+      { id: 'gemini-2.5-pro' },
+    ]);
+    expect(mocks.get).toHaveBeenCalledWith('/model-definitions/gemini');
   });
 });
 
@@ -982,6 +1009,125 @@ describe('authFilesApi patchFieldsForAuthIndexes', () => {
     );
   });
 
+  it('targets array records by position when the source omits explicit auth indexes', async () => {
+    const rawText = JSON.stringify([
+      { type: 'claude', account: 'one@example.com', cloak_mode: 'auto' },
+      { type: 'claude', account: 'two@example.com', cloak_mode: 'never' },
+    ]);
+    mocks.getRaw.mockResolvedValue({ data: new Blob([rawText]) });
+    mocks.postForm.mockResolvedValue({
+      status: 'ok',
+      uploaded: 1,
+      files: ['shared-claude.json'],
+      failed: [],
+    });
+    const target = {
+      name: 'shared-claude.json',
+      runtimeId: 'runtime-two',
+      authIndex: '1',
+      provider: 'claude',
+      accountSnapshot: 'two@example.com',
+    };
+
+    await authFilesApi.patchFieldsForAuthIndexes(
+      'shared-claude.json',
+      [target],
+      [
+        {
+          name: 'shared-claude.json',
+          runtimeId: 'runtime-one',
+          authIndex: '0',
+          provider: 'claude',
+          accountSnapshot: 'one@example.com',
+        },
+        target,
+      ],
+      { cloak_mode: 'always', tool_prefix_disabled: true }
+    );
+
+    await expect(getUploadedFile().text()).resolves.toBe(
+      JSON.stringify([
+        { type: 'claude', account: 'one@example.com', cloak_mode: 'auto' },
+        {
+          type: 'claude',
+          account: 'two@example.com',
+          cloak_mode: 'always',
+          tool_prefix_disabled: true,
+        },
+      ])
+    );
+  });
+
+  it('removes a legacy excluded_models key while writing the canonical exclusion field', async () => {
+    const rawText = JSON.stringify({
+      type: 'xai',
+      auth_index: 'auth-1',
+      account_id: 'account-1',
+      excluded_models: ['legacy-model'],
+    });
+    mocks.getRaw.mockResolvedValue({ data: new Blob([rawText]) });
+    mocks.postForm.mockResolvedValue({
+      status: 'ok',
+      uploaded: 1,
+      files: ['xai.json'],
+      failed: [],
+    });
+    const target = {
+      name: 'xai.json',
+      runtimeId: 'runtime-xai-1',
+      authIndex: 'auth-1',
+      provider: 'xai',
+      accountId: 'account-1',
+    };
+
+    await authFilesApi.patchFieldsForAuthIndexes('xai.json', [target], [target], {
+      'excluded-models': ['canonical-model'],
+      excluded_models: null,
+    });
+
+    await expect(getUploadedFile().text()).resolves.toBe(
+      JSON.stringify({
+        type: 'xai',
+        auth_index: 'auth-1',
+        account_id: 'account-1',
+        'excluded-models': ['canonical-model'],
+      })
+    );
+  });
+
+  it('accepts gemini and gemini-cli as the same verified source identity', async () => {
+    const rawText = JSON.stringify({
+      type: 'gemini',
+      auth_index: 'auth-1',
+      account_id: 'account-1',
+      excluded_models: ['legacy-model'],
+    });
+    mocks.getRaw.mockResolvedValue({ data: new Blob([rawText]) });
+    mocks.postForm.mockResolvedValue({
+      status: 'ok',
+      uploaded: 1,
+      files: ['gemini.json'],
+      failed: [],
+    });
+    const target = {
+      name: 'gemini.json',
+      runtimeId: 'runtime-gemini-1',
+      authIndex: 'auth-1',
+      provider: 'gemini-cli',
+      accountId: 'account-1',
+    };
+
+    await expect(
+      authFilesApi.patchFieldsForAuthIndexes('gemini.json', [target], [target], {
+        'excluded-models': [],
+        excluded_models: null,
+      })
+    ).resolves.toBeUndefined();
+    await expect(getUploadedFile().text()).resolves.toBe(
+      JSON.stringify({ type: 'gemini', auth_index: 'auth-1', account_id: 'account-1' })
+    );
+  });
+
   it('falls back to a verified physical source write for plugin virtual fields', async () => {
     const conflict = Object.assign(
       new Error(
@@ -1118,5 +1264,125 @@ describe('authFilesApi patchFieldsForAuthIndexes', () => {
     ).rejects.toThrow('Auth file patch target changed');
 
     expect(mocks.postForm).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyAuthFileFieldsPatchToRecord', () => {
+  it('applies extended credential configuration fields with source-file cleanup semantics', () => {
+    expect(
+      applyAuthFileFieldsPatchToRecord(
+        {
+          type: 'xai',
+          base_url: 'https://old.example/v1',
+          baseUrl: 'https://legacy.example/v1',
+          proxyUrl: 'http://legacy-proxy.local',
+          weight: 5,
+          excluded_models: ['old-model'],
+          excludedModels: ['legacy-model'],
+          'excluded-models': ['legacy-model-2'],
+          disable_cooling: true,
+          request_retry: 2,
+          'request-retry': 3,
+          cloak_strict_mode: 'true',
+          tool_prefix_disabled: true,
+          'tool-prefix-disabled': true,
+        },
+        {
+          proxy_url: '',
+          proxyUrl: null,
+          base_url: '',
+          baseUrl: null,
+          weight: 0,
+          'excluded-models': [],
+          excluded_models: null,
+          excludedModels: null,
+          disable_cooling: false,
+          request_retry: null,
+          'request-retry': null,
+          cloak_strict_mode: '',
+          tool_prefix_disabled: false,
+          'tool-prefix-disabled': null,
+        }
+      )
+    ).toEqual({
+      type: 'xai',
+      weight: 0,
+    });
+  });
+
+  it('tombstones every supported legacy alias when canonical fields are written', () => {
+    const result = applyAuthFileFieldsPatchToRecord(
+      {
+        proxyUrl: 'https://legacy.proxy',
+        'proxy-url': 'https://legacy.proxy-2',
+        baseUrl: 'https://legacy.base/v1',
+        'base-url': 'https://legacy.base-2/v1',
+        usingApi: true,
+        'using-api': true,
+        disableCooling: true,
+        'disable-cooling': true,
+        requestRetry: 2,
+        'request-retry': 3,
+        excludedModels: ['legacy-a'],
+        excluded_models: ['legacy-b'],
+        cloakMode: 'auto',
+        'cloak-mode': 'always',
+        cloakStrictMode: true,
+        'cloak-strict-mode': true,
+        cloakSensitiveWords: 'legacy',
+        'cloak-sensitive-words': 'legacy-2',
+        cloakCacheUserId: true,
+        'cloak-cache-user-id': true,
+        toolPrefixDisabled: true,
+        'tool-prefix-disabled': true,
+      },
+      {
+        proxy_url: 'https://canonical.proxy',
+        proxyUrl: null,
+        'proxy-url': null,
+        base_url: 'https://canonical.base/v1',
+        baseUrl: null,
+        'base-url': null,
+        using_api: false,
+        usingApi: null,
+        'using-api': null,
+        disable_cooling: false,
+        disableCooling: null,
+        'disable-cooling': null,
+        request_retry: 1,
+        requestRetry: null,
+        'request-retry': null,
+        'excluded-models': ['canonical-model'],
+        excluded_models: null,
+        excludedModels: null,
+        cloak_mode: 'never',
+        cloakMode: null,
+        'cloak-mode': null,
+        cloak_strict_mode: 'false',
+        cloakStrictMode: null,
+        'cloak-strict-mode': null,
+        cloak_sensitive_words: 'canonical',
+        cloakSensitiveWords: null,
+        'cloak-sensitive-words': null,
+        cloak_cache_user_id: 'false',
+        cloakCacheUserId: null,
+        'cloak-cache-user-id': null,
+        tool_prefix_disabled: false,
+        toolPrefixDisabled: null,
+        'tool-prefix-disabled': null,
+      }
+    );
+
+    expect(result).toEqual({
+      proxy_url: 'https://canonical.proxy',
+      base_url: 'https://canonical.base/v1',
+      using_api: false,
+      request_retry: 1,
+      'excluded-models': ['canonical-model'],
+      cloak_mode: 'never',
+      cloak_strict_mode: 'false',
+      cloak_sensitive_words: 'canonical',
+      cloak_cache_user_id: 'false',
+    });
   });
 });

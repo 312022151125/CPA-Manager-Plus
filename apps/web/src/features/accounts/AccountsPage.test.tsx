@@ -1,7 +1,8 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
-import { isValidElement } from 'react';
+import { isValidElement, StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '@/components/ui/Button';
+import { Drawer } from '@/components/ui/Drawer';
 import { DropdownMenu } from '@/components/ui/DropdownMenu';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
@@ -18,6 +19,7 @@ import {
   getAuthFilePatchTarget,
   getAuthFileSelectionKey,
 } from '@/features/authFiles/model/authFilesPageModel';
+import { AccountModelsTab } from './components/accountDetail/AccountModelsTab';
 import { formatQuotaResetTimestamp } from './model/accountsPagePresentation';
 import { AccountsPage } from './AccountsPage';
 
@@ -251,6 +253,20 @@ const { mocks } = vi.hoisted(() => {
       selectedFiles: new Set<string>(),
       selectionCount: 0,
       batchFieldsUpdating: false,
+      configurationDirty: false,
+      configurationSaving: false,
+      configurationEnabledCalls: [] as boolean[],
+      configurationSourceMemberCounts: [] as number[],
+      configurationReset: vi.fn(),
+      configurationReload: vi.fn(async () => undefined),
+      configurationSave: vi.fn(async () => undefined),
+      allowNextNavigation: vi.fn(),
+      allowNavigationTo: vi.fn(),
+      lastUnsavedGuardOptions: null as null | {
+        enabled?: boolean;
+        shouldBlock: boolean | ((args: Record<string, unknown>) => boolean);
+        onConfirmNavigation?: () => boolean | void | Promise<boolean | void>;
+      },
       location: { pathname: '/accounts', search: '' },
       apiBase: 'http://cpa-a.local:8317',
       managementKey: 'manager-key',
@@ -268,7 +284,10 @@ const { mocks } = vi.hoisted(() => {
       batchDelete: vi.fn(),
       handleDelete: vi.fn(),
       handleDownload: vi.fn(async () => undefined),
+      handleCredentialRefresh: vi.fn(async () => undefined),
       showModels: vi.fn(async () => undefined),
+      refreshModels: vi.fn(async () => undefined),
+      invalidateModels: vi.fn(),
       loadExcluded: vi.fn(async () => undefined),
       loadModelAlias: vi.fn(async () => undefined),
       oauthExcluded: {} as Record<string, string[]>,
@@ -350,7 +369,6 @@ const { mocks } = vi.hoisted(() => {
         onModeChange: (mode: 'local' | 'server') => void;
         onOpenCredential: (target: { fileName: string; authIndex: string | null }) => void;
       },
-      credentialSafeSummaryEnabledCalls: [] as boolean[],
       quotaState: {
         antigravityQuota: {},
         claudeQuota: {},
@@ -392,6 +410,20 @@ vi.mock('@/hooks/usePanelFeatureAvailability', () => ({
   usePanelFeatureAvailability: () => mocks.panelFeatureAvailability,
 }));
 
+vi.mock('@/hooks/useUnsavedChangesGuard', () => ({
+  useUnsavedChangesGuard: (options: {
+    enabled?: boolean;
+    shouldBlock: boolean | ((args: Record<string, unknown>) => boolean);
+    onConfirmNavigation?: () => boolean | void | Promise<boolean | void>;
+  }) => {
+    mocks.lastUnsavedGuardOptions = options;
+    return {
+      allowNextNavigation: mocks.allowNextNavigation,
+      allowNavigationTo: mocks.allowNavigationTo,
+    };
+  },
+}));
+
 vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
   useAuthFilesData: () => ({
     files: mocks.files,
@@ -410,6 +442,8 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
     savePastedAuthJson: vi.fn(async () => 'saved.json'),
     handleDelete: mocks.handleDelete,
     handleDownload: mocks.handleDownload,
+    handleCredentialRefresh: mocks.handleCredentialRefresh,
+    credentialRefreshing: {},
     toggleSelect: mocks.toggleSelect,
     selectAllVisible: mocks.selectAllVisible,
     invertVisibleSelection: mocks.invertVisibleSelection,
@@ -445,35 +479,76 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesModels', () => ({
   useAuthFilesModels: () => ({
     modelsLoading: false,
     modelsList: [],
+    modelDefinitions: [],
+    modelDefinitionsLoading: false,
+    modelDefinitionsError: null,
     modelsFileName: '',
     modelsFileType: '',
-    modelsError: '',
+    modelsSelectionKey: getAuthFileSelectionKey(mocks.files[0]),
+    modelsError: null,
     showModels: mocks.showModels,
+    refreshModels: mocks.refreshModels,
+    invalidateModels: mocks.invalidateModels,
   }),
 }));
 
-vi.mock('@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor', () => ({
-  useAuthFilesPrefixProxyEditor: () => ({
-    prefixProxyEditor: null,
-    prefixProxyUpdatedText: '',
-    prefixProxyDirty: false,
-    openPrefixProxyEditor: vi.fn(),
-    closePrefixProxyEditor: vi.fn(),
-    handlePrefixProxyChange: vi.fn(),
-    handlePrefixProxySave: vi.fn(async () => undefined),
-  }),
-}));
-
-vi.mock('@/features/accounts/hooks/useAccountCredentialSafeSummary', () => ({
-  useAccountCredentialSafeSummary: (_file: AuthFileItem | null, enabled: boolean) => {
-    mocks.credentialSafeSummaryEnabledCalls.push(enabled);
+vi.mock('@/features/authFiles/hooks/useAuthFileConfigurationEditor', () => ({
+  useAuthFileConfigurationEditor: (options: {
+    enabled: boolean;
+    file: AuthFileItem | null;
+    sourceMemberCount?: number;
+  }) => {
+    mocks.configurationEnabledCalls.push(options.enabled);
+    mocks.configurationSourceMemberCounts.push(options.sourceMemberCount ?? 0);
+    const draft = {
+      prefix: '',
+      proxyUrl: '',
+      priority: '',
+      weight: '',
+      note: '',
+      headersText: '',
+      excludedModelsText: '',
+      disableCooling: false,
+      requestRetry: '',
+      websockets: false,
+      xaiRoutingMode: 'grok-build' as const,
+      baseUrl: '',
+      cloakMode: '',
+      cloakStrictMode: false,
+      cloakSensitiveWordsText: '',
+      cloakCacheUserId: false,
+      toolPrefixDisabled: false,
+    };
     return {
-      fileName: '',
-      loading: false,
-      error: '',
-      summary: null,
-      reload: vi.fn(async () => undefined),
-      invalidate: vi.fn(),
+      state:
+        options.enabled && options.file
+          ? {
+              authFile: options.file,
+              fileName: options.file.name,
+              loading: false,
+              saving: mocks.configurationSaving,
+              error: '',
+              record: { type: options.file.type ?? options.file.provider ?? 'codex' },
+              recordIndex: null,
+              providerKey: String(options.file.type ?? options.file.provider ?? 'codex'),
+              originalDraft: draft,
+              draft,
+            }
+          : null,
+      draft: options.enabled && options.file ? draft : null,
+      errors: {},
+      dirty: mocks.configurationDirty,
+      canSave: mocks.configurationDirty && !mocks.configurationSaving,
+      rawDataText: '{}',
+      sourceMemberCount: options.sourceMemberCount ?? 0,
+      sharedSourceReadOnly: false,
+      updateField: vi.fn(),
+      reset: () => {
+        mocks.configurationDirty = false;
+        mocks.configurationReset();
+      },
+      reload: mocks.configurationReload,
+      save: mocks.configurationSave,
     };
   },
 }));
@@ -502,10 +577,6 @@ vi.mock('@/features/authFiles/components/AuthJsonPasteModal', () => ({
 vi.mock('@/features/authFiles/components/AuthFileModelsModal', () => ({
   AuthFileModelsContent: () => <div>models-content</div>,
   AuthFileModelsModal: () => null,
-}));
-
-vi.mock('@/features/authFiles/components/AuthFilesPrefixProxyEditorModal', () => ({
-  AuthFilesPrefixProxyEditorModal: () => null,
 }));
 
 vi.mock('@/features/authFiles/components/OAuthExcludedCard', () => ({
@@ -661,6 +732,15 @@ const findBatchMoreItem = (renderer: ReactTestRenderer, key: string) => {
   return item;
 };
 
+const findDrawerMoreItem = (renderer: ReactTestRenderer, key: string) => {
+  const drawerMoreMenu = renderer.root
+    .findAllByType(DropdownMenu)
+    .find((node) => node.props.ariaLabel === 'accounts.drawer_more_actions');
+  const item = drawerMoreMenu?.props.items.find((entry: { key?: string }) => entry.key === key);
+  if (!item || item.type === 'divider') throw new Error(`Drawer menu item not found: ${key}`);
+  return item;
+};
+
 const findInputByAriaLabel = (renderer: ReactTestRenderer, label: string) => {
   const input = renderer.root
     .findAll((node) => node.type === 'input')
@@ -765,6 +845,16 @@ describe('AccountsPage replacement flows', () => {
     mocks.selectedFiles = new Set<string>();
     mocks.selectionCount = 0;
     mocks.batchFieldsUpdating = false;
+    mocks.configurationDirty = false;
+    mocks.configurationSaving = false;
+    mocks.configurationEnabledCalls = [];
+    mocks.configurationSourceMemberCounts = [];
+    mocks.configurationReset.mockClear();
+    mocks.configurationReload.mockClear();
+    mocks.configurationSave.mockClear();
+    mocks.allowNextNavigation.mockClear();
+    mocks.allowNavigationTo.mockClear();
+    mocks.lastUnsavedGuardOptions = null;
     mocks.location = { pathname: '/accounts', search: '' };
     mocks.apiBase = 'http://cpa-a.local:8317';
     mocks.managementKey = 'manager-key';
@@ -786,7 +876,10 @@ describe('AccountsPage replacement flows', () => {
     mocks.batchDelete.mockClear();
     mocks.handleDelete.mockClear();
     mocks.handleDownload.mockClear();
+    mocks.handleCredentialRefresh.mockClear();
     mocks.showModels.mockClear();
+    mocks.refreshModels.mockClear();
+    mocks.invalidateModels.mockClear();
     vi.mocked(copyToClipboard).mockClear();
     vi.mocked(copyToClipboard).mockResolvedValue(true);
     mocks.getAnalytics.mockReset();
@@ -828,7 +921,6 @@ describe('AccountsPage replacement flows', () => {
     mocks.lastExcludedEditorProps = null;
     mocks.lastAliasEditorProps = null;
     mocks.lastHealthWorkspaceProps = null;
-    mocks.credentialSafeSummaryEnabledCalls = [];
     mocks.localInspection = null;
   });
 
@@ -876,6 +968,19 @@ describe('AccountsPage replacement flows', () => {
 
     await act(async () => {
       renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+
+    expect(mocks.loadFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it('restarts the initial credential load when StrictMode replays effects', async () => {
+    await act(async () => {
+      create(
+        <StrictMode>
+          <AccountsPage />
+        </StrictMode>
+      );
       await Promise.resolve();
     });
 
@@ -1007,6 +1112,350 @@ describe('AccountsPage replacement flows', () => {
     expect(
       renderer.root.findByProps({ id: 'accounts-provider-filter-codex' }).props['aria-selected']
     ).toBe(true);
+  });
+
+  it('opens the configuration tab from a deep link', async () => {
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=config',
+    };
+
+    const renderer = await renderAccountsPage();
+
+    expect(
+      findHostButtonByText(renderer, 'accounts.detail_tab_config').props['aria-selected']
+    ).toBe(true);
+    expect(treeText(renderer)).toContain('accounts.config_section_routing');
+    expect(mocks.configurationEnabledCalls).toContain(true);
+    expect(mocks.lastUnsavedGuardOptions?.enabled).toBe(true);
+    expect(typeof mocks.lastUnsavedGuardOptions?.shouldBlock).toBe('function');
+    const shouldBlock = mocks.lastUnsavedGuardOptions?.shouldBlock;
+    if (typeof shouldBlock !== 'function') throw new Error('missing navigation blocker');
+    expect(
+      shouldBlock({
+        currentLocation: mocks.location,
+        nextLocation: { pathname: '/accounts', search: '?view=health&healthMode=local' },
+      })
+    ).toBe(false);
+  });
+
+  it('loads runtime models and global model rules from a models deep link', async () => {
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=models',
+    };
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(findHostButtonByText(renderer, 'auth_files.models_button').props['aria-selected']).toBe(
+      true
+    );
+    expect(mocks.showModels).toHaveBeenCalledWith(mocks.files[0]);
+    expect(mocks.loadExcluded).toHaveBeenCalledTimes(1);
+    expect(mocks.loadModelAlias).toHaveBeenCalledTimes(1);
+  });
+
+  it('masks the models summary credential name when credential display is masked', async () => {
+    mocks.files = [
+      makeCodexFile('customer-private.json', 'auth-1', 'customer-private@example.com'),
+    ];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?display=masked&account=customer-private.json%00auth-1&tab=models',
+    };
+
+    const renderer = await renderAccountsPage();
+
+    expect(renderer.root.findByType(AccountModelsTab).props.fileName).toBe('cus***vate.json');
+  });
+
+  it('migrates legacy credential detail links to configuration without rendering the old tab', async () => {
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=credential',
+    };
+
+    const renderer = await renderAccountsPage();
+    const detailTabLabels = renderer.root
+      .findAll((node) => node.type === 'button' && node.props.role === 'tab')
+      .map((node) => readText(node.props.children));
+
+    expect(
+      findHostButtonByText(renderer, 'accounts.detail_tab_config').props['aria-selected']
+    ).toBe(true);
+    expect(detailTabLabels).not.toContain('accounts.detail_tab_credential');
+    expect(mocks.configurationEnabledCalls).toContain(true);
+  });
+
+  it('passes the number of runtime identities sharing the selected physical source', async () => {
+    mocks.files = [
+      makeCodexFile('codex.json', 'auth-1', 'first@example.com'),
+      makeCodexFile('codex.json', 'auth-2', 'second@example.com'),
+    ];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=config',
+    };
+
+    await renderAccountsPage();
+
+    expect(mocks.configurationSourceMemberCounts).toContain(2);
+  });
+
+  it('keeps Codex credential refresh in the drawer more menu', async () => {
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    const refreshItem = findDrawerMoreItem(renderer, 'refresh-credential');
+
+    expect(refreshItem.label).toBe('auth_files.credential_refresh_button');
+    expect(refreshItem.disabled).toBe(false);
+    await act(async () => {
+      refreshItem.onClick();
+      await Promise.resolve();
+    });
+    expect(mocks.handleCredentialRefresh).toHaveBeenCalledWith(mocks.files[0]);
+  });
+
+  it('confirms before leaving a dirty configuration tab', async () => {
+    mocks.configurationDirty = true;
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=config',
+    };
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(mocks.showConfirmation).toHaveBeenCalledTimes(1);
+    expect(
+      findHostButtonByText(renderer, 'accounts.detail_tab_config').props['aria-selected']
+    ).toBe(true);
+
+    const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as {
+      onConfirm: () => void;
+    };
+    await act(async () => {
+      confirmation.onConfirm();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.configurationReset).toHaveBeenCalledTimes(1);
+    expect(findHostButtonByText(renderer, 'accounts.detail_tab_quota').props['aria-selected']).toBe(
+      true
+    );
+  });
+
+  it('preserves a dirty draft when switching between configuration and models', async () => {
+    mocks.configurationDirty = true;
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=config',
+    };
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'auth_files.models_button').props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(mocks.showConfirmation).not.toHaveBeenCalled();
+    expect(mocks.configurationReset).not.toHaveBeenCalled();
+    expect(mocks.allowNextNavigation).toHaveBeenCalledTimes(1);
+    expect(findHostButtonByText(renderer, 'auth_files.models_button').props['aria-selected']).toBe(
+      true
+    );
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      {
+        pathname: '/accounts',
+        search: '?account=codex.json%00auth-1&tab=models',
+      },
+      { replace: true }
+    );
+    expect(mocks.configurationEnabledCalls).toContain(true);
+  });
+
+  it('refreshes the credential configuration snapshot with the models workspace when clean', async () => {
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=models',
+    };
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      renderer.root.findByType(AccountModelsTab).props.onRefresh();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.refreshModels).toHaveBeenCalledWith(mocks.files[0]);
+    expect(mocks.loadExcluded).toHaveBeenCalled();
+    expect(mocks.loadModelAlias).toHaveBeenCalled();
+    expect(mocks.configurationReload).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the same dirty guard for drawer close and browser navigation', async () => {
+    mocks.configurationDirty = true;
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=config',
+    };
+    const renderer = await renderAccountsPage();
+    const drawer = renderer.root.findByType(Drawer);
+
+    const closeRequest = drawer.props.onBeforeClose?.();
+    expect(closeRequest).toBeInstanceOf(Promise);
+    expect(mocks.lastUnsavedGuardOptions?.enabled).toBe(true);
+    const shouldBlock = mocks.lastUnsavedGuardOptions?.shouldBlock;
+    if (typeof shouldBlock !== 'function') throw new Error('missing navigation blocker');
+    expect(
+      shouldBlock({
+        currentLocation: mocks.location,
+        nextLocation: {
+          pathname: '/accounts',
+          search: '?account=codex.json%00auth-1&tab=models',
+        },
+      })
+    ).toBe(false);
+    expect(
+      shouldBlock({
+        currentLocation: mocks.location,
+        nextLocation: {
+          pathname: '/accounts',
+          search: '?account=codex.json%00auth-1&tab=quota',
+        },
+      })
+    ).toBe(true);
+
+    const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as {
+      onCancel: () => void;
+    };
+    confirmation.onCancel();
+    await expect(closeRequest).resolves.toBe(false);
+    expect(mocks.configurationReset).not.toHaveBeenCalled();
+  });
+
+  it('guards deletion of the open credential without discarding the draft before deletion', async () => {
+    mocks.configurationDirty = true;
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=config',
+    };
+    const renderer = await renderAccountsPage();
+    const deleteItem = findDrawerMoreItem(renderer, 'delete');
+
+    await act(async () => {
+      deleteItem.onClick();
+      await Promise.resolve();
+    });
+
+    expect(mocks.showConfirmation).toHaveBeenCalledTimes(1);
+    expect(mocks.handleDelete).not.toHaveBeenCalled();
+    const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as {
+      onConfirm: () => void;
+    };
+
+    await act(async () => {
+      confirmation.onConfirm();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.handleDelete).toHaveBeenCalledWith(mocks.files[0]);
+    expect(mocks.configurationReset).not.toHaveBeenCalled();
+  });
+
+  it('does not let router navigation discard a configuration while it is saving', async () => {
+    mocks.configurationDirty = true;
+    mocks.configurationSaving = true;
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=config',
+    };
+    await renderAccountsPage();
+
+    const confirmNavigation = mocks.lastUnsavedGuardOptions?.onConfirmNavigation;
+    if (!confirmNavigation) throw new Error('missing router confirmation hook');
+    expect(await confirmNavigation()).toBe(false);
+    expect(mocks.configurationReset).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith('accounts.config_save_in_progress', 'info');
+  });
+
+  it('disables drawer credential mutations while configuration is saving', async () => {
+    mocks.configurationSaving = true;
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=config',
+    };
+    const renderer = await renderAccountsPage();
+
+    expect(findButtonByText(renderer, 'accounts.disable').props.disabled).toBe(true);
+    expect(findDrawerMoreItem(renderer, 'refresh-credential').disabled).toBe(true);
+    expect(findDrawerMoreItem(renderer, 'delete').disabled).toBe(true);
+    expect(findDrawerMoreItem(renderer, 'download').disabled).toBe(false);
+    expect(findButtonByText(renderer, 'accounts.refresh_quota').props.disabled).not.toBe(true);
+  });
+
+  it('clears the selected account and detail tab from the URL after the drawer closes', async () => {
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?provider=codex&account=codex.json%00auth-1&tab=config',
+    };
+    const renderer = await renderAccountsPage();
+    const drawer = renderer.root.findByType(Drawer);
+
+    act(() => {
+      drawer.props.onClose();
+    });
+
+    expect(mocks.allowNextNavigation).toHaveBeenCalledTimes(1);
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      { pathname: '/accounts', search: '?provider=codex' },
+      { replace: true }
+    );
+  });
+
+  it('confirms before switching workspace views and then allows the intended navigation', async () => {
+    mocks.configurationDirty = true;
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=config',
+    };
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.tab_health').props.onClick();
+      await Promise.resolve();
+    });
+    expect(mocks.navigate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ search: expect.stringContaining('view=health') }),
+      expect.anything()
+    );
+
+    const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as {
+      onConfirm: () => void;
+    };
+    await act(async () => {
+      confirmation.onConfirm();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.allowNextNavigation).toHaveBeenCalledTimes(1);
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      {
+        pathname: '/accounts',
+        search: '?view=health&healthMode=local&account=codex.json%00auth-1&tab=config',
+      },
+      { replace: false }
+    );
   });
 
   it('filters credential rows through platform tabs without rendering a duplicate selector', async () => {
@@ -1169,6 +1618,79 @@ describe('AccountsPage replacement flows', () => {
           'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
         })
       ).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('restores an unsupported external hash navigation until dirty changes are confirmed', async () => {
+    const windowEvents = new EventTarget();
+    const browserLocation = {
+      hash: '#/accounts?account=codex.json%00auth-1&tab=config',
+    };
+    const browserHistory = {
+      state: { idx: 7 } as unknown,
+      replaceState: vi.fn((state: unknown, _title: string, url: string) => {
+        browserHistory.state = state;
+        browserLocation.hash = url;
+      }),
+    };
+    const storage = new Map<string, string>();
+    vi.stubGlobal('window', {
+      location: browserLocation,
+      history: browserHistory,
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+        removeItem: (key: string) => storage.delete(key),
+        clear: () => storage.clear(),
+      },
+      addEventListener: windowEvents.addEventListener.bind(windowEvents),
+      removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+    });
+    mocks.configurationDirty = true;
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=config',
+    };
+
+    try {
+      await renderAccountsPage();
+      browserHistory.state = null;
+      browserLocation.hash = '#/accounts?view=health&healthMode=local';
+
+      await act(async () => {
+        windowEvents.dispatchEvent(new Event('popstate'));
+        await Promise.resolve();
+      });
+
+      expect(browserHistory.replaceState).toHaveBeenCalledWith(
+        { idx: 7 },
+        '',
+        '#/accounts?account=codex.json%00auth-1&tab=config'
+      );
+      expect(browserLocation.hash).toBe('#/accounts?account=codex.json%00auth-1&tab=config');
+      expect(mocks.navigate).not.toHaveBeenCalledWith(
+        '/accounts?view=health&healthMode=local',
+        expect.anything()
+      );
+
+      const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as {
+        onConfirm: () => void;
+      };
+      await act(async () => {
+        confirmation.onConfirm();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mocks.configurationReset).toHaveBeenCalledTimes(1);
+      expect(mocks.allowNavigationTo).toHaveBeenCalledWith(
+        '/accounts?view=health&healthMode=local'
+      );
+      expect(mocks.navigate).toHaveBeenCalledWith('/accounts?view=health&healthMode=local', {
+        replace: true,
+      });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1361,10 +1883,9 @@ describe('AccountsPage replacement flows', () => {
       await findBatchMoreItem(renderer, 'websockets-enable').onClick();
     });
 
-    expect(mocks.batchPatchFields).toHaveBeenCalledWith(
-      [getAuthFilePatchTarget(mocks.files[0])],
-      { websockets: true }
-    );
+    expect(mocks.batchPatchFields).toHaveBeenCalledWith([getAuthFilePatchTarget(mocks.files[0])], {
+      websockets: true,
+    });
   });
 
   it('disables batch delete for partial shared auth-file selections', async () => {
@@ -2184,7 +2705,7 @@ describe('AccountsPage replacement flows', () => {
     });
 
     expect(mocks.showModels).toHaveBeenCalledWith(mocks.files[0]);
-    expect(treeText(renderer)).toContain('models-content');
+    expect(treeText(renderer)).toContain('auth_files.models_empty');
 
     const modelsTab = renderer.root
       .findAll((node) => node.type === 'button' && node.props.role === 'tab')
@@ -2230,7 +2751,7 @@ describe('AccountsPage replacement flows', () => {
     expect(treeText(renderer)).toContain('accounts.detail_tab_overview');
   });
 
-  it('renders a decision-first overview without enabling raw credential loading', async () => {
+  it('renders a decision-first overview', async () => {
     const renderer = await renderAccountsPage();
 
     await act(async () => {
@@ -2260,8 +2781,6 @@ describe('AccountsPage replacement flows', () => {
       'accounts.detail_overview_activity_eyebrow',
       'accounts.detail_overview_activity_source',
     ].forEach((key) => expect(overviewText).not.toContain(key));
-    expect(mocks.credentialSafeSummaryEnabledCalls.length).toBeGreaterThan(0);
-    expect(mocks.credentialSafeSummaryEnabledCalls.every((enabled) => !enabled)).toBe(true);
   });
 
   it('loads and renders matching pending actions in the overview', async () => {
@@ -2311,19 +2830,17 @@ describe('AccountsPage replacement flows', () => {
     expect(findHostButtonByText(renderer, 'accounts.detail_tab_quota').props['aria-selected']).toBe(
       true
     );
-    expect(mocks.credentialSafeSummaryEnabledCalls.every((enabled) => !enabled)).toBe(true);
-
     await act(async () => {
       findHostButtonByText(renderer, 'accounts.detail_tab_overview').props.onClick();
     });
     await act(async () => {
-      renderer.root.findByProps({ 'data-overview-target-tab': 'credential' }).props.onClick();
+      renderer.root.findByProps({ 'data-overview-target-tab': 'config' }).props.onClick();
     });
 
     expect(
-      findHostButtonByText(renderer, 'accounts.detail_tab_credential').props['aria-selected']
+      findHostButtonByText(renderer, 'accounts.detail_tab_config').props['aria-selected']
     ).toBe(true);
-    expect(mocks.credentialSafeSummaryEnabledCalls).toContain(true);
+    expect(mocks.configurationEnabledCalls).toContain(true);
   });
 
   it('uses the fixed seven-day monitoring range for overview activity', async () => {

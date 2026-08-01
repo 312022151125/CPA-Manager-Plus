@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
+import type { BlockerFunction } from 'react-router';
 import { createPortal } from 'react-dom';
 import type { TFunction } from 'i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -49,17 +50,16 @@ import {
 import { buildQuotaFailureState, getScopedQuotaState } from '@/components/quota/quotaConfigs';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
+import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { useAuthFilesData } from '@/features/authFiles/hooks/useAuthFilesData';
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
 import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
-import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
-import { useAccountCredentialSafeSummary } from '@/features/accounts/hooks/useAccountCredentialSafeSummary';
+import { useAuthFileConfigurationEditor } from '@/features/authFiles/hooks/useAuthFileConfigurationEditor';
 import { useCredentialInspectionSnapshot } from '@/features/accounts/hooks/useCredentialInspectionSnapshot';
 import { useAccountsWorkspaceRefresh } from '@/features/accounts/hooks/useAccountsWorkspaceRefresh';
 import { PaginationControls } from '@/features/monitoring/components/MonitoringShared';
 import { CredentialHealthInspectionWorkspace } from '@/features/monitoring/components/CredentialHealthInspectionWorkspace';
 import { AuthJsonPasteModal } from '@/features/authFiles/components/AuthJsonPasteModal';
-import { AuthFilesPrefixProxyEditorModal } from '@/features/authFiles/components/AuthFilesPrefixProxyEditorModal';
 import { OAuthExcludedCard } from '@/features/authFiles/components/OAuthExcludedCard';
 import {
   OAuthExcludedEditorModal,
@@ -168,7 +168,7 @@ import {
   writeAccountsWorkspaceUrlSearch,
 } from '@/features/accounts/model/accountsWorkspaceUrlState';
 import {
-  AccountCredentialTab,
+  AccountConfigurationTab,
   AccountDiagnosticsTab,
   AccountLatestRequest,
   AccountMetricsGrid,
@@ -231,6 +231,8 @@ const readAccountsSearchFromHash = (hash: string): string => {
   const queryIndex = hash.indexOf('?');
   return queryIndex >= 0 ? hash.slice(queryIndex) : '';
 };
+
+const isConfigurationDetailTab = (tab: DetailTab): boolean => tab === 'config' || tab === 'models';
 
 const getHealthStatusClass = (status: AccountListHealthStatusKey) => {
   switch (status) {
@@ -339,6 +341,8 @@ export function AccountsPage() {
   const initialWorkspaceUrlState = useRef(
     readAccountsWorkspaceUrlState(location.search, initialWorkspaceUiState.current)
   );
+  const modelsLoadKeyRef = useRef('');
+  const modelRulesLoadKeyRef = useRef('');
   const connectionFingerprint = useMemo(
     () => createCodexInspectionConnectionFingerprint(apiBase, managementKey),
     [apiBase, managementKey]
@@ -375,8 +379,20 @@ export function AccountsPage() {
 
   const [oauthViewMode, setOauthViewMode] = useState<'diagram' | 'list'>('list');
   const oauthState = useAuthFilesOauth({ viewMode: oauthViewMode, files });
-  const { modelsLoading, modelsList, modelsFileName, modelsFileType, modelsError, showModels } =
-    useAuthFilesModels();
+  const {
+    modelsLoading,
+    modelsList,
+    modelDefinitions,
+    modelDefinitionsLoading,
+    modelDefinitionsError,
+    modelsFileName,
+    modelsFileType,
+    modelsSelectionKey,
+    modelsError,
+    showModels,
+    refreshModels,
+    invalidateModels,
+  } = useAuthFilesModels({ connectionKey: connectionFingerprint });
   const antigravityQuota = useQuotaStore((state) => state.antigravityQuota);
   const claudeQuota = useQuotaStore((state) => state.claudeQuota);
   const codexQuota = useQuotaStore((state) => state.codexQuota);
@@ -517,7 +533,10 @@ export function AccountsPage() {
   const lastWorkspaceNavigationRef = useRef<string | null>(null);
   const syncingWorkspaceLocationRef = useRef(false);
   const hasProcessedInitialWorkspaceLocationRef = useRef(false);
-  const loadedFilesConnectionFingerprintRef = useRef<string | null>(null);
+  const currentHashHistoryStateRef = useRef<unknown>(
+    typeof window === 'undefined' ? null : window.history?.state
+  );
+  const pendingExternalHashNavigationRef = useRef('');
   const quotaRequestVersionsRef = useRef<Map<string, number>>(new Map());
   const identityCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accountSortDropdownRef = useRef<HTMLDivElement | null>(null);
@@ -668,8 +687,6 @@ export function AccountsPage() {
   useHeaderRefresh(refreshActiveWorkspace);
 
   useEffect(() => {
-    if (loadedFilesConnectionFingerprintRef.current === connectionFingerprint) return;
-    loadedFilesConnectionFingerprintRef.current = connectionFingerprint;
     void loadFiles();
   }, [connectionFingerprint, loadFiles]);
 
@@ -913,10 +930,7 @@ export function AccountsPage() {
     [selectedRows]
   );
   const selectedFileNames = useMemo(
-    () =>
-      Array.from(
-        new Set(selectedTargetFiles.map((file) => file.name))
-      ),
+    () => Array.from(new Set(selectedTargetFiles.map((file) => file.name))),
     [selectedTargetFiles]
   );
   const selectedHasPartialSharedAuthFile = useMemo(
@@ -931,11 +945,141 @@ export function AccountsPage() {
     () => rows.find((row) => row.selectionKey === selectedRowKey) ?? null,
     [rows, selectedRowKey]
   );
-  const credentialSafeSummary = useAccountCredentialSafeSummary(
-    selectedRow?.raw ?? null,
-    detailTab === 'credential'
-  );
+  const selectedSourceMemberCount = useMemo(() => {
+    const fileName = selectedRow?.fileName.trim();
+    if (!fileName) return 0;
+    return files.filter((file) => String(file.name ?? '').trim() === fileName).length;
+  }, [files, selectedRow?.fileName]);
   const disableControls = connectionStatus !== 'connected';
+  const handleConfigurationSaved = useCallback(() => {
+    if (!selectedRow) return;
+    invalidateModels(selectedRow.raw);
+    if (detailTab === 'models') {
+      void refreshModels(selectedRow.raw);
+    }
+  }, [detailTab, invalidateModels, refreshModels, selectedRow]);
+  const configurationEditor = useAuthFileConfigurationEditor({
+    file: selectedRow && !selectedRow.runtimeOnly ? selectedRow.raw : null,
+    enabled:
+      activeView === 'accounts' &&
+      (detailTab === 'config' || detailTab === 'models') &&
+      Boolean(selectedRow),
+    disableControls,
+    sourceMemberCount: selectedSourceMemberCount,
+    connectionKey: connectionFingerprint,
+    loadFiles,
+    onSaved: handleConfigurationSaved,
+  });
+  const configurationDirty = configurationEditor.dirty;
+  const configurationReload = configurationEditor.reload;
+  const configurationSaving = configurationEditor.state?.saving === true;
+  const handleAccountModelsRefresh = useCallback(async () => {
+    if (!selectedRow) return;
+    await Promise.all([
+      refreshModels(selectedRow.raw),
+      loadOauthExcluded(),
+      loadOauthModelAlias(),
+      ...(!configurationDirty && !configurationSaving && !selectedRow.runtimeOnly
+        ? [configurationReload()]
+        : []),
+    ]);
+  }, [
+    configurationDirty,
+    configurationReload,
+    configurationSaving,
+    loadOauthExcluded,
+    loadOauthModelAlias,
+    refreshModels,
+    selectedRow,
+  ]);
+  const shouldBlockConfigurationNavigation = useCallback<BlockerFunction>(
+    ({ currentLocation, nextLocation }) => {
+      if (!configurationEditor.dirty && !configurationSaving) return false;
+      if (currentLocation.pathname !== nextLocation.pathname) return true;
+
+      const current = readAccountsWorkspaceUrlState(
+        currentLocation.search,
+        DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
+      );
+      const next = readAccountsWorkspaceUrlState(
+        nextLocation.search,
+        DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
+      );
+      return !(
+        current.view === 'accounts' &&
+        next.view === 'accounts' &&
+        Boolean(current.account) &&
+        current.account === next.account &&
+        isConfigurationDetailTab(current.detailTab) &&
+        isConfigurationDetailTab(next.detailTab)
+      );
+    },
+    [configurationEditor.dirty, configurationSaving]
+  );
+  const handleRouterNavigationConfirm = useCallback((): boolean => {
+    if (configurationSaving) {
+      showNotification(t('accounts.config_save_in_progress'), 'info');
+      return false;
+    }
+    configurationEditor.reset();
+    return true;
+  }, [configurationEditor, configurationSaving, showNotification, t]);
+  const { allowNextNavigation, allowNavigationTo } = useUnsavedChangesGuard({
+    enabled: activeView === 'accounts' && (detailTab === 'config' || detailTab === 'models'),
+    shouldBlock: shouldBlockConfigurationNavigation,
+    onConfirmNavigation: handleRouterNavigationConfirm,
+    dialog: {
+      title: t('common.unsaved_changes_title'),
+      message: t('common.unsaved_changes_message'),
+      confirmText: t('common.leave'),
+      cancelText: t('common.stay'),
+      variant: 'danger',
+    },
+  });
+  const discardConfigurationRequestRef = useRef<Promise<boolean> | null>(null);
+  const confirmConfigurationDiscard = useCallback(
+    (resetDraftOnConfirm = true): Promise<boolean> => {
+      if (configurationEditor.state?.saving) {
+        showNotification(t('accounts.config_save_in_progress'), 'info');
+        return Promise.resolve(false);
+      }
+      if (!configurationEditor.dirty) return Promise.resolve(true);
+      if (discardConfigurationRequestRef.current) {
+        return Promise.resolve(false);
+      }
+
+      const request = new Promise<boolean>((resolve) => {
+        showConfirmation({
+          title: t('common.unsaved_changes_title'),
+          message: t('common.unsaved_changes_message'),
+          confirmText: t('common.leave'),
+          cancelText: t('common.stay'),
+          variant: 'danger',
+          onConfirm: () => {
+            if (resetDraftOnConfirm) configurationEditor.reset();
+            resolve(true);
+          },
+          onCancel: () => resolve(false),
+        });
+      });
+      discardConfigurationRequestRef.current = request;
+      void request.finally(() => {
+        if (discardConfigurationRequestRef.current === request) {
+          discardConfigurationRequestRef.current = null;
+        }
+      });
+      return request;
+    },
+    [configurationEditor, showConfirmation, showNotification, t]
+  );
+  const handleAccountDelete = useCallback(
+    async (item: AuthFileItem) => {
+      const deletesOpenCredential = getAuthFileSelectionKey(item) === selectedRowKey;
+      if (deletesOpenCredential && !(await confirmConfigurationDiscard(false))) return;
+      handleDelete(item);
+    },
+    [confirmConfigurationDiscard, handleDelete, selectedRowKey]
+  );
   const selectedRowProvider = selectedRow?.provider ?? '';
   const hasSelectedAccountDetail = activeView === 'accounts' && Boolean(selectedRowKey);
   const needsQuotaCooldowns =
@@ -967,19 +1111,37 @@ export function AccountsPage() {
     void loadHeaderSnapshots();
   }, [loadHeaderSnapshots, needsHeaderSnapshots]);
 
-  const {
-    prefixProxyEditor,
-    prefixProxyUpdatedText,
-    prefixProxyDirty,
-    openPrefixProxyEditor,
-    closePrefixProxyEditor,
-    handlePrefixProxyChange,
-    handlePrefixProxySave,
-  } = useAuthFilesPrefixProxyEditor({
-    disableControls,
-    loadFiles,
-    onSaved: credentialSafeSummary.invalidate,
-  });
+  useEffect(() => {
+    if (activeView !== 'accounts' || detailTab !== 'models' || !selectedRow) {
+      modelsLoadKeyRef.current = '';
+      return;
+    }
+
+    const loadKey = `${connectionFingerprint ?? ''}\u0000${selectedRow.selectionKey}`;
+    if (modelsLoadKeyRef.current === loadKey) return;
+    modelsLoadKeyRef.current = loadKey;
+    void showModels(selectedRow.raw);
+  }, [activeView, connectionFingerprint, detailTab, selectedRow, showModels]);
+
+  useEffect(() => {
+    if (activeView !== 'accounts' || detailTab !== 'models' || !selectedRow) {
+      modelRulesLoadKeyRef.current = '';
+      return;
+    }
+
+    const loadKey = `${connectionFingerprint}\u0000models`;
+    if (modelRulesLoadKeyRef.current === loadKey) return;
+    modelRulesLoadKeyRef.current = loadKey;
+    void Promise.all([loadOauthExcluded(), loadOauthModelAlias()]);
+  }, [
+    activeView,
+    connectionFingerprint,
+    detailTab,
+    loadOauthExcluded,
+    loadOauthModelAlias,
+    selectedRow,
+  ]);
+
   const handleAccountCardClick = useCallback(
     (row: AccountRow) => {
       if (isSelectionMode) {
@@ -989,16 +1151,6 @@ export function AccountsPage() {
       }
     },
     [isSelectionMode, toggleSelect]
-  );
-  const openAccountDetail = useCallback(
-    (row: AccountRow, tab: DetailTab = 'overview') => {
-      setSelectedRowKey(row.selectionKey);
-      setDetailTab(tab);
-      if (tab === 'models') {
-        void showModels(row.raw);
-      }
-    },
-    [showModels]
   );
   const cancelSelectionMode = useCallback(() => {
     deselectAll();
@@ -1204,6 +1356,64 @@ export function AccountsPage() {
     ]
   );
 
+  const openAccountDetail = useCallback(
+    async (row: AccountRow, tab: DetailTab = 'overview') => {
+      const preservesConfigurationDraft =
+        row.selectionKey === selectedRowKey &&
+        (detailTab === 'config' || detailTab === 'models') &&
+        (tab === 'config' || tab === 'models');
+      const hadDirtyConfiguration = configurationEditor.dirty;
+      if (!preservesConfigurationDraft && !(await confirmConfigurationDiscard())) return;
+      if (
+        hadDirtyConfiguration &&
+        (!preservesConfigurationDraft || row.selectionKey !== selectedRowKey || tab !== detailTab)
+      ) {
+        allowNextNavigation();
+      }
+
+      const searchValue = writeAccountsWorkspaceUrlSearch(
+        location.search,
+        {
+          ...workspaceUrlState,
+          view: 'accounts',
+          account: row.selectionKey,
+          detailTab: tab,
+        },
+        DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
+      );
+      setSelectedRowKey(row.selectionKey);
+      setDetailTab(tab);
+      if (searchValue !== location.search) {
+        lastWorkspaceNavigationRef.current = searchValue;
+        navigate({ pathname: location.pathname, search: searchValue }, { replace: true });
+      }
+    },
+    [
+      allowNextNavigation,
+      configurationEditor.dirty,
+      confirmConfigurationDiscard,
+      detailTab,
+      location.pathname,
+      location.search,
+      navigate,
+      selectedRowKey,
+      workspaceUrlState,
+    ]
+  );
+
+  const closeAccountDetail = useCallback(() => {
+    setSelectedRowKey(null);
+    setDetailTab('overview');
+    const searchValue = writeAccountsWorkspaceUrlSearch(
+      location.search,
+      { ...workspaceUrlState, account: null, detailTab: 'overview' },
+      DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
+    );
+    lastWorkspaceNavigationRef.current = searchValue;
+    allowNextNavigation();
+    navigate({ pathname: location.pathname, search: searchValue }, { replace: true });
+  }, [allowNextNavigation, location.pathname, location.search, navigate, workspaceUrlState]);
+
   const applyWorkspaceUrlState = useCallback(
     (searchValue: string, fallback: AccountsWorkspaceUiState) => {
       const next = readAccountsWorkspaceUrlState(searchValue, fallback);
@@ -1238,6 +1448,11 @@ export function AccountsPage() {
   }, [applyWorkspaceUrlState, location.search]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    currentHashHistoryStateRef.current = window.history?.state;
+  }, [location.hash, location.pathname, location.search]);
+
+  useEffect(() => {
     if (syncingWorkspaceLocationRef.current) {
       syncingWorkspaceLocationRef.current = false;
       return;
@@ -1259,6 +1474,7 @@ export function AccountsPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const syncWorkspaceFromHash = () => {
+      if (configurationEditor.dirty || configurationEditor.state?.saving) return;
       applyWorkspaceUrlState(
         readAccountsSearchFromHash(window.location.hash),
         DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
@@ -1266,10 +1482,75 @@ export function AccountsPage() {
     };
     window.addEventListener('hashchange', syncWorkspaceFromHash);
     return () => window.removeEventListener('hashchange', syncWorkspaceFromHash);
-  }, [applyWorkspaceUrlState]);
+  }, [applyWorkspaceUrlState, configurationEditor.dirty, configurationEditor.state?.saving]);
+
+  useEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      !window.history ||
+      typeof window.history.replaceState !== 'function'
+    ) {
+      return undefined;
+    }
+
+    const interceptExternalHashNavigation = (event: Event) => {
+      const historyState = window.history.state as { idx?: unknown } | null;
+      if (typeof historyState?.idx === 'number') return;
+
+      const targetHash = window.location.hash;
+      const currentHash = `#${location.pathname}${location.search}${location.hash || ''}`;
+      if (!targetHash || targetHash === currentHash) return;
+
+      event.stopImmediatePropagation();
+      window.history.replaceState(currentHashHistoryStateRef.current, '', currentHash);
+
+      const target = targetHash.startsWith('#') ? targetHash.slice(1) || '/' : targetHash;
+      if (pendingExternalHashNavigationRef.current) return;
+      pendingExternalHashNavigationRef.current = target;
+      const finish = () => {
+        if (pendingExternalHashNavigationRef.current === target) {
+          pendingExternalHashNavigationRef.current = '';
+        }
+      };
+      const navigateToTarget = () => {
+        allowNavigationTo(target);
+        navigate(target, { replace: true });
+      };
+
+      if (!configurationEditor.dirty && !configurationSaving) {
+        navigateToTarget();
+        finish();
+        return;
+      }
+
+      void confirmConfigurationDiscard()
+        .then((allowed) => {
+          if (allowed) navigateToTarget();
+        })
+        .finally(finish);
+    };
+
+    window.addEventListener('popstate', interceptExternalHashNavigation, true);
+    window.addEventListener('hashchange', interceptExternalHashNavigation, true);
+    return () => {
+      window.removeEventListener('popstate', interceptExternalHashNavigation, true);
+      window.removeEventListener('hashchange', interceptExternalHashNavigation, true);
+    };
+  }, [
+    allowNavigationTo,
+    configurationEditor.dirty,
+    configurationSaving,
+    confirmConfigurationDiscard,
+    location.hash,
+    location.pathname,
+    location.search,
+    navigate,
+  ]);
 
   const changeActiveView = useCallback(
-    (view: AccountsView) => {
+    async (view: AccountsView) => {
+      const hadDirtyConfiguration = configurationEditor.dirty;
+      if (!(await confirmConfigurationDiscard())) return;
       setActiveView(view);
       const searchValue = writeAccountsWorkspaceUrlSearch(
         location.search,
@@ -1277,6 +1558,7 @@ export function AccountsPage() {
         DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
       );
       lastWorkspaceNavigationRef.current = searchValue;
+      if (hadDirtyConfiguration) allowNextNavigation();
       navigate(
         {
           pathname: location.pathname,
@@ -1285,7 +1567,15 @@ export function AccountsPage() {
         { replace: false }
       );
     },
-    [location.pathname, location.search, navigate, workspaceUrlState]
+    [
+      allowNextNavigation,
+      configurationEditor.dirty,
+      confirmConfigurationDiscard,
+      location.pathname,
+      location.search,
+      navigate,
+      workspaceUrlState,
+    ]
   );
 
   const changeHealthMode = useCallback(
@@ -1307,12 +1597,14 @@ export function AccountsPage() {
   }, [loadFiles]);
 
   const handleOpenInspectionCredential = useCallback(
-    (target: CredentialInspectionTarget) => {
+    async (target: CredentialInspectionTarget) => {
       const targetRow = findAccountRowForInspectionTarget(rows, target);
       if (!targetRow) {
         showNotification(t('accounts.inspection_credential_not_found'), 'warning');
         return;
       }
+      const hadDirtyConfiguration = configurationEditor.dirty;
+      if (!(await confirmConfigurationDiscard())) return;
 
       setActiveView('accounts');
       setSelectedRowKey(targetRow.selectionKey);
@@ -1328,9 +1620,21 @@ export function AccountsPage() {
         DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
       );
       lastWorkspaceNavigationRef.current = searchValue;
+      if (hadDirtyConfiguration) allowNextNavigation();
       navigate({ pathname: location.pathname, search: searchValue }, { replace: false });
     },
-    [location.pathname, location.search, navigate, rows, showNotification, t, workspaceUrlState]
+    [
+      allowNextNavigation,
+      configurationEditor.dirty,
+      confirmConfigurationDiscard,
+      location.pathname,
+      location.search,
+      navigate,
+      rows,
+      showNotification,
+      t,
+      workspaceUrlState,
+    ]
   );
 
   useEffect(() => {
@@ -2683,7 +2987,7 @@ export function AccountsPage() {
           size="sm"
           iconOnly
           className={`${styles.accountIconButton} ${styles.accountIconButtonModels}`}
-          onClick={() => openAccountDetail(row, 'models')}
+          onClick={() => void openAccountDetail(row, 'models')}
           disabled={row.runtimeOnly && row.provider !== 'aistudio'}
           title={t('auth_files.models_button')}
           aria-label={t('auth_files.models_button')}
@@ -2707,7 +3011,7 @@ export function AccountsPage() {
           size="sm"
           iconOnly
           className={`${styles.accountIconButton} ${styles.accountIconButtonDelete}`}
-          onClick={() => handleDelete(row.raw)}
+          onClick={() => void handleAccountDelete(row.raw)}
           disabled={disableControls || row.runtimeOnly || deleting === row.fileName}
           title={t('auth_files.delete_button')}
           aria-label={t('auth_files.delete_button')}
@@ -2729,7 +3033,7 @@ export function AccountsPage() {
           variant="ghost"
           size="xs"
           className={styles.rowDetailButton}
-          onClick={() => openAccountDetail(row)}
+          onClick={() => void openAccountDetail(row)}
           title={t('accounts.open_detail', { name: row.fileName })}
           aria-label={t('accounts.open_detail', { name: row.fileName })}
         >
@@ -3091,7 +3395,7 @@ export function AccountsPage() {
                         })}
                         onClick={(event) => {
                           event.stopPropagation();
-                          openAccountDetail(row, 'quota');
+                          void openAccountDetail(row, 'quota');
                         }}
                       >
                         {t('accounts.quota_more_windows', {
@@ -3131,7 +3435,7 @@ export function AccountsPage() {
     const detailTabs: Array<{ id: DetailTab; label: string }> = [
       { id: 'overview', label: t('accounts.detail_tab_overview') },
       { id: 'quota', label: t('accounts.detail_tab_quota') },
-      { id: 'credential', label: t('accounts.detail_tab_credential') },
+      { id: 'config', label: t('accounts.detail_tab_config') },
       { id: 'models', label: t('auth_files.models_button') },
       { id: 'diagnostics', label: t('accounts.detail_tab_diagnostics') },
     ];
@@ -3182,6 +3486,7 @@ export function AccountsPage() {
       !featureAvailability.requestMonitoringAvailable ||
       !featureAvailability.managerServiceBase ||
       !managementKey;
+    const modelsTargetMatches = modelsSelectionKey === selectedRow.selectionKey;
 
     const renderActiveDetail = () => {
       if (detailTab === 'quota') {
@@ -3198,35 +3503,41 @@ export function AccountsPage() {
           />
         );
       }
-      if (detailTab === 'credential') {
+      if (detailTab === 'config') {
         return (
-          <AccountCredentialTab
+          <AccountConfigurationTab
             row={selectedRow}
-            detailView={detailView}
-            healthStatusClass={getHealthStatusClass(detailView.health.status)}
             disableControls={disableControls}
-            fileName={credentialSafeSummary.fileName}
-            loading={credentialSafeSummary.loading}
-            error={credentialSafeSummary.error}
-            summary={credentialSafeSummary.summary}
-            onEdit={() => void openPrefixProxyEditor(selectedRow.raw)}
-            onReload={() => void credentialSafeSummary.reload()}
+            editor={configurationEditor}
+            onCopyText={copyTextWithNotification}
           />
         );
       }
       if (detailTab === 'models') {
         return (
           <AccountModelsTab
-            fileName={modelsFileName || selectedRow.fileName}
-            fileType={modelsFileType || selectedRow.provider}
-            runtimeOnly={selectedRow.runtimeOnly && selectedRow.provider !== 'aistudio'}
-            loading={modelsLoading}
-            error={modelsError}
-            models={modelsList}
-            excluded={oauthState.excluded}
+            key={`${selectedRow.selectionKey}:models`}
+            row={selectedRow}
+            disableControls={disableControls}
+            fileName={getDisplayFileName(
+              modelsTargetMatches ? modelsFileName || selectedRow.fileName : selectedRow.fileName
+            )}
+            fileType={
+              modelsTargetMatches ? modelsFileType || selectedRow.provider : selectedRow.provider
+            }
+            loading={modelsTargetMatches ? modelsLoading : true}
+            error={modelsTargetMatches ? modelsError : null}
+            models={modelsTargetMatches ? modelsList : []}
+            modelDefinitions={modelsTargetMatches ? modelDefinitions : []}
+            modelDefinitionsLoading={modelsTargetMatches ? modelDefinitionsLoading : true}
+            modelDefinitionsError={modelsTargetMatches ? modelDefinitionsError : null}
+            globalExcluded={oauthState.excluded}
+            globalExcludedState={oauthState.excludedError}
             aliases={oauthState.modelAlias}
-            onRefresh={() => void showModels(selectedRow.raw)}
-            onManageRules={() => changeActiveView('oauth')}
+            editor={configurationEditor}
+            onRefresh={() => void handleAccountModelsRefresh()}
+            onManageGlobalRules={() => void changeActiveView('oauth')}
+            onOpenAdvancedRules={() => void openAccountDetail(selectedRow, 'config')}
             onCopyText={copyTextWithNotification}
           />
         );
@@ -3264,21 +3575,35 @@ export function AccountsPage() {
         <AccountOverviewTab
           detailView={detailView}
           getHealthStatusClass={getHealthStatusClass}
-          onSelectTab={setDetailTab}
+          onSelectTab={(tab) => void openAccountDetail(selectedRow, tab)}
         />
       );
     };
+    const selectedCredentialRefreshing =
+      credentialRefreshing[getAuthFileSelectionKey(selectedRow.raw)] === true;
     const drawerMoreItems: DropdownMenuItem[] = [
       {
         key: 'models',
         label: t('auth_files.models_button'),
         icon: <IconModelCluster size={15} />,
         onClick: () => {
-          setDetailTab('models');
-          void showModels(selectedRow.raw);
+          void openAccountDetail(selectedRow, 'models');
         },
         disabled: selectedRow.runtimeOnly && selectedRow.provider !== 'aistudio',
       },
+      ...(selectedRow.provider === CODEX_CONFIG.type && !selectedRow.runtimeOnly
+        ? [
+            {
+              key: 'refresh-credential',
+              label: t('auth_files.credential_refresh_button'),
+              icon: <IconRefreshCw size={15} />,
+              onClick: () => {
+                void handleCredentialRefresh(selectedRow.raw);
+              },
+              disabled: disableControls || configurationSaving || selectedCredentialRefreshing,
+            } satisfies DropdownMenuItem,
+          ]
+        : []),
       {
         key: 'download',
         label: t('auth_files.download_button'),
@@ -3293,6 +3618,7 @@ export function AccountsPage() {
               label: t('codex_quota.reset_action_button'),
               icon: <IconRefreshCw size={15} />,
               onClick: () => resetCodexQuotaForRow(selectedRow),
+              disabled: configurationSaving,
             } satisfies DropdownMenuItem,
           ]
         : []),
@@ -3301,16 +3627,22 @@ export function AccountsPage() {
         key: 'delete',
         label: t('auth_files.delete_button'),
         icon: <IconTrash2 size={15} />,
-        onClick: () => handleDelete(selectedRow.raw),
-        disabled: disableControls || selectedRow.runtimeOnly || deleting === selectedRow.fileName,
+        onClick: () => void handleAccountDelete(selectedRow.raw),
+        disabled:
+          disableControls ||
+          configurationSaving ||
+          selectedRow.runtimeOnly ||
+          deleting === selectedRow.fileName,
         tone: 'danger',
       },
     ];
 
     return (
       <Drawer
+        key={selectedRow.selectionKey}
         open
-        onClose={() => setSelectedRowKey(null)}
+        onClose={closeAccountDetail}
+        onBeforeClose={confirmConfigurationDiscard}
         width="clamp(540px, 45vw, 720px)"
         className={styles.accountDetailDrawer}
         title={
@@ -3339,7 +3671,7 @@ export function AccountsPage() {
               <Button
                 variant="primary"
                 onClick={() => handleReauthAccount(selectedRow.raw)}
-                disabled={disableControls || selectedRow.runtimeOnly}
+                disabled={disableControls || configurationSaving || selectedRow.runtimeOnly}
               >
                 <IconShield size={16} />
                 {t('accounts.recommend_action_reauth')}
@@ -3356,7 +3688,9 @@ export function AccountsPage() {
             <Button
               variant={selectedRow.disabled ? 'secondary' : 'danger'}
               onClick={() => handleBatchStatus(selectedRow.disabled, [selectedRow])}
-              disabled={statusUpdating || selectedRow.runtimeOnly}
+              disabled={
+                disableControls || configurationSaving || statusUpdating || selectedRow.runtimeOnly
+              }
             >
               {selectedRow.disabled ? t('accounts.enable') : t('accounts.disable')}
             </Button>
@@ -3393,12 +3727,7 @@ export function AccountsPage() {
                 role="tab"
                 aria-selected={detailTab === tab.id}
                 className={detailTab === tab.id ? styles.drawerTabActive : ''}
-                onClick={() => {
-                  setDetailTab(tab.id);
-                  if (tab.id === 'models') {
-                    void showModels(selectedRow.raw);
-                  }
-                }}
+                onClick={() => void openAccountDetail(selectedRow, tab.id)}
               >
                 {tab.label}
               </button>
@@ -3660,21 +3989,6 @@ export function AccountsPage() {
           if (!authJsonPasteSaving) setAuthJsonPasteOpen(false);
         }}
         onSave={handleSavePastedAuthJson}
-      />
-      <AuthFilesPrefixProxyEditorModal
-        disableControls={disableControls}
-        editor={prefixProxyEditor}
-        updatedText={prefixProxyUpdatedText}
-        dirty={prefixProxyDirty}
-        credentialRefreshing={Boolean(
-          prefixProxyEditor?.authFile &&
-          credentialRefreshing[getAuthFileSelectionKey(prefixProxyEditor.authFile)] === true
-        )}
-        onClose={closePrefixProxyEditor}
-        onCopyText={copyTextWithNotification}
-        onSave={handlePrefixProxySave}
-        onRefreshCredential={handleCredentialRefresh}
-        onChange={handlePrefixProxyChange}
       />
       <OAuthExcludedEditorModal
         open={oauthExcludedEditorProvider !== null}

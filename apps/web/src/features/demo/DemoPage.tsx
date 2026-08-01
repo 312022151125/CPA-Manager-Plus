@@ -38,6 +38,7 @@ import {
   setDemoMode,
 } from './demoMode';
 import { enableDemoPersistIsolation } from './demoPersistIsolation';
+import { resetDemoAuthFileConfiguration } from './demoApi';
 
 type AuthStoreState = ReturnType<typeof useAuthStore.getState>;
 type ConfigStoreState = ReturnType<typeof useConfigStore.getState>;
@@ -166,6 +167,7 @@ export function DemoPage() {
     const restoreDemoInspectionState = installDemoInspectionState();
 
     resetDemoCredentialRefresh();
+    resetDemoAuthFileConfiguration();
     resetDemoCodexInspectionRunState();
     setDemoMode(true);
     apiClient.setConfig({
@@ -213,6 +215,7 @@ export function DemoPage() {
 
     return () => {
       resetDemoCredentialRefresh();
+      resetDemoAuthFileConfiguration();
       resetDemoCodexInspectionRunState();
       setDemoMode(false);
       useAuthStore.setState(authSnapshot);

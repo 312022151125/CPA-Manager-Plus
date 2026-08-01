@@ -95,19 +95,17 @@ describe('accounts workspace wiring', () => {
     expect(locale.accounts.tab_health).toBe(expectedLabel);
   });
 
-  it.each([en, ru, zhCN, zhTW])('keeps credential-detail copy complete', (locale) => {
+  it.each([en, ru, zhCN, zhTW])('keeps credential-configuration copy complete', (locale) => {
     const accounts = locale.accounts as Record<string, unknown>;
     [
-      'detail_current_availability',
-      'detail_enablement_state',
-      'detail_reload_file',
-      'detail_more_file_info',
-      'detail_configure_routing',
-      'detail_default_routing_title',
-      'detail_default_routing_desc',
+      'detail_tab_config',
       'detail_runtime_config_unavailable',
-      'detail_file_data_unavailable',
+      'config_view_raw_data',
+      'config_raw_data_redacted',
+      'config_raw_data_hint',
+      'detail_overview_open_config',
     ].forEach((key) => expect(accounts[key]).toBeTypeOf('string'));
+    expect(accounts).not.toHaveProperty('detail_tab_credential');
   });
 
   it.each([

@@ -31,16 +31,54 @@ export type AuthFilePluginSourceFallbackVerifier = () => Promise<void>;
 export type AuthFileStatusPluginSourceFallbackVerifier = () => Promise<AuthFileStatusTarget[]>;
 type AuthFileEntry = AuthFilesResponse['files'][number];
 type AuthFileJsonValue = Record<string, unknown> | Record<string, unknown>[];
+type AuthFileModelApiItem = {
+  id: string;
+  display_name?: string;
+  type?: string;
+  owned_by?: string;
+};
 export type AuthFileFieldsPatch = {
   expired?: string;
   last_refresh?: string;
   prefix?: string;
   proxy_url?: string;
+  proxyUrl?: null;
+  'proxy-url'?: null;
+  base_url?: string;
+  baseUrl?: null;
+  'base-url'?: null;
   websockets?: boolean;
   using_api?: boolean;
+  usingApi?: null;
+  'using-api'?: null;
   headers?: Record<string, string>;
   priority?: number;
+  weight?: number | null;
   note?: string;
+  'excluded-models'?: string[] | null;
+  excluded_models?: string[] | null;
+  excludedModels?: null;
+  disable_cooling?: boolean;
+  disableCooling?: null;
+  'disable-cooling'?: null;
+  request_retry?: number | null;
+  'request-retry'?: null;
+  requestRetry?: null;
+  cloak_mode?: string;
+  cloakMode?: null;
+  'cloak-mode'?: null;
+  cloak_strict_mode?: string;
+  cloakStrictMode?: null;
+  'cloak-strict-mode'?: null;
+  cloak_sensitive_words?: string;
+  cloakSensitiveWords?: null;
+  'cloak-sensitive-words'?: null;
+  cloak_cache_user_id?: string;
+  cloakCacheUserId?: null;
+  'cloak-cache-user-id'?: null;
+  tool_prefix_disabled?: boolean;
+  'tool-prefix-disabled'?: null;
+  toolPrefixDisabled?: null;
 };
 export type AuthFilePatchAuthIndex = string | number;
 type AuthFileBatchFailure = { name: string; error: string };
@@ -83,6 +121,31 @@ const getStatusCode = (err: unknown): number | undefined => {
   if (!err || typeof err !== 'object') return undefined;
   if ('status' in err) return (err as StatusError).status;
   return undefined;
+};
+
+const normalizeAuthFileModelItems = (value: unknown): AuthFileModelApiItem[] => {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: AuthFileModelApiItem[] = [];
+  value.forEach((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+    const raw = entry as Record<string, unknown>;
+    const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+    if (!id) return;
+    const key = id.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const item: AuthFileModelApiItem = { id };
+    if (typeof raw.display_name === 'string' && raw.display_name.trim()) {
+      item.display_name = raw.display_name.trim();
+    }
+    if (typeof raw.type === 'string' && raw.type.trim()) item.type = raw.type.trim();
+    if (typeof raw.owned_by === 'string' && raw.owned_by.trim()) {
+      item.owned_by = raw.owned_by.trim();
+    }
+    result.push(item);
+  });
+  return result;
 };
 
 const isCPAPluginVirtualMutationConflict = (err: unknown): boolean =>
@@ -525,14 +588,38 @@ const normalizePatchAuthIndex = (value: unknown): string => {
   return String(value).trim();
 };
 
-const readPatchRecordAuthIndex = (record: Record<string, unknown>): string =>
-  normalizePatchAuthIndex(record.authIndex ?? record['auth_index'] ?? record['auth-index']);
+const normalizePatchProviderIdentity = (value: unknown): string => {
+  const provider = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '-');
+  if (provider === 'x-ai' || provider === 'grok') return 'xai';
+  return provider === 'gemini' ? 'gemini-cli' : provider;
+};
 
-const applyFieldsPatchToAuthRecord = (
+const readPatchRecordAuthIndex = (record: Record<string, unknown>, arrayIndex?: number): string => {
+  const explicit = normalizePatchAuthIndex(
+    record.authIndex ?? record['auth_index'] ?? record['auth-index']
+  );
+  if (explicit) return explicit;
+  return arrayIndex === undefined ? '' : String(arrayIndex);
+};
+
+export const applyAuthFileFieldsPatchToRecord = (
   record: Record<string, unknown>,
   fields: AuthFileFieldsPatch
 ): Record<string, unknown> => {
   const next = { ...record };
+
+  const applyTrimmedString = (key: string, value: string | undefined) => {
+    if (value === undefined) return;
+    const normalized = value.trim();
+    if (normalized) {
+      next[key] = normalized;
+    } else {
+      delete next[key];
+    }
+  };
 
   if (fields.expired !== undefined) {
     const value = fields.expired.trim();
@@ -569,12 +656,26 @@ const applyFieldsPatchToAuthRecord = (
       delete next.proxy_url;
     }
   }
+  if (fields.proxyUrl === null) delete next.proxyUrl;
+  if (fields['proxy-url'] === null) delete next['proxy-url'];
+
+  applyTrimmedString('base_url', fields.base_url);
+  if (fields.baseUrl === null) delete next.baseUrl;
+  if (fields['base-url'] === null) delete next['base-url'];
 
   if (fields.priority !== undefined) {
     if (fields.priority === 0) {
       delete next.priority;
     } else {
       next.priority = fields.priority;
+    }
+  }
+
+  if (fields.weight !== undefined) {
+    if (fields.weight === null) {
+      delete next.weight;
+    } else {
+      next.weight = fields.weight;
     }
   }
 
@@ -586,6 +687,67 @@ const applyFieldsPatchToAuthRecord = (
       delete next.note;
     }
   }
+
+  const excludedModelsPatch =
+    fields['excluded-models'] !== undefined ? fields['excluded-models'] : fields.excluded_models;
+  if (excludedModelsPatch !== undefined) {
+    if (excludedModelsPatch === null) {
+      delete next['excluded-models'];
+      delete next.excluded_models;
+    } else {
+      const models = excludedModelsPatch.map((model) => model.trim()).filter(Boolean);
+      if (models.length > 0) {
+        next['excluded-models'] = models;
+      } else {
+        delete next['excluded-models'];
+      }
+      delete next.excluded_models;
+    }
+  }
+  if (fields.excludedModels === null) delete next.excludedModels;
+
+  if (fields.disable_cooling !== undefined) {
+    if (fields.disable_cooling) {
+      next.disable_cooling = true;
+    } else {
+      delete next.disable_cooling;
+    }
+  }
+  if (fields.disableCooling === null) delete next.disableCooling;
+  if (fields['disable-cooling'] === null) delete next['disable-cooling'];
+
+  if (fields.request_retry !== undefined) {
+    if (fields.request_retry === null) {
+      delete next.request_retry;
+    } else {
+      next.request_retry = fields.request_retry;
+    }
+  }
+  if (fields['request-retry'] === null) delete next['request-retry'];
+  if (fields.requestRetry === null) delete next.requestRetry;
+
+  applyTrimmedString('cloak_mode', fields.cloak_mode);
+  if (fields.cloakMode === null) delete next.cloakMode;
+  if (fields['cloak-mode'] === null) delete next['cloak-mode'];
+  applyTrimmedString('cloak_strict_mode', fields.cloak_strict_mode);
+  if (fields.cloakStrictMode === null) delete next.cloakStrictMode;
+  if (fields['cloak-strict-mode'] === null) delete next['cloak-strict-mode'];
+  applyTrimmedString('cloak_sensitive_words', fields.cloak_sensitive_words);
+  if (fields.cloakSensitiveWords === null) delete next.cloakSensitiveWords;
+  if (fields['cloak-sensitive-words'] === null) delete next['cloak-sensitive-words'];
+  applyTrimmedString('cloak_cache_user_id', fields.cloak_cache_user_id);
+  if (fields.cloakCacheUserId === null) delete next.cloakCacheUserId;
+  if (fields['cloak-cache-user-id'] === null) delete next['cloak-cache-user-id'];
+
+  if (fields.tool_prefix_disabled !== undefined) {
+    if (fields.tool_prefix_disabled) {
+      next.tool_prefix_disabled = true;
+    } else {
+      delete next.tool_prefix_disabled;
+    }
+  }
+  if (fields['tool-prefix-disabled'] === null) delete next['tool-prefix-disabled'];
+  if (fields.toolPrefixDisabled === null) delete next.toolPrefixDisabled;
 
   if (fields.headers !== undefined) {
     const currentHeaders =
@@ -617,6 +779,8 @@ const applyFieldsPatchToAuthRecord = (
   if (fields.using_api !== undefined) {
     next.using_api = fields.using_api;
   }
+  if (fields.usingApi === null) delete next.usingApi;
+  if (fields['using-api'] === null) delete next['using-api'];
 
   return next;
 };
@@ -632,8 +796,8 @@ const patchAuthFileJsonValueByAuthIndexes = (
 
   if (targetIndexes.size === 0) {
     return Array.isArray(value)
-      ? value.map((record) => applyFieldsPatchToAuthRecord(record, fields))
-      : applyFieldsPatchToAuthRecord(value, fields);
+      ? value.map((record) => applyAuthFileFieldsPatchToRecord(record, fields))
+      : applyAuthFileFieldsPatchToRecord(value, fields);
   }
 
   if (!Array.isArray(value)) {
@@ -641,17 +805,17 @@ const patchAuthFileJsonValueByAuthIndexes = (
     if (recordAuthIndex && !targetIndexes.has(recordAuthIndex)) {
       throw new Error('Auth index not found');
     }
-    return applyFieldsPatchToAuthRecord(value, fields);
+    return applyAuthFileFieldsPatchToRecord(value, fields);
   }
 
   const matchedIndexes = new Set<string>();
-  const nextValue = value.map((record) => {
-    const recordAuthIndex = readPatchRecordAuthIndex(record);
+  const nextValue = value.map((record, index) => {
+    const recordAuthIndex = readPatchRecordAuthIndex(record, index);
     if (!recordAuthIndex || !targetIndexes.has(recordAuthIndex)) {
       return record;
     }
     matchedIndexes.add(recordAuthIndex);
-    return applyFieldsPatchToAuthRecord(record, fields);
+    return applyAuthFileFieldsPatchToRecord(record, fields);
   });
 
   if (matchedIndexes.size !== targetIndexes.size) {
@@ -666,8 +830,9 @@ const authFileRecordMatchesPatchTarget = (
   target: AuthFileStatusTarget
 ): boolean => {
   const authFileRecord = { name: '', ...record } as AuthFileItem;
-  const expectedProvider = String(target.provider ?? '').trim();
-  if (expectedProvider && readAuthFileStatusProvider(authFileRecord) !== expectedProvider) {
+  const expectedProvider = normalizePatchProviderIdentity(target.provider);
+  const actualProvider = normalizePatchProviderIdentity(readAuthFileStatusProvider(authFileRecord));
+  if (expectedProvider && actualProvider && actualProvider !== expectedProvider) {
     return false;
   }
 
@@ -711,7 +876,7 @@ const verifyAuthFileJsonPatchTargets = (
     const expectedAuthIndex = normalizePatchAuthIndex(target.authIndex);
     if (!expectedAuthIndex) throw new Error('Auth file patch target changed');
     const matches = value.filter(
-      (record) => readPatchRecordAuthIndex(record) === expectedAuthIndex
+      (record, index) => readPatchRecordAuthIndex(record, index) === expectedAuthIndex
     );
     if (matches.length !== 1 || !authFileRecordMatchesPatchTarget(matches[0], target)) {
       throw new Error('Auth file patch target changed');
@@ -1206,32 +1371,25 @@ export const authFilesApi = {
   },
 
   // 获取认证凭证支持的模型
-  async getModelsForAuthFile(
-    name: string
-  ): Promise<{ id: string; display_name?: string; type?: string; owned_by?: string }[]> {
+  async getModelsForAuthFile(name: string): Promise<AuthFileModelApiItem[]> {
     const data = await apiClient.get<Record<string, unknown>>(
       `/auth-files/models?name=${encodeURIComponent(name)}`
     );
     const models = data.models ?? data['models'];
-    return Array.isArray(models)
-      ? (models as { id: string; display_name?: string; type?: string; owned_by?: string }[])
-      : [];
+    return normalizeAuthFileModelItems(models);
   },
 
   // 获取指定 channel 的模型定义
-  async getModelDefinitions(
-    channel: string
-  ): Promise<{ id: string; display_name?: string; type?: string; owned_by?: string }[]> {
+  async getModelDefinitions(channel: string): Promise<AuthFileModelApiItem[]> {
     const normalizedChannel = String(channel ?? '')
       .trim()
       .toLowerCase();
     if (!normalizedChannel) return [];
+    const endpointChannel = normalizedChannel === 'gemini-cli' ? 'gemini' : normalizedChannel;
     const data = await apiClient.get<Record<string, unknown>>(
-      `/model-definitions/${encodeURIComponent(normalizedChannel)}`
+      `/model-definitions/${encodeURIComponent(endpointChannel)}`
     );
     const models = data.models ?? data['models'];
-    return Array.isArray(models)
-      ? (models as { id: string; display_name?: string; type?: string; owned_by?: string }[])
-      : [];
+    return normalizeAuthFileModelItems(models);
   },
 };

@@ -473,8 +473,9 @@ export function AuthFilesPage() {
     modelsFileType,
     modelsError,
     showModels,
+    refreshModels,
     closeModelsModal,
-  } = useAuthFilesModels();
+  } = useAuthFilesModels({ connectionKey: connectionFingerprint });
 
   const {
     prefixProxyEditor,
@@ -2029,6 +2030,7 @@ export function AuthFilesPage() {
         error={modelsError}
         models={modelsList}
         excluded={excluded}
+        onRetry={() => void refreshModels()}
         onClose={closeModelsModal}
         onCopyText={copyTextWithNotification}
       />

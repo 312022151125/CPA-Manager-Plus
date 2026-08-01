@@ -17,6 +17,8 @@ interface DrawerProps {
   open: boolean;
   title?: ReactNode;
   onClose: () => void;
+  /** 返回 false 时取消本次关闭；异步检查会在关闭动画开始前完成。 */
+  onBeforeClose?: () => boolean | Promise<boolean>;
   footer?: ReactNode;
   /** 桌面端面板宽度，移动端自动转为底部全宽弹层 */
   width?: number | string;
@@ -52,6 +54,7 @@ export function Drawer({
   open,
   title,
   onClose,
+  onBeforeClose,
   footer,
   width = 420,
   className,
@@ -62,6 +65,9 @@ export function Drawer({
   const [isVisible, setIsVisible] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeRequestPendingRef = useRef(false);
+  const closeRequestTokenRef = useRef(0);
+  const previousOpenRef = useRef(open);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const overlayPointerIdsRef = useRef<Set<number>>(new Set());
@@ -84,6 +90,13 @@ export function Drawer({
 
   useEffect(() => {
     let cancelled = false;
+
+    if (previousOpenRef.current !== open) {
+      previousOpenRef.current = open;
+      closeRequestTokenRef.current += 1;
+      closeRequestPendingRef.current = false;
+      overlayPointerIdsRef.current.clear();
+    }
 
     if (open) {
       if (closeTimerRef.current !== null) {
@@ -109,15 +122,31 @@ export function Drawer({
 
   useEffect(() => {
     return () => {
+      closeRequestTokenRef.current += 1;
       if (closeTimerRef.current !== null) {
         globalThis.clearTimeout(closeTimerRef.current);
       }
     };
   }, []);
 
-  const handleClose = useCallback(() => {
-    startClose(true);
-  }, [startClose]);
+  const handleClose = useCallback(async () => {
+    if (closeTimerRef.current !== null || closeRequestPendingRef.current) return;
+
+    closeRequestPendingRef.current = true;
+    const requestToken = closeRequestTokenRef.current + 1;
+    closeRequestTokenRef.current = requestToken;
+    try {
+      const allowed = onBeforeClose ? await onBeforeClose() : true;
+      if (closeRequestTokenRef.current !== requestToken || allowed === false) return;
+      startClose(true);
+    } catch {
+      // 关闭前检查失败时保持抽屉打开，避免意外丢失用户输入。
+    } finally {
+      if (closeRequestTokenRef.current === requestToken) {
+        closeRequestPendingRef.current = false;
+      }
+    }
+  }, [onBeforeClose, startClose]);
 
   // 按 pointerId 配对：仅当同一指针在遮罩上按下且在遮罩上释放时才关闭。
   // 避免「面板内拖选到遮罩释放」与多指针交错状态互相覆盖。
@@ -133,12 +162,8 @@ export function Drawer({
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const startedOnOverlay = overlayPointerIdsRef.current.delete(event.pointerId);
 
-      if (
-        startedOnOverlay &&
-        event.target === event.currentTarget &&
-        event.button === 0
-      ) {
-        handleClose();
+      if (startedOnOverlay && event.target === event.currentTarget && event.button === 0) {
+        void handleClose();
       }
     },
     [handleClose]
@@ -181,7 +206,7 @@ export function Drawer({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        handleClose();
+        void handleClose();
       }
     };
 
@@ -227,7 +252,7 @@ export function Drawer({
           <button
             type="button"
             className={styles.closeButton}
-            onClick={handleClose}
+            onClick={() => void handleClose()}
             aria-label={t('common.close')}
             title={t('common.close')}
           >

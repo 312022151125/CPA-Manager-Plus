@@ -29,7 +29,7 @@ interface AccountOverviewTabProps {
 
 const getTargetLabelKey = (target: AccountDetailOverviewTargetTab) => {
   if (target === 'quota') return 'accounts.detail_overview_open_quota';
-  if (target === 'credential') return 'accounts.detail_overview_open_credential';
+  if (target === 'config') return 'accounts.detail_overview_open_config';
   return 'accounts.detail_overview_open_diagnostics';
 };
 

@@ -45,7 +45,7 @@ export const ACCOUNT_OVERVIEW_ACTIVITY_RANGE_DAYS = 7;
 export const ACCOUNT_OVERVIEW_ACTIVITY_RANGE_MS =
   ACCOUNT_OVERVIEW_ACTIVITY_RANGE_DAYS * 24 * 60 * 60 * 1000;
 
-export type AccountDetailOverviewTargetTab = 'quota' | 'credential' | 'diagnostics';
+export type AccountDetailOverviewTargetTab = 'quota' | 'config' | 'diagnostics';
 export type AccountDetailOverviewActivityScope = 'monitoring_7d' | 'recent_snapshot';
 
 export interface AccountDetailField {
@@ -968,7 +968,7 @@ const buildOverviewCredential = (
       field('authIndex', 'accounts.detail_auth_index', presentOverviewText(row.authIndex)),
       field('priority', 'accounts.col_priority', row.priority ?? 0, 'number'),
     ]),
-    targetTab: 'credential',
+    targetTab: 'config',
   };
 };
 
@@ -1024,7 +1024,7 @@ const getOverviewAttentionTarget = (
 ): AccountDetailOverviewTargetTab => {
   if (action === 'refresh') return 'quota';
   if (action === 'reauth' || action === 'review') return 'diagnostics';
-  return 'credential';
+  return 'config';
 };
 
 const buildOverviewAttention = (

@@ -140,6 +140,23 @@ export const normalizeProviderKey = (value: string) => {
   return key;
 };
 
+export const getEquivalentProviderKeys = (value: string): string[] => {
+  const providerKey = normalizeProviderKey(value);
+  if (!providerKey) return [];
+  if (providerKey === 'gemini') return ['gemini', 'gemini-cli'];
+  if (providerKey === 'gemini-cli') return ['gemini-cli', 'gemini'];
+  return [providerKey];
+};
+
+export const getProviderRecordValues = <T>(record: Record<string, T>, provider: string): T[] => {
+  const providerKeys = getEquivalentProviderKeys(provider);
+  if (providerKeys.length === 0) return [];
+  const entries = Object.entries(record);
+  return providerKeys.flatMap((providerKey) =>
+    entries.filter(([key]) => normalizeProviderKey(key) === providerKey).map(([, value]) => value)
+  );
+};
+
 export const getAuthFileStatusMessage = (file: AuthFileItem): string => {
   const raw = file['status_message'] ?? file.statusMessage;
   if (typeof raw === 'string') return raw.trim();
@@ -264,8 +281,7 @@ export const isModelExcluded = (
   providerType: string,
   excluded: Record<string, string[]>
 ): boolean => {
-  const providerKey = normalizeProviderKey(providerType);
-  const excludedModels = excluded[providerKey] || excluded[providerType] || [];
+  const excludedModels = getProviderRecordValues(excluded, providerType).flat();
   return excludedModels.some((pattern) => {
     if (pattern.includes('*')) {
       // 支持通配符匹配：先转义正则特殊字符，再将 * 视为通配符

@@ -15,13 +15,7 @@ export interface AccountsWorkspaceUrlState extends AccountsWorkspaceUiState {
 
 const VIEW_SET = new Set<AccountsView>(['accounts', 'health', 'oauth']);
 const HEALTH_MODE_SET = new Set<CredentialHealthInspectionMode>(['local', 'server']);
-const DETAIL_TAB_SET = new Set<DetailTab>([
-  'overview',
-  'quota',
-  'credential',
-  'models',
-  'diagnostics',
-]);
+const DETAIL_TAB_SET = new Set<DetailTab>(['overview', 'quota', 'config', 'models', 'diagnostics']);
 const STATUS_FILTER_SET: ReadonlySet<AccountsWorkspaceUiState['statusFilter']> = new Set([
   'all',
   'available',
@@ -135,7 +129,10 @@ export const readAccountsWorkspaceUrlState = (
           ? 'full'
           : fallback.accountDisplayMode,
     account: params.get('account') || null,
-    detailTab: readEnum(params, 'tab', DETAIL_TAB_SET, 'overview'),
+    detailTab:
+      params.get('tab') === 'credential'
+        ? 'config'
+        : readEnum(params, 'tab', DETAIL_TAB_SET, 'overview'),
     editor,
     editorProvider: params.get('editorProvider')?.trim() ?? '',
   };

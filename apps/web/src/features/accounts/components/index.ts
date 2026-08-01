@@ -19,7 +19,7 @@ export { AccountProviderTabs } from './AccountProviderTabs';
 export { CopyableText } from './CopyableText';
 
 export {
-  AccountCredentialTab,
+  AccountConfigurationTab,
   AccountDiagnosticsTab,
   AccountModelsTab,
   AccountOverviewTab,

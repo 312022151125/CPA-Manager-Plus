@@ -52,6 +52,39 @@ describe('accountsWorkspaceUrlState', () => {
     );
   });
 
+  it('round-trips the credential configuration tab', () => {
+    const search = writeAccountsWorkspaceUrlSearch(
+      '',
+      {
+        ...DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE,
+        view: 'accounts',
+        healthMode: 'local',
+        account: 'shared.json\u0000auth-2',
+        detailTab: 'config',
+        editor: null,
+        editorProvider: '',
+      },
+      DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
+    );
+
+    expect(search).toBe('?account=shared.json%00auth-2&tab=config');
+    expect(
+      readAccountsWorkspaceUrlState(search, DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE).detailTab
+    ).toBe('config');
+  });
+
+  it('migrates legacy credential-tab links to configuration', () => {
+    const state = readAccountsWorkspaceUrlState(
+      '?account=shared.json%00auth-2&tab=credential',
+      DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE
+    );
+
+    expect(state.detailTab).toBe('config');
+    expect(writeAccountsWorkspaceUrlSearch('', state, DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE)).toBe(
+      '?account=shared.json%00auth-2&tab=config'
+    );
+  });
+
   it('falls back safely for unsupported query values', () => {
     const state = readAccountsWorkspaceUrlState(
       '?view=invalid&healthMode=remote&status=nope&quota=bad&sort=unknown&pageSize=999&tab=nope&editor=bad',
