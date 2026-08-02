@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { TFunction } from 'i18next';
-import type { AuthFileItem, CodexQuotaState } from '@/types';
+import type {
+  AuthFileItem,
+  CodexQuotaState,
+  CredentialScopedQuotaState,
+} from '@/types';
 import { buildAccountRows, type AccountQuotaStores } from './accountRows';
 import {
   buildAccountQuotaDisplayWindow,
@@ -9,6 +13,10 @@ import {
   parseQuotaResetLabelMs,
   type TranslateQuotaWindowLabel,
 } from './accountQuotaDisplayWindows';
+import {
+  buildQuotaCredentialIdentity,
+  getQuotaCredentialStoreKey,
+} from '@/utils/quota/credentialScope';
 
 const emptyStores = (): AccountQuotaStores => ({
   antigravityQuota: {},
@@ -37,8 +45,23 @@ const t = ((key: string, options?: Record<string, string | number>) => {
 const translateQuotaWindowLabel: TranslateQuotaWindowLabel = (label, labelKey, labelParams) =>
   labelKey ? t(labelKey, labelParams) : (label ?? 'Quota');
 
-const buildRow = (file: AuthFileItem, stores: AccountQuotaStores = emptyStores()) =>
-  buildAccountRows([file], stores)[0];
+const buildRow = (file: AuthFileItem, stores: AccountQuotaStores = emptyStores()) => {
+  const records = [
+    stores.antigravityQuota,
+    stores.claudeQuota,
+    stores.codexQuota,
+    stores.kimiQuota,
+    stores.xaiQuota,
+  ] as Array<Record<string, CredentialScopedQuotaState>>;
+  records.forEach((record) => {
+    const legacy = record[file.name];
+    if (!legacy) return;
+    const identity = buildQuotaCredentialIdentity(file);
+    const storeKey = legacy.authFileKey || getQuotaCredentialStoreKey(file);
+    record[storeKey] = { ...legacy, ...identity, authFileKey: storeKey };
+  });
+  return buildAccountRows([file], stores)[0];
+};
 
 describe('accountQuotaDisplayWindows', () => {
   it('rolls legacy yearless reset labels into the next calendar year', () => {

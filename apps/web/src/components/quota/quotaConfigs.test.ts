@@ -5,11 +5,13 @@ import { describe, expect, it } from 'vitest';
 import type { ClaudeQuotaState, CodexQuotaState, XaiQuotaState } from '@/types';
 import type { QuotaRenderHelpers } from './QuotaCard';
 import {
+  ANTIGRAVITY_CONFIG,
   buildObservedCodexQuotaState,
   buildQuotaFailureState,
   CLAUDE_CONFIG,
   CODEX_CONFIG,
   getCodexQuotaStoreKey,
+  KIMI_CONFIG,
   getSortedCodexResetCreditExpiries,
   resolveQuotaDisplayState,
   XAI_CONFIG,
@@ -39,6 +41,31 @@ describe('getCodexQuotaStoreKey', () => {
     });
 
     expect(first).not.toBe(second);
+  });
+
+  it('uses the same credential identity contract for every quota provider', () => {
+    const file = {
+      name: 'shared.json',
+      provider: 'claude',
+      authIndex: 'auth-1',
+    };
+    const configs = [
+      CLAUDE_CONFIG,
+      ANTIGRAVITY_CONFIG,
+      CODEX_CONFIG,
+      KIMI_CONFIG,
+      XAI_CONFIG,
+    ];
+
+    configs.forEach((config) => {
+      expect(config.getStoreKey?.(file)).toBe('shared.json::auth-1');
+      expect(config.buildLoadingState(file)).toMatchObject({
+        authFileKey: 'shared.json::auth-1',
+        authFileName: 'shared.json',
+        authIndex: 'auth-1',
+        authFileIdentityVerified: true,
+      });
+    });
   });
 });
 

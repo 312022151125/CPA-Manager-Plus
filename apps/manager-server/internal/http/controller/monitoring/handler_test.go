@@ -81,6 +81,80 @@ func TestHandleAccountWindowUsageRejectsUnknownTargetFields(t *testing.T) {
 	}
 }
 
+func TestHandleAccountHistoryValidatesRowKeysAndTargets(t *testing.T) {
+	testCases := []struct {
+		name        string
+		body        string
+		wantMessage string
+	}{
+		{
+			name:        "missing row key",
+			body:        `{"accounts":[{"auth_file_snapshot":"credential.json","auth_index":"auth-1"}]}`,
+			wantMessage: "row_key is required",
+		},
+		{
+			name:        "duplicate row key",
+			body:        `{"accounts":[{"row_key":"row-1","auth_index":"auth-1"},{"row_key":"row-1","auth_index":"auth-2"}]}`,
+			wantMessage: "row_key must be unique",
+		},
+		{
+			name:        "missing target",
+			body:        `{"accounts":[{"row_key":"row-1"}]}`,
+			wantMessage: "at least one account target field is required",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := executeAuthorizedMonitoringRequest(
+				t,
+				"/v0/management/monitoring/account-history",
+				testCase.body,
+			)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), testCase.wantMessage) {
+				t.Fatalf("body = %s, want %q", recorder.Body.String(), testCase.wantMessage)
+			}
+		})
+	}
+}
+
+func TestValidateAccountHistoryRequestTreatsRowKeysAsOpaque(t *testing.T) {
+	err := validateAccountHistoryRequest(monitoringsvc.AccountHistoryRequest{
+		Accounts: []monitoringsvc.AccountHistoryTarget{
+			{RowKey: " row", AuthIndex: "auth-1"},
+			{RowKey: "row", AuthIndex: "auth-2"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("validate opaque row keys: %v", err)
+	}
+}
+
+func executeAuthorizedMonitoringRequest(t *testing.T, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	st := newHandlerTestStore(t)
+	const adminKey = "cpamp_test_key"
+	credential, err := security.NewAdminCredential(adminKey, "test")
+	if err != nil {
+		t.Fatalf("create admin credential: %v", err)
+	}
+	if err := st.SaveAdminCredential(context.Background(), credential); err != nil {
+		t.Fatalf("save admin credential: %v", err)
+	}
+	handler := &Handler{App: &app.Context{
+		AdminAuthService:  adminauthsvc.New(config.Config{}, st),
+		MonitoringService: monitoringsvc.New(st),
+	}}
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	recorder := httptest.NewRecorder()
+	handler.Handle(recorder, req)
+	return recorder
+}
+
 func newHandlerTestStore(t testing.TB) *store.Store {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))

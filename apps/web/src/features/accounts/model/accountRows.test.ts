@@ -1,16 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AuthFileItem, CodexQuotaState } from '@/types';
+import type { AuthFileItem, CodexQuotaState, CredentialScopedQuotaState } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
-import { getAuthFileSelectionKey } from '@/features/authFiles/model/authFilesPageModel';
+import {
+  getAuthFileCodexStatus,
+  getAuthFileSelectionKey,
+} from '@/features/authFiles/model/authFilesPageModel';
 import {
   buildAccountMetrics,
-  buildAccountRows,
+  buildAccountRows as buildAccountRowsBase,
   findAccountRowForInspectionTarget,
   filterAccountRows,
+  getPlanOptions,
   sortAccountRows,
   type AccountInspectionResult,
   type AccountQuotaStores,
 } from './accountRows';
+import {
+  buildQuotaCredentialIdentity,
+  getQuotaCredentialStoreKey,
+} from '@/utils/quota/credentialScope';
 
 const emptyStores = (): AccountQuotaStores => ({
   antigravityQuota: {},
@@ -19,6 +27,38 @@ const emptyStores = (): AccountQuotaStores => ({
   kimiQuota: {},
   xaiQuota: {},
 });
+
+const scopeTestQuotaStores = (files: AuthFileItem[], stores: AccountQuotaStores) => {
+  const fileNameCounts = files.reduce((counts, file) => {
+    counts.set(file.name, (counts.get(file.name) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>());
+  const records = [
+    stores.antigravityQuota,
+    stores.claudeQuota,
+    stores.codexQuota,
+    stores.kimiQuota,
+    stores.xaiQuota,
+  ] as Array<Record<string, CredentialScopedQuotaState>>;
+
+  files.forEach((file) => {
+    records.forEach((record) => {
+      const legacy = record[file.name];
+      if (!legacy || (!legacy.authFileKey && fileNameCounts.get(file.name) !== 1)) return;
+      const identity = buildQuotaCredentialIdentity(file);
+      const storeKey = legacy.authFileKey || getQuotaCredentialStoreKey(file);
+      record[storeKey] = { ...legacy, ...identity, authFileKey: storeKey };
+    });
+  });
+  return stores;
+};
+
+const buildAccountRows = (
+  files: AuthFileItem[],
+  stores: AccountQuotaStores,
+  inspectionResults?: Parameters<typeof buildAccountRowsBase>[2],
+  overrides?: Parameters<typeof buildAccountRowsBase>[3]
+) => buildAccountRowsBase(files, scopeTestQuotaStores(files, stores), inspectionResults, overrides);
 
 describe('accountRows', () => {
   it('normalizes Codex quota usage into remaining percent and risk status', () => {
@@ -1197,6 +1237,128 @@ describe('accountRows', () => {
         search: 'ok@example',
       }).map((row) => row.fileName)
     ).toEqual(['claude-ok.json']);
+  });
+
+  it('filters rows by credential-scoped Codex status evidence', () => {
+    const weeklyQuota: CodexQuotaState = {
+      status: 'success',
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly',
+          usedPercent: 100,
+          resetLabel: 'Mon',
+        },
+      ],
+    };
+    const rows = buildAccountRows(
+      [
+        { name: 'weekly.json', type: 'codex', authIndex: 'weekly' },
+        { name: 'reauth.json', type: 'codex', authIndex: 'reauth' },
+      ],
+      emptyStores()
+    );
+    const codexStatusBySelectionKey = new Map([
+      [rows[0].selectionKey, getAuthFileCodexStatus(rows[0].raw, weeklyQuota)],
+      [
+        rows[1].selectionKey,
+        getAuthFileCodexStatus(rows[1].raw, undefined, {
+          fileName: rows[1].fileName,
+          authIndex: rows[1].authIndex,
+          statusCode: 401,
+          action: 'reauth',
+        }),
+      ],
+    ]);
+
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'weekly_limited',
+        plan: 'all',
+        quotaBand: 'all',
+        search: '',
+        codexStatusBySelectionKey,
+      }).map((row) => row.fileName)
+    ).toEqual(['weekly.json']);
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'reauth',
+        plan: 'all',
+        quotaBand: 'all',
+        search: '',
+        codexStatusBySelectionKey,
+      }).map((row) => row.fileName)
+    ).toEqual(['reauth.json']);
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'quota_limited',
+        plan: 'all',
+        quotaBand: 'all',
+        search: '',
+      })
+    ).toHaveLength(0);
+  });
+
+  it('exposes unknown plans and orders Codex plans by tier with unknown last', () => {
+    const rows = buildAccountRows(
+      [
+        { name: 'pro.json', type: 'codex', planType: 'pro' },
+        { name: 'pro-lite.json', type: 'codex', planType: 'prolite' },
+        { name: 'team.json', type: 'codex', planType: 'team' },
+        { name: 'plus.json', type: 'codex', planType: 'plus' },
+        { name: 'free.json', type: 'codex', planType: 'free' },
+        { name: 'enterprise.json', type: 'codex', planType: 'enterprise' },
+        { name: 'unknown.json', type: 'codex' },
+      ],
+      emptyStores()
+    );
+    const plusRow = rows.find((row) => row.fileName === 'plus.json');
+    if (!plusRow) throw new Error('Plus plan row not found');
+    plusRow.planType = ' plus ';
+
+    expect(getPlanOptions(rows)).toEqual([
+      'enterprise',
+      'free',
+      'plus',
+      'team',
+      'prolite',
+      'pro',
+      'unknown',
+    ]);
+    expect(
+      sortAccountRows(rows, { key: 'plan', direction: 'asc' }).map((row) => row.fileName)
+    ).toEqual([
+      'enterprise.json',
+      'free.json',
+      'plus.json',
+      'team.json',
+      'pro-lite.json',
+      'pro.json',
+      'unknown.json',
+    ]);
+    expect(
+      sortAccountRows(rows, { key: 'plan', direction: 'desc' }).map((row) => row.fileName)
+    ).toEqual([
+      'pro.json',
+      'pro-lite.json',
+      'team.json',
+      'plus.json',
+      'free.json',
+      'enterprise.json',
+      'unknown.json',
+    ]);
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'all',
+        plan: 'plus',
+        quotaBand: 'all',
+        search: '',
+      }).map((row) => row.fileName)
+    ).toEqual(['plus.json']);
   });
 
   it('sorts rows by priority, recent requests, and reset label', () => {

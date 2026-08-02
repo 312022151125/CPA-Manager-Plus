@@ -856,8 +856,8 @@ export function AuthFilesPage() {
 
       const storeKey = getQuotaStoreKey(CODEX_CONFIG, file);
       const previousQuota =
-        (codexQuota[storeKey] as CodexQuotaState | undefined) ??
-        (codexQuota[file.name] as CodexQuotaState | undefined);
+        getAuthFileScopedCodexQuota(file, codexQuota[storeKey]) ??
+        getAuthFileScopedCodexQuota(file, codexQuota[file.name]);
       setCodexQuota((prev) => ({
         ...prev,
         [storeKey]: CODEX_CONFIG.buildLoadingState(file),
@@ -1056,7 +1056,10 @@ export function AuthFilesPage() {
     (file: AuthFileItem): CodexQuotaState | undefined => {
       if (resolveAuthProvider(file) !== 'codex') return undefined;
       const storeKey = getAuthFileCodexInspectionKeyForFile(file);
-      return getAuthFileScopedCodexQuota(file, codexQuota[storeKey] ?? codexQuota[file.name]);
+      return (
+        getAuthFileScopedCodexQuota(file, codexQuota[storeKey]) ??
+        getAuthFileScopedCodexQuota(file, codexQuota[file.name])
+      );
     },
     [codexQuota]
   );

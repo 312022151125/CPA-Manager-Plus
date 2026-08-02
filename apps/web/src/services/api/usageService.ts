@@ -793,9 +793,13 @@ export interface MonitoringAnalyticsRequest {
 }
 
 export interface MonitoringAccountHistoryTarget {
+  row_key: string;
   account_key?: string;
   account_snapshot?: string;
   auth_label_snapshot?: string;
+  auth_file_snapshot?: string;
+  auth_provider_snapshot?: string;
+  auth_project_id_snapshot?: string;
   auth_index?: string;
   source?: string;
 }
@@ -823,6 +827,7 @@ export interface MonitoringAccountLatestRequest {
 }
 
 export interface MonitoringAccountHistoryItem {
+  row_key: string;
   account_key: string;
   matched: boolean;
   total_requests: number;

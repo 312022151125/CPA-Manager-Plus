@@ -45,6 +45,7 @@ import {
   KIMI_CONFIG,
   XAI_CONFIG,
   buildObservedCodexQuotaState,
+  resolveQuotaDisplayState,
   type QuotaConfig,
 } from '@/components/quota';
 import { buildQuotaFailureState, getScopedQuotaState } from '@/components/quota/quotaConfigs';
@@ -72,12 +73,14 @@ import {
   type CodexReauthTarget,
 } from '@/features/oauth/codexReauthModel';
 import {
+  ACCOUNT_CODEX_STATUS_FILTERS,
   buildAccountMetrics,
   buildAccountRows,
   findAccountRowForInspectionTarget,
   filterAccountRows,
   getPlanOptions,
   getProviderOptions,
+  isAccountCodexStatusFilter,
   normalizeAccountProvider,
   sortAccountRows,
   type AccountQuotaBand,
@@ -140,6 +143,7 @@ import {
   getAuthFilePatchTarget,
   getAuthFileSelectionKey,
   getAuthFileScopedCodexQuota,
+  getFreshAuthFileCodexStatusSources,
   hasPartialSharedAuthFileSelection,
 } from '@/features/authFiles/model/authFilesPageModel';
 import {
@@ -155,7 +159,6 @@ import {
 import { resolveAccountReauthAction } from '@/features/accounts/model/accountReauth';
 import { beginAccountQuotaRequest } from '@/features/accounts/model/accountQuotaRequestGate';
 import { buildAccountOperationalItemsByRowKey } from '@/features/accounts/model/accountOperationalScope';
-import { mapWithConcurrency } from '@/features/accounts/model/asyncPool';
 import {
   DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE,
   readAccountsWorkspaceUiState,
@@ -214,7 +217,16 @@ import { copyToClipboard } from '@/utils/clipboard';
 import {
   buildUsageHeaderSnapshotLookup,
   getHighConfidenceUsageHeaderSnapshotForAuthFile,
+  isUsageHeaderQuotaSnapshotExpired,
 } from '@/utils/usageHeaderSnapshots';
+import {
+  getCredentialScopedQuotaState,
+  getQuotaCredentialStoreKey,
+} from '@/utils/quota/credentialScope';
+import {
+  buildProviderCredentialTaskPlan,
+  runProviderCredentialTaskPlan,
+} from '@/utils/quota/providerRefreshScheduler';
 import { createCodexInspectionConnectionFingerprint } from '@/features/monitoring/codexInspection';
 import type {
   CredentialHealthInspectionMode,
@@ -225,7 +237,8 @@ import styles from './AccountsPage.module.scss';
 type QuotaUpdater<T> = T | ((prev: T) => T);
 type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
 
-const MAX_CONCURRENT_QUOTA_REFRESHES = 3;
+const MAX_CONCURRENT_QUOTA_REFRESHES_PER_PROVIDER = 1;
+const MAX_CONCURRENT_QUOTA_REFRESH_PROVIDERS = 3;
 
 const readAccountsSearchFromHash = (hash: string): string => {
   const queryIndex = hash.indexOf('?');
@@ -516,6 +529,7 @@ export function AccountsPage() {
     () => new Map()
   );
   const [headerSnapshots, setHeaderSnapshots] = useState<UsageHeaderSnapshot[]>([]);
+  const [headerSnapshotGeneratedAtMs, setHeaderSnapshotGeneratedAtMs] = useState(0);
   const [accountDisplayMode, setAccountDisplayMode] = useState<QuotaAccountDisplayMode>(
     () => initialWorkspaceUrlState.current.accountDisplayMode
   );
@@ -590,6 +604,7 @@ export function AccountsPage() {
       !featureAvailability.managerServiceBase
     ) {
       setHeaderSnapshots((current) => (current.length === 0 ? current : []));
+      setHeaderSnapshotGeneratedAtMs(0);
       return;
     }
 
@@ -605,6 +620,7 @@ export function AccountsPage() {
       );
       if (id !== headerSnapshotReqIdRef.current) return;
       setHeaderSnapshots(response.items ?? []);
+      setHeaderSnapshotGeneratedAtMs(response.generated_at_ms ?? Date.now());
     } catch {
       // Header snapshots are passive diagnostics; transient failures should not block accounts.
     }
@@ -671,6 +687,7 @@ export function AccountsPage() {
     setQuotaCooldowns(new Map());
     setAccountActionCandidates([]);
     setHeaderSnapshots((current) => (current.length === 0 ? current : []));
+    setHeaderSnapshotGeneratedAtMs(0);
   }, [featureAvailability.managerServiceBase, managementKey]);
 
   const loadOauthExcluded = oauthState.loadExcluded;
@@ -764,13 +781,36 @@ export function AccountsPage() {
     () => buildUsageHeaderSnapshotLookup(headerSnapshots),
     [headerSnapshots]
   );
-  const getDisplayCodexQuota = useCallback(
+  const getActiveCodexQuota = useCallback(
     (file: AuthFileItem): CodexQuotaState | undefined => {
       if (normalizeAccountProvider(file) !== CODEX_CONFIG.type) return undefined;
       const storeKey = CODEX_CONFIG.getStoreKey?.(file) ?? file.name;
-      const activeQuota =
+      return (
         getAuthFileScopedCodexQuota(file, codexQuota[storeKey]) ??
-        getAuthFileScopedCodexQuota(file, codexQuota[file.name]);
+        getAuthFileScopedCodexQuota(file, codexQuota[file.name])
+      );
+    },
+    [codexQuota]
+  );
+  const getFreshCodexHeaderSnapshot = useCallback(
+    (file: AuthFileItem): UsageHeaderSnapshot | undefined => {
+      const headerSnapshot = getHighConfidenceUsageHeaderSnapshotForAuthFile(
+        headerSnapshotLookup,
+        file
+      );
+      return isUsageHeaderQuotaSnapshotExpired(
+        headerSnapshot,
+        headerSnapshotGeneratedAtMs || Date.now()
+      )
+        ? undefined
+        : headerSnapshot;
+    },
+    [headerSnapshotGeneratedAtMs, headerSnapshotLookup]
+  );
+  const getDisplayCodexQuota = useCallback(
+    (file: AuthFileItem): CodexQuotaState | undefined => {
+      if (normalizeAccountProvider(file) !== CODEX_CONFIG.type) return undefined;
+      const activeQuota = getActiveCodexQuota(file);
       if (activeQuota && activeQuota.status !== 'idle' && activeQuota.status !== 'error') {
         return activeQuota;
       }
@@ -784,7 +824,7 @@ export function AccountsPage() {
       );
       return observedQuota ?? activeQuota;
     },
-    [codexQuota, headerSnapshotLookup, t]
+    [getActiveCodexQuota, headerSnapshotLookup, t]
   );
   const accountQuotaOverrides = useMemo(() => {
     const codexQuotaBySelectionKey = new Map<string, CodexQuotaState>();
@@ -810,6 +850,33 @@ export function AccountsPage() {
     () => buildAccountRows(files, baseQuotaStores, inspectionResults, accountQuotaOverrides),
     [accountQuotaOverrides, baseQuotaStores, files, inspectionResults]
   );
+  const codexStatusBySelectionKey = useMemo(() => {
+    const statusMap = new Map<string, ReturnType<typeof getAuthFileCodexStatus>>();
+    rows.forEach((row) => {
+      if (row.provider !== CODEX_CONFIG.type && row.provider !== XAI_CONFIG.type) return;
+      const activeQuota =
+        row.provider === CODEX_CONFIG.type ? getActiveCodexQuota(row.raw) : undefined;
+      const freshHeaderSnapshot = getFreshCodexHeaderSnapshot(row.raw);
+      const sources = getFreshAuthFileCodexStatusSources(
+        row.raw,
+        activeQuota,
+        toAuthFileCodexInspectionSnapshot(row),
+        freshHeaderSnapshot
+      );
+      const statusQuota =
+        row.provider === CODEX_CONFIG.type
+          ? resolveQuotaDisplayState(
+              activeQuota,
+              buildObservedCodexQuotaState(row.raw, sources.headerSnapshot, t)
+            )
+          : undefined;
+      statusMap.set(
+        row.selectionKey,
+        getAuthFileCodexStatus(row.raw, statusQuota, sources.inspection, sources.headerSnapshot)
+      );
+    });
+    return statusMap;
+  }, [getActiveCodexQuota, getFreshCodexHeaderSnapshot, rows, t]);
   const actionCandidatesByRowKey = useMemo(
     () =>
       buildAccountOperationalItemsByRowKey(
@@ -851,8 +918,17 @@ export function AccountsPage() {
         plan: planFilter,
         quotaBand: quotaBandFilter,
         search,
+        codexStatusBySelectionKey,
       }),
-    [planFilter, providerFilter, quotaBandFilter, rows, search, statusFilter]
+    [
+      codexStatusBySelectionKey,
+      planFilter,
+      providerFilter,
+      quotaBandFilter,
+      rows,
+      search,
+      statusFilter,
+    ]
   );
   const filteredRows = useMemo(() => {
     const operationalRows = baseFilteredRows.filter((row) => {
@@ -1082,6 +1158,8 @@ export function AccountsPage() {
   );
   const selectedRowProvider = selectedRow?.provider ?? '';
   const hasSelectedAccountDetail = activeView === 'accounts' && Boolean(selectedRowKey);
+  const needsCodexStatusEvidence =
+    activeView === 'accounts' && isAccountCodexStatusFilter(statusFilter);
   const needsQuotaCooldowns =
     activeView === 'accounts' &&
     (operationalFilter === 'cooldown' ||
@@ -1091,9 +1169,10 @@ export function AccountsPage() {
     (operationalFilter === 'automation' ||
       (hasSelectedAccountDetail && (detailTab === 'overview' || detailTab === 'diagnostics')));
   const needsHeaderSnapshots =
-    hasSelectedAccountDetail &&
-    (detailTab === 'overview' || detailTab === 'quota') &&
-    selectedRowProvider === CODEX_CONFIG.type &&
+    (needsCodexStatusEvidence ||
+      (hasSelectedAccountDetail &&
+        (detailTab === 'overview' || detailTab === 'quota') &&
+        selectedRowProvider === CODEX_CONFIG.type)) &&
     headerSnapshots.length === 0;
 
   useEffect(() => {
@@ -1110,6 +1189,11 @@ export function AccountsPage() {
     if (!needsHeaderSnapshots) return;
     void loadHeaderSnapshots();
   }, [loadHeaderSnapshots, needsHeaderSnapshots]);
+
+  useEffect(() => {
+    if (!needsCodexStatusEvidence || featureAvailability.checking) return;
+    void loadInspectionSummary();
+  }, [featureAvailability.checking, loadInspectionSummary, needsCodexStatusEvidence]);
 
   useEffect(() => {
     if (activeView !== 'accounts' || detailTab !== 'models' || !selectedRow) {
@@ -1817,6 +1901,9 @@ export function AccountsPage() {
         setAccountHistoryByRowKey((current) => {
           if (!mergeResult) return nextHistory;
           const merged = new Map(current);
+          entries.forEach((entry) => {
+            merged.delete(entry.rowKey);
+          });
           nextHistory.forEach((item, rowKey) => {
             merged.set(rowKey, item);
           });
@@ -2020,20 +2107,27 @@ export function AccountsPage() {
         showNotification(t('accounts.no_refreshable_accounts'), 'warning');
         return;
       }
+      const taskPlan = buildProviderCredentialTaskPlan(refreshable, {
+        getProviderKey: (row) => row.provider,
+        getCredentialKey: (row) => getQuotaCredentialStoreKey(row.raw),
+      });
       setQuotaRefreshing(true);
       try {
-        const results = await mapWithConcurrency(
-          refreshable,
-          MAX_CONCURRENT_QUOTA_REFRESHES,
-          refreshQuotaForRow
+        const results = await runProviderCredentialTaskPlan(
+          taskPlan,
+          {
+            perProviderConcurrency: MAX_CONCURRENT_QUOTA_REFRESHES_PER_PROVIDER,
+            maxConcurrentProviders: MAX_CONCURRENT_QUOTA_REFRESH_PROVIDERS,
+          },
+          ({ item }) => refreshQuotaForRow(item)
         );
         const successCount = results.filter(Boolean).length;
         showNotification(
           t('accounts.quota_refresh_result', {
             success: successCount,
-            total: refreshable.length,
+            total: taskPlan.length,
           }),
-          successCount === refreshable.length ? 'success' : 'warning'
+          successCount === taskPlan.length ? 'success' : 'warning'
         );
       } finally {
         setQuotaRefreshing(false);
@@ -2260,8 +2354,17 @@ export function AccountsPage() {
   const selectedAccountSortOption = getAccountSortFieldOption(accountSort.key);
   const selectedAccountSortLabel = t(selectedAccountSortOption.labelKey);
   const selectedStatusFilterLabel =
-    statusFilter === 'all' ? t('accounts.status_all') : t(`accounts.status_${statusFilter}`);
-  const selectedPlanFilterLabel = planFilter === 'all' ? t('accounts.plan_all') : planFilter;
+    statusFilter === 'all'
+      ? t('accounts.status_all')
+      : isAccountCodexStatusFilter(statusFilter)
+        ? t(`auth_files.codex_status_filter_${statusFilter}`)
+        : t(`accounts.status_${statusFilter}`);
+  const selectedPlanFilterLabel =
+    planFilter === 'all'
+      ? t('accounts.plan_all')
+      : planFilter === 'unknown'
+        ? t('auth_files.codex_plan_filter_unknown')
+        : planFilter;
   const selectedQuotaFilterLabel =
     quotaBandFilter === 'all' ? t('accounts.quota_all') : t(`accounts.quota_${quotaBandFilter}`);
   const selectedOperationalFilterLabel = t(`accounts.operational_${operationalFilter}`);
@@ -2530,6 +2633,10 @@ export function AccountsPage() {
             { value: 'disabled', label: t('accounts.status_disabled') },
             { value: 'problem', label: t('accounts.status_problem') },
             { value: 'inspection', label: t('accounts.status_inspection') },
+            ...ACCOUNT_CODEX_STATUS_FILTERS.map((value) => ({
+              value,
+              label: t(`auth_files.codex_status_filter_${value}`),
+            })),
           ]}
           onChange={(value) => setStatusFilter(value as AccountStatusFilter)}
           ariaLabel={t('accounts.status_filter')}
@@ -2556,7 +2663,10 @@ export function AccountsPage() {
           value={planFilter}
           options={[
             { value: 'all', label: t('accounts.plan_all') },
-            ...planOptions.map((plan) => ({ value: plan, label: plan })),
+            ...planOptions.map((plan) => ({
+              value: plan,
+              label: plan === 'unknown' ? t('auth_files.codex_plan_filter_unknown') : plan,
+            })),
           ]}
           onChange={setPlanFilter}
           ariaLabel={t('accounts.plan_filter')}
@@ -3093,15 +3203,7 @@ export function AccountsPage() {
             const quotaWindows =
               quotaDisplayWindowsByRowKey.get(row.selectionKey) ?? buildQuotaDisplayWindows(row);
             const quotaCooldown = quotaCooldownsByRowKey.get(row.selectionKey)?.[0] ?? null;
-            const codexStatus =
-              row.provider === CODEX_CONFIG.type || row.provider === XAI_CONFIG.type
-                ? getAuthFileCodexStatus(
-                    row.raw,
-                    row.provider === CODEX_CONFIG.type ? getDisplayCodexQuota(row.raw) : undefined,
-                    toAuthFileCodexInspectionSnapshot(row),
-                    getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, row.raw)
-                  )
-                : null;
+            const codexStatus = codexStatusBySelectionKey.get(row.selectionKey) ?? null;
             const item = buildAccountListItem(row, {
               recommendation,
               quotaCooldown,
@@ -3450,15 +3552,7 @@ export function AccountsPage() {
       selectedRow.provider === CODEX_CONFIG.type
         ? getDisplayCodexQuota(selectedRow.raw)
         : undefined;
-    const selectedCodexStatus =
-      selectedRow.provider === CODEX_CONFIG.type || selectedRow.provider === XAI_CONFIG.type
-        ? getAuthFileCodexStatus(
-            selectedRow.raw,
-            selectedCodexQuota,
-            toAuthFileCodexInspectionSnapshot(selectedRow),
-            getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, selectedRow.raw)
-          )
-        : null;
+    const selectedCodexStatus = codexStatusBySelectionKey.get(selectedRow.selectionKey) ?? null;
     const hasMatchingDetailEvents = detailEventsRowKey === selectedRow.selectionKey;
     const rowEvents = hasMatchingDetailEvents ? detailEvents : [];
     const rowEventsSummary = hasMatchingDetailEvents ? detailEventsSummary : null;
@@ -3476,7 +3570,9 @@ export function AccountsPage() {
       valueRow,
       codexQuota: selectedCodexQuota,
       xaiQuota:
-        selectedRow.provider === XAI_CONFIG.type ? xaiQuota[selectedRow.fileName] : undefined,
+        selectedRow.provider === XAI_CONFIG.type
+          ? getCredentialScopedQuotaState(xaiQuota, selectedRow.raw)
+          : undefined,
       diagnosticsSummary: rowEventsSummary,
       diagnosticsRecentFailure: rowEventsRecentFailure,
       diagnosticsEvents: rowEvents,

@@ -6,10 +6,12 @@ import {
   type RecentRequestBucket,
 } from '@/utils/recentRequests';
 import {
+  authFileMatchesCodexStatusFilter,
   getAuthFileCodexInspectionKey,
   getAuthFileCodexInspectionKeyForFile,
   getAuthFileCodexInspectionKeyForIdentity,
   getAuthFileSelectionKey,
+  type AuthFileCodexStatusSummary,
 } from '@/features/authFiles/model/authFilesPageModel';
 import { resolveCodexPlanType } from '@/utils/quota/resolvers';
 import {
@@ -42,14 +44,26 @@ export type {
 } from '@/features/accounts/model/accountQuotaSummary';
 
 export type AccountQuotaBand = 'all' | 'ge50' | 'between20and50' | 'lt20' | 'spent';
-export type AccountStatusFilter =
-  | 'all'
-  | 'available'
-  | 'disabled'
-  | 'problem'
-  | 'low'
-  | 'exhausted'
-  | 'inspection';
+export const ACCOUNT_CODEX_STATUS_FILTERS = [
+  'reauth',
+  'quota_limited',
+  'five_hour_limited',
+  'weekly_limited',
+  'monthly_limited',
+  'disabled_with_reset',
+] as const;
+export const ACCOUNT_STATUS_FILTERS = [
+  'all',
+  'available',
+  'disabled',
+  'problem',
+  'low',
+  'exhausted',
+  'inspection',
+  ...ACCOUNT_CODEX_STATUS_FILTERS,
+] as const;
+export type AccountCodexStatusFilter = (typeof ACCOUNT_CODEX_STATUS_FILTERS)[number];
+export type AccountStatusFilter = (typeof ACCOUNT_STATUS_FILTERS)[number];
 export type AccountRowSortKey =
   | 'default'
   | 'name'
@@ -143,10 +157,21 @@ export interface AccountRowFilters {
   plan: string;
   quotaBand: AccountQuotaBand;
   search: string;
+  codexStatusBySelectionKey?: ReadonlyMap<string, AuthFileCodexStatusSummary>;
 }
 
 const QUOTA_LOW_THRESHOLD = 20;
 const QUOTA_OK_THRESHOLD = 50;
+const UNKNOWN_ACCOUNT_PLAN = 'unknown';
+const ACCOUNT_CODEX_STATUS_FILTER_SET = new Set<AccountCodexStatusFilter>(
+  ACCOUNT_CODEX_STATUS_FILTERS
+);
+const PREMIUM_CODEX_PLAN_TYPES = new Set(['prolite', 'pro-lite', 'pro_lite']);
+
+export const isAccountCodexStatusFilter = (
+  status: AccountStatusFilter
+): status is AccountCodexStatusFilter =>
+  ACCOUNT_CODEX_STATUS_FILTER_SET.has(status as AccountCodexStatusFilter);
 
 const readString = (value: unknown): string => {
   if (typeof value === 'string') return value.trim();
@@ -162,6 +187,9 @@ const readNumber = (value: unknown): number | null => {
   }
   return null;
 };
+
+const getAccountPlanFilterValue = (planType: string | null): string =>
+  planType?.trim() || UNKNOWN_ACCOUNT_PLAN;
 
 const readAuthIndex = (file: AuthFileItem): string =>
   readString(file.authIndex ?? file['auth_index']);
@@ -302,9 +330,9 @@ export const findAccountRowForInspectionTarget = (
 
   const hasStableIdentity = Boolean(
     String(target.runtimeId ?? '').trim() ||
-      String(target.authIndex ?? '').trim() ||
-      String(target.accountId ?? '').trim() ||
-      String(target.accountSnapshot ?? '').trim()
+    String(target.authIndex ?? '').trim() ||
+    String(target.accountId ?? '').trim() ||
+    String(target.accountSnapshot ?? '').trim()
   );
   if (hasStableIdentity) return null;
 
@@ -412,8 +440,10 @@ export const filterAccountRows = (rows: AccountRow[], filters: AccountRowFilters
     : null;
   return rows.filter((row) => {
     if (filters.provider !== 'all' && row.provider !== filters.provider) return false;
-    if (filters.plan !== 'all' && (row.planType ?? 'unknown') !== filters.plan) return false;
-    if (!matchesStatusFilter(row, filters.status)) return false;
+    if (filters.plan !== 'all' && getAccountPlanFilterValue(row.planType) !== filters.plan) {
+      return false;
+    }
+    if (!matchesStatusFilter(row, filters.status, filters.codexStatusBySelectionKey)) return false;
     if (!matchesQuotaBand(row, filters.quotaBand)) return false;
     if (!search) return true;
     const values = [
@@ -460,13 +490,37 @@ export const sortAccountRows = (rows: AccountRow[], sort?: AccountRowSort): Acco
 export const getProviderOptions = (rows: AccountRow[]) =>
   Array.from(new Set(rows.map((row) => row.provider))).sort();
 
-export const getPlanOptions = (rows: AccountRow[]) =>
-  Array.from(
-    new Set(rows.map((row) => row.planType).filter((value): value is string => Boolean(value)))
-  ).sort();
+export const getPlanOptions = (rows: AccountRow[]) => {
+  const plans = new Set<string>();
+  let hasUnknownPlan = false;
+  rows.forEach((row) => {
+    const plan = getAccountPlanFilterValue(row.planType);
+    if (plan === UNKNOWN_ACCOUNT_PLAN) {
+      hasUnknownPlan = true;
+      return;
+    }
+    plans.add(plan);
+  });
+  const sortedPlans = Array.from(plans).sort((left, right) =>
+    compareAccountPlanTypes(left, right, 'asc')
+  );
+  if (hasUnknownPlan) {
+    const withoutUnknown = sortedPlans.filter((plan) => plan !== UNKNOWN_ACCOUNT_PLAN);
+    return [...withoutUnknown, UNKNOWN_ACCOUNT_PLAN];
+  }
+  return sortedPlans;
+};
 
-const matchesStatusFilter = (row: AccountRow, status: AccountStatusFilter) => {
+const matchesStatusFilter = (
+  row: AccountRow,
+  status: AccountStatusFilter,
+  codexStatusBySelectionKey?: ReadonlyMap<string, AuthFileCodexStatusSummary>
+) => {
   if (status === 'all') return true;
+  if (isAccountCodexStatusFilter(status)) {
+    const codexStatus = codexStatusBySelectionKey?.get(row.selectionKey);
+    return codexStatus ? authFileMatchesCodexStatusFilter(codexStatus, status) : false;
+  }
   if (status === 'available') return isAccountRowAvailable(row);
   if (status === 'disabled') return row.disabled;
   if (status === 'problem') {
@@ -516,13 +570,40 @@ const compareDefaultAccountRows = (left: AccountRow, right: AccountRow) => {
   });
 };
 
+const getAccountPlanSortRank = (planType: string | null): number | null => {
+  const normalized = planType?.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === 'pro') return 50;
+  if (PREMIUM_CODEX_PLAN_TYPES.has(normalized)) return 40;
+  if (normalized === 'team') return 30;
+  if (normalized === 'plus') return 20;
+  if (normalized === 'free') return 10;
+  return 0;
+};
+
+const compareAccountPlanTypes = (
+  left: string | null,
+  right: string | null,
+  direction: AccountRowSortDirection
+) => {
+  const leftRank = getAccountPlanSortRank(left);
+  const rightRank = getAccountPlanSortRank(right);
+  const leftKnown = leftRank !== null;
+  const rightKnown = rightRank !== null;
+  if (!leftKnown && !rightKnown) return 0;
+  if (!leftKnown) return 1;
+  if (!rightKnown) return -1;
+  const rankComparison = compareNumbers(leftRank, rightRank, direction);
+  return rankComparison || compareText(left ?? '', right ?? '', direction);
+};
+
 const compareAccountRowsBySort = (left: AccountRow, right: AccountRow, sort: AccountRowSort) => {
   if (sort.key === 'name') {
     const accountComparison = compareText(left.accountLabel, right.accountLabel, sort.direction);
     return accountComparison || compareText(left.fileName, right.fileName, sort.direction);
   }
   if (sort.key === 'plan') {
-    return compareText(left.planType ?? '', right.planType ?? '', sort.direction, true);
+    return compareAccountPlanTypes(left.planType, right.planType, sort.direction);
   }
   if (sort.key === 'note') {
     return compareText(left.note ?? '', right.note ?? '', sort.direction, true);

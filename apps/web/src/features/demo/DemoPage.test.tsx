@@ -154,11 +154,17 @@ describe('DemoPage', () => {
     };
     const accountHistory = getDemoAccountHistory({
       accounts: authFiles.files.map((file) => ({
+        row_key: String(file.id ?? `${file.name}:${historyTargetString(file.authIndex) ?? '-'}`),
         account_snapshot:
           historyTargetString(file.account_snapshot) ??
           historyTargetString(file.account) ??
           historyTargetString(file.email),
         auth_label_snapshot: historyTargetString(file.label) ?? historyTargetString(file.note),
+        auth_file_snapshot: file.name,
+        auth_provider_snapshot:
+          historyTargetString(file.provider) ?? historyTargetString(file.type),
+        auth_project_id_snapshot:
+          historyTargetString(file.project_id) ?? historyTargetString(file.projectId),
         source: file.name,
         auth_index: historyTargetString(file.authIndex),
       })),
@@ -276,13 +282,13 @@ describe('DemoPage', () => {
           item.sync_status === 'ready'
       )
     ).toBe(true);
-    expect(accountHistory.items.find((item) => item.account_key === 'Platform Team')).toMatchObject(
-      {
-        total_requests: 5200,
-        total_tokens: 4_220_000,
-        total_cost: 88.1,
-      }
-    );
+    expect(
+      accountHistory.items.find((item) => item.row_key === 'codex-team-01.json')
+    ).toMatchObject({
+      total_requests: 5200,
+      total_tokens: 4_220_000,
+      total_cost: 88.1,
+    });
     expect(Array.from(fileNames).sort()).toEqual(
       [
         'antigravity-daily-exhausted.json',
@@ -312,7 +318,15 @@ describe('DemoPage', () => {
     );
     nonOauthFiles.forEach((fileName) => expect(fileNames).not.toContain(fileName));
 
-    expect(Object.keys(quota.codexQuota)).toEqual(
+    const indexQuotaByFileName = <TState extends { authFileName?: string }>(
+      record: Record<string, TState>
+    ) => new Map(Object.values(record).map((state) => [state.authFileName, state]));
+    const codexQuotaByFileName = indexQuotaByFileName(quota.codexQuota);
+    const claudeQuotaByFileName = indexQuotaByFileName(quota.claudeQuota);
+    const antigravityQuotaByFileName = indexQuotaByFileName(quota.antigravityQuota);
+    const kimiQuotaByFileName = indexQuotaByFileName(quota.kimiQuota);
+    const xaiQuotaByFileName = indexQuotaByFileName(quota.xaiQuota);
+    expect(Array.from(codexQuotaByFileName.keys())).toEqual(
       expect.arrayContaining([
         'codex-team-01.json',
         'codex-fallback-02.json',
@@ -325,57 +339,65 @@ describe('DemoPage', () => {
         chatgpt_subscription_active_until: expect.any(String),
       },
     });
-    expect(quota.codexQuota['codex-team-01.json']?.subscriptionActiveUntil).toEqual(
+    expect(codexQuotaByFileName.get('codex-team-01.json')?.subscriptionActiveUntil).toEqual(
       expect.any(String)
     );
-    expect(quota.codexQuota['codex-team-01.json']?.windows[0]).toMatchObject({
+    expect(codexQuotaByFileName.get('codex-team-01.json')?.windows[0]).toMatchObject({
       resetAtMs: expect.any(Number),
       resetAccuracy: 'estimated',
     });
-    expect(quota.codexQuota['codex-expired-oauth-03.json']?.status).toBe('error');
-    expect(quota.codexQuota['codex-expired-oauth-03.json']?.errorStatus).toBe(401);
-    expect(quota.claudeQuota['claude-research-02.json']?.windows).toHaveLength(3);
-    expect(quota.claudeQuota['claude-research-02.json']?.windows[0]).toMatchObject({
+    expect(codexQuotaByFileName.get('codex-expired-oauth-03.json')?.status).toBe('error');
+    expect(codexQuotaByFileName.get('codex-expired-oauth-03.json')?.errorStatus).toBe(401);
+    expect(claudeQuotaByFileName.get('claude-research-02.json')?.windows).toHaveLength(3);
+    expect(claudeQuotaByFileName.get('claude-research-02.json')?.windows[0]).toMatchObject({
       resetAtMs: expect.any(Number),
       resetAccuracy: 'estimated',
     });
-    expect(quota.claudeQuota['claude-extra-usage-03.json']?.extraUsage?.is_enabled).toBe(true);
-    expect(quota.antigravityQuota['antigravity-builder.json']?.groups).toHaveLength(2);
-    expect(quota.antigravityQuota['antigravity-builder.json']?.groups[0]?.buckets).toHaveLength(2);
+    expect(claudeQuotaByFileName.get('claude-extra-usage-03.json')?.extraUsage?.is_enabled).toBe(
+      true
+    );
+    expect(antigravityQuotaByFileName.get('antigravity-builder.json')?.groups).toHaveLength(2);
     expect(
-      quota.antigravityQuota['antigravity-daily-exhausted.json']?.groups[0]?.buckets[0]
+      antigravityQuotaByFileName.get('antigravity-builder.json')?.groups[0]?.buckets
+    ).toHaveLength(2);
+    expect(
+      antigravityQuotaByFileName.get('antigravity-daily-exhausted.json')?.groups[0]?.buckets[0]
         ?.remainingFraction
     ).toBe(0);
     expect(
-      quota.antigravityQuota['antigravity-monthly-low.json']?.groups[1]?.buckets[1]
+      antigravityQuotaByFileName.get('antigravity-monthly-low.json')?.groups[1]?.buckets[1]
         ?.remainingFraction
     ).toBe(0.08);
-    expect(quota.antigravityQuota['antigravity-free-weekly.json']?.subscription?.plan).toBe('free');
-    expect(quota.antigravityQuota['antigravity-free-weekly.json']?.groups).toHaveLength(2);
+    expect(antigravityQuotaByFileName.get('antigravity-free-weekly.json')?.subscription?.plan).toBe(
+      'free'
+    );
+    expect(antigravityQuotaByFileName.get('antigravity-free-weekly.json')?.groups).toHaveLength(2);
     expect(
-      quota.antigravityQuota['antigravity-free-weekly.json']?.groups.every(
-        (group) => group.buckets.length === 1 && group.buckets[0]?.window === 'weekly'
-      )
+      antigravityQuotaByFileName
+        .get('antigravity-free-weekly.json')
+        ?.groups.every(
+          (group) => group.buckets.length === 1 && group.buckets[0]?.window === 'weekly'
+        )
     ).toBe(true);
     expect(
-      quota.antigravityQuota['antigravity-pro-matrix.json']?.groups[1]?.buckets[0]
+      antigravityQuotaByFileName.get('antigravity-pro-matrix.json')?.groups[1]?.buckets[0]
     ).toMatchObject({
       window: '5h',
       remainingFraction: 0.11,
     });
-    expect(quota.kimiQuota['kimi-coding.json']?.rows[0]?.used).toBe(214);
-    expect(quota.kimiQuota['kimi-coding.json']?.rows[0]).toMatchObject({
+    expect(kimiQuotaByFileName.get('kimi-coding.json')?.rows[0]?.used).toBe(214);
+    expect(kimiQuotaByFileName.get('kimi-coding.json')?.rows[0]).toMatchObject({
       resetAtMs: expect.any(Number),
       resetAccuracy: 'estimated',
     });
-    expect(quota.kimiQuota['kimi-healthy.json']?.rows[0]?.used).toBe(320);
-    expect(quota.kimiQuota['kimi-exhausted.json']?.rows[1]?.used).toBe(200);
-    expect(quota.xaiQuota['xai-ops.json']?.billing?.periodType).toBe('weekly');
-    expect(quota.xaiQuota['xai-ops.json']?.billing?.usagePercent).toBe(42);
-    expect(quota.xaiQuota['xai-ops.json']?.billing?.usedPercent).toBe(86);
-    expect(quota.xaiQuota['xai-payg-buffer.json']?.billing?.usedPercent).toBe(100);
-    expect(quota.xaiQuota['xai-payg-buffer.json']?.billing?.onDemandUsedPercent).toBe(26);
-    expect(quota.xaiQuota['xai-payg-cap.json']?.billing?.onDemandUsedPercent).toBe(100);
+    expect(kimiQuotaByFileName.get('kimi-healthy.json')?.rows[0]?.used).toBe(320);
+    expect(kimiQuotaByFileName.get('kimi-exhausted.json')?.rows[1]?.used).toBe(200);
+    expect(xaiQuotaByFileName.get('xai-ops.json')?.billing?.periodType).toBe('weekly');
+    expect(xaiQuotaByFileName.get('xai-ops.json')?.billing?.usagePercent).toBe(42);
+    expect(xaiQuotaByFileName.get('xai-ops.json')?.billing?.usedPercent).toBe(86);
+    expect(xaiQuotaByFileName.get('xai-payg-buffer.json')?.billing?.usedPercent).toBe(100);
+    expect(xaiQuotaByFileName.get('xai-payg-buffer.json')?.billing?.onDemandUsedPercent).toBe(26);
+    expect(xaiQuotaByFileName.get('xai-payg-cap.json')?.billing?.onDemandUsedPercent).toBe(100);
 
     expect(Array.from(cooldownKeys)).toEqual(
       expect.arrayContaining(['codex-fallback-02.json:codex-fallback-02'])
@@ -388,6 +410,31 @@ describe('DemoPage', () => {
         'xai-expired.json',
       ])
     );
+  });
+
+  it('prefers structured account-history identity over a stale opaque account key', () => {
+    const response = getDemoAccountHistory({
+      accounts: [
+        {
+          row_key: 'platform-team-row',
+          account_key: 'stale-account-key',
+          auth_file_snapshot: 'codex-team-01.json',
+          auth_provider_snapshot: 'codex',
+          auth_index: 'codex-team-01',
+          account_snapshot: 'Platform Team',
+          source: 'codex-team-01.json',
+        },
+      ],
+    });
+
+    expect(response.items[0]).toMatchObject({
+      row_key: 'platform-team-row',
+      matched: true,
+      total_requests: 5200,
+      total_tokens: 4_220_000,
+      total_cost: 88.1,
+    });
+    expect(response.items[0]?.account_key).not.toBe('stale-account-key');
   });
 
   it('fills the dashboard request health timeline with real dashboard granularity', () => {

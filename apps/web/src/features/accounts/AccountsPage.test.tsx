@@ -16,6 +16,10 @@ import type {
 } from '@/services/api/usageService';
 import { copyToClipboard } from '@/utils/clipboard';
 import {
+  buildQuotaCredentialIdentity,
+  getQuotaCredentialStoreKey,
+} from '@/utils/quota/credentialScope';
+import {
   getAuthFilePatchTarget,
   getAuthFileSelectionKey,
 } from '@/features/authFiles/model/authFilesPageModel';
@@ -89,6 +93,7 @@ type AccountHistoryResponseForTest = {
     processed: number;
   };
   items: Array<{
+    row_key: string;
     account_key: string;
     matched: boolean;
     total_requests: number;
@@ -159,6 +164,16 @@ const makeCodexFile = (name: string, authIndex: string, account: string): AuthFi
     priority: 0,
     disabled: false,
   }) as AuthFileItem;
+
+const buildCredentialScopedQuotaRecord = <TState extends object>(
+  file: AuthFileItem,
+  state: TState
+) => ({
+  [getQuotaCredentialStoreKey(file)]: {
+    ...state,
+    ...buildQuotaCredentialIdentity(file),
+  },
+});
 
 const makeAnalyticsEvent = (
   overrides: Partial<Record<string, unknown>>
@@ -1720,6 +1735,131 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
   });
 
+  it('loads precise Codex status evidence on demand and filters by quota window', async () => {
+    mocks.files = [
+      makeCodexFile('weekly.json', 'weekly-auth', 'weekly@example.com'),
+      makeCodexFile('available.json', 'available-auth', 'available@example.com'),
+    ];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: true,
+    };
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 1_700_000_000_000,
+      from_ms: 0,
+      to_ms: 1_700_000_000_000,
+      items: [
+        {
+          event_hash: 'weekly-limit',
+          timestamp_ms: 1_700_000_000_000,
+          auth_file_snapshot: 'weekly.json',
+          auth_index: 'weekly-auth',
+          account_snapshot: 'weekly@example.com',
+          auth_provider_snapshot: 'codex',
+          response_metadata: {
+            quota: {
+              rate_limit_reached_type: 'secondary',
+              reached_window_kind: 'weekly',
+              reached_window_source: 'secondary',
+              recover_at_ms: 1_700_604_800_000,
+            },
+            errors: {
+              kind: 'rate_limit',
+              code: 'usage_limit_reached',
+            },
+          },
+        },
+        {
+          event_hash: 'expired-weekly-limit',
+          timestamp_ms: 1_699_000_000_000,
+          auth_file_snapshot: 'available.json',
+          auth_index: 'available-auth',
+          account_snapshot: 'available@example.com',
+          auth_provider_snapshot: 'codex',
+          response_metadata: {
+            quota: {
+              rate_limit_reached_type: 'secondary',
+              reached_window_kind: 'weekly',
+              reached_window_source: 'secondary',
+              recover_at_ms: 1_699_999_999_999,
+            },
+            errors: {
+              kind: 'rate_limit',
+              code: 'usage_limit_reached',
+            },
+          },
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(mocks.getHeaderSnapshots).not.toHaveBeenCalled();
+    expect(mocks.listCodexInspectionRuns).not.toHaveBeenCalled();
+
+    const statusSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.status_filter');
+    if (!statusSelect) throw new Error('Accounts status filter not found');
+    await act(async () => {
+      statusSelect.props.onChange('weekly_limited');
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
+    expect(mocks.listCodexInspectionRuns).toHaveBeenCalledTimes(1);
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[0]),
+      })
+    ).toHaveLength(1);
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
+      })
+    ).toHaveLength(0);
+  });
+
+  it('offers and applies the unknown plan filter', async () => {
+    mocks.files = [
+      {
+        ...makeCodexFile('plus.json', 'plus-auth', 'plus@example.com'),
+        planType: 'plus',
+      } as AuthFileItem,
+      makeCodexFile('unknown.json', 'unknown-auth', 'unknown@example.com'),
+    ];
+
+    const renderer = await renderAccountsPage();
+    const planSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.plan_filter');
+    if (!planSelect) throw new Error('Accounts plan filter not found');
+
+    expect(planSelect.props.options).toContainEqual({
+      value: 'unknown',
+      label: 'auth_files.codex_plan_filter_unknown',
+    });
+    await act(async () => {
+      planSelect.props.onChange('unknown');
+      await Promise.resolve();
+    });
+
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[0]),
+      })
+    ).toHaveLength(0);
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
+      })
+    ).toHaveLength(1);
+  });
+
   it('updates the accounts view query when switching views', async () => {
     const renderer = await renderAccountsPage();
 
@@ -2311,18 +2451,18 @@ describe('AccountsPage replacement flows', () => {
       },
     ];
     mocks.quotaState.codexQuota = {
-      'low.json': {
+      ...buildCredentialScopedQuotaRecord(mocks.files[0], {
         status: 'success',
         windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 10, resetLabel: '2026-01-10' }],
-      },
-      'middle.json': {
+      }),
+      ...buildCredentialScopedQuotaRecord(mocks.files[1], {
         status: 'success',
         windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 40, resetLabel: '2026-01-02' }],
-      },
-      'high.json': {
+      }),
+      ...buildCredentialScopedQuotaRecord(mocks.files[2], {
         status: 'success',
         windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 70, resetLabel: '2026-01-05' }],
-      },
+      }),
     };
 
     const renderer = await renderAccountsPage();
@@ -2390,21 +2530,19 @@ describe('AccountsPage replacement flows', () => {
         disabled: false,
       } as AuthFileItem,
     ];
-    mocks.quotaState.xaiQuota = {
-      'xai.json': {
-        status: 'success',
-        billing: {
-          monthlyLimitCents: 10_000,
-          usedCents: 12_500,
-          includedUsedCents: 10_000,
-          onDemandCapCents: 5_000,
-          onDemandUsedCents: 2_500,
-          onDemandUsedPercent: 50,
-          billingPeriodEnd: '2026-07-31T00:00:00Z',
-          usedPercent: 100,
-        },
+    mocks.quotaState.xaiQuota = buildCredentialScopedQuotaRecord(mocks.files[0], {
+      status: 'success',
+      billing: {
+        monthlyLimitCents: 10_000,
+        usedCents: 12_500,
+        includedUsedCents: 10_000,
+        onDemandCapCents: 5_000,
+        onDemandUsedCents: 2_500,
+        onDemandUsedPercent: 50,
+        billingPeriodEnd: '2026-07-31T00:00:00Z',
+        usedPercent: 100,
       },
-    };
+    });
 
     const renderer = await renderAccountsPage();
     const text = treeText(renderer);
@@ -2426,58 +2564,56 @@ describe('AccountsPage replacement flows', () => {
         disabled: false,
       } as AuthFileItem,
     ];
-    mocks.quotaState.antigravityQuota = {
-      'antigravity-pro-matrix.json': {
-        status: 'success',
-        subscription: { plan: 'pro', tierName: 'Pro', tierId: 'g1-pro' },
-        groups: [
-          {
-            id: 'gemini-models',
-            label: 'Gemini Models',
-            description: 'Models within this group: Gemini Flash, Gemini Pro',
-            models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
-            buckets: [
-              {
-                id: 'gemini-5h',
-                label: 'Five Hour Limit',
-                window: '5h',
-                remainingFraction: 0.96,
-                resetTime: '2026-07-09T12:00:00Z',
-              },
-              {
-                id: 'gemini-weekly',
-                label: 'Weekly Limit',
-                window: 'weekly',
-                remainingFraction: 0.04,
-                resetTime: '2026-07-15T12:00:00Z',
-              },
-            ],
-          },
-          {
-            id: 'claude-gpt-models',
-            label: 'Claude and GPT models',
-            description: 'Models within this group: Claude Sonnet, GPT-OSS',
-            models: ['claude-sonnet-4-5', 'gpt-oss-120b-medium'],
-            buckets: [
-              {
-                id: '3p-5h',
-                label: 'Five Hour Limit',
-                window: '5h',
-                remainingFraction: 0.11,
-                resetTime: '2026-07-09T11:00:00Z',
-              },
-              {
-                id: '3p-weekly',
-                label: 'Weekly Limit',
-                window: 'weekly',
-                remainingFraction: 0.19,
-                resetTime: '2026-07-13T12:00:00Z',
-              },
-            ],
-          },
-        ],
-      },
-    };
+    mocks.quotaState.antigravityQuota = buildCredentialScopedQuotaRecord(mocks.files[0], {
+      status: 'success',
+      subscription: { plan: 'pro', tierName: 'Pro', tierId: 'g1-pro' },
+      groups: [
+        {
+          id: 'gemini-models',
+          label: 'Gemini Models',
+          description: 'Models within this group: Gemini Flash, Gemini Pro',
+          models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+          buckets: [
+            {
+              id: 'gemini-5h',
+              label: 'Five Hour Limit',
+              window: '5h',
+              remainingFraction: 0.96,
+              resetTime: '2026-07-09T12:00:00Z',
+            },
+            {
+              id: 'gemini-weekly',
+              label: 'Weekly Limit',
+              window: 'weekly',
+              remainingFraction: 0.04,
+              resetTime: '2026-07-15T12:00:00Z',
+            },
+          ],
+        },
+        {
+          id: 'claude-gpt-models',
+          label: 'Claude and GPT models',
+          description: 'Models within this group: Claude Sonnet, GPT-OSS',
+          models: ['claude-sonnet-4-5', 'gpt-oss-120b-medium'],
+          buckets: [
+            {
+              id: '3p-5h',
+              label: 'Five Hour Limit',
+              window: '5h',
+              remainingFraction: 0.11,
+              resetTime: '2026-07-09T11:00:00Z',
+            },
+            {
+              id: '3p-weekly',
+              label: 'Weekly Limit',
+              window: 'weekly',
+              remainingFraction: 0.19,
+              resetTime: '2026-07-13T12:00:00Z',
+            },
+          ],
+        },
+      ],
+    });
 
     const renderer = await renderAccountsPage();
     const matrices = renderer.root.findAll(
@@ -2522,44 +2658,42 @@ describe('AccountsPage replacement flows', () => {
         disabled: false,
       } as AuthFileItem,
     ];
-    mocks.quotaState.antigravityQuota = {
-      'antigravity-free-weekly.json': {
-        status: 'success',
-        subscription: { plan: 'free', tierName: 'Free', tierId: 'g1-free' },
-        groups: [
-          {
-            id: 'gemini-models',
-            label: 'Gemini Models',
-            description: 'Models within this group: Gemini Flash, Gemini Pro',
-            models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
-            buckets: [
-              {
-                id: 'gemini-weekly',
-                label: 'Weekly Limit',
-                window: 'weekly',
-                remainingFraction: 0.76,
-                resetTime: '2026-07-15T12:00:00Z',
-              },
-            ],
-          },
-          {
-            id: 'claude-gpt-models',
-            label: 'Claude and GPT models',
-            description: 'Models within this group: Claude Sonnet, GPT-OSS',
-            models: ['claude-sonnet-4-5', 'gpt-oss-120b-medium'],
-            buckets: [
-              {
-                id: '3p-weekly',
-                label: 'Weekly Limit',
-                window: 'weekly',
-                remainingFraction: 0.31,
-                resetTime: '2026-07-13T12:00:00Z',
-              },
-            ],
-          },
-        ],
-      },
-    };
+    mocks.quotaState.antigravityQuota = buildCredentialScopedQuotaRecord(mocks.files[0], {
+      status: 'success',
+      subscription: { plan: 'free', tierName: 'Free', tierId: 'g1-free' },
+      groups: [
+        {
+          id: 'gemini-models',
+          label: 'Gemini Models',
+          description: 'Models within this group: Gemini Flash, Gemini Pro',
+          models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+          buckets: [
+            {
+              id: 'gemini-weekly',
+              label: 'Weekly Limit',
+              window: 'weekly',
+              remainingFraction: 0.76,
+              resetTime: '2026-07-15T12:00:00Z',
+            },
+          ],
+        },
+        {
+          id: 'claude-gpt-models',
+          label: 'Claude and GPT models',
+          description: 'Models within this group: Claude Sonnet, GPT-OSS',
+          models: ['claude-sonnet-4-5', 'gpt-oss-120b-medium'],
+          buckets: [
+            {
+              id: '3p-weekly',
+              label: 'Weekly Limit',
+              window: 'weekly',
+              remainingFraction: 0.31,
+              resetTime: '2026-07-13T12:00:00Z',
+            },
+          ],
+        },
+      ],
+    });
 
     const renderer = await renderAccountsPage();
     const matrices = renderer.root.findAll(
@@ -3139,14 +3273,90 @@ describe('AccountsPage replacement flows', () => {
       {
         accounts: [
           {
+            row_key: 'generic.json\u0000auth-generic',
             account_snapshot: 'generic@example.com',
             auth_label_snapshot: undefined,
-            source: 'generic.json',
+            auth_file_snapshot: 'generic.json',
+            auth_provider_snapshot: 'generic',
+            auth_project_id_snapshot: undefined,
             auth_index: 'auth-generic',
+            source: 'generic.json',
           },
         ],
       }
     );
+  });
+
+  it('clears stale single-account history when the refresh response cannot be correlated', async () => {
+    mocks.files = [
+      {
+        ...makeCodexFile('stale.json', 'auth-stale', 'stale@example.com'),
+        type: 'generic',
+        provider: 'generic',
+      } as AuthFileItem,
+    ];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory
+      .mockResolvedValueOnce(
+        makeAccountHistoryResponse([
+          {
+            row_key: 'stale.json\u0000auth-stale',
+            account_key: 'opaque-stale',
+            matched: true,
+            total_requests: 777,
+            success_calls: 700,
+            failure_calls: 77,
+            total_tokens: 123456,
+            total_cost: 7.77,
+            success_rate: 0.9,
+            first_seen_ms: 1,
+            last_seen_ms: 2,
+            sync_status: 'ready',
+          },
+        ])
+      )
+      .mockResolvedValueOnce(
+        makeAccountHistoryResponse([
+          {
+            row_key: 'unexpected-row',
+            account_key: 'opaque-unexpected',
+            matched: true,
+            total_requests: 999,
+            success_calls: 999,
+            failure_calls: 0,
+            total_tokens: 999999,
+            total_cost: 9.99,
+            success_rate: 1,
+            first_seen_ms: 1,
+            last_seen_ms: 2,
+            sync_status: 'ready',
+          },
+        ])
+      );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    expect(getAccountListItemTexts(renderer).join('\n')).toContain('777');
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        'stale.json\u0000auth-stale',
+        'accounts.refresh_quota'
+      ).props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    const cardText = getAccountListItemTexts(renderer).join('\n');
+    expect(cardText).not.toContain('777');
+    expect(cardText).not.toContain('999');
   });
 
   it('keeps auth-file selection helpers in accounts selection mode', async () => {
@@ -3222,6 +3432,7 @@ describe('AccountsPage replacement flows', () => {
     mocks.getAccountHistory.mockResolvedValue(
       makeAccountHistoryResponse([
         {
+          row_key: 'healthy.json\u0000auth-1',
           account_key: 'healthy@example.com',
           matched: true,
           total_requests: 1234,
@@ -3247,10 +3458,14 @@ describe('AccountsPage replacement flows', () => {
       {
         accounts: [
           {
+            row_key: 'healthy.json\u0000auth-1',
             account_snapshot: 'healthy@example.com',
             auth_label_snapshot: undefined,
-            source: 'healthy.json',
+            auth_file_snapshot: 'healthy.json',
+            auth_provider_snapshot: 'codex',
+            auth_project_id_snapshot: undefined,
             auth_index: 'auth-1',
+            source: 'healthy.json',
           },
         ],
       }
@@ -3283,6 +3498,7 @@ describe('AccountsPage replacement flows', () => {
     mocks.getAccountHistory.mockResolvedValue(
       makeAccountHistoryResponse([
         {
+          row_key: 'latest.json\u0000auth-latest',
           account_key: 'latest@example.com',
           matched: true,
           total_requests: 1,
@@ -3347,6 +3563,7 @@ describe('AccountsPage replacement flows', () => {
     mocks.getAccountHistory.mockResolvedValue(
       makeAccountHistoryResponse([
         {
+          row_key: 'pending.json\u0000auth-1',
           account_key: 'pending@example.com',
           matched: true,
           total_requests: 5,
@@ -3473,7 +3690,7 @@ describe('AccountsPage replacement flows', () => {
     };
     const resetLabel = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     mocks.quotaState.codexQuota = {
-      'codex-a.json': {
+      ...buildCredentialScopedQuotaRecord(mocks.files[0], {
         status: 'success',
         windows: [
           {
@@ -3484,8 +3701,8 @@ describe('AccountsPage replacement flows', () => {
             limitWindowSeconds: 5 * 60 * 60,
           },
         ],
-      },
-      'codex-b.json': {
+      }),
+      ...buildCredentialScopedQuotaRecord(mocks.files[1], {
         status: 'success',
         windows: [
           {
@@ -3496,7 +3713,7 @@ describe('AccountsPage replacement flows', () => {
             limitWindowSeconds: 5 * 60 * 60,
           },
         ],
-      },
+      }),
     };
     mocks.getActiveQuotaCooldowns.mockResolvedValue([
       {

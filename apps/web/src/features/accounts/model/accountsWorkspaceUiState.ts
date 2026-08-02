@@ -1,4 +1,9 @@
-import type { AccountQuotaBand, AccountRowSort, AccountStatusFilter } from './accountRows';
+import {
+  ACCOUNT_STATUS_FILTERS,
+  type AccountQuotaBand,
+  type AccountRowSort,
+  type AccountStatusFilter,
+} from './accountRows';
 import type { QuotaAccountDisplayMode } from '@/features/quota/quotaPageUiState';
 
 export type AccountOperationalFilter = 'all' | 'reauth' | 'cooldown' | 'automation' | 'recovered';
@@ -29,15 +34,7 @@ const SORT_KEYS = new Set([
   'created',
 ]);
 const SORT_DIRECTIONS = new Set(['asc', 'desc']);
-const STATUS_FILTERS = new Set([
-  'all',
-  'available',
-  'disabled',
-  'problem',
-  'low',
-  'exhausted',
-  'inspection',
-]);
+const STATUS_FILTERS = new Set<AccountStatusFilter>(ACCOUNT_STATUS_FILTERS);
 const QUOTA_BANDS = new Set(['all', 'ge50', 'between20and50', 'lt20', 'spent']);
 const OPERATIONAL_FILTERS = new Set(['all', 'reauth', 'cooldown', 'automation', 'recovered']);
 
@@ -73,7 +70,7 @@ export const normalizeAccountsWorkspaceUiState = (value: unknown): AccountsWorks
       typeof value.providerFilter === 'string' && value.providerFilter.trim()
         ? value.providerFilter
         : 'all',
-    statusFilter: STATUS_FILTERS.has(String(value.statusFilter))
+    statusFilter: STATUS_FILTERS.has(String(value.statusFilter) as AccountStatusFilter)
       ? (String(value.statusFilter) as AccountStatusFilter)
       : 'all',
     planFilter:

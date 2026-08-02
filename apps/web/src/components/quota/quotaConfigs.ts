@@ -15,13 +15,13 @@ import type {
   CodexQuotaState,
   CodexRateLimitResetCredit,
   CodexQuotaWindow,
+  CredentialScopedQuotaState,
   KimiQuotaRow,
   KimiQuotaState,
   XaiBillingSummary,
   XaiQuotaState,
 } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
-import { getAuthFileStatusIdentityKey } from '@/utils/authFileStatusMutation';
 import type { AntigravityQuotaData, CodexQuotaData } from '@/utils/quota';
 import { resetCodexQuota } from '@/services/api/codexQuota';
 import { QuotaInfoTooltip } from '@/components/quota/QuotaInfoTooltip';
@@ -55,8 +55,12 @@ import {
   getHeaderSnapshotUsedPercent,
   hasUsageHeaderQuotaSignal,
 } from '@/utils/usageHeaderSnapshots';
-import { normalizeAuthIndex } from '@/utils/authIndex';
 import { formatXaiBillingDiagnostics } from '@/utils/quota/xaiPresentation';
+import {
+  buildQuotaCredentialIdentity,
+  getQuotaCredentialStoreKey,
+  scopeQuotaStateToCredential,
+} from '@/utils/quota/credentialScope';
 import type { QuotaRenderHelpers } from './QuotaCard';
 import styles from '@/features/quota/QuotaPage.module.scss';
 
@@ -558,28 +562,13 @@ const isObservedQuotaNewerThanFailure = <TState extends DisplayQuotaState>(
   return failedAtMs !== null && observedAtMs !== null && observedAtMs > failedAtMs;
 };
 
-const buildCodexQuotaAuthIdentity = (file: AuthFileItem | undefined) => {
-  if (!file?.name) return {};
-  const authIndex = normalizeAuthIndex(file['auth_index'] ?? file.authIndex ?? file['auth-index']);
-  return {
-    authFileKey: getAuthFileStatusIdentityKey(file),
-    authFileName: file.name,
-    authIndex,
-  };
-};
-
 export const getCodexQuotaStoreKey = (file: AuthFileItem): string =>
-  buildCodexQuotaAuthIdentity(file).authFileKey ?? file.name;
+  getQuotaCredentialStoreKey(file);
 
-const scopeCodexQuotaStateToAuthFile = (
+const scopeCredentialQuotaState = <TState extends CredentialScopedQuotaState>(
   file: AuthFileItem,
-  state: CodexQuotaState | undefined
-): CodexQuotaState | undefined => {
-  if (!state) return undefined;
-  const identity = buildCodexQuotaAuthIdentity(file);
-  if (!state.authFileKey) return identity.authIndex === null ? state : undefined;
-  return state.authFileKey === identity.authFileKey ? state : undefined;
-};
+  state: TState | undefined
+): TState | undefined => scopeQuotaStateToCredential(file, state);
 
 const buildCodexQuotaFailureState = (
   message: string,
@@ -596,7 +585,7 @@ const buildCodexQuotaFailureState = (
     error: message,
     errorStatus: status,
     failedAtMs,
-    ...buildCodexQuotaAuthIdentity(file),
+    ...buildQuotaCredentialIdentity(file),
   };
 };
 
@@ -669,6 +658,7 @@ export const buildObservedCodexQuotaState = (
     status: 'success',
     windows,
     planType,
+    ...buildQuotaCredentialIdentity(file),
     activeLimit: observedQuota?.activeLimit ?? null,
     creditsHasCredits: observedQuota?.creditsHasCredits ?? null,
     creditsUnlimited: observedQuota?.creditsUnlimited ?? null,
@@ -1084,19 +1074,29 @@ export const CLAUDE_CONFIG: QuotaConfig<
   fetchQuota: fetchClaudeQuota,
   storeSelector: (state) => state.claudeQuota,
   storeSetter: 'setClaudeQuota',
-  buildLoadingState: () => ({ status: 'loading', windows: [] }),
-  buildSuccessState: (data) => ({
+  getStoreKey: getQuotaCredentialStoreKey,
+  buildLoadingState: (file) => ({
+    status: 'loading',
+    windows: [],
+    ...buildQuotaCredentialIdentity(file),
+  }),
+  buildSuccessState: (data, file) => ({
     status: 'success',
     windows: data.windows,
     extraUsage: data.extraUsage,
     planType: data.planType,
+    ...buildQuotaCredentialIdentity(file),
+    fetchedAtMs: Date.now(),
   }),
-  buildErrorState: (message, status) => ({
+  buildErrorState: (message, status, file) => ({
     status: 'error',
     windows: [],
     error: message,
     errorStatus: status,
+    ...buildQuotaCredentialIdentity(file),
+    failedAtMs: Date.now(),
   }),
+  scopeState: scopeCredentialQuotaState,
   cardClassName: styles.claudeCard,
   controlsClassName: styles.claudeControls,
   controlClassName: styles.claudeControl,
@@ -1112,26 +1112,33 @@ export const ANTIGRAVITY_CONFIG: QuotaConfig<AntigravityQuotaState, AntigravityQ
   fetchQuota: fetchAntigravityQuota,
   storeSelector: (state) => state.antigravityQuota,
   storeSetter: 'setAntigravityQuota',
-  buildLoadingState: () => ({
+  getStoreKey: getQuotaCredentialStoreKey,
+  buildLoadingState: (file) => ({
     status: 'loading',
     groups: [],
     subscription: null,
     serverTimeOffsetMs: null,
+    ...buildQuotaCredentialIdentity(file),
   }),
-  buildSuccessState: (data) => ({
+  buildSuccessState: (data, file) => ({
     status: 'success',
     groups: data.groups,
     subscription: data.subscription ?? null,
     serverTimeOffsetMs: data.serverTimeOffsetMs,
+    ...buildQuotaCredentialIdentity(file),
+    fetchedAtMs: Date.now(),
   }),
-  buildErrorState: (message, status) => ({
+  buildErrorState: (message, status, file) => ({
     status: 'error',
     groups: [],
     subscription: null,
     serverTimeOffsetMs: null,
     error: message,
     errorStatus: status,
+    ...buildQuotaCredentialIdentity(file),
+    failedAtMs: Date.now(),
   }),
+  scopeState: scopeCredentialQuotaState,
   cardClassName: styles.antigravityCard,
   controlsClassName: styles.antigravityControls,
   controlClassName: styles.antigravityControl,
@@ -1151,7 +1158,7 @@ export const CODEX_CONFIG: QuotaConfig<CodexQuotaState, CodexQuotaData> = {
   buildLoadingState: (file) => ({
     status: 'loading',
     windows: [],
-    ...buildCodexQuotaAuthIdentity(file),
+    ...buildQuotaCredentialIdentity(file),
   }),
   buildSuccessState: (data, file) => ({
     status: 'success',
@@ -1169,7 +1176,7 @@ export const CODEX_CONFIG: QuotaConfig<CodexQuotaState, CodexQuotaData> = {
     rateLimitResetCreditsAvailableCount: data.rateLimitResetCreditsAvailableCount,
     rateLimitResetCredits: data.rateLimitResetCredits,
     rateLimitResetCreditsError: data.rateLimitResetCreditsError,
-    ...buildCodexQuotaAuthIdentity(file),
+    ...buildQuotaCredentialIdentity(file),
     fetchedAtMs: Date.now(),
   }),
   buildErrorState: (message, status, file) => ({
@@ -1178,10 +1185,10 @@ export const CODEX_CONFIG: QuotaConfig<CodexQuotaState, CodexQuotaData> = {
     error: message,
     errorStatus: status,
     failedAtMs: Date.now(),
-    ...buildCodexQuotaAuthIdentity(file),
+    ...buildQuotaCredentialIdentity(file),
   }),
   buildFailureState: buildCodexQuotaFailureState,
-  scopeState: scopeCodexQuotaStateToAuthFile,
+  scopeState: scopeCredentialQuotaState,
   cardClassName: styles.codexCard,
   controlsClassName: styles.codexControls,
   controlClassName: styles.codexControl,
@@ -1254,14 +1261,27 @@ export const KIMI_CONFIG: QuotaConfig<KimiQuotaState, KimiQuotaRow[]> = {
   fetchQuota: fetchKimiQuota,
   storeSelector: (state) => state.kimiQuota,
   storeSetter: 'setKimiQuota',
-  buildLoadingState: () => ({ status: 'loading', rows: [] }),
-  buildSuccessState: (rows) => ({ status: 'success', rows }),
-  buildErrorState: (message, status) => ({
+  getStoreKey: getQuotaCredentialStoreKey,
+  buildLoadingState: (file) => ({
+    status: 'loading',
+    rows: [],
+    ...buildQuotaCredentialIdentity(file),
+  }),
+  buildSuccessState: (rows, file) => ({
+    status: 'success',
+    rows,
+    ...buildQuotaCredentialIdentity(file),
+    fetchedAtMs: Date.now(),
+  }),
+  buildErrorState: (message, status, file) => ({
     status: 'error',
     rows: [],
     error: message,
     errorStatus: status,
+    ...buildQuotaCredentialIdentity(file),
+    failedAtMs: Date.now(),
   }),
+  scopeState: scopeCredentialQuotaState,
   cardClassName: styles.kimiCard,
   controlsClassName: styles.kimiControls,
   controlClassName: styles.kimiControl,
@@ -1537,14 +1557,27 @@ export const XAI_CONFIG: QuotaConfig<XaiQuotaState, XaiBillingSummary> = {
   fetchQuota: fetchXaiQuota,
   storeSelector: (state) => state.xaiQuota,
   storeSetter: 'setXaiQuota',
-  buildLoadingState: () => ({ status: 'loading', billing: null }),
-  buildSuccessState: (billing) => ({ status: 'success', billing }),
-  buildErrorState: (message, status) => ({
+  getStoreKey: getQuotaCredentialStoreKey,
+  buildLoadingState: (file) => ({
+    status: 'loading',
+    billing: null,
+    ...buildQuotaCredentialIdentity(file),
+  }),
+  buildSuccessState: (billing, file) => ({
+    status: 'success',
+    billing,
+    ...buildQuotaCredentialIdentity(file),
+    fetchedAtMs: Date.now(),
+  }),
+  buildErrorState: (message, status, file) => ({
     status: 'error',
     billing: null,
     error: message,
     errorStatus: status,
+    ...buildQuotaCredentialIdentity(file),
+    failedAtMs: Date.now(),
   }),
+  scopeState: scopeCredentialQuotaState,
   cardClassName: styles.kimiCard,
   controlsClassName: styles.kimiControls,
   controlClassName: styles.kimiControl,

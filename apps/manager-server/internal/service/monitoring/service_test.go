@@ -16,6 +16,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 func TestAnalyticsQueryGroupBoundsConcurrency(t *testing.T) {
@@ -2080,21 +2081,37 @@ func TestAccountHistoryReturnsRollupTotalsAndCost(t *testing.T) {
 	first.ResolvedModel = "resolved-a"
 	first.AccountSnapshot = "hist@example.com"
 	first.Source = "hist@example.com"
+	first.AuthFileSnapshot = "history.json"
 	first.CacheReadTokens = 20_000
 	first.CacheCreationTokens = 10_000
 	second := monitoringEvent("history-a-2", baseMS+2_000, "alias-a", "auth-1", "source-a", true, 0, 0, 0, 0, 0, nil)
 	second.ResolvedModel = "resolved-a"
 	second.AccountSnapshot = "hist@example.com"
 	second.Source = "hist@example.com"
+	second.AuthFileSnapshot = "history.json"
 	if _, err := db.InsertEvents(ctx, []usage.Event{first, second}); err != nil {
 		t.Fatalf("insert events: %v", err)
 	}
 
+	historyKey := historyTestKey("history.json", "auth-1", "openai", "hist@example.com")
+	missingKey := historyTestKey("missing.json", "auth-missing", "openai", "missing@example.com")
 	resp, err := New(db).AccountHistory(ctx, AccountHistoryRequest{
 		Accounts: []AccountHistoryTarget{
-			{AccountSnapshot: "hist@example.com"},
-			{AccountSnapshot: "missing@example.com"},
-			{AccountKey: "hist@example.com"},
+			{
+				RowKey:               "row-history",
+				AuthFileSnapshot:     "history.json",
+				AuthIndex:            "auth-1",
+				AuthProviderSnapshot: "openai",
+				AccountSnapshot:      "hist@example.com",
+			},
+			{
+				RowKey:               "row-missing",
+				AuthFileSnapshot:     "missing.json",
+				AuthIndex:            "auth-missing",
+				AuthProviderSnapshot: "openai",
+				AccountSnapshot:      "missing@example.com",
+			},
+			{RowKey: "row-legacy-key", AccountKey: historyKey},
 		},
 		CatchUp: true,
 	})
@@ -2108,7 +2125,7 @@ func TestAccountHistoryReturnsRollupTotalsAndCost(t *testing.T) {
 		t.Fatalf("items = %#v", resp.Items)
 	}
 	history := resp.Items[0]
-	if history.AccountKey != "hist@example.com" || !history.Matched || history.SyncStatus != "ready" {
+	if history.RowKey != "row-history" || history.AccountKey != historyKey || !history.Matched || history.SyncStatus != "ready" {
 		t.Fatalf("history item = %#v", history)
 	}
 	if history.TotalRequests != 2 || history.SuccessCalls != 1 || history.FailureCalls != 1 || history.TotalTokens != 1_530_000 {
@@ -2123,11 +2140,63 @@ func TestAccountHistoryReturnsRollupTotalsAndCost(t *testing.T) {
 	if history.FirstSeenMS == nil || *history.FirstSeenMS != baseMS+1_000 || history.LastSeenMS == nil || *history.LastSeenMS != baseMS+2_000 {
 		t.Fatalf("seen range = %#v %#v", history.FirstSeenMS, history.LastSeenMS)
 	}
-	if resp.Items[1].Matched || resp.Items[1].SyncStatus != "empty" {
+	if resp.Items[1].RowKey != "row-missing" || resp.Items[1].AccountKey != missingKey || resp.Items[1].Matched || resp.Items[1].SyncStatus != "empty" {
 		t.Fatalf("missing item = %#v", resp.Items[1])
 	}
-	if !resp.Items[2].Matched || resp.Items[2].AccountKey != "hist@example.com" || resp.Items[2].TotalRequests != 2 {
+	if resp.Items[2].RowKey != "row-legacy-key" || !resp.Items[2].Matched || resp.Items[2].AccountKey != historyKey || resp.Items[2].TotalRequests != 2 {
 		t.Fatalf("account_key item = %#v", resp.Items[2])
+	}
+}
+
+func TestAccountHistorySeparatesSharedAccountAndStructuredIdentityOverridesLegacyKey(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_700_005_000_000)
+	first := monitoringEvent("history-shared-a", baseMS+1_000, "gpt-a", "auth-a", "shared.json", false, 10, 5, 0, 0, 15, nil)
+	first.AuthFileSnapshot = "shared.json"
+	first.AuthProviderSnapshot = "openai"
+	first.AccountSnapshot = "same@example.com"
+	second := monitoringEvent("history-shared-b", baseMS+2_000, "gpt-a", "auth-b", "shared.json", false, 20, 10, 0, 0, 30, nil)
+	second.AuthFileSnapshot = "shared.json"
+	second.AuthProviderSnapshot = "openai"
+	second.AccountSnapshot = "same@example.com"
+	if _, err := db.InsertEvents(ctx, []usage.Event{first, second}); err != nil {
+		t.Fatalf("insert shared-account events: %v", err)
+	}
+
+	firstKey := historyTestKey("shared.json", "auth-a", "openai", "same@example.com")
+	secondKey := historyTestKey("shared.json", "auth-b", "openai", "same@example.com")
+	resp, err := New(db).AccountHistory(ctx, AccountHistoryRequest{
+		Accounts: []AccountHistoryTarget{
+			{
+				RowKey:               "row-b",
+				AccountKey:           firstKey,
+				AuthFileSnapshot:     "shared.json",
+				AuthIndex:            "auth-b",
+				AuthProviderSnapshot: "openai",
+				AccountSnapshot:      "same@example.com",
+			},
+			{
+				RowKey:               "row-a",
+				AuthFileSnapshot:     "shared.json",
+				AuthIndex:            "auth-a",
+				AuthProviderSnapshot: "openai",
+				AccountSnapshot:      "same@example.com",
+			},
+		},
+		CatchUp: true,
+	})
+	if err != nil {
+		t.Fatalf("account history: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("items = %#v", resp.Items)
+	}
+	if item := resp.Items[0]; item.RowKey != "row-b" || item.AccountKey != secondKey || !item.Matched || item.TotalRequests != 1 || item.TotalTokens != 30 {
+		t.Fatalf("second credential item = %#v", item)
+	}
+	if item := resp.Items[1]; item.RowKey != "row-a" || item.AccountKey != firstKey || !item.Matched || item.TotalRequests != 1 || item.TotalTokens != 15 {
+		t.Fatalf("first credential item = %#v", item)
 	}
 }
 
@@ -2167,14 +2236,22 @@ func TestAccountHistoryPricesContextTierBands(t *testing.T) {
 		events[index].ResolvedModel = "tiered-resolved"
 		events[index].AccountSnapshot = "tier-history@example.com"
 		events[index].Source = "tier-history@example.com"
+		events[index].AuthFileSnapshot = "tier-history.json"
+		events[index].AuthProviderSnapshot = "openai"
 	}
 	if _, err := db.InsertEvents(ctx, events); err != nil {
 		t.Fatalf("insert events: %v", err)
 	}
 
 	resp, err := New(db).AccountHistory(ctx, AccountHistoryRequest{
-		Accounts: []AccountHistoryTarget{{AccountSnapshot: "tier-history@example.com"}},
-		CatchUp:  true,
+		Accounts: []AccountHistoryTarget{{
+			RowKey:               "row-tier-history",
+			AuthFileSnapshot:     "tier-history.json",
+			AuthIndex:            "auth-tiered",
+			AuthProviderSnapshot: "openai",
+			AccountSnapshot:      "tier-history@example.com",
+		}},
+		CatchUp: true,
 	})
 	if err != nil {
 		t.Fatalf("account history: %v", err)
@@ -2206,7 +2283,7 @@ func TestAccountHistoryEmptyTargetDoesNotMatchAnonymousBucket(t *testing.T) {
 
 	resp, err := New(db).AccountHistory(ctx, AccountHistoryRequest{
 		Accounts: []AccountHistoryTarget{
-			{},
+			{RowKey: "row-empty"},
 		},
 		CatchUp: true,
 	})
@@ -2216,7 +2293,7 @@ func TestAccountHistoryEmptyTargetDoesNotMatchAnonymousBucket(t *testing.T) {
 	if len(resp.Items) != 1 {
 		t.Fatalf("items = %#v", resp.Items)
 	}
-	if resp.Items[0].Matched || resp.Items[0].AccountKey != "" || resp.Items[0].SyncStatus != "empty" {
+	if resp.Items[0].RowKey != "row-empty" || resp.Items[0].Matched || resp.Items[0].AccountKey != "" || resp.Items[0].SyncStatus != "empty" {
 		t.Fatalf("empty target matched anonymous bucket: %#v", resp.Items[0])
 	}
 }
@@ -2263,9 +2340,10 @@ func TestAccountHistoryIncludesLatestCredentialRequestWithoutExposingRawFailureD
 
 	resp, err := New(db).AccountHistory(ctx, AccountHistoryRequest{
 		Accounts: []AccountHistoryTarget{{
-			AccountSnapshot: "alice@example.com",
-			Source:          "credential-a.json",
-			AuthIndex:       "auth-1",
+			RowKey:           "row-credential-a",
+			AccountSnapshot:  "alice@example.com",
+			AuthFileSnapshot: "credential-a.json",
+			AuthIndex:        "auth-1",
 		}},
 	})
 	if err != nil {
@@ -2275,6 +2353,9 @@ func TestAccountHistoryIncludesLatestCredentialRequestWithoutExposingRawFailureD
 		t.Fatalf("history response = %#v", resp)
 	}
 	item := resp.Items[0]
+	if item.RowKey != "row-credential-a" {
+		t.Fatalf("history row key = %q", item.RowKey)
+	}
 	if len(item.RecentRequests) != accountRecentRequestLimit {
 		t.Fatalf("recent requests = %#v", item.RecentRequests)
 	}
@@ -2838,4 +2919,17 @@ func monitoringEvent(
 		Failed:          failed,
 		CreatedAtMS:     timestampMS,
 	}
+}
+
+func historyTestKey(authFileSnapshot, authIndex, provider, accountSnapshot string) string {
+	key, valid := usageidentity.AccountKey(usageidentity.Fields{
+		AuthFileSnapshot:     authFileSnapshot,
+		AuthIndex:            authIndex,
+		AuthProviderSnapshot: provider,
+		AccountSnapshot:      accountSnapshot,
+	})
+	if !valid {
+		panic("invalid account history test identity")
+	}
+	return key
 }

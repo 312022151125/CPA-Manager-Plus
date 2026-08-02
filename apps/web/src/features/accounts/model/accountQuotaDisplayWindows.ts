@@ -1,4 +1,5 @@
 import type { TFunction } from 'i18next';
+import { getCredentialScopedQuotaState } from '@/utils/quota/credentialScope';
 import type {
   AuthFileItem,
   ClaudeExtraUsage,
@@ -311,7 +312,9 @@ const buildCodexQuotaDisplayWindows = (
   row: AccountRow,
   options: BuildAccountQuotaDisplayWindowsOptions
 ): AccountQuotaDisplayWindow[] => {
-  const quota = options.getDisplayCodexQuota?.(row.raw) ?? options.stores.codexQuota[row.fileName];
+  const quota =
+    options.getDisplayCodexQuota?.(row.raw) ??
+    getCredentialScopedQuotaState(options.stores.codexQuota, row.raw);
   if (!quota?.windows?.length) return [];
   return quota.windows.map((window) =>
     buildAccountQuotaDisplayWindow({
@@ -333,7 +336,7 @@ const buildClaudeQuotaDisplayWindows = (
   row: AccountRow,
   options: BuildAccountQuotaDisplayWindowsOptions
 ): AccountQuotaDisplayWindow[] => {
-  const quota = options.stores.claudeQuota[row.fileName];
+  const quota = getCredentialScopedQuotaState(options.stores.claudeQuota, row.raw);
   if (!quota) return [];
   const windows =
     quota.windows?.map((window) =>
@@ -374,7 +377,7 @@ const buildAntigravityQuotaDisplayWindows = (
   row: AccountRow,
   options: BuildAccountQuotaDisplayWindowsOptions
 ): AccountQuotaDisplayWindow[] => {
-  const quota = options.stores.antigravityQuota[row.fileName];
+  const quota = getCredentialScopedQuotaState(options.stores.antigravityQuota, row.raw);
   const groups = quota?.groups ?? [];
   return groups.flatMap((group) => {
     const groupLabel = translateAntigravityQuotaLabel(
@@ -426,7 +429,7 @@ const buildKimiQuotaDisplayWindows = (
   row: AccountRow,
   options: BuildAccountQuotaDisplayWindowsOptions
 ): AccountQuotaDisplayWindow[] => {
-  const quota = options.stores.kimiQuota[row.fileName];
+  const quota = getCredentialScopedQuotaState(options.stores.kimiQuota, row.raw);
   if (!quota?.rows?.length) return [];
   return quota.rows.map((quotaRow) => {
     const remainingPercent =
@@ -457,7 +460,7 @@ const buildXaiQuotaDisplayWindows = (
   row: AccountRow,
   options: BuildAccountQuotaDisplayWindowsOptions
 ): AccountQuotaDisplayWindow[] => {
-  const billing = options.stores.xaiQuota[row.fileName]?.billing;
+  const billing = getCredentialScopedQuotaState(options.stores.xaiQuota, row.raw)?.billing;
   if (!billing || billing.officialApiHealth) return [];
 
   const resetLabel = billing.billingPeriodEnd
