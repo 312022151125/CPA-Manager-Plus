@@ -3882,7 +3882,7 @@ describe('AccountsPage replacement flows', () => {
 
   it('uses the unified quota timestamp format for cooldown and reset-credit expiry', async () => {
     const cooldownRecoverAtMs = new Date(2026, 6, 30, 10, 5, 0, 0).getTime();
-    const resetCreditExpiresAtMs = new Date(2026, 7, 2, 18, 45, 0, 0).getTime();
+    const resetCreditExpiresAtMs = Date.now() + 24 * 60 * 60 * 1000;
     mocks.quotaState.codexQuota = {
       'codex.json': {
         status: 'success',

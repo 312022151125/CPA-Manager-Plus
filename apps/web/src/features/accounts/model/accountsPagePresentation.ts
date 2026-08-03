@@ -182,7 +182,7 @@ export const formatQuotaResetTimestamp = (value: number | null | undefined, _loc
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '-';
-  return `${date.getFullYear()}-${padQuotaResetPart(date.getMonth() + 1)}-${padQuotaResetPart(
+  return `${padQuotaResetPart(date.getMonth() + 1)}/${padQuotaResetPart(
     date.getDate()
   )} ${padQuotaResetPart(date.getHours())}:${padQuotaResetPart(date.getMinutes())}`;
 };

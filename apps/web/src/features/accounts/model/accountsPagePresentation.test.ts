@@ -28,8 +28,11 @@ describe('accountsPagePresentation', () => {
     const resetAtMs = new Date(2026, 6, 30, 10, 5, 0, 0).getTime();
     const recoverAtMs = new Date(2026, 6, 31, 11, 15, 0, 0).getTime();
 
-    expect(formatQuotaResetTimestamp(resetAtMs, 'zh-CN')).toBe('2026-07-30 10:05');
-    expect(formatQuotaResetDisplay(resetAtMs, '2h', 'en')).toBe('2026-07-30 10:05');
+    expect(formatQuotaResetTimestamp(resetAtMs, 'zh-CN')).toBe('07/30 10:05');
+    expect(formatQuotaResetDisplay(resetAtMs, '2h', 'en')).toBe('07/30 10:05');
+    expect(formatQuotaResetTimestamp(new Date(2026, 0, 1, 1, 1, 0, 0).getTime(), 'en')).toBe(
+      '01/01 01:01'
+    );
     expect(formatQuotaResetDisplay(null, 'resets in 2d', 'en')).toBe('resets in 2d');
     expect(
       formatQuotaResetTooltipParams(
@@ -38,7 +41,7 @@ describe('accountsPagePresentation', () => {
         'en',
         recoverAtMs
       )
-    ).toEqual({ resetAt: '2026-07-30 10:05', recoverAt: '2026-07-31 11:15' });
+    ).toEqual({ resetAt: '07/30 10:05', recoverAt: '07/31 11:15' });
   });
 
   it('rejects timestamps outside the JavaScript date range', () => {
