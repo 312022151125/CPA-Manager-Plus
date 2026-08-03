@@ -80,6 +80,15 @@ export const buildOpenAIChatCompletionsEndpoint = (baseUrl: string): string => {
   return `${trimmed}/chat/completions`;
 };
 
+export const buildOpenAIEmbeddingsEndpoint = (baseUrl: string): string => {
+  const trimmed = normalizeOpenAIBaseUrl(baseUrl);
+  if (!trimmed) return '';
+  if (trimmed.endsWith('/embeddings')) {
+    return trimmed;
+  }
+  return `${trimmed}/embeddings`;
+};
+
 export const buildCodexResponsesEndpoint = (baseUrl: string): string => {
   const trimmed = normalizeOpenAIBaseUrl(baseUrl);
   if (!trimmed) return '';
@@ -116,7 +125,9 @@ const EMPTY_RECENT_USAGE_ENTRY: RecentRequestUsageEntry = {
 };
 
 const normalizeProviderRecentKey = (value: unknown): string =>
-  String(value ?? '').trim().toLowerCase();
+  String(value ?? '')
+    .trim()
+    .toLowerCase();
 
 export function getProviderRecentUsageEntry(
   usageByProvider: ProviderRecentUsageMap,
@@ -139,12 +150,7 @@ export function getProviderRecentBuckets(
   apiKey?: string,
   baseUrl?: string
 ): RecentRequestBucket[] {
-  return getProviderRecentUsageEntry(
-    usageByProvider,
-    provider,
-    apiKey,
-    baseUrl
-  ).recentRequests;
+  return getProviderRecentUsageEntry(usageByProvider, provider, apiKey, baseUrl).recentRequests;
 }
 
 export function getProviderTotalStats(

@@ -1,16 +1,16 @@
-# Graph Report - CPA-Manager-Plus  (2026-07-24)
+# Graph Report - CPA-Manager-Plus  (2026-07-23)
 
 ## Corpus Check
-- 859 files · ~881,695 words
+- 840 files · ~836,004 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 9273 nodes · 24628 edges · 401 communities (368 shown, 33 thin omitted)
-- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 1205 edges (avg confidence: 0.78)
+- 8819 nodes · 23131 edges · 380 communities (351 shown, 29 thin omitted)
+- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 1113 edges (avg confidence: 0.78)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `f2cd65ab`
+- Built from commit: `bd972987`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -388,39 +388,18 @@
 - log.ts
 - TestDisableOwnershipCRUD
 - @typescript-eslint/eslint-plugin
-- appRoutes.tsx
-- CodexInspectionAutoActionEditor.tsx
-- logs.ts
-- runUsageBaselineFixture
-- useQuotaStore.ts
-- CodexInspectionModeTabs.tsx
-- DiffModal.tsx
-- New
-- useAuthFilesOauth.stability.test.tsx
-- validation.ts
-- CPA Manager Plus v1.11.7
-- CPA Manager Plus v1.11.7
-- .Handle
-- .Management
-- accountOverviewCardMetrics.ts
-- types/oauth.ts
-- TestHandleAccountHistoryRejectsUnknownTargetFields
-- TestRunMigratesLegacySetupAndEncryptsSecrets
-- Handler
-- aliasValidation.ts
-- @eslint/js
 
 ## God Nodes (most connected - your core abstractions)
-1. `Context` - 522 edges
-2. `Store` - 180 edges
+1. `Context` - 467 edges
+2. `Store` - 173 edges
 3. `normalizeAuthIndex()` - 99 edges
 4. `useNotificationStore` - 97 edges
 5. `AuthFilesPage()` - 83 edges
 6. `useAuthStore` - 76 edges
-7. `Button()` - 71 edges
-8. `Event` - 69 edges
+7. `Button()` - 70 edges
+8. `Event` - 66 edges
 9. `AuthFileItem` - 66 edges
-10. `MonitoringCenterPage()` - 63 edges
+10. `MonitoringCenterPage()` - 61 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `findExecutable()` --indirect_call--> `candidate()`  [INFERRED]
@@ -439,8 +418,8 @@
 - 2-file cycle: `apps/web/src/features/monitoring/codexInspection.ts -> apps/web/src/features/monitoring/model/codexInspectionExecution.ts -> apps/web/src/features/monitoring/codexInspection.ts`
 - 3-file cycle: `apps/web/src/features/monitoring/grokInspection.ts -> apps/web/src/features/monitoring/model/grokInspectionProbe.ts -> apps/web/src/features/monitoring/model/grokInspectionSettings.ts -> apps/web/src/features/monitoring/grokInspection.ts`
 - 3-file cycle: `apps/web/src/components/quota/QuotaCard.tsx -> apps/web/src/features/quota/quotaPageUiState.ts -> apps/web/src/components/quota/quotaConfigs.ts -> apps/web/src/components/quota/QuotaCard.tsx`
-- 3-file cycle: `apps/web/src/components/providers/ProviderEditDrawer/ClaudeEditDrawer.tsx -> apps/web/src/components/providers/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/ClaudeEditDrawer.tsx`
 - 3-file cycle: `apps/web/src/components/providers/ProviderEditDrawer/GeminiEditDrawer.tsx -> apps/web/src/components/providers/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/GeminiEditDrawer.tsx`
+- 3-file cycle: `apps/web/src/components/providers/ProviderEditDrawer/ClaudeEditDrawer.tsx -> apps/web/src/components/providers/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/ClaudeEditDrawer.tsx`
 - 3-file cycle: `apps/web/src/components/providers/ProviderEditDrawer/CodexEditDrawer.tsx -> apps/web/src/components/providers/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/CodexEditDrawer.tsx`
 - 3-file cycle: `apps/web/src/components/providers/ProviderEditDrawer/OpenAIEditDrawer.tsx -> apps/web/src/components/providers/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/OpenAIEditDrawer.tsx`
 - 3-file cycle: `apps/web/src/components/providers/ProviderEditDrawer/VertexEditDrawer.tsx -> apps/web/src/components/providers/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/index.ts -> apps/web/src/components/providers/ProviderEditDrawer/VertexEditDrawer.tsx`
@@ -452,143 +431,143 @@
 - 5-file cycle: `apps/web/src/features/demo/demoApi.ts -> apps/web/src/features/demo/demoFixtures.ts -> apps/web/src/features/monitoring/codexInspection.ts -> apps/web/src/services/api/apiCall.ts -> apps/web/src/services/api/client.ts -> apps/web/src/features/demo/demoApi.ts`
 - 5-file cycle: `apps/web/src/features/demo/demoApi.ts -> apps/web/src/features/demo/demoFixtures.ts -> apps/web/src/features/monitoring/codexInspection.ts -> apps/web/src/services/api/authFiles.ts -> apps/web/src/services/api/client.ts -> apps/web/src/features/demo/demoApi.ts`
 
-## Communities (401 total, 33 thin omitted)
+## Communities (380 total, 29 thin omitted)
 
 ### Community 0 - "Context"
 Cohesion: 0.03
-Nodes (48): AutomationRuntimeService, Context, FromExisting(), Config, FS, Service, repository, AccountHistoryKey() (+40 more)
+Nodes (36): AutomationRuntimeService, Context, FromExisting(), Config, FS, Service, AccountHistoryKey(), AccountActionCandidate (+28 more)
 
 ### Community 1 - "usageAnalyticsModel.ts"
 Cohesion: 0.05
-Nodes (97): analyzeUsageBucket(), anomalyMetricLabelKey(), buildApiKeyTrendSeries(), buildCredentialQuotaRows(), buildEntityTrendSeries(), buildHeatmapHighlightsForMetric(), buildKeyAnomalies(), buildMatrixCellsFromEntityRows() (+89 more)
+Nodes (117): adaptUsageAnalyticsData(), analyzeUsageBucket(), buildApiKeyContextRows(), buildApiKeyRows(), buildApiKeyTrendSeries(), buildCredentialQuotaRows(), buildCredentialRows(), buildDrilldownPreview() (+109 more)
 
 ### Community 2 - "authFiles/AuthFilesPage.tsx"
-Cohesion: 0.02
-Nodes (179): usePageTransitionLayer(), CLAUDE_CONFIG, CODEX_CONFIG, TestQuotaState, XAI_CONFIG, AuthFilesPage(), CodexInspectionSnapshotSource, getQuotaCooldownContextKey() (+171 more)
+Cohesion: 0.05
+Nodes (95): XAI_CONFIG, AuthFilesPage(), CodexInspectionSnapshotSource, getQuotaCooldownContextKey(), isStaleCodexReauthSnapshot(), QuotaCooldownState, readCodexInspectionRunAtMs(), toAuthFileCodexInspectionSnapshots() (+87 more)
 
 ### Community 3 - "aiProviders/AiProvidersCodexEditPage.tsx"
 Cohesion: 0.04
-Nodes (150): areCloakConfigsEqual(), buildClaudeBaseline(), buildEmptyForm(), ClaudeEditDrawer(), ClaudeEditDrawerProps, ClaudeFormBaseline, getErrorMessage(), hasHeader() (+142 more)
+Nodes (166): SecondaryScreenShell, SecondaryScreenShellProps, OpenAIKeyTestStatusIndicator(), areCloakConfigsEqual(), buildClaudeBaseline(), buildEmptyForm(), ClaudeEditDrawer(), ClaudeEditDrawerProps (+158 more)
 
 ### Community 4 - "usage-analytics/UsageAnalyticsPage.tsx"
 Cohesion: 0.05
-Nodes (92): buildOptionValues(), computeRowAverageCostPerCall(), DEFAULT_SELECTED_METRICS, formatHeatmapMetricValue(), formatLocalDateTime(), formatMetricValue(), hasUsageData(), maskApiKeyHash() (+84 more)
+Nodes (90): anomalyMetricLabelKey(), buildOptionValues(), computeRowAverageCostPerCall(), DEFAULT_SELECTED_METRICS, formatHeatmapMetricValue(), formatLocalDateTime(), hasUsageData(), maskApiKeyHash() (+82 more)
 
 ### Community 5 - "cpaauthfiles/client.go"
-Cohesion: 0.17
-Nodes (21): authFilesEndpoint(), decodeValueAfterToken(), disabledField(), filesFromJSON(), Find(), FromMap(), Decoder, Duration (+13 more)
+Cohesion: 0.06
+Nodes (70): ManagerConfig, managerConfigFromSetup(), FetchManagementConfig(), FetchUsageConfig(), NormalizeBaseURL(), readBoolField(), readIntField(), readStringField() (+62 more)
 
 ### Community 6 - "icons.tsx"
 Cohesion: 0.03
-Nodes (135): AppLifecycle(), AppBackground(), ConfirmationModal(), NotificationContainer(), OrphanAliasConflict, VisualConfigEditor(), headerIconProps, headerIcons (+127 more)
+Nodes (84): SplashScreenProps, getValidationMessage(), VisualConfigEditor(), headerIconProps, headerIcons, MainLayoutProps, NavItem, sidebarIcons (+76 more)
 
 ### Community 7 - "grokInspection.ts"
-Cohesion: 0.09
-Nodes (51): GrokInspectionAccount, GrokInspectionQuotaWindow, GrokInspectionStoredActionFilter, GrokInspectionStoredLogEntry, GrokInspectionSummary, resolveGrokInspectionSettings(), buildGrokQuotaWindows(), inspectSingleGrokAccount() (+43 more)
+Cohesion: 0.05
+Nodes (84): buildProgressSummary(), buildSummary(), createDeferred(), createGrokInspectionSession(), CreateGrokInspectionSessionOptions, createProgressSnapshot(), GrokInspectionAccount, GrokInspectionAction (+76 more)
 
 ### Community 8 - "quotaConfigs.ts"
 Cohesion: 0.05
-Nodes (59): ANTIGRAVITY_BUCKET_LABEL_KEYS, ANTIGRAVITY_GROUP_LABEL_KEYS, buildCodexQuotaAuthIdentity(), buildCodexQuotaFailureState(), buildCodexWindowTooltipRows(), clearQuotaFailureForObservedRecovery(), CODEX_INFO_WINDOW_IDS, CodexQuotaMergeState (+51 more)
+Nodes (71): ANTIGRAVITY_BUCKET_LABEL_KEYS, ANTIGRAVITY_GROUP_LABEL_KEYS, buildCodexQuotaAuthIdentity(), buildCodexQuotaFailureState(), buildCodexWindowTooltipRows(), clearQuotaFailureForObservedRecovery(), CODEX_INFO_WINDOW_IDS, CodexQuotaMergeState (+63 more)
 
 ### Community 9 - "useMonitoringData.ts"
-Cohesion: 0.06
-Nodes (87): buildEventsPageKey(), buildMonitoringEventsScopeKey(), createEventsPageState(), EMPTY_MONITORING_ANALYTICS_EVENT_ROWS, mergeMonitoringApiKeyOptionRows(), mergeMonitoringEventsPageItems(), MonitoringEventsPageState, MonitoringPresentationSnapshot (+79 more)
+Cohesion: 0.07
+Nodes (76): buildEventsPageKey(), buildMonitoringEventsScopeKey(), createEventsPageState(), EMPTY_MONITORING_ANALYTICS_EVENT_ROWS, mergeMonitoringEventsPageItems(), MonitoringEventsPageState, MonitoringPresentationSnapshot, MonitoringPresentationSnapshotResolution (+68 more)
 
 ### Community 10 - "aiProviders/AiProvidersPage.tsx"
-Cohesion: 0.04
-Nodes (105): FieldRowProps, ProviderDetailDrawer(), ProviderDetailDrawerProps, emptyUsageByProvider, COLOR_STOPS, formatSuccessRate(), formatTime(), ProviderStatusBar() (+97 more)
+Cohesion: 0.03
+Nodes (123): FieldRowProps, ProviderDetailDrawer(), ProviderDetailDrawerProps, buildKeyProviderItem(), buildOpenAIProviderItems(), buildProviderHealthCheckItems(), ensureNonEmptyModels(), getConfiguredModelNames() (+115 more)
 
 ### Community 11 - "Button.tsx"
-Cohesion: 0.06
-Nodes (41): Button(), ButtonProps, ButtonSize, ButtonVariant, IconSearch(), IconSlidersHorizontal(), Input(), InputProps (+33 more)
+Cohesion: 0.05
+Nodes (51): OrphanAliasConflict, clampPos(), computeUnifiedDiff(), DiffModal(), DiffModalProps, DiffResult, Hunk, UnifiedLine (+43 more)
 
 ### Community 12 - "monitoring/ModelPricesPage.tsx"
 Cohesion: 0.12
-Nodes (31): applyCandidatePrice(), buildCandidateMap(), buildModelPriceRows(), buildModelPriceSummary(), buildPriceFromDraft(), buildSyncPriceModelsFromSummary(), createConfiguredDraftValue(), createEmptyPriceDraft() (+23 more)
+Nodes (32): IconPencil(), applyCandidatePrice(), buildCandidateMap(), buildModelPriceRows(), buildModelPriceSummary(), buildPriceFromDraft(), buildSyncPriceModelsFromSummary(), createConfiguredDraftValue() (+24 more)
 
 ### Community 13 - "Open"
-Cohesion: 0.23
-Nodes (23): T, TestDisableOwnershipCRUD(), dataSourceName(), DB, Open(), OpenWithOptions(), assertTableCount(), DB (+15 more)
+Cohesion: 0.35
+Nodes (17): dataSourceName(), Open(), assertTableCount(), DB, T, migrationTableColumns(), TestCodexInspectionAutoRecoverySchema(), TestDashboardHourlyRollupFormatUpgradeRebuildsOnce() (+9 more)
 
 ### Community 14 - "usageService.ts"
-Cohesion: 0.03
-Nodes (77): AccountPolicyCapabilityKey, AccountPolicyGroupKey, AccountPolicyViewGroup, AccountPolicyViewItem, AccountPolicyViewOptions, buildItem(), capabilityKeys, capabilityMetadata (+69 more)
+Cohesion: 0.02
+Nodes (98): AccountPolicyCapabilityKey, AccountPolicyGroupKey, AccountPolicyViewGroup, AccountPolicyViewItem, AccountPolicyViewOptions, buildItem(), capabilityKeys, capabilityMetadata (+90 more)
 
 ### Community 15 - "AnalyticsFilter"
-Cohesion: 0.06
-Nodes (44): addAccountCondition(), addProviderCondition(), analyticsConstantOffsetMS(), analyticsWhere(), credentialBucketMapSQL(), Location, ModelStat, NullFloat64 (+36 more)
+Cohesion: 0.08
+Nodes (45): addAccountCondition(), addProviderCondition(), analyticsConstantOffsetMS(), analyticsWhere(), credentialBucketMapSQL(), Location, ModelStat, NullFloat64 (+37 more)
 
 ### Community 16 - "dashboard/service.go"
 Cohesion: 0.08
-Nodes (67): aggregateModelStats(), BenchmarkDashboardMonitoringRefreshPaths(), BenchmarkDashboardTodayMetrics(), B, insertDashboardBenchmarkEvents(), insertDashboardRecentBenchmarkEvents(), buildChannelHealth(), buildFailureSources() (+59 more)
+Nodes (68): aggregateModelStats(), BenchmarkDashboardMonitoringRefreshPaths(), BenchmarkDashboardTodayMetrics(), B, insertDashboardBenchmarkEvents(), insertDashboardRecentBenchmarkEvents(), buildChannelHealth(), buildFailureSources() (+60 more)
 
 ### Community 17 - "stores/index.ts"
-Cohesion: 0.05
-Nodes (70): QuotaCard(), QuotaCardProps, QuotaProgressBar(), QuotaProgressBarProps, QuotaRenderHelpers, QuotaStatus, QuotaStatusState, resolveQuotaErrorMessage() (+62 more)
+Cohesion: 0.06
+Nodes (65): QuotaCard(), QuotaCardProps, QuotaProgressBar(), QuotaProgressBarProps, QuotaRenderHelpers, QuotaStatus, QuotaStatusState, resolveQuotaErrorMessage() (+57 more)
 
 ### Community 18 - "codexInspectionPresentation.ts"
-Cohesion: 0.05
-Nodes (56): buildAutoActionPreflightOutcome(), CodexInspectionAccount, CodexInspectionAutoActionPlan, CodexInspectionConfigurableSettings, CodexInspectionExecutionAction, CodexInspectionExecutionStatus, CodexInspectionLastRunState, CodexInspectionLogDetail (+48 more)
+Cohesion: 0.06
+Nodes (68): applyCodexInspectionExecutionResult(), buildCodexInspectionError(), buildExecutionFailureMessage(), CodexInspectionAction, CodexInspectionAutoActionMode, CodexInspectionConfigurableSettings, CodexInspectionExecutionAction, CodexInspectionExecutionOutcome (+60 more)
 
 ### Community 19 - "authFiles/AuthFilesOAuthModelAliasEditPage.tsx"
-Cohesion: 0.20
-Nodes (19): useAuthFilesOauth(), UseAuthFilesOauthOptions, ViewMode, applyOAuthAliasWritePlans(), createSerialAsyncQueue(), findChannelMappings(), formatOAuthAliasPreview(), getHttpStatusCode() (+11 more)
+Cohesion: 0.05
+Nodes (55): EmptyState(), EmptyStateProps, AuthFileModelItem, AuthFilesOAuthModelAliasEditPage(), buildEmptyMappingEntry(), LocationState, normalizeMappingEntries(), normalizeProviderKey() (+47 more)
 
 ### Community 20 - "response_headers.go"
-Cohesion: 0.09
-Nodes (52): attachProviderUsageMetadata(), AttachResponseHeaderMetadata(), boolPointer(), classifyHeaderError(), cloneResponseHeaderMetadata(), DeriveResponseHeaderMetadata(), firstNonEmptyString(), ProviderUsageMetadata (+44 more)
+Cohesion: 0.07
+Nodes (64): applyQuotaWindowSemantics(), attachProviderUsageMetadata(), AttachResponseHeaderMetadata(), boolPointer(), classifyHeaderError(), cloneResponseHeaderMetadata(), DeriveResponseHeaderMetadata(), firstNonEmptyString() (+56 more)
 
 ### Community 21 - "AuthFileCard.tsx"
-Cohesion: 0.16
-Nodes (14): createProviderRecentRequestsCache(), createProviderRecentRequestsCacheController(), EMPTY_USAGE_BY_PROVIDER, fetchProviderRecentRequests(), normalizeApiKeyUsageResponse(), normalizeProviderKey(), ProviderRecentRequests, ProviderRecentRequestsCache (+6 more)
+Cohesion: 0.05
+Nodes (61): createProviderRecentRequestsCache(), createProviderRecentRequestsCacheController(), EMPTY_USAGE_BY_PROVIDER, fetchProviderRecentRequests(), normalizeApiKeyUsageResponse(), normalizeProviderKey(), ProviderRecentRequests, ProviderRecentRequestsCache (+53 more)
 
 ### Community 22 - "sessionAuthConverter.ts"
 Cohesion: 0.08
 Nodes (67): appendJsonFileNameSuffix(), assertTraversalDepth(), AUTH_FILE_FINGERPRINT_IGNORED_KEYS, AuthJsonConversionError, AuthJsonConversionResult, AuthJsonFilePayload, buildAggregatedSessionObject(), buildAuthFileFingerprint() (+59 more)
 
 ### Community 23 - "codexInspection.ts"
-Cohesion: 0.12
-Nodes (48): CodexInspectionStoredActionFilter, resolveCodexInspectionSettings(), readAuthFileName(), readDisplayAccount(), toInspectionAccount(), clampPositiveInteger(), CODEX_INSPECTION_AUTO_ACTION_MODES, CODEX_INSPECTION_TARGET_TYPES (+40 more)
+Cohesion: 0.15
+Nodes (38): CodexInspectionLastRunState, CodexInspectionStoredActionFilter, resolveCodexInspectionSettings(), clampPositiveInteger(), CODEX_INSPECTION_AUTO_ACTION_MODES, CODEX_INSPECTION_TARGET_TYPES, CodexInspectionConfigurableSettingsInput, CodexInspectionTargetType (+30 more)
 
 ### Community 24 - "monitoring/ServerCodexInspectionPage.tsx"
-Cohesion: 0.07
-Nodes (51): CodexInspectionLogsPanel(), CodexInspectionLogsPanelProps, levelClassMap, logs, Panel(), PanelProps, formatTimestamp(), getCanonicalServerCodexInspectionActionIds() (+43 more)
+Cohesion: 0.10
+Nodes (44): CodexInspectionModeTabs(), formatActionLabel(), formatServerCodexInspectionLogDetail(), getCanonicalServerCodexInspectionActionIds(), getMixedServerCodexInspectionActionIds(), isActionableServerCodexInspectionResult(), isPendingServerReauthResult(), isServerCodexInspectionAction() (+36 more)
 
 ### Community 25 - "install-cpamp.sh"
 Cohesion: 0.08
 Nodes (60): backup_generated_config(), check_port(), check_requirements(), choose_language(), choose_new_project_name(), collect_choices(), collect_install_directory(), command_exists() (+52 more)
 
 ### Community 26 - "codexinspection/service.go"
-Cohesion: 0.05
-Nodes (98): NormalizeCodexInspectionActionStatus(), NormalizeCodexInspectionAutoActionMode(), addAdditionalRateLimitWindows(), addCodexRateLimitWindows(), addCodexWindowInfo(), allowAutoAction(), applyActionOutcomes(), applyManualActionOverrides() (+90 more)
+Cohesion: 0.07
+Nodes (74): addAdditionalRateLimitWindows(), addCodexRateLimitWindows(), addCodexWindowInfo(), buildCodexInspectionQuotaWindows(), classifyWindows(), codexPlanTypeForTeam(), codexRateLimitWindows(), copyCodexLabelParams() (+66 more)
 
 ### Community 27 - "usagerollup/repository.go"
 Cohesion: 0.10
-Nodes (31): aggregateDashboardHourly(), dashboardEventsAfterCheckpoint(), NullInt64, Tx, repository, upsertDashboardHourlyRows(), accountGroupKey(), AccountKey() (+23 more)
+Nodes (30): aggregateDashboardHourly(), dashboardEventsAfterCheckpoint(), NullInt64, Tx, repository, upsertDashboardHourlyRows(), accountGroupKey(), AccountKey() (+22 more)
 
 ### Community 28 - "usage.ts"
 Cohesion: 0.08
-Nodes (56): HealthAlertsCard(), CACHE_CREATION_TOKEN_KEYS, CACHE_READ_TOKEN_KEYS, CacheHitMetricsInput, CacheInputContext, CacheInputMode, calculateCacheHitRate(), calculateCacheHitRateFromTotals() (+48 more)
+Nodes (57): CACHE_CREATION_TOKEN_KEYS, CACHE_READ_TOKEN_KEYS, CacheHitMetricsInput, CacheInputContext, CacheInputMode, calculateCacheHitRate(), calculateCacheHitRateFromTotals(), calculateCost() (+49 more)
 
 ### Community 29 - "Setup"
-Cohesion: 0.15
-Nodes (13): boolPointer(), Client, Service, CodexInspectionLog, CodexInspectionRun, ManagerCodexInspectionConfig, Mutex, logPreflightActionOutcomes() (+5 more)
+Cohesion: 0.10
+Nodes (32): NormalizeCodexInspectionActionStatus(), NormalizeCodexInspectionAutoActionMode(), allowAutoAction(), applyActionOutcomes(), applyManualActionOverrides(), buildExecutableFileActionGroups(), collectActionOutcomes(), countFailedOutcomes() (+24 more)
 
 ### Community 30 - "monitoring/service.go"
-Cohesion: 0.13
-Nodes (27): accountGroupKey(), addAccountTotals(), addSetValue(), apiKeyGroupKey(), buildAccountSelectorStats(), buildAccountStats(), buildAPIKeyStats(), buildCredentialStats() (+19 more)
+Cohesion: 0.08
+Nodes (49): accountGroupKey(), addAccountModelStat(), addAccountTotals(), addAPIKeyContextStat(), addSetValue(), aggregateModelStats(), apiKeyContextKey(), apiKeyGroupKey() (+41 more)
 
 ### Community 31 - "AccountOverviewCard.tsx"
-Cohesion: 0.06
-Nodes (63): IconChevronRight(), IconChevronUp(), IconCrosshair(), AccountSortKey, AccountSortState, MonitoringAccountAuthState, MonitoringAccountOverviewMode, AccountExpandedDetails() (+55 more)
+Cohesion: 0.08
+Nodes (50): IconCrosshair(), ACCOUNT_OVERVIEW_CARD_METRIC_KEY_SET, ACCOUNT_OVERVIEW_CARD_METRIC_ORDER_MAP, sortAccountOverviewCardMetrics(), ACCOUNT_OVERVIEW_CARD_METRIC_KEYS, AccountSortKey, AccountSortState, MonitoringAccountAuthState (+42 more)
 
 ### Community 32 - "monitoring/GrokInspectionPage.tsx"
-Cohesion: 0.05
-Nodes (84): CodexInspectionProgressSnapshot, CodexInspectionStatusPanel(), CodexInspectionStatusPanelProps, GrokInspectionConfigFields(), GrokInspectionConfigFieldsProps, applyGrokInspectionExecutionResult(), buildExecutionFailureMessage(), buildGrokInspectionError() (+76 more)
+Cohesion: 0.09
+Nodes (49): GrokInspectionConfigFields(), GrokInspectionConfigFieldsProps, applyGrokInspectionExecutionResult(), buildExecutionFailureMessage(), buildGrokInspectionError(), createGrokInspectionConnectionFingerprint(), GrokInspectionAutoActionMode, GrokInspectionConfigurableSettings (+41 more)
 
 ### Community 33 - "usageHeaderSnapshots.ts"
-Cohesion: 0.09
-Nodes (62): buildObservedCodexQuotaState(), findCodexFiveHourQuotaWindow(), findCodexMonthlyQuotaWindow(), findCodexQuotaWindow(), findCodexWeeklyQuotaWindow(), formatObservedRecoverLabel(), getAuthFileCodexStatus(), getAuthFileCodexStatusSearchValues() (+54 more)
+Cohesion: 0.12
+Nodes (48): buildObservedCodexQuotaState(), getAuthFileCodexStatusSearchValues(), getAuthFilePlanType(), getAuthFileSearchValues(), buildObservedCodexAccountQuotaEntry(), buildObservedHeaderEvidence(), formatObservedHeaderRecoverAt(), UsageHeaderSnapshot (+40 more)
 
 ### Community 34 - "quota.ts"
 Cohesion: 0.06
@@ -596,123 +575,123 @@ Nodes (57): AntigravityModelsPayload, AntigravityQuotaBucket, AntigravityQuotaGr
 
 ### Community 35 - "modelprice/service.go"
 Cohesion: 0.08
-Nodes (50): canonicalModelID(), canonicalModelTail(), containsToken(), defaultSyncHTTPClient(), fetchLiteLLMModelPrices(), fetchOpenRouterModelPrices(), findAutomaticModelPrice(), findCandidateModelPrices() (+42 more)
+Nodes (49): canonicalModelID(), canonicalModelTail(), containsToken(), defaultSyncHTTPClient(), fetchLiteLLMModelPrices(), fetchOpenRouterModelPrices(), findAutomaticModelPrice(), findCandidateModelPrices() (+41 more)
 
 ### Community 36 - "monitoringCenterPageModel.ts"
-Cohesion: 0.06
-Nodes (39): MonitoringAccountQuotaTarget, AccountOverviewColumn, buildAccountQuotaErrorEntry(), buildAccountQuotaRefreshFailureEntry(), buildApiKeyOptions(), buildBaseAccountQuotaEntry(), buildChannelOptions(), buildClaudeAccountQuotaWindows() (+31 more)
+Cohesion: 0.05
+Nodes (81): MonitoringAccountQuotaTarget, buildMonitoringAccountAuthStateMap(), buildMonitoringAccountStatusDataMap(), normalizeAccountOverviewPageSize(), readAccountOverviewUiState(), resolveMonitoringStatusRangeBounds(), shouldClampAccountOverviewPage(), shouldResetAccountOverviewPage() (+73 more)
 
 ### Community 37 - "MainRoutes.tsx"
 Cohesion: 0.04
 Nodes (49): 100k Monitoring include-profile 测试, 100k Overview 三次测试, 100k 当前 main 三次复测, 100k 当前 main 三次复测, 100k 核心路径三次测试, 100k 核心路径当前 main 三次复测, 100k 测试结果, 100k 测试结果 (+41 more)
 
 ### Community 38 - "OpenAIEditDrawer.tsx"
-Cohesion: 0.06
-Nodes (64): SecondaryScreenShell, SecondaryScreenShellProps, OpenAIKeyTestStatusIndicator(), buildKeyProviderItem(), buildOpenAIProviderItems(), buildProviderHealthCheckItems(), ensureNonEmptyModels(), getConfiguredModelNames() (+56 more)
+Cohesion: 0.62
+Nodes (5): ApiKeyTestStatus, appendIdleKeyTestStatus(), buildIdleStatus(), normalizeStatusList(), removeKeyTestStatusAtIndex()
 
 ### Community 39 - "login/LoginPage.tsx"
-Cohesion: 0.15
-Nodes (15): mocks, LanguageState, Language, API_ENDPOINTS, LANGUAGE_LABEL_KEYS, LANGUAGE_ORDER, OAUTH_CARD_IDS, OAUTH_PROVIDERS (+7 more)
+Cohesion: 0.24
+Nodes (10): mocks, LanguageState, Language, SUPPORTED_LANGUAGES, getBrowserLanguage(), getInitialLanguage(), getStoredLanguage(), isSupportedLanguage() (+2 more)
 
 ### Community 40 - "sourceResolver.ts"
 Cohesion: 0.08
-Nodes (51): HealthAlertsCardProps, buildSearchText(), maskAuthIndex(), maskEmailLike(), buildEventRows(), calculateOutputTokensPerSecond(), buildRows(), toDurationMs() (+43 more)
+Nodes (57): HealthAlertsCardProps, ApiKeyDisplayInfo, buildApiKeyDisplayMap(), sanitizeApiKeyDisplayText(), buildSearchText(), formatApiKeyHashLabel(), maskAuthIndex(), maskEmailLike() (+49 more)
 
 ### Community 41 - "utils.ts"
-Cohesion: 0.06
-Nodes (53): DashboardDisplayMeta, baseProgress, ALL_SCOPE_FILTERS, EMPTY_API_KEY_ALIASES, EMPTY_MODEL_PRICES, Harness(), UsageImportOptions, UsagePayload (+45 more)
+Cohesion: 0.28
+Nodes (10): CONFIG_SECTION_KEYS, extractConfigSectionValue(), configApi, ConfigCache, ConfigState, AuthPoolCleanConfig, Config, ConfigCache (+2 more)
 
 ### Community 42 - "logs/LogsPage.tsx"
-Cohesion: 0.09
-Nodes (29): detectHttpStatusCode(), extractHttpMethodAndPath(), extractIp(), extractLatency(), extractLogLevel(), HTTP_METHOD_REGEX, HTTP_STATUS_PATTERNS, inferLogLevel() (+21 more)
+Cohesion: 0.07
+Nodes (49): detectHttpStatusCode(), extractHttpMethodAndPath(), extractIp(), extractLatency(), extractLogLevel(), HTTP_METHOD_REGEX, HTTP_STATUS_PATTERNS, inferLogLevel() (+41 more)
 
 ### Community 43 - "event.go"
-Cohesion: 0.09
-Nodes (54): correctedDerivedTotal(), stageCacheAccountingRow(), buildEventHash(), cacheInputModeFromRecord(), classifyExecutorCacheInputMode(), classifyModelCacheInputMode(), classifyProviderCacheInputMode(), compactJSON() (+46 more)
+Cohesion: 0.10
+Nodes (49): buildEventHash(), cacheInputModeFromRecord(), classifyExecutorCacheInputMode(), classifyModelCacheInputMode(), classifyProviderCacheInputMode(), compactJSON(), EffectiveServiceTier(), explicitPositiveTotalFromRecord() (+41 more)
 
 ### Community 44 - "providerRequests.ts"
-Cohesion: 0.04
-Nodes (86): candidate(), AntigravityQuotaGroupDefinition, ClaudeUsagePayload, TypeColorSet, XaiBillingSummary, ANTIGRAVITY_AVAILABLE_MODELS_URLS, ANTIGRAVITY_CLIENT_PLATFORM, ANTIGRAVITY_QUOTA_GROUPS (+78 more)
+Cohesion: 0.07
+Nodes (58): parseAntigravityPayload(), parseXaiBillingPayload(), antigravitySubscriptionRequests, areEquivalentClaudeScopedWindows(), buildClaudeBaseLimitFallbacks(), buildClaudeQuotaWindows(), buildClaudeScopedWeeklyWindows(), buildXaiRequestHeaders() (+50 more)
 
 ### Community 45 - "codexinspection/service_test.go"
-Cohesion: 0.12
-Nodes (70): assertMixedNeedsReviewRun(), boolToInt(), CodexInspectionLog, ManagerConfig, Service, T, Time, mustParseTime() (+62 more)
+Cohesion: 0.11
+Nodes (65): New(), assertMixedNeedsReviewRun(), boolToInt(), ManagerConfig, Service, T, Time, mustParseTime() (+57 more)
 
 ### Community 46 - "useNotificationStore"
-Cohesion: 0.11
-Nodes (27): buildXaiCallbackUrl(), BUILT_IN_PROVIDER_IDS, BUILT_IN_PROVIDERS, BuiltInProviderDefinition, CALLBACK_SUPPORTED, extractDisplayedXaiCode(), getAuthKey(), getErrorMessage() (+19 more)
+Cohesion: 0.09
+Nodes (33): buildXaiCallbackUrl(), BUILT_IN_PROVIDER_IDS, BUILT_IN_PROVIDERS, BuiltInProviderDefinition, CALLBACK_SUPPORTED, extractDisplayedXaiCode(), getAuthKey(), getErrorMessage() (+25 more)
 
 ### Community 47 - "demoFixtures.ts"
-Cohesion: 0.06
-Nodes (59): buildDemoCodexInspectionLogDetail(), buildDemoInspectionCompletionDetail(), buildDemoInspectionResults(), buildDemoServerInspectionLogs(), buildDemoXaiInspectionLogDetail(), buildMonitoringAnalytics(), buildNestedModelRow(), clone() (+51 more)
+Cohesion: 0.05
+Nodes (56): advanceDemoCredentialRefresh(), buildDemoInspectionResults(), buildMonitoringAnalytics(), buildNestedModelRow(), clone(), countDemoInspectionActions(), dashboardBase(), demoAccountCandidates (+48 more)
 
 ### Community 48 - "VisualConfigEditor.tsx"
 Cohesion: 0.06
-Nodes (36): ApiKeysCardEditor, ConfigSection, ConfigSectionProps, getValidationMessage(), ToggleRowProps, VisualConfigEditorProps, VisualSection, VisualSectionId (+28 more)
+Nodes (37): ApiKeysCardEditor, ConfigSection, ConfigSectionProps, ToggleRowProps, VisualConfigEditorProps, VisualSection, VisualSectionId, createPluginStoreAuthRule() (+29 more)
 
 ### Community 49 - "usePanelFeatureAvailability.ts"
-Cohesion: 0.13
-Nodes (21): ManagerConfigPanel(), ConfigEditorTab, ConfigPage(), isManagerAuthErrorCode(), LazyConfigSourceEditor, MANAGER_COLLECTOR_DEFAULT, ManagerBindingStatus, managerPositiveIntegerInputChanged() (+13 more)
+Cohesion: 0.03
+Nodes (99): AppLifecycle(), usePageTransitionLayer(), useProviderRecentRequests(), withDisableAllModelsRule(), withoutDisableAllModelsRule(), SegmentedTabItem, SegmentedTabs(), SegmentedTabsLinkProps (+91 more)
 
 ### Community 50 - "xai_probe.go"
-Cohesion: 0.09
-Nodes (55): countAccounts(), decodeCPAAPICallResponse(), firstValue(), normalizeBody(), parseRecord(), readFloat(), readMapSlice(), TestParseXAIBillingSummaryDoesNotCreateMonthlyWindowFromWeeklyZeroOnDemandData() (+47 more)
+Cohesion: 0.11
+Nodes (43): countAccounts(), decodeCPAAPICallResponse(), normalizeBody(), parseRecord(), readFloat(), TestResolveXAIBasicInspectionResultClassifiesNonBlockingPartialBilling(), truncate(), containsAny() (+35 more)
 
 ### Community 51 - "analyticsAdapters.ts"
-Cohesion: 0.07
-Nodes (53): ACCOUNT_FILTER_PREFIXES, addAuthIndexConstraint(), addFilterValueConstraint(), buildAccountFilterToken(), buildAccountRowsFromAnalytics(), buildAnalyticsEventKey(), buildAnalyticsFilters(), buildApiKeyRowsFromAnalytics() (+45 more)
+Cohesion: 0.08
+Nodes (47): ACCOUNT_FILTER_PREFIXES, addAuthIndexConstraint(), addFilterValueConstraint(), buildAccountFilterToken(), buildAccountRowsFromAnalytics(), buildAnalyticsEventKey(), buildAnalyticsFilters(), buildApiKeyRowsFromAnalytics() (+39 more)
 
 ### Community 52 - ".Analytics"
-Cohesion: 0.06
-Nodes (65): accountHistorySyncStatus(), accountHistoryTargetKey(), addAPIKeyContextStat(), addHeatmapContributor(), apiKeyContextKey(), buildAccountHistoryTotals(), buildAPIKeyTimeline(), buildCredentialTimeline() (+57 more)
+Cohesion: 0.07
+Nodes (67): analyticsHourlyRollupEligible(), anomalyScore(), anomalySeverity(), averageTokensPerRequest(), bucketSizeMS(), buildAnomalyPoints(), buildAPIKeyTimeline(), buildCredentialTimeline() (+59 more)
 
 ### Community 53 - "providers.ts"
-Cohesion: 0.07
-Nodes (64): API_KEY_ENTRY_FIELDS, apiKeyEntryIdentity(), AUTH_INDEX_FIELDS, buildPreservedList(), CLAUDE_KEY_FIELDS, CLOAK_FIELDS, cloneWithoutKnownFields(), CODEX_KEY_FIELDS (+56 more)
+Cohesion: 0.08
+Nodes (47): API_KEY_ENTRY_FIELDS, apiKeyEntryIdentity(), AUTH_INDEX_FIELDS, buildPreservedList(), CLAUDE_KEY_FIELDS, CLOAK_FIELDS, cloneWithoutKnownFields(), CODEX_KEY_FIELDS (+39 more)
 
 ### Community 54 - "New"
 Cohesion: 0.17
-Nodes (50): New(), newAnalyticsQueryGroup(), catchUpMonitoringHourlyRollup(), T, monitoringEvent(), newMonitoringTestStore(), TestAccountHistoryEmptyTargetDoesNotMatchAnonymousBucket(), TestAccountHistoryReturnsRollupTotalsAndCost() (+42 more)
+Nodes (48): New(), newAnalyticsQueryGroup(), catchUpMonitoringHourlyRollup(), T, monitoringEvent(), newMonitoringTestStore(), TestAccountHistoryEmptyTargetDoesNotMatchAnonymousBucket(), TestAccountHistoryReturnsRollupTotalsAndCost() (+40 more)
 
 ### Community 55 - "cost.go"
 Cohesion: 0.12
 Nodes (45): clampTokens(), configuredPriceValue(), costForLongContextModel(), CostForModel(), CostForModelCandidatesWithServiceTier(), CostForModelWithServiceTier(), costForPrice(), costForPriceWithServiceTier() (+37 more)
 
 ### Community 56 - "dashboard/DashboardPage.tsx"
-Cohesion: 0.09
-Nodes (36): IconBot(), CollectorStatusCard(), CollectorStatusCardProps, formatCount(), formatTimestamp(), VersionCardProps, DashboardPage(), ProviderStats (+28 more)
+Cohesion: 0.17
+Nodes (19): buildLegacyAuthIndexAliases(), buildLegacyConfigSeed(), isUsableSourceCandidate(), readAnyString(), readString(), RecordLike, rightRotate(), SHA256_K (+11 more)
 
 ### Community 57 - "Service"
-Cohesion: 0.10
+Cohesion: 0.11
 Nodes (29): boolPtr(), Config, Mutex, RWMutex, New(), overallSource(), Service, Status (+21 more)
 
 ### Community 58 - "authFiles/constants.ts"
-Cohesion: 0.11
-Nodes (30): IconRefreshCw(), AuthFilesPrefixProxyEditorModalProps, codexFile, createEditor(), renderModal(), applyAuthFileWebsockets(), readAuthFileWebsockets(), supportsAuthFileUsingApi() (+22 more)
+Cohesion: 0.12
+Nodes (29): codexFile, createEditor(), renderModal(), applyAuthFileWebsockets(), parsePriorityValue(), readAuthFileWebsockets(), supportsAuthFileUsingApi(), applyHeadersPatch() (+21 more)
 
 ### Community 59 - "datamigration/repository_test.go"
-Cohesion: 0.35
-Nodes (24): New(), assertAccounting(), assertCheckpoint(), assertCount(), assertIdentityAggregateVersion(), assertNormalizedTotalNull(), assertPermanentAggregateState(), DB (+16 more)
+Cohesion: 0.40
+Nodes (21): New(), assertAccounting(), assertCheckpoint(), assertCount(), assertNormalizedTotalNull(), DB, T, insertAccountingEvent() (+13 more)
 
 ### Community 60 - "reader.go"
-Cohesion: 0.14
-Nodes (23): addAnalyticsTimelinePoint(), addModelStat(), analyticsTimelineFromRows(), ceilHourMS(), coreFromRows(), dashboardTimelineFromRows(), floorHourMS(), Location (+15 more)
+Cohesion: 0.07
+Nodes (45): Dial(), encodeCommand(), Conn, Duration, Time, URL, parseURL(), addAnalyticsTimelinePoint() (+37 more)
 
 ### Community 61 - "accountOverviewState.ts"
-Cohesion: 0.05
-Nodes (80): ACCOUNT_DISPLAY_MODE_SET, ACCOUNT_OVERVIEW_CARD_PAGE_SIZE_OPTIONS, ACCOUNT_OVERVIEW_TABLE_PAGE_SIZE_OPTIONS, ACCOUNT_SORT_DIRECTION_SET, ACCOUNT_SORT_KEY_SET, ACCOUNT_SORT_KEYS, AccountOverviewPageResetState, AccountSortDirection (+72 more)
+Cohesion: 0.08
+Nodes (39): ACCOUNT_DISPLAY_MODE_SET, ACCOUNT_OVERVIEW_CARD_PAGE_SIZE_OPTIONS, ACCOUNT_OVERVIEW_TABLE_PAGE_SIZE_OPTIONS, ACCOUNT_SORT_DIRECTION_SET, ACCOUNT_SORT_KEY_SET, ACCOUNT_SORT_KEYS, AccountOverviewPageResetState, AccountSortDirection (+31 more)
 
 ### Community 62 - "RuntimeConfig"
-Cohesion: 0.08
-Nodes (29): classifyUsageControlPayload(), collectorMode(), CancelFunc, Client, Duration, Mutex, insertedEvents(), needsAccountSnapshotEnrichment() (+21 more)
+Cohesion: 0.07
+Nodes (30): classifyUsageControlPayload(), collectorMode(), CancelFunc, Client, Duration, Mutex, insertedEvents(), needsAccountSnapshotEnrichment() (+22 more)
 
 ### Community 63 - "client.ts"
-Cohesion: 0.08
-Nodes (19): isDemoMode(), VersionPayload, ApiClient, oauthApi, OAuthCallbackResponse, OAuthStartResponse, { mocks }, WEBUI_SUPPORTED (+11 more)
+Cohesion: 0.07
+Nodes (33): createAxiosResponse(), DemoMethod, handleDemoApiRequest(), handleDemoFormRequest(), handleDemoRawRequest(), isCredentialRefreshPatch(), normalizeDemoUrl(), ok (+25 more)
 
 ### Community 64 - "RealtimeEventsPanel.tsx"
-Cohesion: 0.09
-Nodes (36): IconFilter(), AccountDisplayMode, buildHeaderDiagnosticParts(), buildRealtimeApiKeyDisplay(), buildRealtimeTokenSummary(), buildRequestDiagnosticDetails(), buildRequestDiagnosticMetaText(), clampNumber() (+28 more)
+Cohesion: 0.08
+Nodes (42): IconFilter(), HealthAlertsCard(), AccountDisplayMode, buildHeaderDiagnosticParts(), buildRealtimeApiKeyDisplay(), buildRealtimeTokenSummary(), buildRequestDiagnosticDetails(), buildRequestDiagnosticMetaText() (+34 more)
 
 ### Community 65 - "MonitoringStatusHeader.tsx"
 Cohesion: 0.40
@@ -723,48 +702,48 @@ Cohesion: 0.10
 Nodes (40): boolPtr(), CodexInspectionScheduleDue(), CodexInspectionTriggerKey(), DefaultCodexInspectionConfig(), Location, Time, IsCodexInspectionTargetType(), MarshalCodexInspectionQuotaWindows() (+32 more)
 
 ### Community 67 - "xaiErrors.ts"
-Cohesion: 0.09
-Nodes (32): billingError(), inferenceError(), normalizeXaiBoolean(), requestXaiOfficialApiHealth(), actionForDisable(), actionForHealthy(), asRecord(), classifyXaiProbe() (+24 more)
+Cohesion: 0.07
+Nodes (40): baseAccount, billingError(), healthySummary, inferenceError(), mockProbeXaiInference, mockProbeXaiQuota, officialApiSummary, rawAccount (+32 more)
 
 ### Community 68 - "usageAnalyticsPresentation.ts"
-Cohesion: 0.08
-Nodes (41): IconArrowDownToLine(), IconArrowUpFromLine(), IconBinary(), IconDatabaseZap(), summaryAccentClassMap, summaryIconMap, UsageSummarySection(), getUsageCacheTokens() (+33 more)
+Cohesion: 0.09
+Nodes (43): IconModelCluster(), summaryAccentClassMap, summaryIconMap, UsageSummarySection(), computeCacheHitRate(), computeRowCacheHitRate(), formatMetricValue(), getUsageCacheTokens() (+35 more)
 
 ### Community 69 - "NewConfig"
-Cohesion: 0.14
-Nodes (42): ManagerConfig, T, newCodexInspectionHTTPManagerConfig(), TestCodexInspectionManualActionsRoute(), TestCodexInspectionRoutesAreMounted(), TestCodexInspectionRunReturnsPreconditionFailedWhenNotConfigured(), compatEvent(), Config (+34 more)
+Cohesion: 0.23
+Nodes (24): compatEvent(), Config, T, newCompatHandler(), osWriteFile(), TestServerCompatCPAPanelKeyCannotUseManagerOnlyRoutes(), TestServerCompatDashboardSummary(), TestServerCompatHealthInfoAndPanel() (+16 more)
 
 ### Community 70 - "proxy/service.go"
-Cohesion: 0.15
-Nodes (22): ResponseWriter, URL, inspectAuthFileOwnershipMutation(), IsCPAPluginManagementPath(), IsCPAPluginResourcePath(), isJSONContentType(), isManagementPath(), isModelListPath() (+14 more)
+Cohesion: 0.07
+Nodes (52): ResponseWriter, ResponseWriter, ResponseWriter, Writer, Parse(), ResponseWriter, URL, inspectAuthFileOwnershipMutation() (+44 more)
 
 ### Community 71 - "useMonitoringAnalytics.ts"
-Cohesion: 0.06
-Nodes (46): UsageMetricsCardProps, getTodayStartMs(), useDashboardUsageSummary(), UseDashboardUsageSummaryReturn, buildInFlightRequestIdentityKey(), getBrowserTimeZone(), isFiniteTimestamp(), MonitoringAnalyticsRefreshOptions (+38 more)
+Cohesion: 0.10
+Nodes (30): getTodayStartMs(), useDashboardUsageSummary(), buildInFlightRequestIdentityKey(), getBrowserTimeZone(), isFiniteTimestamp(), MonitoringAnalyticsRefreshOptions, parseJson(), stableJson() (+22 more)
 
 ### Community 72 - "usageAnalyticsUiState.ts"
 Cohesion: 0.09
 Nodes (37): USAGE_ANALYTICS_TABS, UsageAnalyticsCacheStatus, UsageAnalyticsCustomRange, UsageAnalyticsFiltersState, UsageAnalyticsGranularity, UsageAnalyticsLatencyFilter, UsageAnalyticsStatus, UsageAnalyticsTab (+29 more)
 
 ### Community 73 - "useVisualConfig.ts"
-Cohesion: 0.10
-Nodes (46): arePluginStoreAuthRulesEqual(), areStringArraysEqual(), asRecord(), createInitialVisualConfigState(), deepClone(), deleteIfMapEmpty(), deleteLegacyApiKeysProvider(), docHas() (+38 more)
+Cohesion: 0.12
+Nodes (39): asRecord(), createInitialVisualConfigState(), deepClone(), deleteIfMapEmpty(), deleteLegacyApiKeysProvider(), docHas(), ensureMapInDoc(), extractApiKeyValue() (+31 more)
 
 ### Community 74 - "healthCheck.ts"
 Cohesion: 0.05
 Nodes (43): 100k Monitoring Include-Profile Results, 100k Results, 100k Results, 58,686-Event Real-Data Validation, Benchmark Interpretation, Cause, Cause, Cause (+35 more)
 
 ### Community 75 - "Event"
-Cohesion: 0.12
-Nodes (45): ResponseHeaderMetadataFromJSON(), codexQuotaWindowKindFromEvent(), codexUsageLimitResetTimeFromEvent(), codexUsageLimitResetTimeFromHeaders(), codexUsageLimitSignalFromHeaders(), decodeXAIProviderUsageEvidence(), explicitCodexResetTime(), explicitResetTime() (+37 more)
+Cohesion: 0.11
+Nodes (48): codexQuotaFullWindowResetAtMS(), codexQuotaHasFullWindow(), codexQuotaReachedResetAtMS(), codexUsageLimitResetTimeFromEvent(), codexUsageLimitResetTimeFromHeaders(), codexUsageLimitSignalFromHeaders(), decodeXAIProviderUsageEvidence(), explicitCodexResetTime() (+40 more)
 
 ### Community 76 - "types/index.ts"
-Cohesion: 0.10
-Nodes (17): AnimatedNotification, ConfirmationOptions, NotificationState, AppliedTheme, getSystemTheme(), resolveAutoTheme(), ResolvedTheme, resolveTheme() (+9 more)
+Cohesion: 0.07
+Nodes (24): App(), AppRouter(), appRoutes, createAppRoutes(), RootShell(), AppBackground(), ConfirmationModal(), AnimatedNotification (+16 more)
 
 ### Community 77 - "plugins/PluginsPage.tsx"
-Cohesion: 0.04
-Nodes (80): DropdownMenu(), DropdownMenuItem, DropdownMenuProps, EmptyState(), EmptyStateProps, IconMoreVertical(), IconPlugin(), IconPlus() (+72 more)
+Cohesion: 0.03
+Nodes (132): MainLayout(), DropdownMenu(), DropdownMenuItem, DropdownMenuProps, IconMoreVertical(), IconPlugin(), IconPlus(), PluginInstallGateModal() (+124 more)
 
 ### Community 78 - "config/ConfigPage.tsx"
 Cohesion: 0.05
@@ -779,52 +758,56 @@ Cohesion: 0.08
 Nodes (34): applyFieldsPatchToAuthRecord(), AuthFileBatchDeleteResponse, AuthFileBatchDeleteResult, AuthFileBatchFailure, AuthFileBatchUploadResponse, AuthFileBatchUploadResult, AuthFileEntry, AuthFileJsonValue (+26 more)
 
 ### Community 81 - "Repository"
-Cohesion: 0.16
-Nodes (15): MarshalCodexInspectionSettings(), CodexInspectionLog, CodexInspectionResult, CodexInspectionRun, DB, New(), nullFloat(), nullInt() (+7 more)
+Cohesion: 0.14
+Nodes (16): MarshalCodexInspectionSettings(), CodexInspectionLog, CodexInspectionResult, CodexInspectionRun, DB, New(), nullFloat(), nullInt() (+8 more)
+
+### Community 82 - "plugins/PluginStorePage.tsx"
+Cohesion: 0.09
+Nodes (23): IconCopy(), CodexInspectionConfigOverview(), CodexInspectionConfigOverviewProps, CodexInspectionStatusPanel(), CodexInspectionStatusPanelProps, clampNumber(), FailureDetailsTooltip(), FailureDetailsTooltipProps (+15 more)
 
 ### Community 83 - "config.go"
-Cohesion: 0.14
-Nodes (32): createDefaultFileConfig(), env(), envBool(), envInt(), envInt64(), executableConfigPath(), Duration, hasEnv() (+24 more)
+Cohesion: 0.20
+Nodes (22): createDefaultFileConfig(), env(), envBool(), envInt(), executableConfigPath(), Duration, hasEnv(), intFallback() (+14 more)
 
 ### Community 84 - "Request"
 Cohesion: 0.15
 Nodes (29): cloneInt64Pointer(), cloneProviderUsageMetadata(), containsProviderUsageCode(), Time, int64Pointer(), isNativeXAIExecutor(), IsNativeXAIProvider(), MergeProviderUsageMetadata() (+21 more)
 
 ### Community 85 - "MethodNotAllowed"
-Cohesion: 0.10
-Nodes (18): ResponseWriter, ResponseWriter, ResponseWriter, parseOptionalInt(), validateAccountHistoryRequest(), validateRequest(), ResponseWriter, Error() (+10 more)
+Cohesion: 0.04
+Nodes (50): Handler, Handler, ResponseWriter, ResponseWriter, ResponseWriter, Service, New(), codexInspectionErrorStatus() (+42 more)
 
 ### Community 86 - "import_test.go"
-Cohesion: 0.11
-Nodes (43): BuildPayload(), NormalizeRaw(), decodeJSON(), eventFromJSONRecord(), hasUsageAPIs(), looksLikeLegacyUsageSummary(), ParseImportPayload(), parseJSONArrayImport() (+35 more)
+Cohesion: 0.16
+Nodes (30): BuildPayload(), CompatibleCachedTokens(), NormalizeRaw(), ParseImportPayload(), T, TestBuildPayloadExposesResolvedModelOnDetails(), TestCompatibleCachedTokensDoesNotDoubleCountFineGrainedCache(), TestFailSummaryRedactionPreservesDiagnosticText() (+22 more)
 
 ### Community 87 - "codexInspectionProbe.ts"
-Cohesion: 0.24
-Nodes (14): buildMonitoringAccountQuotaTargetsByAccount(), isQuotaTargetable(), MonitoringAccountQuotaProvider, readAuthFileQuotaLabel(), resolveActiveQuotaProvidersForRow(), resolveMonitoringAccountQuotaProvider(), isAntigravityFile(), isClaudeFile() (+6 more)
+Cohesion: 0.09
+Nodes (40): candidate(), buildMonitoringAccountQuotaTargetsByAccount(), isQuotaTargetable(), MonitoringAccountQuotaProvider, readAuthFileQuotaLabel(), resolveActiveQuotaProvidersForRow(), resolveMonitoringAccountQuotaProvider(), CodexInspectionAccount (+32 more)
 
 ### Community 88 - "Repository"
-Cohesion: 0.10
+Cohesion: 0.12
 Nodes (13): DB, ManagerConfig, New(), bootstrapStatus(), ensureAdminCredential(), Config, migrateLegacyConfig(), projectInitialized() (+5 more)
 
 ### Community 90 - "codexInspectionExecution.ts"
-Cohesion: 0.11
-Nodes (31): CodexInspectionExecutionOutcome, CodexInspectionExecutionResult, buildActionValidationOutcome(), buildExecutionOutcomeLogDetail(), buildPreflightOutcome(), executeCodexInspectionActions(), ExecuteCodexInspectionActionsOptions, executeDelete() (+23 more)
+Cohesion: 0.08
+Nodes (40): appendUploadFileNameSuffix(), AuthFilePatchTargetGroup, AuthFilePreparationFailure, AuthFilesBatchPatchResult, buildPastedAuthJsonPayloads(), createUniqueConvertedAuthFiles(), DeleteAllOptions, findCredentialRefreshTarget() (+32 more)
 
 ### Community 91 - "plugins/PluginResourcePage.tsx"
 Cohesion: 0.27
 Nodes (10): buildPluginHostStyle(), buildVariableBlock(), collectHostVariables(), createPluginHostStyleBridge(), getOrCreateHead(), HOST_STYLE_FALLBACKS, PluginHostStyleBridge, PluginHostStyleOptions (+2 more)
 
 ### Community 92 - "runServer"
-Cohesion: 0.10
-Nodes (16): main(), newPprofServer(), runServer(), runUsageResponseMetadataBackfill(), T, TestNewPprofServer(), Handler, Service (+8 more)
+Cohesion: 0.36
+Nodes (4): Service, Time, NewCodexInspectionWorker(), CodexInspectionWorker
 
 ### Community 93 - "import.go"
-Cohesion: 0.24
-Nodes (38): buildLegacyStreamShape(), consumeJSONDelimiter(), duplicateLegacyStructuralKeyError(), ensureDecoderEOF(), ensureOnlyWhitespace(), eventsFromLegacyUsage(), expectJSONDelimiter(), Decoder (+30 more)
+Cohesion: 0.22
+Nodes (21): decodeJSON(), ensureDecoderEOF(), ensureOnlyWhitespace(), eventFromJSONRecord(), eventsFromLegacyUsage(), Decoder, hasUsageAPIs(), looksLikeLegacyUsageSummary() (+13 more)
 
 ### Community 94 - "account_action_candidate_test.go"
-Cohesion: 0.09
-Nodes (43): containsAny(), EvaluateFailure(), NormalizeProvider(), normalizeToken(), T, TestEvaluateFailure(), xaiCredentialPermissionDenied(), accountActionCandidateFromEvent() (+35 more)
+Cohesion: 0.14
+Nodes (26): accountActionCandidateFromEvent(), RWMutex, Time, NewAccountActionCandidateWorker(), T, TestAccountActionCandidateFromEventClassifiesXAIAuthenticationFailures(), TestAccountActionCandidateFromEventDeletesAccountDeactivatedHeader(), TestAccountActionCandidateFromEventHandlesDeactivatedWorkspace402() (+18 more)
 
 ### Community 95 - "quotaAutoDisableCandidateFromEvent"
 Cohesion: 0.16
@@ -832,19 +815,19 @@ Nodes (33): NewRateLimitAutoDisableWorker(), quotaAutoDisableCandidateFromEvent(
 
 ### Community 96 - "devDependencies"
 Cohesion: 0.07
-Nodes (27): devDependencies, eslint, eslint-plugin-react-hooks, eslint-plugin-react-refresh, prettier, @types/node, @types/react, @types/react-dom (+19 more)
+Nodes (27): devDependencies, eslint, @eslint/js, eslint-plugin-react-hooks, prettier, @types/node, @types/react, @types/react-dom (+19 more)
 
 ### Community 97 - "Modal.tsx"
 Cohesion: 0.11
 Nodes (12): Common Providers, Providers And Compatibility Reference, When Requests Fail, Admin Key, Collection Configuration, Configuration And Data Directory, CPA Management Key, Key Files (+4 more)
 
 ### Community 98 - "api/codexQuota.ts"
-Cohesion: 0.09
-Nodes (31): getCodexPlanLabel(), baseAccount, inspectionT, mockRequestCodexUsageRaw, settings, buildAntigravityAccountQuotaWindows(), buildXaiAccountQuotaWindows(), formatXaiCurrency() (+23 more)
+Cohesion: 0.12
+Nodes (28): getProbeFailureMessage(), getApiCallErrorMessage(), CodexUsageRawResult, CodexUsageRequestParams, consumeCodexRateLimitResetCredit(), createCodexRedeemRequestId(), requestCodexUsagePayload(), requestCodexUsageRaw() (+20 more)
 
 ### Community 99 - "compilerOptions"
 Cohesion: 0.07
-Nodes (27): compilerOptions, allowImportingTsExtensions, erasableSyntaxOnly, jsx, lib, module, moduleDetection, moduleResolution (+19 more)
+Nodes (26): compilerOptions, allowImportingTsExtensions, erasableSyntaxOnly, jsx, lib, module, moduleDetection, moduleResolution (+18 more)
 
 ### Community 100 - "cpa-manager-plusctl.sh"
 Cohesion: 0.16
@@ -852,39 +835,39 @@ Nodes (21): ensure_private_dir(), is_group_or_world_writable_mode(), is_managed_
 
 ### Community 101 - "NewStore"
 Cohesion: 0.14
-Nodes (22): T, TestHandleUsageSummaryUsesQueryLimitAndPanelAuthorization(), T, TestImportRejectsKnownOversizedContentLengthBeforeReading(), TestImportReturnsBadRequestWhenUncommittedArrayParsingFails(), TestImportReturnsInternalServerErrorForPersistenceFailure(), TestParseImportSessionPath(), T (+14 more)
+Nodes (24): T, TestHandleUsageSummaryUsesQueryLimitAndPanelAuthorization(), T, TestImportRejectsKnownOversizedContentLengthBeforeReading(), TestImportReturnsBadRequestWhenUncommittedArrayParsingFails(), TestImportReturnsInternalServerErrorForPersistenceFailure(), Handler, TestServerCompatAccountProcessingPolicyPatchRejectsEnvLockedField() (+16 more)
 
 ### Community 102 - "AutomationRuntime"
-Cohesion: 0.13
-Nodes (11): Service, NewAutomationRuntime(), T, TestAutomationRuntimeReloadUpdatesAutoDisable(), TestAutomationUsageHandlerGatesNewEvents(), accountAutomationWorker, AutomationRuntime, automationUsageHandler (+3 more)
+Cohesion: 0.18
+Nodes (10): Service, NewAutomationRuntime(), T, TestAutomationRuntimeReloadUpdatesAutoDisable(), TestAutomationUsageHandlerGatesNewEvents(), accountAutomationWorker, AutomationRuntime, automationUsageHandler (+2 more)
 
 ### Community 103 - "ModelMappingDiagram.tsx"
-Cohesion: 0.11
-Nodes (27): ModelMappingDiagram, ModelMappingDiagramProps, ModelMappingDiagramRef, PROVIDER_COLORS, AliasColumn(), AliasColumnProps, ProviderColumn(), ProviderColumnProps (+19 more)
+Cohesion: 0.10
+Nodes (27): hasCaseInsensitiveAliasConflict(), ModelMappingDiagram, ModelMappingDiagramProps, ModelMappingDiagramRef, PROVIDER_COLORS, AliasColumn(), AliasColumnProps, ProviderColumn() (+19 more)
 
 ### Community 104 - "aiProviders/AiProvidersClaudeEditLayout.tsx"
-Cohesion: 0.07
-Nodes (54): draftValue(), fieldType(), PluginConfigDraftState, PluginConfigDraftValue, Translate, buildGitHubReleasesPageURL(), fetchPluginReleaseVersions(), getGitHubRepositorySlug() (+46 more)
+Cohesion: 0.22
+Nodes (8): buildEmptyDraft(), buildEmptyForm(), ClaudeCloakBaseline, ClaudeEditBaseline, ClaudeEditDraft, ClaudeEditDraftState, ClaudeTestStatus, useClaudeEditDraftStore
 
 ### Community 105 - "ToggleSwitch.tsx"
-Cohesion: 0.21
-Nodes (11): ObfuscatedStorageService, decodeText(), deobfuscateData(), encodeText(), fromBase64(), getKeyBytes(), isObfuscated(), obfuscateData() (+3 more)
+Cohesion: 0.14
+Nodes (16): ObfuscatedStorageService, IMPORTANT: 这不是安全边界，仅用于避免“肉眼直读”的轻度混淆。, StorageOptions, readPersistedCodexQuota(), readPersistedQuotaScope(), StorageLike, decodeText(), deobfuscateData() (+8 more)
 
 ### Community 106 - "TrafficOverviewCard.tsx"
-Cohesion: 0.14
-Nodes (24): buildHealthTitle(), buildTrafficTrendOption(), formatHour(), formatMinuteLabel(), formatPercent(), HealthCellStyle, healthToneClassMap, tokenColorMap (+16 more)
+Cohesion: 0.15
+Nodes (23): buildHealthTitle(), buildTrafficTrendOption(), formatHour(), formatMinuteLabel(), formatPercent(), HealthCellStyle, healthToneClassMap, tokenColorMap (+15 more)
 
 ### Community 107 - "monitoringCenterUiState.ts"
-Cohesion: 0.16
-Nodes (21): AUTO_REFRESH_MS_SET, getDefaultMonitoringCenterUiState(), MONITORING_DATA_TABS, MonitoringCenterStatusFilter, MonitoringCenterTimeRange, MonitoringCenterUiState, normalizeMonitoringAutoRefreshMs(), normalizeMonitoringCenterUiState() (+13 more)
+Cohesion: 0.15
+Nodes (22): AUTO_REFRESH_MS_SET, getDefaultMonitoringCenterUiState(), MONITORING_DATA_TABS, MonitoringCenterStatusFilter, MonitoringCenterTimeRange, MonitoringCenterUiState, MonitoringDataTab, normalizeMonitoringAutoRefreshMs() (+14 more)
 
 ### Community 108 - "plugins.ts"
-Cohesion: 0.21
-Nodes (14): completeInTx(), equalNullableInt(), DB, NullInt64, Tx, readCacheAccountingBatch(), readState(), stateInTx() (+6 more)
+Cohesion: 0.18
+Nodes (19): completeInTx(), correctedDerivedTotal(), equalNullableInt(), DB, NullInt64, Tx, readCacheAccountingBatch(), readState() (+11 more)
 
 ### Community 109 - "normalizeNumberValue"
-Cohesion: 0.11
-Nodes (28): cloneImportSession(), CancelFunc, Mutex, ReadSeeker, minInt64(), newImportSessionError(), newImportSessionID(), openValidatedRegularFile() (+20 more)
+Cohesion: 0.24
+Nodes (13): CodexRateLimitResetCredit, CodexResetCreditsSummary, normalizeNumberValue(), normalizeStringValue(), buildXaiBillingSummary(), normalizeXaiCentValue(), normalizeXaiProductUsage(), resolveCodexRateLimitResetCreditsAvailableCount() (+5 more)
 
 ### Community 110 - "compilerOptions"
 Cohesion: 0.08
@@ -895,8 +878,8 @@ Cohesion: 0.08
 Nodes (25): compilerOptions, allowImportingTsExtensions, composite, declaration, declarationDir, emitDeclarationOnly, erasableSyntaxOnly, lib (+17 more)
 
 ### Community 112 - "Repository"
-Cohesion: 0.20
-Nodes (12): queryer, Repository, rowScanner, boolInt(), getByID(), AccountActionCandidate, DB, New() (+4 more)
+Cohesion: 0.17
+Nodes (14): queryer, Repository, rowScanner, boolInt(), getByID(), AccountActionCandidate, DB, New() (+6 more)
 
 ### Community 113 - "server_test.go"
 Cohesion: 0.21
@@ -904,23 +887,23 @@ Nodes (24): closeFloat(), Config, Handler, T, newTestHandler(), newTestHandlerWi
 
 ### Community 114 - "QuotaCooldown"
 Cohesion: 0.15
-Nodes (16): boolInt(), getByID(), DB, Rows, New(), normalizeEvidenceJSON(), nullString(), scanList() (+8 more)
+Nodes (17): boolInt(), getByID(), DB, Rows, New(), normalizeEvidenceJSON(), nullString(), scanList() (+9 more)
 
 ### Community 115 - "AccountHistoryRollupWorker"
-Cohesion: 0.11
-Nodes (11): Duration, NewAccountHistoryRollupWorker(), Duration, NewDashboardHourlyRollupWorker(), T, TestDashboardHourlyRollupWorkerCatchUp(), TestDashboardHourlyRollupWorkerContinuesPendingBacklog(), Duration (+3 more)
+Cohesion: 0.06
+Nodes (23): main(), newPprofServer(), runServer(), runUsageResponseMetadataBackfill(), T, TestNewPprofServer(), Handler, Duration (+15 more)
 
 ### Community 116 - "dependencies"
 Cohesion: 0.08
 Nodes (25): dependencies, axios, @codemirror/lang-yaml, @codemirror/merge, echarts, i18next, motion, react-dom (+17 more)
 
 ### Community 117 - "format.ts"
-Cohesion: 0.14
-Nodes (19): PanelHostMode, obfuscatedStorage, IMPORTANT: 这不是安全边界，仅用于避免“肉眼直读”的轻度混淆。, StorageOptions, AuthStoreState, RestoreSessionOptions, readPersistedCodexQuota(), readPersistedQuotaScope() (+11 more)
+Cohesion: 0.15
+Nodes (20): CollectorStatusCard(), CollectorStatusCardProps, formatCount(), formatTimestamp(), VersionCardProps, PanelHostMode, UsageServiceStatus, obfuscatedStorage (+12 more)
 
 ### Community 118 - "demo/DemoPage.tsx"
-Cohesion: 0.15
-Nodes (21): getDemoCodexInspectionLocalRun(), getDemoProviderModels(), getDemoRawConfig(), resetDemoCredentialRefresh(), setDemoMode(), AuthStoreState, captureAuthSnapshot(), captureConfigSnapshot() (+13 more)
+Cohesion: 0.10
+Nodes (35): getDemoAuthFiles(), getDemoCodexInspectionLocalLogs(), getDemoCodexInspectionLocalRun(), getDemoManagerConfig(), getDemoProviderModels(), getDemoRawConfig(), resetDemoCredentialRefresh(), ensureRouteBasePathname() (+27 more)
 
 ### Community 119 - "cpa-manager-plusctl.ps1"
 Cohesion: 0.20
@@ -931,8 +914,8 @@ Cohesion: 0.18
 Nodes (17): Rows, UsageEvent, repository, Writer, int64String(), normalizeUsageStreamLimit(), scanCompatibleDetail(), scanExportRow() (+9 more)
 
 ### Community 121 - "xaiPresentation.ts"
-Cohesion: 0.23
-Nodes (9): XaiBillingDiagnostic, XaiProbeClassification, formatXaiBillingDiagnostics(), formatXaiProbeIssue(), getXaiProbeIssueKey(), locales, XAI_PROBE_ISSUE_CLASSIFICATIONS, XaiProbeIssueClassification (+1 more)
+Cohesion: 0.12
+Nodes (23): CodexInspectionQuotaWindow, buildXaiQuotaWindows(), finitePercent(), formatXaiInspectionAction(), identityT, inspectSingleXaiAccount(), LogHandler, resolveXaiUsedPercent() (+15 more)
 
 ### Community 122 - "scripts"
 Cohesion: 0.08
@@ -943,12 +926,12 @@ Cohesion: 0.11
 Nodes (17): Config, HandlerFunc, ResponseWriter, T, TestWriteCORSAllowsPatch(), WithCORS(), WriteCORS(), Handler (+9 more)
 
 ### Community 124 - "visualConfigPayloadRules.ts"
-Cohesion: 0.16
-Nodes (26): getNextDirtyFields(), arePayloadFilterRulesEqual(), arePayloadHeaderEntriesEqual(), arePayloadModelEntriesEqual(), arePayloadParamEntriesEqual(), arePayloadRulesEqual(), areStringArraysEqual(), asRecord() (+18 more)
+Cohesion: 0.19
+Nodes (21): asRecord(), getPayloadParamValidationError(), hasPayloadParamValidationErrors(), parsePayloadConditions(), parsePayloadFilterRules(), parsePayloadHeaders(), parsePayloadModelEntries(), parsePayloadParamValue() (+13 more)
 
 ### Community 125 - "security.go"
-Cohesion: 0.20
-Nodes (16): deriveDataKey(), ExtractBearerToken(), GenerateAdminKey(), hashAdminKey(), LoadOrCreateDataKey(), NewAdminCredential(), parseStoredDataKey(), randomAlnum() (+8 more)
+Cohesion: 0.19
+Nodes (17): deriveDataKey(), GenerateAdminKey(), hashAdminKey(), LoadOrCreateDataKey(), NewAdminCredential(), parseStoredDataKey(), randomAlnum(), randomBytes() (+9 more)
 
 ### Community 126 - "Service"
 Cohesion: 0.23
@@ -971,11 +954,11 @@ Cohesion: 0.23
 Nodes (18): options, ensureManagerDB(), Writer, parseArgs(), resolveAdminKey(), resolveDBPath(), Run(), T (+10 more)
 
 ### Community 131 - "worker/account_action_candidate.go"
-Cohesion: 0.17
-Nodes (18): applyQuotaWindowSemantics(), float64Pointer(), nearlyEqualFloat(), newQuotaWindowSelection(), quotaWindowKind(), quotaWindowResetAtMS(), quotaWindowSelections(), selectQuotaReachedWindow() (+10 more)
+Cohesion: 0.11
+Nodes (26): ResponseHeaderMetadata, repository, mergeResponseMetadata(), responseMetadataJSONEqual(), containsAny(), EvaluateFailure(), NormalizeProvider(), normalizeToken() (+18 more)
 
 ### Community 132 - "APIKeyAlias"
-Cohesion: 0.16
+Cohesion: 0.20
 Nodes (10): Repository, SaveRequest, Service, DB, New(), normalizeAPIKeyAlias(), normalizeAPIKeyAliasUniqueKey(), validAPIKeyHash() (+2 more)
 
 ### Community 133 - "RateLimitAutoDisableWorker"
@@ -987,27 +970,27 @@ Cohesion: 0.09
 Nodes (22): CPA 面板仍显示旧面板, CPAMP 会上传数据吗？, CPAMP 轻量面板缺少监控或模型价格, Docker 重建后数据没了, Full Docker 打开的是登录页，不是 setup, HTTP 反向代理能代理 RESP 吗？, Manager Server 返回 401, `/models` 返回 412 (+14 more)
 
 ### Community 135 - "transformers.ts"
-Cohesion: 0.14
-Nodes (30): aggregateConditions(), appendFilterConditions(), batchBucketRange(), ceilHourMS(), eventIDsAfter(), floorHourMS(), DB, NullInt64 (+22 more)
+Cohesion: 0.37
+Nodes (16): isRecord(), normalizeApiKeyEntry(), normalizeAuthIndex(), normalizeBoolean(), normalizeConfigResponse(), normalizeExcludedModels(), normalizeGeminiKeyConfig(), normalizeHeaders() (+8 more)
 
 ### Community 136 - "utils/quota/index.ts"
-Cohesion: 0.10
-Nodes (40): classifyUnauthorizedReason(), CodexInspectionDecision, formatCodexInspectionAction(), identityT, inspectSingleAccount(), isDeactivatedWorkspaceResponse(), QUOTA_BODY_PATTERNS, resolveDeactivatedWorkspaceProbeAction() (+32 more)
+Cohesion: 0.15
+Nodes (25): resolveWindowAwareProbeAction(), CodexAdditionalRateLimit, CodexRateLimitInfo, CodexUsageWindow, addAdditionalRateLimitWindows(), addCodexRateLimitWindows(), addCodexWindowInfo(), buildCodexQuotaWindowInfos() (+17 more)
 
 ### Community 137 - "classify-pr-checks.mjs"
 Cohesion: 0.22
 Nodes (17): allChecks(), CHECK_NAMES, classifyChangedFiles(), findForbiddenUnicode(), FORBIDDEN_INVISIBLE_CODE_POINTS, normalizeChangedFiles(), normalizePath(), repoRoot (+9 more)
 
 ### Community 138 - "antigravitySubscription.ts"
-Cohesion: 0.09
-Nodes (33): antigravitySubscriptionApi, AntigravitySubscriptionCredit, AntigravitySubscriptionPlan, AntigravitySubscriptionSummary, AntigravitySubscriptionTier, CODE_ASSIST_REQUEST_BODY, isRecord(), normalizeCredits() (+25 more)
+Cohesion: 0.18
+Nodes (15): antigravitySubscriptionApi, AntigravitySubscriptionCredit, AntigravitySubscriptionPlan, AntigravitySubscriptionTier, CODE_ASSIST_REQUEST_BODY, isRecord(), normalizeCredits(), normalizeCreditValue() (+7 more)
 
 ### Community 139 - "quota/constants.ts"
-Cohesion: 0.17
-Nodes (29): newImportSessionManager(), CancelFunc, Once, Service, T, newBlockingChunkReader(), newImportSessionTestService(), requireImportSessionErrorCode() (+21 more)
+Cohesion: 0.12
+Nodes (16): AntigravityQuotaGroupDefinition, TypeColorSet, ANTIGRAVITY_AVAILABLE_MODELS_URLS, ANTIGRAVITY_CLIENT_PLATFORM, ANTIGRAVITY_QUOTA_GROUPS, ANTIGRAVITY_QUOTA_SUMMARY_URLS, ANTIGRAVITY_USER_AGENT, AntigravityUserAgentOptions (+8 more)
 
 ### Community 140 - "Aggregate"
-Cohesion: 0.15
+Cohesion: 0.19
 Nodes (8): NullFloat64, NullInt64, ResponseHeaderMetadata, TimelinePoint, repository, Aggregate, ModelStat, RecentFailure
 
 ### Community 141 - "VersionCard.tsx"
@@ -1035,8 +1018,8 @@ Cohesion: 0.24
 Nodes (10): firstNonEmpty(), firstSafeAccount(), Client, Mutex, Time, looksLikeSecret(), readAuthFileString(), toString() (+2 more)
 
 ### Community 147 - "NewManager"
-Cohesion: 0.24
-Nodes (20): newAuthSnapshotResolver(), Config, NewManager(), Config, T, newTestStore(), TestAuthSnapshotResolverStreamsAuthFiles(), testConfig() (+12 more)
+Cohesion: 0.38
+Nodes (14): newAuthSnapshotResolver(), Config, NewManager(), Config, T, newTestStore(), TestAuthSnapshotResolverStreamsAuthFiles(), testConfig() (+6 more)
 
 ### Community 148 - "resp/client_test.go"
 Cohesion: 0.39
@@ -1047,36 +1030,36 @@ Cohesion: 0.21
 Nodes (9): DataMigrationState, Duration, Once, NewUsageCacheAccountingMigrationWorker(), T, TestUsageCacheAccountingMigrationWorkerCompletesOnce(), TestUsageCacheAccountingMigrationWorkerRunsBatchesBeforeCompletion(), waitFor() (+1 more)
 
 ### Community 151 - "UsageAnalyticsPage.test.tsx"
-Cohesion: 0.15
-Nodes (11): EChartsView(), EChartsViewProps, USAGE_ANALYTICS_DEFAULT_FILTERS, UsageRankRow, createRankRow(), createTimelinePoint(), createUsageState(), findHostButtonByText() (+3 more)
+Cohesion: 0.17
+Nodes (10): EChartsView(), EChartsViewProps, USAGE_ANALYTICS_DEFAULT_FILTERS, UsageRankRow, createRankRow(), createTimelinePoint(), createUsageState(), findHostButtonByText() (+2 more)
 
 ### Community 152 - "OpenAIKeyTestStatusIndicator.tsx"
 Cohesion: 0.16
 Nodes (7): clampNumber(), OpenAIKeyTestStatus, OpenAIKeyTestStatusIndicatorProps, OpenAIKeyTestTooltipPosition, resolveOpenAIKeyTestTooltipPosition(), TooltipAnchorRect, TooltipPlacement
 
 ### Community 153 - "MonitoringCenterPage.test.tsx"
-Cohesion: 0.10
-Nodes (22): IconChartLine(), IconDollarSign(), formatMetric(), formatPercent(), MetricCardProps, MetricStyle, RankStyle, UsageMetricsCard() (+14 more)
+Cohesion: 0.07
+Nodes (28): IconArrowDownToLine(), IconArrowUpFromLine(), IconBinary(), IconChartLine(), IconDatabaseZap(), IconDollarSign(), formatMetric(), formatPercent() (+20 more)
 
 ### Community 154 - "MonitoringHealthStatusBar.tsx"
-Cohesion: 0.26
-Nodes (10): formatStatusRate(), MonitoringHealthStatusBar(), rateToStatusColor(), STATUS_BAR_COLOR_STOPS, buildMonitoringStatusBlockAriaLabel(), getNextMonitoringStatusBlockIndex(), StatusBlockAriaCopy, StatusBlockAriaLabelOptions (+2 more)
+Cohesion: 0.20
+Nodes (13): ProviderStatusBarProps, ProviderRowBase, formatStatusRate(), MonitoringHealthStatusBar(), rateToStatusColor(), STATUS_BAR_COLOR_STOPS, buildMonitoringStatusBlockAriaLabel(), getNextMonitoringStatusBlockIndex() (+5 more)
 
 ### Community 155 - "buildEvents"
-Cohesion: 0.15
-Nodes (28): adaptUsageAnalyticsData(), buildApiKeyContextRows(), buildApiKeyRows(), buildCredentialRows(), buildDrilldownPreview(), buildModelRows(), buildModelSpendRows(), buildServerAnomalyPoints() (+20 more)
+Cohesion: 0.12
+Nodes (15): accountHistorySyncStatus(), accountHistoryTargetKey(), buildAccountHistoryTotals(), AccountHistoryRollupRow, HeaderSnapshot, nullableMSPointer(), AccountHistoryCheckpointState, AccountHistoryItem (+7 more)
 
 ### Community 156 - "New"
 Cohesion: 0.26
 Nodes (8): isUnsupportedStatus(), New(), T, TestClientPopClassifiesUnsupportedEndpoint(), TestClientPopKeepsAuthErrorsDistinct(), TestClientPopReadsUsageQueue(), Client, StatusError
 
 ### Community 157 - ".InsertBatch"
-Cohesion: 0.15
-Nodes (14): ResponseHeaderMetadata, repository, mergeResponseMetadata(), responseMetadataJSONEqual(), DB, UsageEvent, Repository, nullFloat() (+6 more)
+Cohesion: 0.27
+Nodes (8): DB, UsageEvent, Repository, nullFloat(), nullInt(), nullPositiveInt64(), nullString(), responseHeaderDerivedForInsert()
 
 ### Community 158 - "Service"
-Cohesion: 0.11
-Nodes (10): Duration, Time, RWMutex, Writer, WithImportSessions(), ImportPersistenceError, ImportResult, ImportSessionConfig (+2 more)
+Cohesion: 0.14
+Nodes (13): RWMutex, Writer, New(), T, TestImportKeepsCompletedBatchesWhenReaderFails(), TestImportNotifiesAfterPartialSuccess(), TestImportNotifiesOnceAfterInsertedEvents(), TestImportStreamsBatchesIntoStore() (+5 more)
 
 ### Community 159 - "CPAMock"
 Cohesion: 0.27
@@ -1087,16 +1070,16 @@ Cohesion: 0.15
 Nodes (13): scripts, build, build:bundle, build:demo, build:demo:bundle, dev, dev:demo, format (+5 more)
 
 ### Community 161 - "CodexInspectionAutoActionEditor.tsx"
-Cohesion: 0.05
-Nodes (82): applyCodexInspectionExecutionResult(), buildCodexInspectionError(), CodexInspectionSession, createCodexInspectionConnectionFingerprint(), isCodexInspectionStoppedError(), isExecutableAction(), isReauthAction(), isSuggestedAction() (+74 more)
+Cohesion: 0.04
+Nodes (60): IconRefreshCw(), IconTrash2(), CodexInspectionStoredLogEntry, CodexInspectionAutoActionEditor(), CodexInspectionAutoActionEditorProps, normalizeAutoActionMode(), problemActionIcon, problemActionToneClass (+52 more)
 
 ### Community 162 - "pluginReleaseVersions.ts"
-Cohesion: 0.13
-Nodes (24): BenchmarkLatencyPercentilesWithFilter(), B, Location, T, rawLatencyPercentiles(), TestLatencyPercentilesApplyFiltersAndIgnoreMissingValues(), TestLatencyPercentilesMatchRawAcrossTimeZonesAndDST(), TestLatencyPercentilesUseNearestRankAcrossSummaryAndBuckets() (+16 more)
+Cohesion: 0.22
+Nodes (16): BenchmarkLatencyPercentilesWithFilter(), B, Location, T, rawLatencyPercentiles(), TestLatencyPercentilesApplyFiltersAndIgnoreMissingValues(), TestLatencyPercentilesMatchRawAcrossTimeZonesAndDST(), TestLatencyPercentilesUseNearestRankAcrossSummaryAndBuckets() (+8 more)
 
 ### Community 163 - "NewProtector"
-Cohesion: 0.22
-Nodes (9): AEAD, Options, Config, FS, New(), IsProtected(), NewProtector(), TestProtectorEncryptsAndDecryptsString() (+1 more)
+Cohesion: 0.15
+Nodes (13): AEAD, Options, Config, FS, New(), IsProtected(), NewProtector(), TestProtectorEncryptsAndDecryptsString() (+5 more)
 
 ### Community 164 - "docs/package.json"
 Cohesion: 0.17
@@ -1107,20 +1090,20 @@ Cohesion: 0.31
 Nodes (9): DB, ModelPrice, New(), nullInt(), nullString(), validateModelPrice(), validPriceValue(), parseProviderUsageCount() (+1 more)
 
 ### Community 166 - "useAntigravitySubscriptions.ts"
-Cohesion: 0.27
-Nodes (10): AntigravitySubscriptionState, buildCacheKey(), buildSubscriptionTarget(), getCachedSubscriptionState(), inFlightSubscriptionRequests, requestAntigravitySubscription(), SubscriptionTarget, successfulSubscriptionCache (+2 more)
+Cohesion: 0.23
+Nodes (12): AntigravitySubscriptionState, buildCacheKey(), buildSubscriptionTarget(), getCachedSubscriptionState(), inFlightSubscriptionRequests, requestAntigravitySubscription(), SubscriptionTarget, successfulSubscriptionCache (+4 more)
 
 ### Community 168 - "event_test.go"
 Cohesion: 0.29
 Nodes (9): IsLongContextInput(), T, TestCacheHitRateFromTotalsClampsMalformedData(), TestCacheHitRateUsesNormalizedInputTotals(), TestInferCacheInputModeUsesStrictFieldPriority(), TestIsLongContextInputBoundary(), TestNormalizeCacheAccounting(), TestNormalizeRawPrefersResolvedModelOverRequestedAndDisplayAliases() (+1 more)
 
 ### Community 169 - "Service"
-Cohesion: 0.19
-Nodes (7): Service, DB, New(), Config, ManagerConfig, New(), Repository
+Cohesion: 0.31
+Nodes (5): Service, ExtractBearerToken(), Config, ManagerConfig, New()
 
 ### Community 170 - "buildHeatmap"
-Cohesion: 0.22
-Nodes (17): ManagerConfig, managerConfigFromSetup(), BoolPtr(), CollectorMode(), Config, ManagerConfig, ManagerCollectorEnabled(), ManagerConfigConnectionDiffers() (+9 more)
+Cohesion: 0.35
+Nodes (11): addHeatmapContributor(), buildHeatmap(), costForHeatmapPoint(), heatmapContributorKey(), heatmapProviderKey(), newHeatmapAccumulator(), ratio(), topHeatmapContributors() (+3 more)
 
 ### Community 171 - "buildCredentialTimeline"
 Cohesion: 0.12
@@ -1139,12 +1122,12 @@ Cohesion: 0.12
 Nodes (17): CPAMP 轻量面板, Linux systemd 固定目录, macOS / Linux 前台或控制脚本, Windows, 一键安装器生成的 Docker 部署, 一键安装器生成的原生部署, 使用 `latest`, 使用固定版本 (+9 more)
 
 ### Community 176 - "plugin.ts"
-Cohesion: 0.20
-Nodes (25): T, TestCatchUpDashboardHourlyAggregatesByCheckpoint(), TestCatchUpDashboardHourlyFailureDoesNotAdvanceCheckpoint(), TestCatchUpDashboardHourlyPreservesDimensionStrings(), BenchmarkAccountHistoryRows(), benchmarkAccountKeys(), BenchmarkCatchUpAccountHistoryIncremental(), BenchmarkCatchUpAccountHistoryInitial() (+17 more)
+Cohesion: 0.35
+Nodes (14): T, TestCatchUpDashboardHourlyAggregatesByCheckpoint(), TestCatchUpDashboardHourlyFailureDoesNotAdvanceCheckpoint(), TestCatchUpDashboardHourlyPreservesDimensionStrings(), New(), DB, T, newRollupTestDB() (+6 more)
 
 ### Community 177 - "ResetAdminKey"
-Cohesion: 0.33
-Nodes (8): ResetAdminKeyResult, VerifyAdminKey(), ResetAdminKey(), T, TB, newResetTestStore(), TestResetAdminKeyGeneratesNewKey(), TestResetAdminKeyUsesProvidedKey()
+Cohesion: 0.36
+Nodes (7): ResetAdminKeyResult, ResetAdminKey(), T, TB, newResetTestStore(), TestResetAdminKeyGeneratesNewKey(), TestResetAdminKeyUsesProvidedKey()
 
 ### Community 178 - ".vitepress/config.ts"
 Cohesion: 0.22
@@ -1163,24 +1146,24 @@ Cohesion: 0.61
 Nodes (8): accountHistoryBenchmarkEvents(), accountHistoryBenchmarkTargets(), BenchmarkAccountHistoryServiceCatchUp(), BenchmarkAccountHistoryServiceRead(), B, insertAccountHistoryBenchmarkEvents(), openAccountHistoryBenchmarkStore(), saveAccountHistoryBenchmarkPrices()
 
 ### Community 182 - "CodexInspectionQuotaWindows.tsx"
-Cohesion: 0.07
-Nodes (31): CodexInspectionAction, CodexInspectionRunResult, clampPercent(), CodexInspectionQuotaWindows(), CodexInspectionQuotaWindowsProps, CodexInspectionQuotaWindowView, formatQuotaLabel(), formatRemainingPercent() (+23 more)
+Cohesion: 0.26
+Nodes (10): clampPercent(), CodexInspectionQuotaWindows(), CodexInspectionQuotaWindowsProps, CodexInspectionQuotaWindowView, formatQuotaLabel(), formatRemainingPercent(), getQuotaFillClass(), normalizePercent() (+2 more)
 
 ### Community 183 - "arePayloadModelEntriesEqual"
-Cohesion: 0.18
-Nodes (19): FetchManagementConfig(), FetchUsageConfig(), NormalizeBaseURL(), readBoolField(), readIntField(), readStringField(), SetUsageStatisticsEnabled(), ValidateCollectorConfig() (+11 more)
+Cohesion: 0.28
+Nodes (9): arePluginStoreAuthRulesEqual(), areStringArraysEqual(), getNextDirtyFields(), arePayloadFilterRulesEqual(), arePayloadHeaderEntriesEqual(), arePayloadModelEntriesEqual(), arePayloadParamEntriesEqual(), arePayloadRulesEqual() (+1 more)
 
 ### Community 184 - "repoSourceIntegrity.test.mjs"
 Cohesion: 0.31
 Nodes (7): findForbiddenUnicode(), FORBIDDEN_INVISIBLE_CODE_POINTS, hasGitDiffBase(), isChangedTextPath(), listChangedTextFiles(), repoRoot, toLineColumn()
 
 ### Community 185 - "ModelUsageSummary"
-Cohesion: 0.16
-Nodes (21): createAxiosResponse(), DemoMethod, handleDemoApiRequest(), handleDemoFormRequest(), handleDemoRawRequest(), isCredentialRefreshPatch(), normalizeDemoUrl(), ok (+13 more)
+Cohesion: 0.29
+Nodes (5): repository, ModelPrice, ModelPriceSyncResult, ModelUsageStat, ModelUsageSummary
 
 ### Community 186 - "ModelMappingDiagramColumns.tsx"
-Cohesion: 0.16
-Nodes (12): IconProps, IconSidebarMonitor(), IconSidebarProviders(), MonitoringDataPanel(), MonitoringDataPanelProps, MonitoringTab, MonitoringTabBadgeTone, MonitoringTabIcon (+4 more)
+Cohesion: 0.17
+Nodes (11): IconKey(), IconProps, MonitoringDataPanel(), MonitoringDataPanelProps, MonitoringTab, MonitoringTabBadgeTone, MonitoringTabIcon, MonitoringTabsBar() (+3 more)
 
 ### Community 187 - "useAuthStore.test.ts"
 Cohesion: 0.25
@@ -1191,20 +1174,20 @@ Cohesion: 0.29
 Nodes (6): configPath, contentRoots, docsRoot, markdownFiles(), relativeMarkdownPaths(), repoRoot
 
 ### Community 189 - ".Handle"
-Cohesion: 0.24
-Nodes (10): ProviderUsageMetadata, ResponseWriter, mapCooldown(), parseCooldownEvidence(), T, TestParseCooldownEvidenceDropsMismatchedRecoverySource(), TestParseCooldownEvidenceRejectsOtherProviderCodes(), cooldownItem (+2 more)
+Cohesion: 0.33
+Nodes (8): ProviderUsageMetadata, mapCooldown(), parseCooldownEvidence(), T, TestParseCooldownEvidenceDropsMismatchedRecoverySource(), TestParseCooldownEvidenceRejectsOtherProviderCodes(), cooldownItem, listResponse
 
 ### Community 190 - "analyticsQueryGroup"
-Cohesion: 0.08
-Nodes (41): costForChannelStat(), aggregateModelStats(), analyticsHourlyRollupEligible(), buildChannelShare(), buildModelShare(), buildModelStats(), buildSummary(), clearFullSummaryMetrics() (+33 more)
+Cohesion: 0.33
+Nodes (4): CancelFunc, Once, analyticsQueryGroup, WaitGroup
 
 ### Community 191 - "newTestProtector"
 Cohesion: 0.57
 Nodes (6): T, TB, newTestProtector(), rawSettingValue(), TestStoreEncryptsSetupAndManagerConfigSecrets(), TestStoreReadsLegacyPlaintextSecretsAndRewritesEncrypted()
 
 ### Community 192 - "workerTestConfig"
-Cohesion: 0.12
-Nodes (13): Handler, ResponseWriter, codexInspectionErrorStatus(), ResponseWriter, ResponseWriter, AuthorizeAdmin(), AuthorizePanel(), ResponseWriter (+5 more)
+Cohesion: 0.57
+Nodes (6): Config, T, TestCollectorServiceRestartAndStop(), TestCollectorWorkerDoesNotStartWhenMonitoringDisabled(), TestCollectorWorkerStartsFromEnvironmentConfig(), workerTestConfig()
 
 ### Community 193 - "helpers.ts"
 Cohesion: 0.41
@@ -1215,8 +1198,8 @@ Cohesion: 0.21
 Nodes (11): findExecutable(), repoRoot, runControl(), runPowerShell(), runPowerShellControl(), runUnixControl(), spawnPowerShellControl(), tempDirs (+3 more)
 
 ### Community 196 - "Repository"
-Cohesion: 0.17
-Nodes (8): Dial(), encodeCommand(), Conn, Duration, Time, URL, parseURL(), Client
+Cohesion: 0.47
+Nodes (3): DB, New(), Repository
 
 ### Community 198 - "DashboardHourlyRow"
 Cohesion: 0.17
@@ -1239,8 +1222,8 @@ Cohesion: 0.33
 Nodes (4): checkedRoots, repoRoot, sourceExtensions, sourceRoot
 
 ### Community 203 - "New"
-Cohesion: 0.19
-Nodes (20): Parse(), successfulAuthFileOwnershipMutation(), T, TestInspectAuthFileOwnershipMutationReadsMultipartUpload(), TestInspectAuthFileOwnershipMutationRestoresStatusBody(), TestIsCPAPluginManagementPath(), TestIsCPAPluginResourcePath(), TestIsManagementPath() (+12 more)
+Cohesion: 0.44
+Nodes (11): BenchmarkAccountHistoryRows(), benchmarkAccountKeys(), BenchmarkCatchUpAccountHistoryIncremental(), BenchmarkCatchUpAccountHistoryInitial(), BenchmarkCatchUpDashboardHourlyInitial(), benchmarkRollupEvents(), B, DB (+3 more)
 
 ### Community 204 - "TestHandleAccountHistoryRejectsUnknownTargetFields"
 Cohesion: 0.17
@@ -1267,8 +1250,8 @@ Cohesion: 0.40
 Nodes (4): name, private, type, version
 
 ### Community 210 - "ApiKeySummaryPanel.test.tsx"
-Cohesion: 0.09
-Nodes (28): AutocompleteInput(), AutocompleteInputProps, IconChevronDown(), AuthFileModelItem, AuthFilesOAuthExcludedEditPage(), LocationState, normalizeProviderKey(), OAUTH_PROVIDER_EXCLUDES (+20 more)
+Cohesion: 0.11
+Nodes (19): IconChevronDown(), IconChevronUp(), AccountTokenMetricGrid(), ApiKeyExpandedDetails(), ApiKeyOverviewColumn, ApiKeyPaginationState, ApiKeySummaryPanel(), ApiKeySummaryPanelActions() (+11 more)
 
 ### Community 211 - "useVisualConfig.test.ts"
 Cohesion: 0.50
@@ -1289,10 +1272,6 @@ Nodes (11): Acknowledgements, Build, CPA Manager Plus v1.7.0, Docs, Features, Fi
 ### Community 221 - "backfill.go"
 Cohesion: 0.17
 Nodes (11): Usage Analytics 原型对齐实施记录, 初始功能差异清单, 实现不正确或阻塞项, 未实现功能, 范围说明, 阶段 1: 阻塞修复与现状分析, 阶段 2: 数据模型扩展, 阶段 3: 页面功能实现 (+3 more)
-
-### Community 222 - "eslint-plugin-react-refresh"
-Cohesion: 0.18
-Nodes (11): ResponseWriter, Service, New(), ResponseWriter, parseSummaryParams(), readOptionalInt(), readOptionalInt64(), ResponseWriter (+3 more)
 
 ### Community 227 - ".Health"
 Cohesion: 0.17
@@ -1319,8 +1298,8 @@ Cohesion: 0.38
 Nodes (10): CredentialTimelinePoint, repository, T, Time, insertAnalyticsPreaggregationEvents(), newAnalyticsPreaggregationRepo(), sortCredentialTimelinePoints(), TestCredentialIDFilterMatchesAllIdentityFallbacks() (+2 more)
 
 ### Community 249 - "useThemeStore.ts"
-Cohesion: 0.26
-Nodes (9): ResponseWriter, Writer, parseImportSessionPath(), writeImportSessionError(), Handler, Request(), countingWriter, createImportSessionRequest (+1 more)
+Cohesion: 0.24
+Nodes (7): AppliedTheme, getSystemTheme(), resolveAutoTheme(), ResolvedTheme, resolveTheme(), ThemeState, Theme
 
 ### Community 250 - "Highlights"
 Cohesion: 0.18
@@ -1395,12 +1374,12 @@ Cohesion: 0.20
 Nodes (10): Docker Compose, Docker Named Volume, 一键安装脚本创建的 Docker 部署, 原生包, 命令作用, 执行前检查, 指定管理员密钥, 排障 (+2 more)
 
 ### Community 268 - "OpenWithOptions"
-Cohesion: 0.52
-Nodes (6): assertConnectionPragmas(), Conn, T, TestDataSourceNameEncodesWindowsDrivePath(), TestOpenWithOptionsAppliesConnectionDefaults(), TestOpenWithOptionsSupportsRelativePath()
+Cohesion: 0.33
+Nodes (9): DB, OpenWithOptions(), assertConnectionPragmas(), Conn, T, TestDataSourceNameEncodesWindowsDrivePath(), TestOpenWithOptionsAppliesConnectionDefaults(), TestOpenWithOptionsSupportsRelativePath() (+1 more)
 
 ### Community 269 - "accountAutomationPresentation.ts"
-Cohesion: 0.16
-Nodes (20): addAccountModelStat(), anomalyScore(), anomalySeverity(), averageTokensPerRequest(), bucketSizeMS(), buildAnomalyPoints(), buildTimeline(), cacheHitRate() (+12 more)
+Cohesion: 0.40
+Nodes (8): AccountAutomationPresentation, AccountAutomationTone, canBulkDeleteAccountAction(), canBulkDeleteAccountActions(), getAccountAutomationPresentation(), isPendingAccountAction(), selectAccountActionCandidate(), AccountActionCandidate
 
 ### Community 270 - "CPA Manager Plus v1.10.1"
 Cohesion: 0.20
@@ -1463,20 +1442,20 @@ Cohesion: 0.22
 Nodes (9): Codex、Claude 与 xAI 配额管理, Provider 能力概览, xAI 付费 OAuth, xAI 请求监控证据, 排障, 数据来源, 进入页面前, 配额冷却 (+1 more)
 
 ### Community 285 - "Load"
-Cohesion: 0.19
-Nodes (17): buildAvailabilityRequestKey(), buildPanelManagerServiceCandidates(), BuildPanelManagerServiceCandidatesInput, buildUnavailableState(), demoAvailability, detectPanelFeatureAvailability(), initialAvailability, managerConfigMatchesPanel() (+9 more)
+Cohesion: 0.53
+Nodes (8): Load(), clearConfigEnv(), T, TestLoadCreatesDefaultConfig(), TestLoadEnvOverridesConfig(), TestLoadReadsConfigAndResolvesRelativePaths(), TestLoadWithoutCreatingDefaultDoesNotCreateConfig(), TestNormalizeCollectorMode()
 
 ### Community 286 - "baseResolver.ts"
-Cohesion: 0.24
-Nodes (13): buildUsageServiceBaseCandidates(), hasConfiguredUsageServiceBase(), normalizeCandidate(), resolveUsageServiceBase(), ResolveUsageServiceBaseDeps, UsageServiceBaseInput, resolveUsageServiceLoginMode(), ProtectedRoute() (+5 more)
+Cohesion: 0.47
+Nodes (7): buildUsageServiceBaseCandidates(), hasConfiguredUsageServiceBase(), normalizeCandidate(), resolveUsageServiceBase(), ResolveUsageServiceBaseDeps, UsageServiceBaseInput, UsageServiceInfo
 
 ### Community 287 - "AuthFileQuotaSection.test.tsx"
 Cohesion: 0.25
 Nodes (7): file, findButtonByText(), getText(), legacyQuotaWithoutIdentity, matchingQuota, mismatchedQuota, { mocks }
 
 ### Community 288 - "apiCall.ts"
-Cohesion: 0.25
-Nodes (13): ensureRouteBasePathname(), getDemoLogoutHash(), getDemoLogoutPath(), isDemoRoutePath(), normalizePathname(), prefixRouteBase(), readCurrentHashPathname(), stripRouteBase() (+5 more)
+Cohesion: 0.33
+Nodes (4): ApiCallRequest, ApiCallResult, formatApiCallBody(), getApiCallErrorDetails()
 
 ### Community 289 - "CPA Manager Plus v1.10.4"
 Cohesion: 0.22
@@ -1615,8 +1594,8 @@ Cohesion: 0.29
 Nodes (7): Docker 备份示例, 不保留请求历史，只迁移 Manager 配置, 为什么必须备份 data.key, 原生包备份, 备份与恢复, 必备备份文件, 恢复
 
 ### Community 323 - "TestCodexInspectionManualActionsRoute"
-Cohesion: 0.35
-Nodes (15): New(), aggregateTestEvent(), callsFor(), T, sumCalls(), TestCatchUpAndLoadRowsMergeCoverageDeltaAndLateEvents(), TestCatchUpBackfillsLegacyIdentityLedger(), TestCatchUpFailureDoesNotAdvanceCoverage() (+7 more)
+Cohesion: 0.48
+Nodes (6): ManagerConfig, T, newCodexInspectionHTTPManagerConfig(), TestCodexInspectionManualActionsRoute(), TestCodexInspectionRoutesAreMounted(), TestCodexInspectionRunReturnsPreconditionFailedWhenNotConfigured()
 
 ### Community 324 - "InspectionConfigDrawer.tsx"
 Cohesion: 0.48
@@ -1746,10 +1725,6 @@ Nodes (5): CPA Management Key, 关键文件, 管理员密钥, 配置与数据目
 Cohesion: 0.33
 Nodes (6): CPA Manager Plus 能力矩阵, 完整模式如何安装, 按使用方式, 按账号与 Provider, 数据与自动化边界, 相关文档
 
-### Community 356 - "AuthFilesPage.quotaCooldown.test.tsx"
-Cohesion: 0.39
-Nodes (15): New(), catchUpReaderRollup(), T, TimelinePoint, newReaderTestStore(), readerEvent(), sortTimelinePoints(), TestAnalyticsTimelineAccumulatesLatencyBeforeAveraging() (+7 more)
-
 ### Community 357 - "CPA Manager Plus v1.4.2"
 Cohesion: 0.33
 Nodes (5): CPA Manager Plus v1.4.2, Features, Highlights, Overview, Upgrade Notes
@@ -1803,8 +1778,8 @@ Cohesion: 0.40
 Nodes (5): 主要内容, 排障时建议提供, 模型列表怎么用, 清除登录存储, 系统信息
 
 ### Community 370 - "TestModelUsageSummaryAggregatesRecentRequestedAndResolvedModels"
-Cohesion: 0.24
-Nodes (9): Duration, NewUsageHourlyAggregateWorker(), T, newUsageHourlyAggregateWorkerStore(), TestUsageHourlyAggregateWorkerCatchUp(), TestUsageHourlyAggregateWorkerContinuesPendingBacklog(), TestUsageHourlyAggregateWorkerRecordsFailure(), usageHourlyAggregateWorkerEvent() (+1 more)
+Cohesion: 0.60
+Nodes (4): T, modelUsageTestEvent(), TestModelUsageSummaryAggregatesRecentRequestedAndResolvedModels(), TestModelUsageSummaryReturnsEmptyModels()
 
 ### Community 371 - "en/index.md"
 Cohesion: 0.50
@@ -1834,89 +1809,25 @@ Nodes (4): 按顺序检查, 最常见的修复方法, 根据现象处理, 请求
 Cohesion: 0.50
 Nodes (3): LogEntry, LogFilter, LogLevel
 
-### Community 378 - "TestDisableOwnershipCRUD"
-Cohesion: 0.29
-Nodes (13): actionFailureDetail(), hasActionFailureValue(), New(), T, TestClientActionsRejectBusinessFailureResponses(), TestClientFetchAndFindAcceptSingleAuthFileObject(), TestClientFetchRejectsOversizedAuthFilesResponse(), TestClientFindStreamsLargeAuthFilesResponse() (+5 more)
-
-### Community 380 - "appRoutes.tsx"
-Cohesion: 0.19
-Nodes (7): App(), AppRouter(), appRoutes, createAppRoutes(), RootShell(), SplashScreenProps, faviconEl
-
-### Community 381 - "CodexInspectionAutoActionEditor.tsx"
-Cohesion: 0.19
-Nodes (11): CodexInspectionAutoActionMode, CodexInspectionAutoActionEditor(), CodexInspectionAutoActionEditorProps, normalizeAutoActionMode(), problemActionIcon, problemActionToneClass, t, CODEX_INSPECTION_PROBLEM_ACTION_MODES (+3 more)
-
-### Community 382 - "logs.ts"
-Cohesion: 0.23
-Nodes (11): asRecord(), booleanValue(), ErrorLogFile, ErrorLogsResponse, logsApi, LogsQuery, LogsResponse, normalizeLogsResponse() (+3 more)
-
-### Community 383 - "runUsageBaselineFixture"
-Cohesion: 0.27
-Nodes (11): BenchmarkUsageDataLifecycleRawPaths(), explainUsagePlan(), B, DB, Repository, T, TB, insertUsageBaselineEvents() (+3 more)
-
-### Community 384 - "useQuotaStore.ts"
-Cohesion: 0.27
-Nodes (8): QuotaStore, emptyQuotaState, QuotaStoreState, QuotaUpdater, AntigravityQuotaState, ClaudeQuotaState, KimiQuotaState, XaiQuotaState
-
-### Community 385 - "CodexInspectionModeTabs.tsx"
-Cohesion: 0.24
-Nodes (8): SegmentedTabItem, SegmentedTabs(), SegmentedTabsLinkProps, SegmentedTabsProps, baseItems, CodexInspectionMode, CodexInspectionModeTabsProps, MODES
-
-### Community 386 - "DiffModal.tsx"
-Cohesion: 0.24
-Nodes (8): clampPos(), computeUnifiedDiff(), DiffModal(), DiffModalProps, DiffResult, Hunk, UnifiedLine, UnifiedLineType
-
-### Community 387 - "New"
-Cohesion: 0.36
-Nodes (6): New(), CodexInspectionResult, Repository, TestRequestCodexUsageStreamsResponsesLargerThanEightMiB(), failAfterInsertCodexInspectionRepository, failFirstInsertCodexInspectionRepository
-
-### Community 388 - "useAuthFilesOauth.stability.test.tsx"
-Cohesion: 0.33
-Nodes (5): AuthFilesInitEffectHarness(), HarnessApi, { mocks }, mountHarness(), UseAuthFilesOauthResult
-
-### Community 390 - "CPA Manager Plus v1.11.7"
-Cohesion: 0.29
-Nodes (6): CPA Manager Plus v1.11.7, Features, Fixes, Highlights, Overview, Upgrade Notes
-
-### Community 391 - "CPA Manager Plus v1.11.7"
-Cohesion: 0.29
-Nodes (6): CPA Manager Plus v1.11.7, Features, Fixes, Highlights, Overview, Upgrade Notes
-
-### Community 394 - "accountOverviewCardMetrics.ts"
-Cohesion: 0.53
-Nodes (4): ACCOUNT_OVERVIEW_CARD_METRIC_KEY_SET, ACCOUNT_OVERVIEW_CARD_METRIC_ORDER_MAP, sortAccountOverviewCardMetrics(), ACCOUNT_OVERVIEW_CARD_METRIC_KEYS
-
-### Community 395 - "types/oauth.ts"
-Cohesion: 0.33
-Nodes (5): OAuthConfig, OAuthExcludedModels, OAuthFlow, OAuthModelAlias, OAuthProvider
-
-### Community 396 - "TestHandleAccountHistoryRejectsUnknownTargetFields"
-Cohesion: 0.50
-Nodes (4): T, TB, newHandlerTestStore(), TestHandleAccountHistoryRejectsUnknownTargetFields()
-
-### Community 397 - "TestRunMigratesLegacySetupAndEncryptsSecrets"
-Cohesion: 0.50
-Nodes (4): T, TB, rawBootstrapSettingValue(), TestRunMigratesLegacySetupAndEncryptsSecrets()
-
 ## Knowledge Gaps
-- **2066 isolated node(s):** `zhNav`, `enNav`, `zhSidebar`, `enSidebar`, `zhSearchTranslations` (+2061 more)
+- **2027 isolated node(s):** `zhNav`, `enNav`, `zhSidebar`, `enSidebar`, `zhSearchTranslations` (+2022 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **33 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **29 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Context` connect `Context` to `Run`, `New`, `APIKeyAlias`, `cpaauthfiles/client.go`, `RateLimitAutoDisableWorker`, `transformers.ts`, `.Handle`, `.Management`, `Aggregate`, `Handler`, `AnalyticsFilter`, `dashboard/service.go`, `authSnapshotResolver`, `UsageCacheAccountingMigrationWorker`, `codexinspection/service.go`, `usagerollup/repository.go`, `New`, `Setup`, `Service`, `.InsertBatch`, `NewProtector`, `modelprice/service.go`, `.ReplaceAll`, `Service`, `buildHeatmap`, `event.go`, `plugin.ts`, `ResetAdminKey`, `xai_probe.go`, `.Analytics`, `BenchmarkAccountHistoryServiceCatchUp`, `New`, `arePayloadModelEntriesEqual`, `Service`, `reader.go`, `.Handle`, `RuntimeConfig`, `analyticsQueryGroup`, `workerTestConfig`, `codex_inspection.go`, `NewConfig`, `proxy/service.go`, `Event`, `insertMonitoringBenchmarkEvents`, `Repository`, `MethodNotAllowed`, `Repository`, `runServer`, `stream.go`, `eslint-plugin-react-refresh`, `account_action_candidate_test.go`, `AuthFilesPage.quotaCooldown.test.tsx`, `AutomationRuntime`, `plugins.ts`, `normalizeNumberValue`, `Repository`, `QuotaCooldown`, `AccountHistoryRollupWorker`, `TestModelUsageSummaryAggregatesRecentRequestedAndResolvedModels`, `insertAnalyticsPreaggregationEvents`, `useThemeStore.ts`, `rootHandler`, `Service`, `runUsageBaselineFixture`?**
+- **Why does `Context` connect `Context` to `Run`, `worker/account_action_candidate.go`, `APIKeyAlias`, `cpaauthfiles/client.go`, `RateLimitAutoDisableWorker`, `Aggregate`, `AnalyticsFilter`, `dashboard/service.go`, `authSnapshotResolver`, `UsageCacheAccountingMigrationWorker`, `usagerollup/repository.go`, `New`, `Setup`, `buildEvents`, `monitoring/service.go`, `Service`, `.InsertBatch`, `NewProtector`, `modelprice/service.go`, `.ReplaceAll`, `Service`, `ResetAdminKey`, `xai_probe.go`, `.Analytics`, `BenchmarkAccountHistoryServiceCatchUp`, `New`, `Service`, `ModelUsageSummary`, `reader.go`, `RuntimeConfig`, `analyticsQueryGroup`, `codex_inspection.go`, `Repository`, `NewConfig`, `proxy/service.go`, `New`, `Event`, `insertMonitoringBenchmarkEvents`, `Repository`, `MethodNotAllowed`, `Repository`, `stream.go`, `runServer`, `account_action_candidate_test.go`, `AutomationRuntime`, `plugins.ts`, `Repository`, `QuotaCooldown`, `AccountHistoryRollupWorker`, `insertAnalyticsPreaggregationEvents`, `rootHandler`, `Service`?**
   _High betweenness centrality (0.065) - this node is a cross-community bridge._
-- **Why does `Store` connect `Context` to `New`, `APIKeyAlias`, `RateLimitAutoDisableWorker`, `TestHandleAccountHistoryRejectsUnknownTargetFields`, `Aggregate`, `AnalyticsFilter`, `dashboard/service.go`, `NewManager`, `UsageCacheAccountingMigrationWorker`, `Setup`, `Service`, `modelprice/service.go`, `Service`, `buildHeatmap`, `codexinspection/service_test.go`, `Open`, `ResetAdminKey`, `BenchmarkAccountHistoryServiceCatchUp`, `New`, `arePayloadModelEntriesEqual`, `Service`, `reader.go`, `RuntimeConfig`, `newTestProtector`, `analyticsQueryGroup`, `NewConfig`, `proxy/service.go`, `insertMonitoringBenchmarkEvents`, `Repository`, `runServer`, `account_action_candidate_test.go`, `quotaAutoDisableCandidateFromEvent`, `AuthFilesPage.quotaCooldown.test.tsx`, `NewStore`, `TestModelUsageSummaryAggregatesRecentRequestedAndResolvedModels`, `AccountHistoryRollupWorker`, `QuotaCooldown`, `Service`?**
-  _High betweenness centrality (0.016) - this node is a cross-community bridge._
-- **Why does `AuthFileItem` connect `authFiles/AuthFilesPage.tsx` to `usageAnalyticsModel.ts`, `icons.tsx`, `grokInspection.ts`, `quotaConfigs.ts`, `useMonitoringData.ts`, `utils/quota/index.ts`, `antigravitySubscription.ts`, `stores/index.ts`, `codexInspectionPresentation.ts`, `authFiles/AuthFilesOAuthModelAliasEditPage.tsx`, `AuthFileQuotaSection.test.tsx`, `monitoring/GrokInspectionPage.tsx`, `CodexInspectionAutoActionEditor.tsx`, `usageHeaderSnapshots.ts`, `monitoringCenterPageModel.ts`, `useAntigravitySubscriptions.ts`, `utils.ts`, `providerRequests.ts`, `CodexInspectionQuotaWindows.tsx`, `dashboard/DashboardPage.tsx`, `authFiles/constants.ts`, `accountOverviewState.ts`, `ApiKeySummaryPanel.test.tsx`, `codexInspectionProbe.ts`, `codexInspectionExecution.ts`, `api/codexQuota.ts`?**
-  _High betweenness centrality (0.011) - this node is a cross-community bridge._
+- **Why does `Store` connect `Context` to `APIKeyAlias`, `cpaauthfiles/client.go`, `RateLimitAutoDisableWorker`, `dashboard/service.go`, `NewManager`, `UsageCacheAccountingMigrationWorker`, `buildEvents`, `Setup`, `Service`, `modelprice/service.go`, `Service`, `codexinspection/service_test.go`, `Open`, `ResetAdminKey`, `BenchmarkAccountHistoryServiceCatchUp`, `New`, `reader.go`, `RuntimeConfig`, `newTestProtector`, `NewConfig`, `proxy/service.go`, `insertMonitoringBenchmarkEvents`, `MethodNotAllowed`, `Repository`, `runServer`, `account_action_candidate_test.go`, `quotaAutoDisableCandidateFromEvent`, `NewStore`, `AccountHistoryRollupWorker`, `Service`?**
+  _High betweenness centrality (0.019) - this node is a cross-community bridge._
+- **Why does `AuthFileItem` connect `stores/index.ts` to `usageAnalyticsModel.ts`, `authFiles/AuthFilesPage.tsx`, `icons.tsx`, `grokInspection.ts`, `quotaConfigs.ts`, `useMonitoringData.ts`, `Button.tsx`, `usageService.ts`, `codexInspectionPresentation.ts`, `authFiles/AuthFilesOAuthModelAliasEditPage.tsx`, `AuthFileCard.tsx`, `AuthFileQuotaSection.test.tsx`, `CodexInspectionAutoActionEditor.tsx`, `usageHeaderSnapshots.ts`, `monitoringCenterPageModel.ts`, `useAntigravitySubscriptions.ts`, `providerRequests.ts`, `demoFixtures.ts`, `usePanelFeatureAvailability.ts`, `dashboard/DashboardPage.tsx`, `authFiles/constants.ts`, `accountOverviewState.ts`, `codexInspectionProbe.ts`, `codexInspectionExecution.ts`, `api/codexQuota.ts`?**
+  _High betweenness centrality (0.013) - this node is a cross-community bridge._
 - **Are the 7 inferred relationships involving `AuthFilesPage()` (e.g. with `hasInlineQuotaLayout()` and `candidate()`) actually correct?**
   _`AuthFilesPage()` has 7 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `zhNav`, `enNav`, `zhSidebar` to the rest of the system?**
-  _2066 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _2027 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Context` be split into smaller, more focused modules?**
-  _Cohesion score 0.02896627971254837 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.029411764705882353 - nodes in this community are weakly interconnected._
 - **Should `usageAnalyticsModel.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.04626262626262626 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.04551820728291316 - nodes in this community are weakly interconnected._

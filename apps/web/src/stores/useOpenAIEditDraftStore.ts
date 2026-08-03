@@ -37,11 +37,14 @@ export type OpenAIEditBaseline = {
   testModel: string;
 };
 
+export type OpenAITestEndpoint = 'chat' | 'embeddings';
+
 export type OpenAIEditDraft = {
   initialized: boolean;
   baseline: OpenAIEditBaseline | null;
   form: OpenAIFormState;
   testModel: string;
+  testEndpoint: OpenAITestEndpoint;
   testStatus: OpenAITestStatus;
   testMessage: string;
   keyTestStatuses: KeyTestStatus[];
@@ -57,6 +60,7 @@ interface OpenAIEditDraftState {
   setDraftBaseline: (key: string, baseline: OpenAIEditBaseline) => void;
   setDraftForm: (key: string, action: SetStateAction<OpenAIFormState>) => void;
   setDraftTestModel: (key: string, action: SetStateAction<string>) => void;
+  setDraftTestEndpoint: (key: string, action: SetStateAction<OpenAITestEndpoint>) => void;
   setDraftTestStatus: (key: string, action: SetStateAction<OpenAITestStatus>) => void;
   setDraftTestMessage: (key: string, action: SetStateAction<string>) => void;
   setDraftKeyTestStatus: (draftKey: string, keyIndex: number, status: KeyTestStatus) => void;
@@ -65,7 +69,7 @@ interface OpenAIEditDraftState {
   clearDraft: (key: string) => void;
 }
 
-const resolveAction = <T,>(action: SetStateAction<T>, prev: T): T =>
+const resolveAction = <T>(action: SetStateAction<T>, prev: T): T =>
   typeof action === 'function' ? (action as (previous: T) => T)(prev) : action;
 
 const buildEmptyForm = (): OpenAIFormState => ({
@@ -83,6 +87,7 @@ const buildEmptyDraft = (): OpenAIEditDraft => ({
   baseline: null,
   form: buildEmptyForm(),
   testModel: '',
+  testEndpoint: 'chat',
   testStatus: 'idle',
   testMessage: '',
   keyTestStatuses: [],
@@ -177,6 +182,20 @@ export const useOpenAIEditDraftStore = create<OpenAIEditDraftState>((set, get) =
         drafts: {
           ...state.drafts,
           [key]: { ...existing, initialized: true, testModel: nextValue },
+        },
+      };
+    });
+  },
+
+  setDraftTestEndpoint: (key, action) => {
+    if (!key) return;
+    set((state) => {
+      const existing = state.drafts[key] ?? buildEmptyDraft();
+      const nextValue = resolveAction(action, existing.testEndpoint);
+      return {
+        drafts: {
+          ...state.drafts,
+          [key]: { ...existing, initialized: true, testEndpoint: nextValue },
         },
       };
     });

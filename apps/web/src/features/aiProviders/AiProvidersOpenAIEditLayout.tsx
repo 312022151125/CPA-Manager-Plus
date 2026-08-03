@@ -22,7 +22,11 @@ import {
   parseProviderIndexParam,
 } from '@/features/aiProviders/model/routeParams';
 import type { ModelEntry, OpenAIFormState } from '@/components/providers/types';
-import type { KeyTestStatus, OpenAIEditBaseline } from '@/stores/useOpenAIEditDraftStore';
+import type {
+  KeyTestStatus,
+  OpenAIEditBaseline,
+  OpenAITestEndpoint,
+} from '@/stores/useOpenAIEditDraftStore';
 
 type LocationState = { fromAiProviders?: boolean } | null;
 
@@ -38,6 +42,8 @@ export type OpenAIEditOutletContext = {
   setForm: Dispatch<SetStateAction<OpenAIFormState>>;
   testModel: string;
   setTestModel: Dispatch<SetStateAction<string>>;
+  testEndpoint: OpenAITestEndpoint;
+  setTestEndpoint: Dispatch<SetStateAction<OpenAITestEndpoint>>;
   testStatus: 'idle' | 'loading' | 'success' | 'error';
   setTestStatus: Dispatch<SetStateAction<'idle' | 'loading' | 'success' | 'error'>>;
   testMessage: string;
@@ -184,6 +190,7 @@ export function AiProvidersOpenAIEditLayout() {
   const setDraftBaseline = useOpenAIEditDraftStore((state) => state.setDraftBaseline);
   const setDraftForm = useOpenAIEditDraftStore((state) => state.setDraftForm);
   const setDraftTestModel = useOpenAIEditDraftStore((state) => state.setDraftTestModel);
+  const setDraftTestEndpoint = useOpenAIEditDraftStore((state) => state.setDraftTestEndpoint);
   const setDraftTestStatus = useOpenAIEditDraftStore((state) => state.setDraftTestStatus);
   const setDraftTestMessage = useOpenAIEditDraftStore((state) => state.setDraftTestMessage);
   const setDraftKeyTestStatus = useOpenAIEditDraftStore((state) => state.setDraftKeyTestStatus);
@@ -194,6 +201,7 @@ export function AiProvidersOpenAIEditLayout() {
 
   const form = draft?.form ?? buildEmptyForm();
   const testModel = draft?.testModel ?? '';
+  const testEndpoint = draft?.testEndpoint ?? 'chat';
   const testStatus = draft?.testStatus ?? 'idle';
   const testMessage = draft?.testMessage ?? '';
   const keyTestStatuses = draft?.keyTestStatuses ?? [];
@@ -210,6 +218,13 @@ export function AiProvidersOpenAIEditLayout() {
       setDraftTestModel(draftKey, action);
     },
     [draftKey, setDraftTestModel]
+  );
+
+  const setTestEndpoint: Dispatch<SetStateAction<OpenAITestEndpoint>> = useCallback(
+    (action) => {
+      setDraftTestEndpoint(draftKey, action);
+    },
+    [draftKey, setDraftTestEndpoint]
   );
 
   const setTestStatus: Dispatch<SetStateAction<'idle' | 'loading' | 'success' | 'error'>> =
@@ -341,6 +356,7 @@ export function AiProvidersOpenAIEditLayout() {
         baseline,
         form: seededForm,
         testModel: initialTestModel,
+        testEndpoint: 'chat',
         testStatus: 'idle',
         testMessage: '',
         keyTestStatuses: [],
@@ -351,6 +367,7 @@ export function AiProvidersOpenAIEditLayout() {
         baseline: buildOpenAIBaseline(emptyForm, ''),
         form: emptyForm,
         testModel: '',
+        testEndpoint: 'chat',
         testStatus: 'idle',
         testMessage: '',
         keyTestStatuses: [],
@@ -376,6 +393,11 @@ export function AiProvidersOpenAIEditLayout() {
       setTestMessage('');
     }
   }, [availableModels, loading, setTestMessage, setTestModel, setTestStatus, testModel]);
+
+  useEffect(() => {
+    setTestStatus('idle');
+    setTestMessage('');
+  }, [testEndpoint, setTestStatus, setTestMessage]);
 
   const mergeDiscoveredModels = useCallback(
     (selectedModels: ModelInfo[]) => {
@@ -585,6 +607,8 @@ export function AiProvidersOpenAIEditLayout() {
           setForm,
           testModel,
           setTestModel,
+          testEndpoint,
+          setTestEndpoint,
           testStatus,
           setTestStatus,
           testMessage,

@@ -17,7 +17,11 @@ import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/u
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { areKeyValueEntriesEqual, areModelEntriesEqual } from '@/utils/compare';
 import { entriesToModels, modelsToEntries } from '@/components/ui/modelInputListUtils';
-import { buildApiKeyEntry, buildOpenAIChatCompletionsEndpoint } from '@/components/providers/utils';
+import {
+  buildApiKeyEntry,
+  buildOpenAIChatCompletionsEndpoint,
+  buildOpenAIEmbeddingsEndpoint,
+} from '@/components/providers/utils';
 import {
   appendIdleKeyTestStatus,
   removeKeyTestStatusAtIndex,
@@ -159,6 +163,7 @@ export function OpenAIEditDrawer({
   const [loaded, setLoaded] = useState(false);
   const [isTestingKeys, setIsTestingKeys] = useState(false);
   const [testModel, setTestModel] = useState('');
+  const [testEndpoint, setTestEndpoint] = useState<'chat' | 'embeddings'>('chat');
   const [testStatus, setTestStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
   const [keyTestStatuses, setKeyTestStatuses] = useState<
@@ -264,6 +269,11 @@ export function OpenAIEditDrawer({
     }
   }, [availableModels, loaded, testModel]);
 
+  useEffect(() => {
+    setTestStatus('idle');
+    setTestMessage('');
+  }, [testEndpoint]);
+
   const canSave = !disabled && !loading && !saving && !invalidIndex && !isTestingKeys;
 
   const isDirty = useMemo(() => {
@@ -340,11 +350,7 @@ export function OpenAIEditDrawer({
 
   const configuredModelNames = useMemo(
     () =>
-      new Set(
-        form.modelEntries
-          .map((entry) => entry.name.trim().toLowerCase())
-          .filter(Boolean)
-      ),
+      new Set(form.modelEntries.map((entry) => entry.name.trim().toLowerCase()).filter(Boolean)),
     [form.modelEntries]
   );
 
@@ -401,7 +407,9 @@ export function OpenAIEditDrawer({
   );
 
   useEffect(() => {
-    const availableNames = new Set(discoveredModels.map((model) => String(model.name ?? '').trim()));
+    const availableNames = new Set(
+      discoveredModels.map((model) => String(model.name ?? '').trim())
+    );
     setModelDiscoverySelected((prev) => {
       let changed = false;
       const next = new Set<string>();
@@ -449,7 +457,10 @@ export function OpenAIEditDrawer({
         showNotification(t('notification.openai_test_url_required'), 'error');
         return false;
       }
-      const endpoint = buildOpenAIChatCompletionsEndpoint(baseUrl);
+      const endpoint =
+        testEndpoint === 'embeddings'
+          ? buildOpenAIEmbeddingsEndpoint(baseUrl)
+          : buildOpenAIChatCompletionsEndpoint(baseUrl);
       if (!endpoint) {
         showNotification(t('notification.openai_test_url_required'), 'error');
         return false;
@@ -491,12 +502,16 @@ export function OpenAIEditDrawer({
             method: 'POST',
             url: endpoint,
             header: Object.keys(headers).length ? headers : undefined,
-            data: JSON.stringify({
-              model: modelName,
-              messages: [{ role: 'user', content: 'Hi' }],
-              stream: false,
-              max_tokens: 5,
-            }),
+            data: JSON.stringify(
+              testEndpoint === 'embeddings'
+                ? { model: modelName, input: 'Hi' }
+                : {
+                    model: modelName,
+                    messages: [{ role: 'user', content: 'Hi' }],
+                    stream: false,
+                    max_tokens: 5,
+                  }
+            ),
           },
           { timeout: OPENAI_TEST_TIMEOUT_MS }
         );
@@ -536,6 +551,7 @@ export function OpenAIEditDrawer({
       showNotification,
       t,
       testModel,
+      testEndpoint,
     ]
   );
 
@@ -702,6 +718,14 @@ export function OpenAIEditDrawer({
       return acc;
     }, []);
   }, [form.modelEntries]);
+
+  const endpointSelectOptions = useMemo(
+    () => [
+      { value: 'chat', label: t('ai_providers.openai_test_endpoint_chat') },
+      { value: 'embeddings', label: t('ai_providers.openai_test_endpoint_embeddings') },
+    ],
+    [t]
+  );
 
   const renderKeyEntries = () => {
     const list = form.apiKeyEntries.length ? form.apiKeyEntries : [buildApiKeyEntry()];
@@ -968,6 +992,16 @@ export function OpenAIEditDrawer({
                   <span className={styles.modelTestHint}>{t('ai_providers.openai_test_hint')}</span>
                 </div>
                 <div className={styles.modelTestControls}>
+                  <Select
+                    value={testEndpoint}
+                    options={endpointSelectOptions}
+                    onChange={(value) => {
+                      setTestEndpoint(value as 'chat' | 'embeddings');
+                    }}
+                    className={styles.openaiTestSelect}
+                    ariaLabel={t('ai_providers.openai_test_endpoint_label')}
+                    disabled={saving || disabled || isTestingKeys || testStatus === 'loading'}
+                  />
                   <Select
                     value={testModel}
                     options={modelSelectOptions}

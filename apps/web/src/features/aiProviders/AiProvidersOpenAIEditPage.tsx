@@ -16,13 +16,17 @@ import { apiCallApi, getApiCallErrorDetails } from '@/services/api';
 import type { ApiKeyEntry } from '@/types';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { buildHeaderObject, hasHeader } from '@/utils/headers';
-import { buildApiKeyEntry, buildOpenAIChatCompletionsEndpoint } from '@/components/providers/utils';
+import {
+  buildApiKeyEntry,
+  buildOpenAIChatCompletionsEndpoint,
+  buildOpenAIEmbeddingsEndpoint,
+} from '@/components/providers/utils';
 import {
   appendIdleKeyTestStatus,
   removeKeyTestStatusAtIndex,
 } from '@/features/aiProviders/model/keyTestStatuses';
 import type { OpenAIEditOutletContext } from './AiProvidersOpenAIEditLayout';
-import type { KeyTestStatus } from '@/stores/useOpenAIEditDraftStore';
+import type { KeyTestStatus, OpenAITestEndpoint } from '@/stores/useOpenAIEditDraftStore';
 import styles from './AiProvidersPage.module.scss';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
 
@@ -49,6 +53,8 @@ export function AiProvidersOpenAIEditPage() {
     setForm,
     testModel,
     setTestModel,
+    testEndpoint,
+    setTestEndpoint,
     testStatus,
     setTestStatus,
     testMessage,
@@ -79,7 +85,13 @@ export function AiProvidersOpenAIEditPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleBack]);
 
-  const canSave = !disableControls && !loading && !saving && !invalidIndexParam && !invalidIndex && !isTestingKeys;
+  const canSave =
+    !disableControls &&
+    !loading &&
+    !saving &&
+    !invalidIndexParam &&
+    !invalidIndex &&
+    !isTestingKeys;
   const hasConfiguredModels = form.modelEntries.some((entry) => entry.name.trim());
   const hasTestableKeys = form.apiKeyEntries.some(
     (entry) => entry.apiKey?.trim() || normalizeAuthIndex(entry.authIndex)
@@ -98,6 +110,14 @@ export function AiProvidersOpenAIEditPage() {
       return acc;
     }, []);
   }, [form.modelEntries]);
+
+  const endpointSelectOptions = useMemo(
+    () => [
+      { value: 'chat', label: t('ai_providers.openai_test_endpoint_chat') },
+      { value: 'embeddings', label: t('ai_providers.openai_test_endpoint_embeddings') },
+    ],
+    [t]
+  );
   const connectivityConfigSignature = useMemo(() => {
     const headersSignature = form.headers
       .map((entry) => `${entry.key.trim()}:${entry.value.trim()}`)
@@ -105,8 +125,14 @@ export function AiProvidersOpenAIEditPage() {
     const modelsSignature = form.modelEntries
       .map((entry) => `${entry.name.trim()}:${entry.alias.trim()}`)
       .join('|');
-    return [form.baseUrl.trim(), testModel.trim(), headersSignature, modelsSignature].join('||');
-  }, [form.baseUrl, form.headers, form.modelEntries, testModel]);
+    return [
+      form.baseUrl.trim(),
+      testModel.trim(),
+      testEndpoint,
+      headersSignature,
+      modelsSignature,
+    ].join('||');
+  }, [form.baseUrl, form.headers, form.modelEntries, testModel, testEndpoint]);
   const previousConnectivityConfigRef = useRef(connectivityConfigSignature);
 
   useEffect(() => {
@@ -134,7 +160,10 @@ export function AiProvidersOpenAIEditPage() {
         return false;
       }
 
-      const endpoint = buildOpenAIChatCompletionsEndpoint(baseUrl);
+      const endpoint =
+        testEndpoint === 'embeddings'
+          ? buildOpenAIEmbeddingsEndpoint(baseUrl)
+          : buildOpenAIChatCompletionsEndpoint(baseUrl);
       if (!endpoint) {
         showNotification(t('notification.openai_test_url_required'), 'error');
         return false;
@@ -143,7 +172,10 @@ export function AiProvidersOpenAIEditPage() {
       const keyEntry = form.apiKeyEntries[keyIndex];
       const keyAuthIndex = normalizeAuthIndex(keyEntry?.authIndex) ?? undefined;
       if (!keyEntry?.apiKey?.trim() && !keyAuthIndex) {
-        setDraftKeyTestStatus(keyIndex, { status: 'error', message: t('notification.openai_test_key_required') });
+        setDraftKeyTestStatus(keyIndex, {
+          status: 'error',
+          message: t('notification.openai_test_key_required'),
+        });
         return false;
       }
 
@@ -159,7 +191,9 @@ export function AiProvidersOpenAIEditPage() {
         ...customHeaders,
       };
       if (!hasHeader(headers, 'authorization')) {
-        headers.Authorization = keyAuthIndex ? 'Bearer $TOKEN$' : `Bearer ${keyEntry.apiKey.trim()}`;
+        headers.Authorization = keyAuthIndex
+          ? 'Bearer $TOKEN$'
+          : `Bearer ${keyEntry.apiKey.trim()}`;
       }
 
       // Set loading state for this key
@@ -172,12 +206,16 @@ export function AiProvidersOpenAIEditPage() {
             method: 'POST',
             url: endpoint,
             header: Object.keys(headers).length ? headers : undefined,
-            data: JSON.stringify({
-              model: modelName,
-              messages: [{ role: 'user', content: 'Hi' }],
-              stream: false,
-              max_tokens: 5,
-            }),
+            data: JSON.stringify(
+              testEndpoint === 'embeddings'
+                ? { model: modelName, input: 'Hi' }
+                : {
+                    model: modelName,
+                    messages: [{ role: 'user', content: 'Hi' }],
+                    stream: false,
+                    max_tokens: 5,
+                  }
+            ),
           },
           { timeout: OPENAI_TEST_TIMEOUT_MS }
         );
@@ -202,7 +240,17 @@ export function AiProvidersOpenAIEditPage() {
         return false;
       }
     },
-    [form.baseUrl, form.apiKeyEntries, form.headers, testModel, availableModels, t, setDraftKeyTestStatus, showNotification]
+    [
+      form.baseUrl,
+      form.apiKeyEntries,
+      form.headers,
+      testModel,
+      testEndpoint,
+      availableModels,
+      t,
+      setDraftKeyTestStatus,
+      showNotification,
+    ]
   );
 
   const testSingleKey = useCallback(
@@ -231,7 +279,10 @@ export function AiProvidersOpenAIEditPage() {
       return;
     }
 
-    const endpoint = buildOpenAIChatCompletionsEndpoint(baseUrl);
+    const endpoint =
+      testEndpoint === 'embeddings'
+        ? buildOpenAIEmbeddingsEndpoint(baseUrl)
+        : buildOpenAIChatCompletionsEndpoint(baseUrl);
     if (!endpoint) {
       const message = t('notification.openai_test_url_required');
       setTestStatus('error');
@@ -250,7 +301,9 @@ export function AiProvidersOpenAIEditPage() {
     }
 
     const validKeyIndexes = form.apiKeyEntries
-      .map((entry, index) => (entry.apiKey?.trim() || normalizeAuthIndex(entry.authIndex) ? index : -1))
+      .map((entry, index) =>
+        entry.apiKey?.trim() || normalizeAuthIndex(entry.authIndex) ? index : -1
+      )
       .filter((index) => index >= 0);
     if (validKeyIndexes.length === 0) {
       const message = t('notification.openai_test_key_required');
@@ -282,7 +335,10 @@ export function AiProvidersOpenAIEditPage() {
         setTestMessage(message);
         showNotification(message, 'error');
       } else {
-        const message = t('ai_providers.openai_test_all_partial', { success: successCount, failed: failCount });
+        const message = t('ai_providers.openai_test_all_partial', {
+          success: successCount,
+          failed: failCount,
+        });
         setTestStatus('error');
         setTestMessage(message);
         showNotification(message, 'warning');
@@ -295,6 +351,7 @@ export function AiProvidersOpenAIEditPage() {
     form.baseUrl,
     form.apiKeyEntries,
     testModel,
+    testEndpoint,
     availableModels,
     t,
     setTestStatus,
@@ -550,10 +607,12 @@ export function AiProvidersOpenAIEditPage() {
                   <Button
                     variant="secondary"
                     size="sm"
-                    onClick={() => setForm((prev) => ({
-                      ...prev,
-                      modelEntries: [...prev.modelEntries, { name: '', alias: '' }]
-                    }))}
+                    onClick={() =>
+                      setForm((prev) => ({
+                        ...prev,
+                        modelEntries: [...prev.modelEntries, { name: '', alias: '' }],
+                      }))
+                    }
                     disabled={saving || disableControls || isTestingKeys}
                   >
                     {t('ai_providers.openai_models_add_btn')}
@@ -596,10 +655,24 @@ export function AiProvidersOpenAIEditPage() {
               {/* 测试区域 */}
               <div className={styles.modelTestPanel}>
                 <div className={styles.modelTestMeta}>
-                  <label className={styles.modelTestLabel}>{t('ai_providers.openai_test_title')}</label>
+                  <label className={styles.modelTestLabel}>
+                    {t('ai_providers.openai_test_title')}
+                  </label>
                   <span className={styles.modelTestHint}>{t('ai_providers.openai_test_hint')}</span>
                 </div>
                 <div className={styles.modelTestControls}>
+                  <Select
+                    value={testEndpoint}
+                    options={endpointSelectOptions}
+                    onChange={(value) => {
+                      setTestEndpoint(value as OpenAITestEndpoint);
+                    }}
+                    className={styles.openaiTestSelect}
+                    ariaLabel={t('ai_providers.openai_test_endpoint_label')}
+                    disabled={
+                      saving || disableControls || isTestingKeys || testStatus === 'loading'
+                    }
+                  />
                   <Select
                     value={testModel}
                     options={modelSelectOptions}
@@ -615,14 +688,27 @@ export function AiProvidersOpenAIEditPage() {
                     }
                     className={styles.openaiTestSelect}
                     ariaLabel={t('ai_providers.openai_test_title')}
-                    disabled={saving || disableControls || isTestingKeys || testStatus === 'loading' || availableModels.length === 0}
+                    disabled={
+                      saving ||
+                      disableControls ||
+                      isTestingKeys ||
+                      testStatus === 'loading' ||
+                      availableModels.length === 0
+                    }
                   />
                   <Button
                     variant={testStatus === 'error' ? 'danger' : 'secondary'}
                     size="sm"
                     onClick={() => void testAllKeys()}
                     loading={testStatus === 'loading'}
-                    disabled={saving || disableControls || isTestingKeys || testStatus === 'loading' || !hasConfiguredModels || !hasTestableKeys}
+                    disabled={
+                      saving ||
+                      disableControls ||
+                      isTestingKeys ||
+                      testStatus === 'loading' ||
+                      !hasConfiguredModels ||
+                      !hasTestableKeys
+                    }
                     title={t('ai_providers.openai_test_all_hint')}
                     className={styles.modelTestAllButton}
                   >
@@ -647,7 +733,9 @@ export function AiProvidersOpenAIEditPage() {
 
             <div className={styles.keyEntriesSection}>
               <div className={styles.keyEntriesHeader}>
-                <label className={styles.keyEntriesTitle}>{t('ai_providers.openai_add_modal_keys_label')}</label>
+                <label className={styles.keyEntriesTitle}>
+                  {t('ai_providers.openai_add_modal_keys_label')}
+                </label>
                 <span className={styles.keyEntriesHint}>{t('ai_providers.openai_keys_hint')}</span>
               </div>
               {renderKeyEntries(form.apiKeyEntries)}
