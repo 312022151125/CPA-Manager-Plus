@@ -24,6 +24,13 @@ describe('accountsPagePresentation', () => {
     expect(quotaStatusLabelKey('exhausted')).toBe('accounts.quota_status_exhausted');
   });
 
+  it('formats detail timestamps with optional seconds using a numeric local format', () => {
+    const timestamp = new Date(2026, 7, 26, 17, 44, 5, 0).getTime();
+
+    expect(formatTimestamp(timestamp, 'zh-CN')).toBe('08/26 17:44');
+    expect(formatTimestamp(timestamp, 'en', true)).toBe('08/26 17:44:05');
+  });
+
   it('formats normalized quota resets consistently and preserves legacy text fallbacks', () => {
     const resetAtMs = new Date(2026, 6, 30, 10, 5, 0, 0).getTime();
     const recoverAtMs = new Date(2026, 6, 31, 11, 15, 0, 0).getTime();

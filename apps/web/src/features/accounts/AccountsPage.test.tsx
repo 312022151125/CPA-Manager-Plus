@@ -3082,7 +3082,7 @@ describe('AccountsPage replacement flows', () => {
               input_tokens: 800,
               output_tokens: 200,
               cost: 0.42,
-              last_seen_ms: 1_700_000_000_000,
+              last_seen_ms: new Date(2026, 7, 26, 17, 44, 5, 0).getTime(),
             },
           ],
           timeline: [],
@@ -3104,6 +3104,7 @@ describe('AccountsPage replacement flows', () => {
     });
     expect(lastActiveMetric.props['data-overview-metric-kind']).toBe('timestamp');
     expect(readText(lastActiveMetric)).toContain('accounts.detail_overview_activity_last_active');
+    expect(readText(lastActiveMetric)).toContain('08/26 17:44');
     expect(lastActiveMetric.findByType('strong').props.title).toBeTruthy();
     const overviewCall = mocks.getAnalytics.mock.calls.find(
       (call) => (call[2] as AnalyticsRequestForTest).include?.account_stats === true

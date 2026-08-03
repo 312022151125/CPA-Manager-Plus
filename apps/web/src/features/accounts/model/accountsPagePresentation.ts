@@ -145,19 +145,19 @@ const resolveValidTimestampDate = (value: number | null | undefined): Date | nul
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
-export const formatTimestamp = (value: number | null, locale: string) => {
+const padTimestampPart = (value: number) => String(value).padStart(2, '0');
+
+const formatNumericTimestamp = (date: Date, includeSeconds = false) => {
+  const base = `${padTimestampPart(date.getMonth() + 1)}/${padTimestampPart(
+    date.getDate()
+  )} ${padTimestampPart(date.getHours())}:${padTimestampPart(date.getMinutes())}`;
+  return includeSeconds ? `${base}:${padTimestampPart(date.getSeconds())}` : base;
+};
+
+export const formatTimestamp = (value: number | null, _locale: string, includeSeconds = false) => {
   const date = resolveValidTimestampDate(value);
   if (!date) return '-';
-  try {
-    return new Intl.DateTimeFormat(locale, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    }).format(date);
-  } catch {
-    return '-';
-  }
+  return formatNumericTimestamp(date, includeSeconds);
 };
 
 export const formatTimestampTitle = (
@@ -176,15 +176,11 @@ export const formatTimestampTitle = (
   }
 };
 
-const padQuotaResetPart = (value: number) => String(value).padStart(2, '0');
-
 export const formatQuotaResetTimestamp = (value: number | null | undefined, _locale?: string) => {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '-';
-  return `${padQuotaResetPart(date.getMonth() + 1)}/${padQuotaResetPart(
-    date.getDate()
-  )} ${padQuotaResetPart(date.getHours())}:${padQuotaResetPart(date.getMinutes())}`;
+  return formatNumericTimestamp(date);
 };
 
 export const formatQuotaResetDisplay = (

@@ -597,6 +597,7 @@ describe('accountDetailViewModel', () => {
           key: 'lastSeenMs',
           labelKey: 'accounts.detail_overview_activity_last_active',
           value: 1_700_000_000_000,
+          valueKind: 'timestamp',
         }),
       ])
     );
