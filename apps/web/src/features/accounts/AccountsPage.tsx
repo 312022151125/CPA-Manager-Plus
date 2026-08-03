@@ -26,6 +26,7 @@ import {
   IconEye,
   IconEyeOff,
   IconFileText,
+  IconKey,
   IconMoreVertical,
   IconModelCluster,
   IconPlus,
@@ -52,6 +53,7 @@ import { buildQuotaFailureState, getScopedQuotaState } from '@/components/quota/
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
+import { getAuthFileIcon } from '@/features/authFiles/constants';
 import { useAuthFilesData } from '@/features/authFiles/hooks/useAuthFilesData';
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
 import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
@@ -558,6 +560,7 @@ export function AccountsPage() {
   const accountSortOptionRefs = useRef<Map<AccountSortFieldValue, HTMLButtonElement | null>>(
     new Map()
   );
+  const detailDrawerBodyRef = useRef<HTMLDivElement | null>(null);
   const headerSnapshotContextRef = useRef({
     managerServiceBase: featureAvailability.managerServiceBase,
     managementKey,
@@ -1726,6 +1729,12 @@ export function AccountsPage() {
       setDetailTab('overview');
     }
   }, [selectedRowKey]);
+
+  useLayoutEffect(() => {
+    if (detailDrawerBodyRef.current) {
+      detailDrawerBodyRef.current.scrollTop = 0;
+    }
+  }, [detailTab, selectedRowKey]);
 
   useEffect(() => {
     if (loading || error || !selectedRowKey || selectedRow) return;
@@ -3534,6 +3543,8 @@ export function AccountsPage() {
       );
     }
 
+    const providerIcon = getAuthFileIcon(selectedRow.provider, resolvedTheme);
+
     const detailTabs: Array<{ id: DetailTab; label: string }> = [
       { id: 'overview', label: t('accounts.detail_tab_overview') },
       { id: 'quota', label: t('accounts.detail_tab_quota') },
@@ -3741,24 +3752,34 @@ export function AccountsPage() {
         onBeforeClose={confirmConfigurationDiscard}
         width="clamp(540px, 45vw, 720px)"
         className={styles.accountDetailDrawer}
+        bodyRef={detailDrawerBodyRef}
         title={
-          <div className={styles.drawerTitleStack}>
-            <strong className={styles.drawerTitlePrimary} title={selectedRow.accountLabel}>
-              {getDisplayAccount(selectedRow)}
-            </strong>
-            <span className={styles.drawerTitleMeta}>
-              {getProviderLabel(selectedRow.provider, t)} · {selectedRow.planType ?? '-'} ·{' '}
-              <button
-                type="button"
-                className={styles.drawerFileNameCopy}
-                onClick={() => copyTextWithNotification(selectedRow.fileName)}
-                title={t('common.copy', { defaultValue: '点击复制' })}
-                aria-label={`${t('common.copy', { defaultValue: '点击复制' })} ${getDisplayFileName(selectedRow.fileName)}`}
-              >
-                {getDisplayFileName(selectedRow.fileName)}
-                <IconCopy size={12} />
-              </button>
+          <div className={styles.drawerTitleIdentity}>
+            <span
+              className={styles.drawerProviderIcon}
+              data-account-provider-icon={selectedRow.provider}
+              aria-hidden="true"
+            >
+              {providerIcon ? <img src={providerIcon} alt="" /> : <IconKey size={24} />}
             </span>
+            <div className={styles.drawerTitleStack}>
+              <strong className={styles.drawerTitlePrimary} title={selectedRow.accountLabel}>
+                {getDisplayAccount(selectedRow)}
+              </strong>
+              <span className={styles.drawerTitleMeta}>
+                {getProviderLabel(selectedRow.provider, t)} · {selectedRow.planType ?? '-'} ·{' '}
+                <button
+                  type="button"
+                  className={styles.drawerFileNameCopy}
+                  onClick={() => copyTextWithNotification(selectedRow.fileName)}
+                  title={t('common.copy', { defaultValue: '点击复制' })}
+                  aria-label={`${t('common.copy', { defaultValue: '点击复制' })} ${getDisplayFileName(selectedRow.fileName)}`}
+                >
+                  {getDisplayFileName(selectedRow.fileName)}
+                  <IconCopy size={12} />
+                </button>
+              </span>
+            </div>
           </div>
         }
         footer={
@@ -3815,13 +3836,19 @@ export function AccountsPage() {
               </p>
             </div>
           ) : null}
-          <div className={styles.drawerTabs} role="tablist">
+          <div
+            className={styles.drawerTabs}
+            role="tablist"
+            aria-label={t('accounts.detail_tablist_label')}
+          >
             {detailTabs.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
                 role="tab"
+                id={`accounts-detail-tab-${tab.id}`}
                 aria-selected={detailTab === tab.id}
+                aria-controls="accounts-detail-tab-panel"
                 className={detailTab === tab.id ? styles.drawerTabActive : ''}
                 onClick={() => void openAccountDetail(selectedRow, tab.id)}
               >
@@ -3829,7 +3856,14 @@ export function AccountsPage() {
               </button>
             ))}
           </div>
-          <div className={styles.drawerTabPanel}>{renderActiveDetail()}</div>
+          <div
+            id="accounts-detail-tab-panel"
+            className={styles.drawerTabPanel}
+            role="tabpanel"
+            aria-labelledby={`accounts-detail-tab-${detailTab}`}
+          >
+            {renderActiveDetail()}
+          </div>
         </div>
       </Drawer>
     );

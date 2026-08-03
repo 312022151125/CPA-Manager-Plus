@@ -6,6 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
   type PropsWithChildren,
+  type Ref,
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -23,6 +24,8 @@ interface DrawerProps {
   /** 桌面端面板宽度，移动端自动转为底部全宽弹层 */
   width?: number | string;
   className?: string;
+  /** 可选的正文滚动容器引用，供需要在内容切换时归零滚动位置的调用方使用。 */
+  bodyRef?: Ref<HTMLDivElement>;
 }
 
 const CLOSE_ANIMATION_DURATION = 280;
@@ -58,6 +61,7 @@ export function Drawer({
   footer,
   width = 420,
   className,
+  bodyRef,
   children,
 }: PropsWithChildren<DrawerProps>) {
   const { t } = useTranslation();
@@ -259,7 +263,9 @@ export function Drawer({
             <IconX size={18} />
           </button>
         </div>
-        <div className={styles.body}>{children}</div>
+        <div ref={bodyRef} className={styles.body}>
+          {children}
+        </div>
         {footer && <div className={styles.footer}>{footer}</div>}
       </div>
     </div>

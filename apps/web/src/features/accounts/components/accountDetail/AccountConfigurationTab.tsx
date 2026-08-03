@@ -136,25 +136,11 @@ export function AccountConfigurationTab({
             {t('accounts.config_unsaved')}
           </span>
         ) : null}
-        <div
-          className={`${styles.configurationToolbarActions} ${styles.configurationToolbarActionsWithReload}`}
-        >
+        <div className={styles.configurationToolbarActions}>
           <Button
             variant="secondary"
             size="sm"
-            iconOnly
-            id={reloadButtonId}
-            data-account-config-reload="toolbar"
-            aria-label={t('common.refresh')}
-            title={t('common.refresh')}
-            onClick={reloadAndRestoreFocus}
-            disabled={dirty || state.saving}
-          >
-            <IconRefreshCw size={14} />
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
+            className={styles.configurationToolbarButton}
             onClick={editor.reset}
             disabled={!dirty || state.saving}
           >
@@ -162,6 +148,7 @@ export function AccountConfigurationTab({
           </Button>
           <Button
             size="sm"
+            className={styles.configurationToolbarButton}
             onClick={() => void editor.save()}
             loading={state.saving}
             disabled={!canSave || row.disabled}
@@ -192,14 +179,16 @@ export function AccountConfigurationTab({
             disabled={disabled}
             onChange={(event) => editor.updateField('prefix', event.target.value)}
           />
-          <Input
-            label={t('auth_files.proxy_url_label')}
-            value={draft.proxyUrl}
-            placeholder={t('auth_files.proxy_url_placeholder')}
-            hint={t('accounts.config_proxy_hint')}
-            disabled={disabled}
-            onChange={(event) => editor.updateField('proxyUrl', event.target.value)}
-          />
+          <div className={styles.configurationFieldFull}>
+            <Input
+              label={t('auth_files.proxy_url_label')}
+              value={draft.proxyUrl}
+              placeholder={t('auth_files.proxy_url_placeholder')}
+              hint={t('accounts.config_proxy_hint')}
+              disabled={disabled}
+              onChange={(event) => editor.updateField('proxyUrl', event.target.value)}
+            />
+          </div>
         </div>
       </section>
 
@@ -230,13 +219,15 @@ export function AccountConfigurationTab({
             disabled={disabled}
             onChange={(event) => editor.updateField('weight', event.target.value)}
           />
-          <Input
-            label={t('auth_files.note_label')}
-            value={draft.note}
-            placeholder={t('auth_files.note_placeholder')}
-            disabled={disabled}
-            onChange={(event) => editor.updateField('note', event.target.value)}
-          />
+          <div className={styles.configurationFieldFull}>
+            <Input
+              label={t('auth_files.note_label')}
+              value={draft.note}
+              placeholder={t('auth_files.note_placeholder')}
+              disabled={disabled}
+              onChange={(event) => editor.updateField('note', event.target.value)}
+            />
+          </div>
         </div>
       </section>
 

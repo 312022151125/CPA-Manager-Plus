@@ -1218,6 +1218,19 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.configurationSourceMemberCounts).toContain(2);
   });
 
+  it('shows the provider icon in the credential detail title', async () => {
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+      await Promise.resolve();
+    });
+
+    const providerIcon = renderer.root.findByProps({ 'data-account-provider-icon': 'codex' });
+    expect(providerIcon.findByType('img').props.alt).toBe('');
+    expect(providerIcon.findByType('img').props.src).toContain('codex');
+  });
+
   it('keeps Codex credential refresh in the drawer more menu', async () => {
     const renderer = await renderAccountsPage();
 
@@ -2951,14 +2964,14 @@ describe('AccountsPage replacement flows', () => {
     expect(treeText(renderer)).toContain('accounts.detail_overview_attention_candidates');
   });
 
-  it('navigates from overview cards to their contextual detail tabs', async () => {
+  it('navigates between the overview and contextual detail tabs', async () => {
     const renderer = await renderAccountsPage();
 
     await act(async () => {
       findDetailButtonByName(renderer, 'codex.json').props.onClick();
     });
     await act(async () => {
-      renderer.root.findByProps({ 'data-overview-target-tab': 'quota' }).props.onClick();
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
     });
 
     expect(findHostButtonByText(renderer, 'accounts.detail_tab_quota').props['aria-selected']).toBe(
@@ -2968,7 +2981,7 @@ describe('AccountsPage replacement flows', () => {
       findHostButtonByText(renderer, 'accounts.detail_tab_overview').props.onClick();
     });
     await act(async () => {
-      renderer.root.findByProps({ 'data-overview-target-tab': 'config' }).props.onClick();
+      findHostButtonByText(renderer, 'accounts.detail_tab_config').props.onClick();
     });
 
     expect(
@@ -3761,6 +3774,47 @@ describe('AccountsPage replacement flows', () => {
       source: 'codex-a.json',
       auth_index: 'auth-a',
     });
+  });
+
+  it('associates credential detail tabs with their active panel', async () => {
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+
+    const tablist = renderer.root
+      .findAllByProps({ role: 'tablist' })
+      .find((node) => node.props['aria-label'] === 'accounts.detail_tablist_label');
+    const panel = renderer.root.findByProps({ role: 'tabpanel' });
+    const tabs = renderer.root
+      .findAllByProps({ role: 'tab' })
+      .filter((node) => node.props['aria-controls'] === panel.props.id);
+
+    expect(tablist?.props['aria-label']).toBe('accounts.detail_tablist_label');
+    expect(tabs).toHaveLength(5);
+    expect(tabs.every((tab) => tab.props['aria-controls'] === panel.props.id)).toBe(true);
+    expect(panel.props['aria-labelledby']).toBe('accounts-detail-tab-overview');
+  });
+
+  it('resets the detail drawer scroll position when switching tabs', async () => {
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+      await Promise.resolve();
+    });
+
+    const drawer = renderer.root.findByType(Drawer);
+    const bodyRef = drawer.props.bodyRef as { current: { scrollTop: number } | null };
+    bodyRef.current = { scrollTop: 240 };
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(bodyRef.current?.scrollTop).toBe(0);
   });
 
   it('uses the unified quota timestamp format for cooldown and reset-credit expiry', async () => {

@@ -118,20 +118,13 @@ const renderTab = (
 };
 
 describe('AccountConfigurationTab', () => {
-  it('reloads the source from a compact toolbar action only when the draft is clean', () => {
-    const cleanEditor = makeEditor('codex');
-    const renderer = renderTab(makeRow('codex'), cleanEditor);
-    const reloadButton = renderer.root.findByProps({ 'aria-label': 'common.refresh' });
+  it('keeps credential refresh out of the configuration toolbar', () => {
+    const renderer = renderTab(makeRow('codex'), makeEditor('codex'));
 
-    expect(reloadButton.props.disabled).toBe(false);
-    act(() => reloadButton.props.onClick());
-    expect(cleanEditor.reload).toHaveBeenCalledTimes(1);
-
-    const dirtyEditor = { ...makeEditor('codex'), dirty: true };
-    const dirtyRenderer = renderTab(makeRow('codex'), dirtyEditor);
-    expect(dirtyRenderer.root.findByProps({ 'aria-label': 'common.refresh' }).props.disabled).toBe(
-      true
+    expect(renderer.root.findAllByProps({ 'data-account-config-reload': 'toolbar' })).toHaveLength(
+      0
     );
+    expect(readText(renderer.toJSON())).not.toContain('common.refresh');
   });
 
   it('shows xAI routing choices, Base URL, and WebSocket controls together', () => {
@@ -174,6 +167,8 @@ describe('AccountConfigurationTab', () => {
     const saveButton = buttons.find((button) => readText(button).includes('common.save'));
     if (!resetButton || !saveButton) throw new Error('configuration toolbar actions missing');
 
+    expect(resetButton.props.className).toContain('configurationToolbarButton');
+    expect(saveButton.props.className).toContain('configurationToolbarButton');
     act(() => resetButton.props.onClick());
     act(() => saveButton.props.onClick());
 

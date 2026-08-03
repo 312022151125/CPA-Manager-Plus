@@ -1361,11 +1361,17 @@
   --accounts-surface: var(--accounts-strong-surface);
   background: var(--accounts-surface);
   color: var(--accounts-text);
+
+  @include mobile {
+    height: 100dvh;
+    max-height: 100dvh;
+  }
 }
 
 .drawerBodyShell {
   display: grid;
   gap: 12px;
+  margin-top: -$spacing-md;
   min-width: 0;
   min-height: 0;
 }
@@ -1380,6 +1386,35 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.drawerTitleIdentity {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 10px;
+  min-width: 0;
+}
+
+.drawerProviderIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+
+  img {
+    display: block;
+    width: 30px;
+    height: 30px;
+    object-fit: contain;
+  }
 }
 
 .drawerTitlePrimary {
@@ -1431,14 +1466,22 @@
 }
 
 .drawerTabs {
+  position: sticky;
+  top: -$spacing-md;
+  z-index: 4;
   display: flex;
   gap: 4px;
   min-width: 0;
   overflow-x: auto;
+  margin-inline: -$spacing-lg;
   padding: 3px;
+  padding-inline: calc(#{$spacing-lg} + 4px) calc(#{$spacing-lg} + 3px);
   border: 1px solid var(--accounts-border);
-  border-radius: 12px;
+  border-top: 0;
+  border-left: 0;
+  border-radius: 0;
   background: var(--accounts-muted-surface);
+  box-shadow: 0 6px 12px color-mix(in srgb, var(--accounts-text) 7%, transparent);
 
   button {
     flex: 0 0 auto;
@@ -1523,6 +1566,7 @@
 }
 
 .overviewDecisionCard,
+.overviewRecentStatusCard,
 .overviewCard,
 .overviewActivityCard,
 .overviewAttentionCard {
@@ -1584,6 +1628,134 @@
   &[data-overview-health='disabled'],
   &[data-overview-health='raw'] {
     --overview-accent: var(--accounts-neutral);
+  }
+}
+
+.overviewRecentStatusCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 15px;
+  background: color-mix(in srgb, var(--accounts-primary) 3%, var(--accounts-surface));
+}
+
+.overviewRecentStatusLayout {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.72fr) minmax(0, 1.28fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.overviewRecentStatusStats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.overviewRecentStatusMetric {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--accounts-border) 78%, transparent);
+  border-radius: 9px;
+  background: var(--accounts-surface);
+
+  span {
+    min-width: 0;
+    color: var(--accounts-muted);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+
+  strong {
+    flex: 0 0 auto;
+    color: var(--accounts-text);
+    font-size: 17px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+}
+
+.overviewRecentStatusMetricSuccess {
+  border-color: color-mix(in srgb, var(--accounts-success) 26%, var(--accounts-border));
+
+  strong {
+    color: var(--accounts-success);
+  }
+}
+
+.overviewRecentStatusMetricFailure {
+  border-color: color-mix(in srgb, var(--accounts-danger) 24%, var(--accounts-border));
+
+  strong {
+    color: var(--accounts-danger);
+  }
+}
+
+.overviewRecentStatusTimeline {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--accounts-primary) 15%, var(--accounts-border));
+  border-radius: 9px;
+  background: var(--accounts-surface);
+}
+
+.overviewRecentStatusTimelineHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+
+  span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--accounts-text);
+    font-size: 11px;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  span:last-child {
+    flex: 0 0 auto;
+    color: var(--accounts-muted);
+    font-size: 10px;
+    white-space: nowrap;
+  }
+}
+
+.overviewRecentStatusMessage {
+  display: grid;
+  gap: 4px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--accounts-danger) 30%, var(--accounts-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accounts-danger) 7%, var(--accounts-surface));
+
+  span {
+    color: var(--accounts-danger);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+  }
+
+  p {
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--accounts-text);
+    font-size: 12px;
+    line-height: 1.45;
   }
 }
 
@@ -1742,7 +1914,7 @@
 
 .overviewFieldGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 7px;
   margin: 0;
 
@@ -1766,13 +1938,11 @@
   dd {
     min-width: 0;
     margin: 0;
-    overflow: hidden;
+    overflow-wrap: anywhere;
     color: var(--accounts-text);
     font-size: 12px;
     font-weight: 800;
     line-height: 1.35;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 }
 
@@ -1966,11 +2136,15 @@
 }
 
 .configurationToolbar {
+  position: sticky;
+  top: 33px;
+  z-index: 3;
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 2px 0 4px;
+  padding: 0;
+  background: transparent;
 }
 
 .configurationDirtyBadge {
@@ -1992,6 +2166,45 @@
   flex: 0 0 auto;
   gap: 8px;
   margin-left: auto;
+}
+
+.configurationToolbarButton:global(.btn.btn-secondary) {
+  opacity: 1;
+  border-color: var(--accounts-strong-border);
+  background: var(--accounts-strong-surface);
+  color: var(--accounts-text);
+
+  &:hover:not(:disabled) {
+    border-color: var(--border-hover);
+    background: var(--surface-subtle-hover);
+    color: var(--primary-color);
+  }
+}
+
+.configurationToolbarButton:global(.btn.btn-secondary:disabled) {
+  opacity: 1;
+  border-color: var(--accounts-border);
+  background: var(--accounts-strong-surface);
+  color: var(--text-tertiary, var(--accounts-muted));
+}
+
+.configurationToolbarButton:global(.btn.btn-primary) {
+  opacity: 1;
+}
+
+.configurationToolbarButton:global(.btn.btn-primary:disabled) {
+  opacity: 1;
+  border-color: color-mix(
+    in srgb,
+    var(--primary-solid, var(--primary-color)) 38%,
+    var(--accounts-strong-surface)
+  );
+  background: color-mix(
+    in srgb,
+    var(--primary-solid, var(--primary-color)) 38%,
+    var(--accounts-strong-surface)
+  );
+  color: var(--text-tertiary, var(--accounts-muted));
 }
 
 .configurationReadOnlyNotice {
@@ -2263,6 +2476,21 @@
   border: 1px solid var(--accounts-border);
   border-radius: 11px;
   background: color-mix(in srgb, var(--accounts-muted-surface) 32%, var(--accounts-surface));
+
+  :global(.form-group) {
+    margin-bottom: 0;
+  }
+
+  :global(.form-group > label) {
+    color: var(--accounts-text);
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  :global(.form-group .hint) {
+    font-size: 12px;
+    line-height: 1.45;
+  }
 }
 
 .configurationSectionTitle {
@@ -2276,7 +2504,13 @@
 .configurationFieldGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 13px;
+  min-width: 0;
+}
+
+.configurationFieldFull {
+  grid-column: 1 / -1;
   min-width: 0;
 }
 
@@ -2421,12 +2655,12 @@
 
   dd {
     overflow: hidden;
+    overflow-wrap: anywhere;
     color: var(--accounts-text);
     font-family: $font-mono;
     font-size: 11px;
     font-weight: 700;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
   }
 }
 
@@ -2522,6 +2756,22 @@
     color: var(--text-primary);
     font-size: 13px;
     font-weight: 700;
+  }
+}
+
+.detailQuotaDiagnostics {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+
+  h4 {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.35;
   }
 }
 
@@ -4049,11 +4299,14 @@
 }
 
 .drawerTabs {
-  gap: 2px;
-  padding: 3px;
+  margin-inline: -$spacing-lg;
+  padding: 6px;
+  padding-inline: calc(#{$spacing-lg} + 3px) calc(#{$spacing-lg} + 3px);
   overflow-x: auto;
   border: 1px solid var(--accounts-border);
-  border-radius: 12px;
+  border-top: 0;
+  border-left: 0;
+  border-radius: 0;
   background: var(--accounts-muted-surface);
 
   button {
@@ -4159,6 +4412,7 @@
   }
 
   .overviewCardGrid,
+  .overviewRecentStatusLayout,
   .overviewEvidenceRow,
   .overviewFieldGrid {
     grid-template-columns: 1fr;
@@ -4179,9 +4433,9 @@
   }
 
   .configurationToolbar {
-    align-items: stretch;
-    flex-direction: column;
-    padding: 0 0 2px;
+    align-items: center;
+    flex-direction: row;
+    padding: 0;
   }
 
   .configurationDirtyBadge {
@@ -4189,20 +4443,11 @@
   }
 
   .configurationToolbarActions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin-left: 0;
+    display: flex;
+    margin-left: auto;
 
     :global(.btn) {
-      width: 100%;
-    }
-  }
-
-  .configurationToolbarActionsWithReload {
-    grid-template-columns: auto repeat(2, minmax(0, 1fr));
-
-    :global(.btn-icon-only) {
-      width: 34px;
+      width: auto;
     }
   }
 
@@ -4384,6 +4629,7 @@
 
 @include mobile {
   .overviewCardGrid,
+  .overviewRecentStatusLayout,
   .overviewEvidenceRow,
   .overviewFieldGrid {
     grid-template-columns: 1fr;

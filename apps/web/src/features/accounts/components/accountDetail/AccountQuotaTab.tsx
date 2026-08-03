@@ -92,6 +92,12 @@ export function AccountQuotaTab({
             </strong>
           </div>
         ) : null}
+        {detailView.quota.diagnostics.length > 0 ? (
+          <div className={styles.detailQuotaDiagnostics}>
+            <h4>{t('accounts.detail_quota_diagnostics')}</h4>
+            <AccountDetailFieldList fields={detailView.quota.diagnostics} />
+          </div>
+        ) : null}
       </section>
       <section className={styles.drawerSection}>
         <div className={styles.sectionHeaderInline}>
@@ -117,12 +123,6 @@ export function AccountQuotaTab({
           </div>
         )}
       </section>
-      {detailView.quota.diagnostics.length > 0 ? (
-        <section className={styles.drawerSection}>
-          <h3>{t('accounts.detail_quota_diagnostics')}</h3>
-          <AccountDetailFieldList fields={detailView.quota.diagnostics} />
-        </section>
-      ) : null}
     </div>
   );
 }
