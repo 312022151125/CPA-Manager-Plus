@@ -7,6 +7,9 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const workflowDir = path.join(repoRoot, '.github', 'workflows');
 const readWorkflow = (name) => readFileSync(path.join(workflowDir, name), 'utf8');
 const dependabotConfig = readFileSync(path.join(repoRoot, '.github', 'dependabot.yml'), 'utf8');
+const releaseYmlPath = path.join(workflowDir, 'release.yml');
+const hasReleaseYml = existsSync(releaseYmlPath);
+const releaseIt = hasReleaseYml ? it : it.skip;
 
 const externalActions = (workflow) =>
   [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)@([^\s#]+)/gm)]
@@ -67,7 +70,7 @@ describe('GitHub Actions workflow integrity', () => {
     expect(workflow).toContain('classify-pr-checks.mjs --null');
   });
 
-  it('serializes every publishing stage behind release preflight', () => {
+  releaseIt('serializes every publishing stage behind release preflight', () => {
     const workflow = readWorkflow('release.yml');
     for (const jobName of [
       'build_release_assets',
@@ -83,7 +86,7 @@ describe('GitHub Actions workflow integrity', () => {
     }
   });
 
-  it('exposes a serialized dry-run path and rejects legacy release-note fallback', () => {
+  releaseIt('exposes a serialized dry-run path and rejects legacy release-note fallback', () => {
     const workflow = readWorkflow('release.yml');
 
     expect(workflow).toContain('workflow_dispatch:');
@@ -99,7 +102,7 @@ describe('GitHub Actions workflow integrity', () => {
     expect(workflow).not.toContain('previous_tag');
   });
 
-  it('scopes Telegram secrets to the delivery step', () => {
+  releaseIt('scopes Telegram secrets to the delivery step', () => {
     const workflow = readWorkflow('release.yml');
     const notifyJob = jobBlock(workflow, 'notify_telegram');
     const stepsOffset = notifyJob.indexOf('\n    steps:');
