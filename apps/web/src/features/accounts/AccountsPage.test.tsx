@@ -3980,6 +3980,7 @@ describe('AccountsPage replacement flows', () => {
       requestMonitoringAvailable: true,
       serverCodexInspectionAvailable: false,
     };
+    const activityTimestamp = new Date(2026, 7, 26, 17, 44, 5, 0).getTime();
     mocks.getAnalytics.mockImplementation(
       async (_base: string, _key: string | undefined, request: unknown) => {
         const analyticsRequest = request as AnalyticsRequestForTest;
@@ -4000,14 +4001,14 @@ describe('AccountsPage replacement flows', () => {
           },
           recent_failures: [
             {
-              timestamp_ms: 1800,
+              timestamp_ms: activityTimestamp,
               model: 'gpt-5',
               fail_status_code: 503,
               fail_summary: 'full-range failure',
             },
           ],
           events: {
-            items: [makeAnalyticsEvent({ timestamp_ms: 2000, failed: false })],
+            items: [makeAnalyticsEvent({ timestamp_ms: activityTimestamp, failed: false })],
             next_before_ms: 0,
             has_more: false,
             total_count: 42,
@@ -4039,6 +4040,7 @@ describe('AccountsPage replacement flows', () => {
     expect(readText(failureRateMetric)).toContain('16.7%');
     expect(readText(latencyMetric)).toContain('2345 ms');
     expect(treeText(renderer)).toContain('full-range failure');
+    expect(treeText(renderer)).toContain('08/26 17:44:05');
   });
 
   it('keeps the scoped monitoring link visible when the event list is empty', async () => {

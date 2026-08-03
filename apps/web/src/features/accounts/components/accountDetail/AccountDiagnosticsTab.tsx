@@ -80,7 +80,7 @@ export function AccountDiagnosticsTab({
   const activityTotalCalls = activity.totalCalls ?? eventsTotalCount;
   const recentFailureMeta = activity.recentFailure
     ? [
-        formatTimestamp(activity.recentFailure.timestampMs, i18n.language),
+        formatTimestamp(activity.recentFailure.timestampMs, i18n.language, true),
         activity.recentFailure.model,
         activity.recentFailure.statusCode ? `HTTP ${activity.recentFailure.statusCode}` : '',
       ].filter(Boolean)
@@ -210,7 +210,9 @@ export function AccountDiagnosticsTab({
                           >
                             {getEventStatusText(event, t)}
                           </span>
-                          <strong>{formatTimestamp(event.timestamp_ms, i18n.language)}</strong>
+                          <strong>
+                            {formatTimestamp(event.timestamp_ms, i18n.language, true)}
+                          </strong>
                         </div>
                         <div className={styles.detailEventIdentity}>
                           <CopyableText
