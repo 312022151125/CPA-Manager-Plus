@@ -6,6 +6,7 @@ import { Drawer } from '@/components/ui/Drawer';
 import { DropdownMenu } from '@/components/ui/DropdownMenu';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { ProviderStatusBar } from '@/components/providers/ProviderStatusBar';
 import type { AuthFileItem, OAuthModelAliasEntry } from '@/types';
 import type {
   AccountActionCandidatesResponse,
@@ -2907,10 +2908,34 @@ describe('AccountsPage replacement flows', () => {
     await flushPromises();
 
     expect(renderer.root.findAllByProps({ 'data-overview-section': 'decision' })).toHaveLength(1);
+    const overviewSectionNames = renderer.root
+      .findAll((node) => typeof node.props['data-overview-section'] === 'string')
+      .map((node) => node.props['data-overview-section']);
+    expect(overviewSectionNames).toEqual([
+      'decision',
+      'recent-status',
+      'capacity',
+      'credential',
+      'activity',
+    ]);
+    expect(renderer.root.findAllByProps({ 'data-overview-section': 'recent-status' })).toHaveLength(
+      1
+    );
     expect(renderer.root.findAllByProps({ 'data-overview-section': 'capacity' })).toHaveLength(1);
     expect(renderer.root.findAllByProps({ 'data-overview-section': 'credential' })).toHaveLength(1);
     expect(renderer.root.findAllByProps({ 'data-overview-section': 'activity' })).toHaveLength(1);
     expect(renderer.root.findAllByProps({ 'data-overview-section': 'attention' })).toHaveLength(0);
+    const recentStatusSection = renderer.root.findByProps({
+      'data-overview-section': 'recent-status',
+    });
+    expect(recentStatusSection.props['data-overview-recent-status-empty']).toBe(true);
+    expect(
+      recentStatusSection.findAllByProps({ 'data-overview-recent-status-empty-message': 'true' })
+    ).toHaveLength(1);
+    const recentStatusBar = recentStatusSection.findByType(ProviderStatusBar);
+    expect(recentStatusBar.props.statusData.blockDetails).toHaveLength(20);
+    expect(recentStatusBar.props.statusData.totalSuccess).toBe(0);
+    expect(recentStatusBar.props.statusData.totalFailure).toBe(0);
     expect(
       renderer.root.findAllByProps({ 'data-overview-activity-scope': 'recent_snapshot' })
     ).toHaveLength(1);
@@ -2928,6 +2953,44 @@ describe('AccountsPage replacement flows', () => {
       'accounts.detail_overview_activity_eyebrow',
       'accounts.detail_overview_activity_source',
     ].forEach((key) => expect(overviewText).not.toContain(key));
+  });
+
+  it('aggregates recent request buckets and shows the current status explanation', async () => {
+    mocks.files = [
+      {
+        ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+        recent_requests: [
+          { success: 2, failed: 1 },
+          { success: 3, failed: 0 },
+        ],
+        status_message: 'rate_limit_reached',
+      } as AuthFileItem,
+    ];
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+
+    const recentStatusSection = renderer.root.findByProps({
+      'data-overview-section': 'recent-status',
+    });
+    expect(recentStatusSection.props['data-overview-recent-status-empty']).toBe(false);
+    expect(
+      recentStatusSection.findAllByProps({ 'data-overview-recent-status-empty-message': 'true' })
+    ).toHaveLength(0);
+    expect(
+      recentStatusSection.findAllByProps({ 'data-overview-recent-status-message': 'true' })
+    ).toHaveLength(1);
+    expect(readText(recentStatusSection)).toContain('rate_limit_reached');
+
+    const recentStatusBar = recentStatusSection.findByType(ProviderStatusBar);
+    expect(recentStatusBar.props.statusData).toMatchObject({
+      totalSuccess: 5,
+      totalFailure: 1,
+    });
+    expect(recentStatusBar.props.statusData.blockDetails).toHaveLength(20);
   });
 
   it('loads and renders matching pending actions in the overview', async () => {

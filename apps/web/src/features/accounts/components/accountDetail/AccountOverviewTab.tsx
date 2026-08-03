@@ -1,23 +1,26 @@
 import { useTranslation } from 'react-i18next';
 import {
   IconChartLine,
-  IconChevronRight,
   IconDatabaseZap,
   IconKey,
   IconShield,
   IconTriangleAlert,
 } from '@/components/ui/icons';
+import { ProviderStatusBar } from '@/components/providers/ProviderStatusBar';
 import type {
   AccountDetailField,
   AccountDetailOverviewTargetTab,
   AccountDetailViewModel,
 } from '@/features/accounts/model/accountDetailViewModel';
+import authFileStyles from '@/features/authFiles/AuthFilesPage.module.scss';
+import { isHealthyAuthFileStatusMessage } from '@/features/authFiles/constants';
 import type { AccountListHealthStatusKey } from '@/features/accounts/model/accountListPresentation';
 import {
   formatPercent,
   formatQuotaResetTooltipParams,
   formatTimestampTitle,
 } from '@/features/accounts/model/accountsPagePresentation';
+import { statusBarDataFromRecentRequests } from '@/utils/recentRequests';
 import { AccountDetailFieldValue } from './AccountDetailFieldList';
 import styles from '@/features/accounts/AccountsPage.module.scss';
 
@@ -26,12 +29,6 @@ interface AccountOverviewTabProps {
   getHealthStatusClass: (status: AccountListHealthStatusKey) => string;
   onSelectTab: (tab: AccountDetailOverviewTargetTab) => void;
 }
-
-const getTargetLabelKey = (target: AccountDetailOverviewTargetTab) => {
-  if (target === 'quota') return 'accounts.detail_overview_open_quota';
-  if (target === 'config') return 'accounts.detail_overview_open_config';
-  return 'accounts.detail_overview_open_diagnostics';
-};
 
 function OverviewFieldGrid({ fields }: { fields: AccountDetailField[] }) {
   const { t } = useTranslation();
@@ -50,34 +47,14 @@ function OverviewFieldGrid({ fields }: { fields: AccountDetailField[] }) {
   );
 }
 
-function OverviewTabLink({
-  target,
-  onSelectTab,
-}: {
-  target: AccountDetailOverviewTargetTab;
-  onSelectTab: (tab: AccountDetailOverviewTargetTab) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <button
-      type="button"
-      className={styles.overviewTabLink}
-      data-overview-target-tab={target}
-      onClick={() => onSelectTab(target)}
-    >
-      <span>{t(getTargetLabelKey(target))}</span>
-      <IconChevronRight size={14} aria-hidden="true" />
-    </button>
-  );
-}
-
-export function AccountOverviewTab({
-  detailView,
-  getHealthStatusClass,
-  onSelectTab,
-}: AccountOverviewTabProps) {
+export function AccountOverviewTab({ detailView, getHealthStatusClass }: AccountOverviewTabProps) {
   const { t, i18n } = useTranslation();
-  const { decision, capacity, credential, activity, attention } = detailView.overview;
+  const { decision, capacity, credential, recentStatus, activity, attention } = detailView.overview;
+  const recentStatusData = statusBarDataFromRecentRequests(recentStatus.recentRequests);
+  const hasRecentRequests = recentStatusData.totalSuccess + recentStatusData.totalFailure > 0;
+  const hasStatusMessage =
+    Boolean(recentStatus.statusMessage) &&
+    !isHealthyAuthFileStatusMessage(recentStatus.statusMessage);
   const activityScopeLabel =
     activity.scope === 'monitoring_7d'
       ? t('accounts.detail_overview_activity_scope_7d', { days: activity.scopeDays ?? 7 })
@@ -136,7 +113,71 @@ export function AccountOverviewTab({
             </strong>
           </div>
         </div>
-        <OverviewTabLink target={decision.targetTab} onSelectTab={onSelectTab} />
+      </section>
+
+      <section
+        className={styles.overviewRecentStatusCard}
+        data-overview-section="recent-status"
+        data-overview-recent-status-empty={!hasRecentRequests}
+      >
+        <div className={styles.overviewCardHeader}>
+          <div className={styles.overviewSectionHeading}>
+            <span className={styles.overviewSectionIcon} aria-hidden="true">
+              <IconChartLine size={18} />
+            </span>
+            <h3>{t('accounts.detail_overview_recent_status_title')}</h3>
+          </div>
+          <span className={styles.overviewScopePill}>
+            {t('accounts.detail_overview_recent_status_scope')}
+          </span>
+        </div>
+
+        <div className={styles.overviewRecentStatusLayout}>
+          <div className={styles.overviewRecentStatusStats}>
+            <div
+              className={`${styles.overviewRecentStatusMetric} ${styles.overviewRecentStatusMetricSuccess}`}
+            >
+              <span>{t('accounts.detail_overview_recent_status_success')}</span>
+              <strong>{recentStatusData.totalSuccess}</strong>
+            </div>
+            <div
+              className={`${styles.overviewRecentStatusMetric} ${styles.overviewRecentStatusMetricFailure}`}
+            >
+              <span>{t('accounts.detail_overview_recent_status_failure')}</span>
+              <strong>{recentStatusData.totalFailure}</strong>
+            </div>
+          </div>
+
+          <div
+            className={styles.overviewRecentStatusTimeline}
+            data-overview-recent-status-bar="true"
+          >
+            <div className={styles.overviewRecentStatusTimelineHeader}>
+              <span>{t('accounts.detail_overview_recent_status_timeline')}</span>
+              <span>{t('accounts.detail_overview_recent_status_timeline_hint')}</span>
+            </div>
+            <ProviderStatusBar statusData={recentStatusData} styles={authFileStyles} />
+          </div>
+        </div>
+
+        {!hasRecentRequests ? (
+          <div
+            className={styles.overviewEmptyState}
+            data-overview-recent-status-empty-message="true"
+          >
+            {t('accounts.detail_overview_recent_status_empty')}
+          </div>
+        ) : null}
+
+        {hasStatusMessage ? (
+          <div
+            className={styles.overviewRecentStatusMessage}
+            data-overview-recent-status-message="true"
+          >
+            <span>{t('accounts.detail_overview_recent_status_message')}</span>
+            <p>{recentStatus.statusMessage}</p>
+          </div>
+        ) : null}
       </section>
 
       <div className={styles.overviewCardGrid}>
@@ -164,7 +205,6 @@ export function AccountOverviewTab({
           </div>
           <p className={styles.overviewCardDescription}>{t(capacity.descriptionKey)}</p>
           <OverviewFieldGrid fields={capacity.fields} />
-          <OverviewTabLink target={capacity.targetTab} onSelectTab={onSelectTab} />
         </section>
 
         <section className={styles.overviewCard} data-overview-section="credential">
@@ -181,7 +221,6 @@ export function AccountOverviewTab({
             <span>{t(credential.sourceLabelKey)}</span>
           </div>
           <OverviewFieldGrid fields={credential.fields} />
-          <OverviewTabLink target={credential.targetTab} onSelectTab={onSelectTab} />
         </section>
       </div>
 
@@ -239,7 +278,6 @@ export function AccountOverviewTab({
         ) : (
           <div className={styles.overviewEmptyState}>{t(activity.emptyStateKey)}</div>
         )}
-        <OverviewTabLink target={activity.targetTab} onSelectTab={onSelectTab} />
       </section>
 
       {attention ? (
@@ -259,7 +297,6 @@ export function AccountOverviewTab({
             </h3>
             <p>{t(attention.reasonKey, attention.reasonParams)}</p>
           </div>
-          <OverviewTabLink target={attention.targetTab} onSelectTab={onSelectTab} />
         </section>
       ) : null}
     </div>

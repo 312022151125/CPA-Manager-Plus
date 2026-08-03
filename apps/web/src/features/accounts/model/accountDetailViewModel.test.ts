@@ -459,6 +459,29 @@ describe('accountDetailViewModel', () => {
     );
   });
 
+  it('does not expose a stale pending action status for a keep inspection', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        inspection: {
+          source: 'server',
+          action: 'keep',
+          actionReason: 'healthy',
+          actionStatus: 'pending',
+          statusCode: 200,
+          usedPercent: 20,
+          isQuota: false,
+          runId: 1,
+          resultId: 2,
+          createdAtMs: 1000,
+        },
+      })
+    );
+
+    expect(viewModel.strategy.inspectionFields).not.toEqual(
+      expect.arrayContaining([{ key: 'actionStatus' }])
+    );
+  });
+
   it('exposes xAI official API reachability without billing details', () => {
     const xaiQuota: XaiQuotaState = {
       status: 'success',
@@ -1165,6 +1188,30 @@ describe('accountDetailViewModel', () => {
     expect(viewModel.overview.decision.basisLabelKey).toBe(
       'accounts.detail_overview_basis_credential_state'
     );
+  });
+
+  it('aggregates recent status from request buckets and preserves the current status message', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        statusMessage: 'rate_limit_reached',
+        usage: {
+          success: 99,
+          failure: 1,
+          successRate: 99,
+          recentRequests: [
+            { success: 2, failed: 1 },
+            { success: 3, failed: 0 },
+          ],
+        },
+      })
+    );
+
+    expect(viewModel.overview.recentStatus).toMatchObject({
+      success: 5,
+      failure: 1,
+      successRate: (5 / 6) * 100,
+      statusMessage: 'rate_limit_reached',
+    });
   });
 
   it('treats a failed cached quota lookup without values or windows as missing capacity data', () => {

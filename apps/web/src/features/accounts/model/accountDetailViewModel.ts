@@ -14,6 +14,7 @@ import { normalizePlanType, parseIdTokenPayload } from '@/utils/quota/parsers';
 import { isValidQuotaResetAtMs } from '@/utils/quota/formatters';
 import { resolveCodexPlanType } from '@/utils/quota/resolvers';
 import { parseTimestampMs } from '@/utils/timestamp';
+import { sumRecentRequests, type RecentRequestBucket } from '@/utils/recentRequests';
 import type { AccountRow } from './accountRows';
 import {
   buildAccountListItem,
@@ -201,6 +202,14 @@ export interface AccountDetailOverviewCredential {
   targetTab: AccountDetailOverviewTargetTab;
 }
 
+export interface AccountDetailOverviewRecentStatus {
+  success: number;
+  failure: number;
+  successRate: number | null;
+  recentRequests: RecentRequestBucket[];
+  statusMessage: string;
+}
+
 export interface AccountDetailOverviewActivity {
   scope: AccountDetailOverviewActivityScope;
   scopeDays: number | null;
@@ -247,6 +256,7 @@ export interface AccountDetailViewModel {
     decision: AccountDetailOverviewDecision;
     capacity: AccountDetailOverviewCapacity;
     credential: AccountDetailOverviewCredential;
+    recentStatus: AccountDetailOverviewRecentStatus;
     activity: AccountDetailOverviewActivity;
     attention: AccountDetailOverviewAttention | null;
   };
@@ -1019,6 +1029,20 @@ const buildOverviewActivity = (
   };
 };
 
+const buildOverviewRecentStatus = (row: AccountRow): AccountDetailOverviewRecentStatus => {
+  const recentRequests = row.usage.recentRequests;
+  const totals = sumRecentRequests(recentRequests);
+  const total = totals.success + totals.failure;
+
+  return {
+    success: totals.success,
+    failure: totals.failure,
+    successRate: total > 0 ? (totals.success / total) * 100 : null,
+    recentRequests,
+    statusMessage: row.statusMessage,
+  };
+};
+
 const getOverviewAttentionTarget = (
   action: AccountRecommendation['action']
 ): AccountDetailOverviewTargetTab => {
@@ -1178,7 +1202,15 @@ const buildInspectionFields = (row: AccountRow): AccountDetailField[] => {
       row.inspection.actionReason || '-',
       row.inspection.actionReason.startsWith('monitoring.') ? 'i18n' : 'text'
     ),
-    field('actionStatus', 'accounts.detail_action_status', row.inspection.actionStatus || '-'),
+    ...(row.inspection.action === 'keep'
+      ? []
+      : [
+          field(
+            'actionStatus',
+            'accounts.detail_action_status',
+            row.inspection.actionStatus || '-'
+          ),
+        ]),
     field('usedPercent', 'accounts.detail_used', row.inspection.usedPercent, 'percent'),
     field('createdAtMs', 'accounts.detail_observed_at', row.inspection.createdAtMs, 'timestamp'),
   ]);
@@ -1228,6 +1260,7 @@ export const buildAccountDetailViewModel = (
     decision: buildOverviewDecision(row, listItem, quotaCooldown),
     capacity: buildOverviewCapacity(row, quotaWindows, listItem),
     credential: buildOverviewCredential(row, options.codexQuota),
+    recentStatus: buildOverviewRecentStatus(row),
     activity: buildOverviewActivity(row, value),
     attention: buildOverviewAttention(recommendation, actionCandidates),
   };
