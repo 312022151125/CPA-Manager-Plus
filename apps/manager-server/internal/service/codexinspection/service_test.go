@@ -22,6 +22,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpaauthfiles"
 	managerconfigsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
+	quotasnapshotsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/quotasnapshot"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/testutil"
 )
@@ -1727,6 +1728,12 @@ func TestRunPersistsPlanQuotaWindowsAndErrorDetail(t *testing.T) {
 	if windowsByID["monthly"].ResetLabel == "" || windowsByID["monthly"].ResetLabel == "-" {
 		t.Fatalf("monthly reset label = %q, want concrete reset label", windowsByID["monthly"].ResetLabel)
 	}
+	if windowsByID["monthly"].ResetAtMS != 1_782_895_966_000 || windowsByID["monthly"].ResetAccuracy != "exact" {
+		t.Fatalf("monthly normalized reset = %#v", windowsByID["monthly"])
+	}
+	if windowsByID["five-hour"].ResetAtMS <= 0 || windowsByID["five-hour"].ResetAccuracy != "derived" {
+		t.Fatalf("five-hour normalized reset = %#v", windowsByID["five-hour"])
+	}
 	if windowsByID["credits-weekly-0"].LabelParams["name"] != "credits" {
 		t.Fatalf("additional window params = %#v, want credits name", windowsByID["credits-weekly-0"].LabelParams)
 	}
@@ -1740,6 +1747,24 @@ func TestRunPersistsPlanQuotaWindowsAndErrorDetail(t *testing.T) {
 	}
 	if stored[0].ErrorKind != "http_status" || !strings.Contains(stored[0].ErrorDetail, "short window exhausted") {
 		t.Fatalf("stored error detail = %#v, want persisted HTTP detail", stored[0])
+	}
+	snapshots, err := quotasnapshotsvc.New(db).Query(context.Background(), quotasnapshotsvc.QueryRequest{
+		Accounts: []quotasnapshotsvc.QueryAccount{{
+			RowKey: "row-1", Provider: "codex", Account: quotasnapshotsvc.AccountTarget{
+				AuthFileSnapshot: "auth-a.json", AuthProviderSnapshot: "codex", AuthIndex: "auth-1",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("query inspection quota snapshots: %v", err)
+	}
+	if len(snapshots.Items) != 1 || len(snapshots.Items[0].Windows) != len(item.QuotaWindows) {
+		t.Fatalf("inspection quota snapshots = %#v", snapshots)
+	}
+	for _, window := range snapshots.Items[0].Windows {
+		if window.Source != "inspection" {
+			t.Fatalf("inspection snapshot source = %#v", window)
+		}
 	}
 }
 

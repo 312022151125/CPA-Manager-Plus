@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
+	quotasnapshotsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/quotasnapshot"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
@@ -265,6 +266,47 @@ func TestManagerOnlyPassesInsertedEventsToHandler(t *testing.T) {
 	}
 	if handler.events[0].EventHash == duplicateEvent.EventHash || handler.events[0].FailStatusCode == http.StatusTooManyRequests {
 		t.Fatalf("duplicate quota event was passed to handler: %#v", handler.events[0])
+	}
+}
+
+func TestManagerPersistsQuotaEvidenceAfterUsageInsert(t *testing.T) {
+	db := newTestStore(t)
+	manager := NewManager(testConfig(t, "http"), db)
+	payload := `{
+		"request_id":"quota-header",
+		"timestamp":"2026-05-06T00:00:00Z",
+		"provider":"codex",
+		"model":"gpt-test",
+		"endpoint":"POST /v1/responses",
+		"auth_file_snapshot":"codex.json",
+		"auth_provider_snapshot":"codex",
+		"auth_index":"auth-1",
+		"account_snapshot":"user@example.com",
+		"response_headers":{
+			"X-Codex-Primary-Used-Percent":["40"],
+			"X-Codex-Primary-Reset-After-Seconds":["18000"],
+			"X-Codex-Primary-Window-Minutes":["300"]
+		}
+	}`
+	if err := manager.processItems(context.Background(), RuntimeConfig{}, []string{payload}); err != nil {
+		t.Fatalf("process quota event: %v", err)
+	}
+	query, err := quotasnapshotsvc.New(db).Query(context.Background(), quotasnapshotsvc.QueryRequest{
+		Accounts: []quotasnapshotsvc.QueryAccount{{
+			RowKey: "row-1", Provider: "codex", Account: quotasnapshotsvc.AccountTarget{
+				AuthFileSnapshot: "codex.json", AuthProviderSnapshot: "codex", AuthIndex: "auth-1",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("query quota snapshots: %v", err)
+	}
+	if len(query.Items) != 1 || len(query.Items[0].Windows) != 1 {
+		t.Fatalf("quota snapshots = %#v", query)
+	}
+	window := query.Items[0].Windows[0]
+	if window.ProviderWindowID != "five-hour" || window.Source != "response_header" {
+		t.Fatalf("quota window = %#v", window)
 	}
 }
 

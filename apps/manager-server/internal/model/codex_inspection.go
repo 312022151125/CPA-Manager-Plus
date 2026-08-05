@@ -144,6 +144,8 @@ type CodexInspectionQuotaWindow struct {
 	LabelParams        map[string]any `json:"labelParams,omitempty"`
 	UsedPercent        *float64       `json:"usedPercent,omitempty"`
 	ResetLabel         string         `json:"resetLabel"`
+	ResetAtMS          int64          `json:"resetAtMs,omitempty"`
+	ResetAccuracy      string         `json:"resetAccuracy,omitempty"`
 	LimitWindowSeconds *float64       `json:"limitWindowSeconds,omitempty"`
 }
 

@@ -28,6 +28,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpaauthfiles"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/credentialpolicy"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
+	quotasnapshotsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/quotasnapshot"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 )
 
@@ -72,6 +73,7 @@ type Service struct {
 	managerConfigService *managerconfig.Service
 	client               *http.Client
 	authFileMutations    *cpaauthfiles.MutationCoordinator
+	quotaSnapshots       *quotasnapshotsvc.Service
 
 	mu                             sync.Mutex
 	cancelMu                       sync.Mutex
@@ -315,6 +317,7 @@ func NewWithOptions(st *store.Store, managerConfigService *managerconfig.Service
 		managerConfigService:           managerConfigService,
 		client:                         client,
 		authFileMutations:              authFileMutations,
+		quotaSnapshots:                 quotasnapshotsvc.New(st),
 		ownerID:                        ownerID,
 		leaseDuration:                  leaseDuration,
 		heartbeatInterval:              heartbeatInterval,
@@ -3962,7 +3965,7 @@ func (s *Service) persistInspectionResults(
 		}
 		result.RunID = runID
 		writeCtx, cancel := context.WithTimeout(persistCtx, resultWriteTimeout)
-		_, err := s.store.InsertCodexInspectionResult(writeCtx, result)
+		stored, err := s.store.InsertCodexInspectionResult(writeCtx, result)
 		cancel()
 		if err != nil {
 			failures++
@@ -3971,6 +3974,17 @@ func (s *Service) persistInspectionResults(
 				"displayAccount": result.DisplayAccount,
 				"retryScheduled": true,
 				"error":          err.Error(),
+			})
+			continue
+		}
+		snapshotCtx, snapshotCancel := context.WithTimeout(persistCtx, resultWriteTimeout)
+		snapshotErr := s.quotaSnapshots.WriteCodexInspectionResult(snapshotCtx, stored)
+		snapshotCancel()
+		if snapshotErr != nil {
+			logger.warning(ctx, "写入巡检额度快照失败", map[string]any{
+				"fileName":       result.FileName,
+				"displayAccount": result.DisplayAccount,
+				"error":          snapshotErr.Error(),
 			})
 		}
 	}
@@ -4501,7 +4515,9 @@ func addCodexWindowInfo(
 	if window == nil {
 		return
 	}
-	resetLabel := formatCodexResetLabel(window)
+	observedAt := time.Now()
+	resetAtMS, resetAccuracy := resolveCodexInspectionReset(window, observedAt)
+	resetLabel := formatCodexResetLabelAt(window, observedAt)
 	usedPercent := window.UsedPercent
 	if usedPercent == nil && (limitReached || (allowed != nil && !*allowed)) && resetLabel != "-" {
 		usedPercent = ptrFloat(100)
@@ -4512,6 +4528,8 @@ func addCodexWindowInfo(
 		LabelParams:        copyCodexLabelParams(labelParams),
 		UsedPercent:        usedPercent,
 		ResetLabel:         resetLabel,
+		ResetAtMS:          resetAtMS,
+		ResetAccuracy:      resetAccuracy,
 		LimitWindowSeconds: window.LimitWindowSeconds,
 	})
 }
@@ -4565,6 +4583,10 @@ func readMapSlice(record map[string]any, keys ...string) []map[string]any {
 }
 
 func formatCodexResetLabel(window *codexWindow) string {
+	return formatCodexResetLabelAt(window, time.Now())
+}
+
+func formatCodexResetLabelAt(window *codexWindow, observedAt time.Time) string {
 	if window == nil {
 		return "-"
 	}
@@ -4572,10 +4594,23 @@ func formatCodexResetLabel(window *codexWindow) string {
 		return formatUnixSeconds(*window.ResetAt)
 	}
 	if window.ResetAfterSeconds != nil && *window.ResetAfterSeconds > 0 {
-		targetSeconds := float64(time.Now().Unix()) + math.Floor(*window.ResetAfterSeconds)
+		targetSeconds := float64(observedAt.Unix()) + math.Floor(*window.ResetAfterSeconds)
 		return formatUnixSeconds(targetSeconds)
 	}
 	return "-"
+}
+
+func resolveCodexInspectionReset(window *codexWindow, observedAt time.Time) (int64, string) {
+	if window == nil {
+		return 0, "unknown"
+	}
+	if window.ResetAt != nil && *window.ResetAt > 0 {
+		return int64(math.Floor(*window.ResetAt)) * 1000, "exact"
+	}
+	if window.ResetAfterSeconds != nil && *window.ResetAfterSeconds > 0 {
+		return observedAt.Add(time.Duration(*window.ResetAfterSeconds * float64(time.Second))).UnixMilli(), "derived"
+	}
+	return 0, "unknown"
 }
 
 func formatUnixSeconds(seconds float64) string {
