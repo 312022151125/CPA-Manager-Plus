@@ -120,6 +120,20 @@ export interface AntigravityQuotaGroupDefinition {
 }
 
 export type QuotaResetAccuracy = 'exact' | 'estimated' | 'unknown';
+export type QuotaWindowMode = 'fixed' | 'calendar' | 'rolling' | 'non_window' | 'unknown';
+export type QuotaObservationSource =
+  | 'api_query'
+  | 'response_header'
+  | 'response_body'
+  | 'inspection';
+export type QuotaModelScopeKind = 'all' | 'family' | 'models' | 'product' | 'feature';
+
+export interface QuotaModelScope {
+  kind: QuotaModelScopeKind;
+  key?: string;
+  models?: string[];
+  complete?: boolean;
+}
 
 export interface CodexUsageWindow {
   used_percent?: number | string;
@@ -285,6 +299,8 @@ export interface ClaudeQuotaWindow {
   resetLabel: string;
   resetAtMs?: number | null;
   resetAccuracy?: QuotaResetAccuracy;
+  limitWindowSeconds?: number | null;
+  modelScope?: QuotaModelScope;
 }
 
 export interface CredentialScopedQuotaState {
@@ -442,6 +458,8 @@ export interface KimiQuotaRow {
   resetHint?: string;
   resetAtMs?: number | null;
   resetAccuracy?: QuotaResetAccuracy;
+  scope?: string;
+  limitWindowSeconds?: number | null;
 }
 
 export interface KimiQuotaState extends CredentialScopedQuotaState {

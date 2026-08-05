@@ -29,6 +29,8 @@ import {
   type AccountQuotaWindowKind,
 } from './accountQuotaDisplayWindows';
 import { accountWindowUsageRequestKey } from './accountWindowUsageRows';
+import { estimateWindowUsage, type WindowUsageForecast } from './estimateWindowUsage';
+import type { AccountQuotaBoundaryAccuracy } from './accountQuotaWindowDefinitions';
 import { accountOperationalItemMatchesRow } from './accountOperationalScope';
 import type { AccountRecommendation, AccountRecommendationPriority } from './quotaRecommendations';
 import type { UsageValueRow, UsageValueSource } from './usageValueRows';
@@ -60,14 +62,19 @@ export interface AccountDetailQuotaWindowInput extends Omit<
   AccountQuotaDisplayWindow,
   'limitWindowSeconds' | 'resetAtMs' | 'resetAccuracy' | 'fromMs' | 'toMs'
 > {
+  providerWindowId?: string;
   limitWindowSeconds?: number | null;
   resetAtMs?: number | null;
   resetAccuracy?: QuotaResetAccuracy;
   fromMs?: number | null;
   toMs?: number | null;
+  boundaryAccuracy?: AccountQuotaBoundaryAccuracy;
+  stale?: boolean;
 }
 
 export interface AccountDetailWindowUsageSummary {
+  fromMs: number;
+  toMs: number;
   matched: boolean;
   totalRequests: number;
   successCalls: number;
@@ -77,6 +84,8 @@ export interface AccountDetailWindowUsageSummary {
   successRate: number | null;
   lastSeenMs: number | null;
   syncStatus: string;
+  scopeMatchStatus: string;
+  unmatchedRequests: number;
 }
 
 export interface AccountDetailQuotaWindow extends Omit<
@@ -86,6 +95,10 @@ export interface AccountDetailQuotaWindow extends Omit<
   resetAtMs: number | null;
   resetAccuracy: QuotaResetAccuracy;
   usage: AccountDetailWindowUsageSummary | null;
+  currentUsage: AccountDetailWindowUsageSummary | null;
+  previousUsage: AccountDetailWindowUsageSummary | null;
+  previousPeriod: 'previous' | 'previous_equal_range' | null;
+  forecast: WindowUsageForecast | null;
 }
 
 export interface AccountDetailResetCreditExpiry {
@@ -160,6 +173,7 @@ export interface AccountDetailHistorySummary {
   successRate: number | null;
   firstSeenMs: number | null;
   lastSeenMs: number | null;
+  generatedAtMs: number | null;
   syncStatus: string;
 }
 
@@ -437,6 +451,8 @@ const toWindowUsageSummary = (
 ): AccountDetailWindowUsageSummary | null => {
   if (!item) return null;
   return {
+    fromMs: item.from_ms,
+    toMs: item.to_ms,
     matched: item.matched,
     totalRequests: item.total_requests,
     successCalls: item.success_calls,
@@ -446,6 +462,8 @@ const toWindowUsageSummary = (
     successRate: item.success_rate === null ? null : item.success_rate * 100,
     lastSeenMs: item.last_seen_ms,
     syncStatus: item.sync_status,
+    scopeMatchStatus: item.scope_match_status ?? 'complete',
+    unmatchedRequests: item.unmatched_requests ?? 0,
   };
 };
 
@@ -463,6 +481,7 @@ const toHistorySummary = (
     successRate: item.success_rate === null ? null : item.success_rate * 100,
     firstSeenMs: item.first_seen_ms,
     lastSeenMs: item.last_seen_ms,
+    generatedAtMs: item.generated_at_ms ?? null,
     syncStatus: item.sync_status,
   };
 };
@@ -501,13 +520,71 @@ const buildQuotaWindows = (
 ): AccountDetailQuotaWindow[] =>
   quotaWindows.map((window) => {
     const resetAtMs = isValidQuotaResetAtMs(window.resetAtMs) ? window.resetAtMs : null;
+    const providerWindowId = window.providerWindowId ?? window.key;
+    const modelScope = window.modelScope
+      ? {
+          kind: window.modelScope.kind,
+          key: window.modelScope.key,
+          models: window.modelScope.models,
+        }
+      : undefined;
+    const currentUsage = toWindowUsageSummary(
+      windowUsageByKey.get(
+        accountWindowUsageRequestKey(row.selectionKey, providerWindowId, 'current', modelScope)
+      )
+    );
+    const previousPeriod =
+      window.windowMode === 'rolling'
+        ? ('previous_equal_range' as const)
+        : window.windowMode === 'fixed' || window.windowMode === 'calendar'
+          ? ('previous' as const)
+          : null;
+    const previousUsage = previousPeriod
+      ? toWindowUsageSummary(
+          windowUsageByKey.get(
+            accountWindowUsageRequestKey(
+              row.selectionKey,
+              providerWindowId,
+              previousPeriod,
+              modelScope
+            )
+          )
+        )
+      : null;
+    const forecast =
+      (window.windowMode === 'fixed' || window.windowMode === 'calendar') &&
+      typeof window.cycleStartMs === 'number' &&
+      typeof window.cycleEndMs === 'number'
+        ? estimateWindowUsage({
+            nowMs: Date.now(),
+            cycleStartMs: window.cycleStartMs,
+            cycleEndMs: window.cycleEndMs,
+            current: currentUsage
+              ? {
+                  requests: currentUsage.totalRequests,
+                  tokens: currentUsage.totalTokens,
+                  cost: currentUsage.totalCost,
+                }
+              : null,
+            previous: previousUsage
+              ? {
+                  requests: previousUsage.totalRequests,
+                  tokens: previousUsage.totalTokens,
+                  cost: previousUsage.totalCost,
+                }
+              : null,
+          })
+        : null;
     return {
       ...window,
+      providerWindowId,
       resetAtMs,
       resetAccuracy: resetAtMs !== null ? (window.resetAccuracy ?? 'unknown') : 'unknown',
-      usage: toWindowUsageSummary(
-        windowUsageByKey.get(accountWindowUsageRequestKey(row.selectionKey, window.key))
-      ),
+      usage: currentUsage,
+      currentUsage,
+      previousUsage,
+      previousPeriod,
+      forecast,
     };
   });
 

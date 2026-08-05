@@ -793,6 +793,12 @@ const buildClaudeScopedWeeklyWindows = (payload: ClaudeUsagePayload): ClaudeQuot
         window: {
           id: `weekly-scoped-${idPart}`,
           label,
+          limitWindowSeconds: 7 * 24 * 60 * 60,
+          modelScope: {
+            kind: 'models',
+            models: modelId ? [modelId] : [],
+            complete: Boolean(modelId),
+          },
           ...values,
         },
       };
@@ -870,6 +876,8 @@ const buildClaudeQuotaWindows = (
           resetLabel,
           resetAtMs: reset.resetAtMs,
           resetAccuracy: reset.resetAccuracy,
+          limitWindowSeconds: id === 'five-hour' ? 5 * 60 * 60 : 7 * 24 * 60 * 60,
+          modelScope: { kind: 'all', complete: true },
         });
         renderedTopLevelWindow = true;
       }
@@ -882,6 +890,8 @@ const buildClaudeQuotaWindows = (
           label: t(labelKey),
           labelKey,
           ...fallback,
+          limitWindowSeconds: id === 'five-hour' ? 5 * 60 * 60 : 7 * 24 * 60 * 60,
+          modelScope: { kind: 'all', complete: true },
         });
       }
     }

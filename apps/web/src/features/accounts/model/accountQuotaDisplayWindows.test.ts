@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TFunction } from 'i18next';
-import type {
-  AuthFileItem,
-  CodexQuotaState,
-  CredentialScopedQuotaState,
-} from '@/types';
+import type { AuthFileItem, CodexQuotaState, CredentialScopedQuotaState } from '@/types';
 import { buildAccountRows, type AccountQuotaStores } from './accountRows';
 import {
   buildAccountQuotaDisplayWindow,
@@ -165,6 +161,8 @@ describe('accountQuotaDisplayWindows', () => {
               resetLabel: '07/10, 12:00',
               resetAtMs: Date.parse('2026-07-10T12:00:00Z'),
               resetAccuracy: 'exact',
+              limitWindowSeconds: 7 * 24 * 60 * 60,
+              modelScope: { kind: 'all', complete: true },
             },
           ],
           extraUsage: {
@@ -192,6 +190,8 @@ describe('accountQuotaDisplayWindows', () => {
       remainingPercent: 60,
       resetAtMs: Date.parse('2026-07-10T12:00:00Z'),
       resetAccuracy: 'exact',
+      limitWindowSeconds: 7 * 24 * 60 * 60,
+      modelScope: { kind: 'all', complete: true },
       source: 'claude',
     });
     expect(windows[1]).toMatchObject({
@@ -215,6 +215,7 @@ describe('accountQuotaDisplayWindows', () => {
             {
               id: 'gemini',
               label: 'Gemini models',
+              models: ['gemini-3-pro'],
               description: 'models within this group: gemini-3-pro',
               buckets: [
                 {
@@ -234,6 +235,19 @@ describe('accountQuotaDisplayWindows', () => {
                 },
               ],
             },
+            {
+              id: 'claude-gpt',
+              label: 'Claude and GPT models',
+              buckets: [
+                {
+                  id: 'weekly',
+                  label: 'Weekly limit',
+                  window: 'weekly',
+                  remainingFraction: 0.65,
+                  resetTime: '2026-07-15T00:00:00Z',
+                },
+              ],
+            },
           ],
         },
       },
@@ -246,6 +260,7 @@ describe('accountQuotaDisplayWindows', () => {
       t,
     });
 
+    expect(windows).toHaveLength(3);
     expect(windows[0]).toMatchObject({
       key: 'gemini:daily',
       label: 'Daily limit',
@@ -256,6 +271,8 @@ describe('accountQuotaDisplayWindows', () => {
       description: 'Daily model quota',
       resetAtMs: Date.parse('2026-07-10T00:00:00Z'),
       resetAccuracy: 'exact',
+      limitWindowSeconds: 24 * 60 * 60,
+      modelScope: { kind: 'models', models: ['gemini-3-pro'], complete: true },
       source: 'antigravity',
     });
     expect(getQuotaWindowShortLabel(windows[0])).toBe('24H');
@@ -264,8 +281,16 @@ describe('accountQuotaDisplayWindows', () => {
       kind: 'five_hour',
       remainingPercent: 52,
       usedPercent: 48,
+      limitWindowSeconds: 5 * 60 * 60,
+      modelScope: { kind: 'models', models: ['gemini-3-pro'], complete: true },
     });
     expect(getQuotaWindowShortLabel(windows[1])).toBe('5H');
+    expect(windows[2]).toMatchObject({
+      key: 'claude-gpt:weekly',
+      kind: 'weekly',
+      limitWindowSeconds: 7 * 24 * 60 * 60,
+      modelScope: { kind: 'family', key: 'claude_gpt', complete: true },
+    });
   });
 
   it('adds Kimi usage amounts and formatted reset hints', () => {
@@ -283,6 +308,8 @@ describe('accountQuotaDisplayWindows', () => {
               resetHint: '2d',
               resetAtMs: Date.parse('2026-07-31T10:00:00Z'),
               resetAccuracy: 'estimated',
+              scope: 'FEATURE_CODING',
+              limitWindowSeconds: 7 * 24 * 60 * 60,
             },
           ],
         },
@@ -305,6 +332,8 @@ describe('accountQuotaDisplayWindows', () => {
       resetLabel: 'resets in 2d',
       resetAtMs: Date.parse('2026-07-31T10:00:00Z'),
       resetAccuracy: 'estimated',
+      limitWindowSeconds: 7 * 24 * 60 * 60,
+      modelScope: { kind: 'all', complete: true },
       amountLabel: '3 / 10',
       source: 'kimi',
     });
@@ -401,6 +430,10 @@ describe('accountQuotaDisplayWindows', () => {
       usedPercent: 42,
       resetAtMs: billingPeriodEndMs,
       resetAccuracy: 'exact',
+      limitWindowSeconds: 7 * 24 * 60 * 60,
+      cycleStartMs: Date.parse('2026-07-01T00:00:00Z'),
+      cycleEndMs: billingPeriodEndMs,
+      windowMode: 'fixed',
       source: 'xai',
     });
     expect(windows[1]).toMatchObject({

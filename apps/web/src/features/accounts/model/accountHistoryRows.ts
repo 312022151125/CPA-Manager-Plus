@@ -57,14 +57,18 @@ export const buildAccountHistoryTargetEntries = (rows: AccountRow[]): AccountHis
 
 export const buildAccountHistoryByRowKey = (
   entries: AccountHistoryTargetEntry[],
-  items: MonitoringAccountHistoryItem[]
+  items: MonitoringAccountHistoryItem[],
+  generatedAtMs?: number
 ): Map<string, MonitoringAccountHistoryItem> => {
   const result = new Map<string, MonitoringAccountHistoryItem>();
   const requestedRowKeys = new Set(entries.map((entry) => entry.rowKey));
   items.forEach((item) => {
     const rowKey = readRowKey(item.row_key);
     if (rowKey && requestedRowKeys.has(rowKey)) {
-      result.set(rowKey, item);
+      result.set(
+        rowKey,
+        generatedAtMs && generatedAtMs > 0 ? { ...item, generated_at_ms: generatedAtMs } : item
+      );
     }
   });
   return result;

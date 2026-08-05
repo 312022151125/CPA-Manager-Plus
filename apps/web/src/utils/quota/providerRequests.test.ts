@@ -1667,6 +1667,20 @@ describe('fetchClaudeQuota', () => {
       'weekly-scoped-sonnet',
     ]);
     expect(result.windows.map((window) => window.usedPercent)).toEqual([35, 14, 39]);
+    expect(result.windows).toMatchObject([
+      {
+        limitWindowSeconds: 5 * 60 * 60,
+        modelScope: { kind: 'all', complete: true },
+      },
+      {
+        limitWindowSeconds: 7 * 24 * 60 * 60,
+        modelScope: { kind: 'all', complete: true },
+      },
+      {
+        limitWindowSeconds: 7 * 24 * 60 * 60,
+        modelScope: { kind: 'models', models: [], complete: false },
+      },
+    ]);
   });
 });
 

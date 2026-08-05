@@ -5,6 +5,7 @@ import {
   buildAccountWindowUsageByKey,
   buildAccountWindowUsageTargetEntries,
 } from './accountWindowUsageRows';
+import type { AccountQuotaWindowDefinition } from './accountQuotaWindowDefinitions';
 
 const makeRow = (overrides: Partial<AccountRow>): AccountRow =>
   ({
@@ -81,5 +82,50 @@ describe('accountWindowUsageRows', () => {
       total_requests: 32,
       total_cost: 5.2,
     });
+  });
+
+  it('skips an incomplete model scope without dropping other quota windows', () => {
+    const row = makeRow({});
+    const incompleteDefinition = {
+      key: 'weekly-scoped-label-only',
+      providerWindowId: 'weekly-scoped-label-only',
+      provider: 'claude',
+      label: 'Label-only model',
+      kind: 'weekly',
+      windowMode: 'fixed',
+      modelScope: { kind: 'models', models: [], complete: false },
+      observationSource: 'api_query',
+      observedAtMs: 5_000,
+      boundaryAccuracy: 'exact',
+      cycleStartMs: 1_000,
+      cycleEndMs: 7_000,
+      durationSeconds: 6,
+      remainingPercent: 50,
+      usedPercent: 50,
+      stale: false,
+      display: {
+        key: 'weekly-scoped-label-only',
+        label: 'Label-only model',
+        remainingPercent: 50,
+        usedPercent: 50,
+        resetLabel: '-',
+        resetAccuracy: 'exact',
+        limitWindowSeconds: 6,
+        resetAtMs: 7_000,
+        fromMs: 1_000,
+        toMs: 5_000,
+      },
+    } satisfies AccountQuotaWindowDefinition;
+
+    const entries = buildAccountWindowUsageTargetEntries(
+      [row],
+      new Map([
+        [row.selectionKey, [{ key: '5h', fromMs: 1000, toMs: 2000 }, incompleteDefinition]],
+      ]),
+      5_000
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].windowKey).toBe('5h');
   });
 });

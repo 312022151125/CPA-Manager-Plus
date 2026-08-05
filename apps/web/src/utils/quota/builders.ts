@@ -489,6 +489,22 @@ function kimiDurationToken(duration: number, rawTimeUnit: unknown): string {
   return `${duration}s`;
 }
 
+function kimiDurationSeconds(duration: number, rawTimeUnit: unknown): number | null {
+  if (!Number.isFinite(duration) || duration <= 0) return null;
+  const unit =
+    typeof rawTimeUnit === 'string'
+      ? rawTimeUnit
+          .trim()
+          .toUpperCase()
+          .replace(/^TIME_UNIT_/, '')
+      : '';
+  if (unit === 'MINUTE' || unit === 'MINUTES') return duration * 60;
+  if (unit === 'HOUR' || unit === 'HOURS') return duration * 60 * 60;
+  if (unit === 'DAY' || unit === 'DAYS') return duration * 24 * 60 * 60;
+  if (unit === 'SECOND' || unit === 'SECONDS' || unit === '') return duration;
+  return null;
+}
+
 function kimiLimitLabel(
   item: KimiLimitItem,
   detail: KimiUsageDetail | KimiLimitItem,
@@ -606,7 +622,20 @@ export function buildKimiQuotaRows(
           detail === item ? [itemRecord] : [detailRecord, itemRecord]
         );
         if (row) {
-          rows.push({ id: `${idPrefix}limit-${idx}`, ...row, ...applyKimiScopeLabel(row, scope) });
+          const duration =
+            toInt(window.duration) ?? toInt(itemRecord.duration) ?? toInt(detailRecord.duration);
+          const timeUnit = window.timeUnit ?? itemRecord.timeUnit ?? detailRecord.timeUnit;
+          const resolvedScope =
+            (typeof item.scope === 'string' && item.scope.trim()) ||
+            (typeof scope === 'string' && scope.trim()) ||
+            undefined;
+          rows.push({
+            id: `${idPrefix}limit-${idx}`,
+            ...row,
+            ...applyKimiScopeLabel(row, scope),
+            scope: resolvedScope,
+            limitWindowSeconds: duration !== null ? kimiDurationSeconds(duration, timeUnit) : null,
+          });
         }
       });
     }

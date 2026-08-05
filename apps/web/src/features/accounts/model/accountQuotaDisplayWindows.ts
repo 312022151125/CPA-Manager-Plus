@@ -4,7 +4,10 @@ import type {
   AuthFileItem,
   ClaudeExtraUsage,
   CodexQuotaState,
+  QuotaModelScope,
+  QuotaObservationSource,
   QuotaResetAccuracy,
+  QuotaWindowMode,
   XaiBillingSummary,
 } from '@/types';
 import {
@@ -52,6 +55,12 @@ export interface AccountQuotaDisplayWindow {
   description?: string;
   groupLabel?: string;
   source?: AccountQuotaWindowSource;
+  observationSource?: QuotaObservationSource;
+  observedAtMs?: number | null;
+  windowMode?: QuotaWindowMode;
+  cycleStartMs?: number | null;
+  cycleEndMs?: number | null;
+  modelScope?: QuotaModelScope;
 }
 
 export type TranslateQuotaWindowLabel = (
@@ -90,6 +99,32 @@ export const remainingPercentFromUsed = (value: number | null | undefined) =>
 export { parseQuotaResetLabelMs };
 
 const normalizeText = (value: string): string => value.trim().toLowerCase().replace(/\s+/g, ' ');
+
+const parseAntigravityWindowSeconds = (value: string | undefined): number | null => {
+  const normalized = value?.trim().toLowerCase().replace(/_/g, '-') ?? '';
+  if (['5h', '5-hour', 'five-hour'].includes(normalized)) return 5 * 60 * 60;
+  if (['24h', 'daily', 'day'].includes(normalized)) return 24 * 60 * 60;
+  if (['7d', 'weekly', 'week'].includes(normalized)) return 7 * 24 * 60 * 60;
+  const match = normalized.match(/^(\d+)\s*(m|h|d|w)$/);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const multiplier = { m: 60, h: 3600, d: 86400, w: 604800 }[match[2]];
+  return Number.isFinite(amount) && multiplier ? amount * multiplier : null;
+};
+
+const buildAntigravityWindowModelScope = (
+  groupId: string,
+  groupLabel: string,
+  models: string[] | undefined
+): QuotaModelScope => {
+  if (models?.length) return { kind: 'models', models, complete: true };
+  const normalized = `${groupId} ${groupLabel}`.toLowerCase();
+  if (/gemini/.test(normalized)) return { kind: 'family', key: 'gemini', complete: true };
+  if (/(claude|gpt|external)/.test(normalized)) {
+    return { kind: 'family', key: 'claude_gpt', complete: true };
+  }
+  return { kind: 'all', complete: false };
+};
 
 const translateAntigravityQuotaLabel = (
   value: string,
@@ -258,6 +293,12 @@ export const buildAccountQuotaDisplayWindow = ({
   description,
   groupLabel,
   source,
+  observationSource = 'api_query',
+  observedAtMs = null,
+  windowMode,
+  cycleStartMs,
+  cycleEndMs,
+  modelScope = { kind: 'all', complete: true },
   nowMs,
 }: {
   key: string;
@@ -273,6 +314,12 @@ export const buildAccountQuotaDisplayWindow = ({
   description?: string;
   groupLabel?: string;
   source?: AccountQuotaWindowSource;
+  observationSource?: QuotaObservationSource;
+  observedAtMs?: number | null;
+  windowMode?: QuotaWindowMode;
+  cycleStartMs?: number | null;
+  cycleEndMs?: number | null;
+  modelScope?: QuotaModelScope;
   nowMs?: number;
 }): AccountQuotaDisplayWindow => {
   const normalizedResetLabel = resetLabel || '-';
@@ -284,17 +331,28 @@ export const buildAccountQuotaDisplayWindow = ({
     nowMs,
     resetAtMs
   );
+  const resolvedKind =
+    kind ??
+    inferAccountQuotaWindowKind({
+      key,
+      label,
+      limitWindowSeconds: normalizedLimitWindowSeconds,
+    }) ??
+    undefined;
+  const resolvedMode =
+    windowMode ??
+    (range.fromMs !== null && range.resetAtMs !== null
+      ? 'fixed'
+      : resolvedKind === 'billing' ||
+          resolvedKind === 'payg' ||
+          resolvedKind === 'product' ||
+          resolvedKind === 'summary'
+        ? 'non_window'
+        : 'unknown');
   return {
     key,
     label,
-    kind:
-      kind ??
-      inferAccountQuotaWindowKind({
-        key,
-        label,
-        limitWindowSeconds: normalizedLimitWindowSeconds,
-      }) ??
-      undefined,
+    kind: resolvedKind,
     remainingPercent,
     usedPercent,
     resetLabel: normalizedResetLabel,
@@ -304,6 +362,12 @@ export const buildAccountQuotaDisplayWindow = ({
     description,
     groupLabel,
     source,
+    observationSource,
+    observedAtMs,
+    windowMode: resolvedMode,
+    cycleStartMs: cycleStartMs ?? range.fromMs,
+    cycleEndMs: cycleEndMs ?? range.resetAtMs,
+    modelScope,
     ...range,
   };
 };
@@ -327,6 +391,8 @@ const buildCodexQuotaDisplayWindows = (
       resetAccuracy: window.resetAccuracy,
       limitWindowSeconds: window.limitWindowSeconds ?? null,
       source: 'codex',
+      observationSource: quota.observedFromUsageHeaders ? 'response_header' : 'api_query',
+      observedAtMs: quota.observedAtMs ?? quota.fetchedAtMs ?? null,
       nowMs: options.nowMs,
     })
   );
@@ -348,7 +414,10 @@ const buildClaudeQuotaDisplayWindows = (
         resetLabel: window.resetLabel || '-',
         resetAtMs: window.resetAtMs,
         resetAccuracy: window.resetAccuracy,
+        limitWindowSeconds: window.limitWindowSeconds ?? null,
+        modelScope: window.modelScope ?? { kind: 'all', complete: true },
         source: 'claude',
+        observedAtMs: quota.fetchedAtMs ?? null,
         nowMs: options.nowMs,
       })
     ) ?? [];
@@ -416,9 +485,12 @@ const buildAntigravityQuotaDisplayWindows = (
         resetLabel: formatDisplayResetTime(bucket.resetTime),
         resetAtMs: reset.resetAtMs,
         resetAccuracy: reset.resetAccuracy,
+        limitWindowSeconds: parseAntigravityWindowSeconds(bucket.window),
         description,
         groupLabel,
+        modelScope: buildAntigravityWindowModelScope(group.id, group.label, group.models),
         source: 'antigravity',
+        observedAtMs: quota?.fetchedAtMs ?? null,
         nowMs: options.nowMs,
       });
     });
@@ -449,8 +521,13 @@ const buildKimiQuotaDisplayWindows = (
       resetLabel: formatKimiResetHint(options.t, quotaRow.resetHint) || '-',
       resetAtMs: quotaRow.resetAtMs,
       resetAccuracy: quotaRow.resetAccuracy,
+      limitWindowSeconds: quotaRow.limitWindowSeconds ?? null,
+      // Kimi's scope is a product/feature label, not an explicit model set.
+      // Aggregate the credential as a whole until the provider returns models.
+      modelScope: { kind: 'all', complete: true },
       amountLabel: `${quotaRow.used} / ${quotaRow.limit}`,
       source: 'kimi',
+      observedAtMs: quota.fetchedAtMs ?? null,
       nowMs: options.nowMs,
     });
   });
@@ -460,7 +537,8 @@ const buildXaiQuotaDisplayWindows = (
   row: AccountRow,
   options: BuildAccountQuotaDisplayWindowsOptions
 ): AccountQuotaDisplayWindow[] => {
-  const billing = getCredentialScopedQuotaState(options.stores.xaiQuota, row.raw)?.billing;
+  const quota = getCredentialScopedQuotaState(options.stores.xaiQuota, row.raw);
+  const billing = quota?.billing;
   if (!billing || billing.officialApiHealth) return [];
 
   const resetLabel = billing.billingPeriodEnd
@@ -470,6 +548,11 @@ const buildXaiQuotaDisplayWindows = (
   const periodResetValue = billing.periodEnd ?? billing.billingPeriodEnd;
   const periodResetLabel = periodResetValue ? formatDisplayResetTime(periodResetValue) : '-';
   const periodReset = resolveAbsoluteQuotaReset(periodResetValue);
+  const periodStart = resolveAbsoluteQuotaReset(billing.periodStart);
+  const periodDurationSeconds =
+    periodStart.resetAtMs && periodReset.resetAtMs && periodReset.resetAtMs > periodStart.resetAtMs
+      ? Math.round((periodReset.resetAtMs - periodStart.resetAtMs) / 1000)
+      : null;
   const windows: AccountQuotaDisplayWindow[] = [];
   const periodUsedPercent =
     typeof billing.usagePercent === 'number' && Number.isFinite(billing.usagePercent)
@@ -487,7 +570,12 @@ const buildXaiQuotaDisplayWindows = (
         resetLabel: periodResetLabel,
         resetAtMs: periodReset.resetAtMs,
         resetAccuracy: periodReset.resetAccuracy,
+        limitWindowSeconds: periodDurationSeconds,
+        cycleStartMs: periodStart.resetAtMs,
+        cycleEndMs: periodReset.resetAtMs,
+        windowMode: periodDurationSeconds ? 'fixed' : 'unknown',
         source: 'xai',
+        observedAtMs: quota?.fetchedAtMs ?? null,
         nowMs: options.nowMs,
       })
     );
@@ -516,6 +604,7 @@ const buildXaiQuotaDisplayWindows = (
         resetAccuracy: billingReset.resetAccuracy,
         amountLabel: formatXaiMonthlyAmount(billing, options.t),
         source: 'xai',
+        observedAtMs: quota?.fetchedAtMs ?? null,
         nowMs: options.nowMs,
       })
     );
@@ -540,6 +629,7 @@ const buildXaiQuotaDisplayWindows = (
         resetAccuracy: billingReset.resetAccuracy,
         amountLabel: formatXaiPaygAmount(billing, options.t),
         source: 'xai',
+        observedAtMs: quota?.fetchedAtMs ?? null,
         nowMs: options.nowMs,
       })
     );
@@ -564,6 +654,7 @@ const buildXaiQuotaDisplayWindows = (
         resetAtMs: periodReset.resetAtMs,
         resetAccuracy: periodReset.resetAccuracy,
         source: 'xai',
+        observedAtMs: quota?.fetchedAtMs ?? null,
         nowMs: options.nowMs,
       })
     );

@@ -210,7 +210,7 @@ describe('accountDetailViewModel', () => {
     });
     const windowUsageByKey = new Map<string, MonitoringAccountWindowUsageItem>([
       [
-        accountWindowUsageRequestKey('shared.codex.json\u00000', 'weekly'),
+        accountWindowUsageRequestKey('shared.codex.json\u00000', 'rate_limit:weekly'),
         makeWindowUsage({
           row_key: 'shared.codex.json\u00000',
           total_requests: 11,
@@ -218,7 +218,7 @@ describe('accountDetailViewModel', () => {
         }),
       ],
       [
-        accountWindowUsageRequestKey('shared.codex.json\u00001', 'weekly'),
+        accountWindowUsageRequestKey('shared.codex.json\u00001', 'rate_limit:weekly'),
         makeWindowUsage({
           row_key: 'shared.codex.json\u00001',
           total_requests: 22,
@@ -231,6 +231,7 @@ describe('accountDetailViewModel', () => {
       quotaWindows: [
         {
           key: 'weekly',
+          providerWindowId: 'rate_limit:weekly',
           label: 'Weekly',
           kind: 'weekly',
           remainingPercent: 40,
@@ -260,6 +261,7 @@ describe('accountDetailViewModel', () => {
     expect(viewModel.quota.windows[0].usage?.totalRequests).toBe(22);
     expect(viewModel.quota.windows[0].usage?.totalCost).toBe(0.22);
     expect(viewModel.quota.windows[0]).toMatchObject({
+      providerWindowId: 'rate_limit:weekly',
       kind: 'weekly',
       amountLabel: '40 / 100',
       groupLabel: 'Gemini models',
@@ -270,6 +272,51 @@ describe('accountDetailViewModel', () => {
       id: 2,
       reasonCode: 'invalid_credentials',
       reason: 'second account',
+    });
+  });
+
+  it('estimates usage for calendar windows with reliable boundaries', () => {
+    const row = makeRow();
+    const nowMs = Date.now();
+    const windowUsageByKey = new Map<string, MonitoringAccountWindowUsageItem>([
+      [
+        accountWindowUsageRequestKey(row.selectionKey, 'calendar-week', 'current'),
+        makeWindowUsage({
+          window_key: 'calendar-week',
+          total_requests: 50,
+          total_tokens: 500_000,
+          total_cost: 5,
+        }),
+      ],
+    ]);
+
+    const viewModel = buildAccountDetailViewModel(row, {
+      quotaWindows: [
+        {
+          key: 'calendar-week',
+          providerWindowId: 'calendar-week',
+          label: 'Calendar week',
+          kind: 'weekly',
+          remainingPercent: 50,
+          usedPercent: 50,
+          resetLabel: 'later',
+          resetAtMs: nowMs + 60 * 60 * 1000,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 7 * 24 * 60 * 60,
+          windowMode: 'calendar',
+          cycleStartMs: nowMs - 60 * 60 * 1000,
+          cycleEndMs: nowMs + 60 * 60 * 1000,
+          modelScope: { kind: 'all', complete: true },
+        },
+      ],
+      windowUsageByKey,
+    });
+
+    expect(viewModel.quota.windows[0].forecast).toMatchObject({
+      basis: 'current',
+      requests: 100,
+      tokens: 1_000_000,
+      cost: 10,
     });
   });
 
