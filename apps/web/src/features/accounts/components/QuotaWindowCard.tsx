@@ -425,6 +425,24 @@ export const QuotaWindowCard = ({
     </div>
   );
 
+  const modelWarning = modelWindowStatsUnavailable ? (
+    <div className={styles.modelWarning} data-quota-model-warning="true" role="alert">
+      <span className={styles.warningIcon} aria-hidden="true">
+        <IconTriangleAlert size={13} />
+      </span>
+      <div>
+        <strong>
+          {q.modelScope?.complete === false
+            ? t('accounts.detail_scope_unknown')
+            : t('accounts.detail_model_window_stats_unavailable')}
+        </strong>
+        {q.modelScope?.complete === false ? null : (
+          <p>{t('accounts.detail_model_window_stats_unavailable_desc')}</p>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   const header = (
     <div className={styles.header}>
       <div className={styles.headerMain}>
@@ -504,6 +522,7 @@ export const QuotaWindowCard = ({
       >
         {header}
         {progress}
+        {modelWarning}
         {modelUsage ? (
             <div className={styles.modelUsage} data-quota-usage-period="current">
               <div className={styles.modelUsageHeader}>
