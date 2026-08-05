@@ -545,6 +545,38 @@ func Migrate(db *sql.DB) error {
 			updated_at_ms integer not null
 		)`,
 		`create index if not exists idx_quota_cooldowns_due on quota_cooldowns(status, recover_at_ms)`,
+		`create table if not exists account_quota_snapshots (
+			id integer primary key autoincrement,
+			account_key text not null,
+			provider text not null,
+			provider_window_id text not null,
+			window_kind text not null,
+			window_mode text not null,
+			model_scope_kind text not null,
+			model_scope_key text,
+			model_ids_json text,
+			source text not null,
+			source_observation_id text,
+			observed_at_ms integer not null,
+			boundary_accuracy text not null,
+			cycle_start_ms integer,
+			cycle_end_ms integer,
+			duration_seconds integer,
+			used_percent real,
+			remaining_percent real,
+			used_value real,
+			limit_value real,
+			quota_unit text,
+			reset_credits_available integer,
+			reset_credits_json text,
+			plan_type text,
+			created_at_ms integer not null
+		)`,
+		`create index if not exists idx_quota_snapshots_latest
+			on account_quota_snapshots (
+				account_key, provider, provider_window_id,
+				model_scope_kind, model_scope_key, observed_at_ms desc
+			)`,
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {

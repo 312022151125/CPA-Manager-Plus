@@ -97,6 +97,70 @@ func TestMigrateCreatesLatestAccountRequestIndexes(t *testing.T) {
 	}
 }
 
+func TestMigrateCreatesAccountQuotaSnapshotSchema(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "account-quota-snapshots.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	columns := migrationTableColumns(t, db, "account_quota_snapshots")
+	for _, column := range []string{
+		"account_key",
+		"provider",
+		"provider_window_id",
+		"window_kind",
+		"window_mode",
+		"model_scope_kind",
+		"model_scope_key",
+		"model_ids_json",
+		"source",
+		"source_observation_id",
+		"observed_at_ms",
+		"boundary_accuracy",
+		"cycle_start_ms",
+		"cycle_end_ms",
+		"duration_seconds",
+		"used_percent",
+		"remaining_percent",
+		"used_value",
+		"limit_value",
+		"quota_unit",
+		"reset_credits_available",
+		"reset_credits_json",
+		"plan_type",
+		"created_at_ms",
+	} {
+		if !columns[column] {
+			t.Fatalf("account quota snapshot columns = %#v, missing %s", columns, column)
+		}
+	}
+
+	rows, err := db.Query(`pragma index_list(account_quota_snapshots)`)
+	if err != nil {
+		t.Fatalf("list account quota snapshot indexes: %v", err)
+	}
+	defer rows.Close()
+	indexes := map[string]bool{}
+	for rows.Next() {
+		var sequence int
+		var name string
+		var unique int
+		var origin string
+		var partial int
+		if err := rows.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+			t.Fatalf("scan account quota snapshot index: %v", err)
+		}
+		indexes[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate account quota snapshot indexes: %v", err)
+	}
+	if !indexes["idx_quota_snapshots_latest"] {
+		t.Fatalf("account quota snapshot indexes = %#v", indexes)
+	}
+}
+
 func TestUsageDataMigrationUpgradeAddsChangedRowsAndPreservesV1(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage-data-migration-upgrade.sqlite")
 	db, err := Open(path)
