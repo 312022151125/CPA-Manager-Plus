@@ -2468,6 +2468,81 @@ func TestAccountWindowUsageReturnsWindowScopedTotalsAndComputedCost(t *testing.T
 	}
 }
 
+func TestAccountWindowUsageSeparatesPeriodsAndAppliesModelScopeAcrossOverlappingWindows(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	resetMS := int64(1_700_100_000_000)
+	events := []usage.Event{
+		monitoringEvent("scope-previous", resetMS-1, "claude-sonnet", "auth-1", "source-a", false, 1, 1, 0, 0, 2, nil),
+		monitoringEvent("scope-boundary", resetMS, "claude-opus", "auth-1", "source-a", false, 1, 1, 0, 0, 2, nil),
+		monitoringEvent("scope-gemini", resetMS+1_000, "gemini-2.5-pro", "auth-1", "source-a", false, 1, 1, 0, 0, 2, nil),
+		monitoringEvent("scope-unknown", resetMS+2_000, "custom-router-model", "auth-1", "source-a", false, 1, 1, 0, 0, 2, nil),
+	}
+	for index := range events {
+		events[index].AccountSnapshot = "quota@example.com"
+		events[index].AuthFileSnapshot = "antigravity.json"
+	}
+	events[2].Model = "gemini-alias"
+	events[2].ResolvedModel = "gemini-2.5-pro"
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).AccountWindowUsage(ctx, AccountWindowUsageRequest{Windows: []AccountWindowUsageTarget{
+		{
+			RequestKey: "five-hour-previous", RowKey: "row-1", ProviderWindowID: "five-hour",
+			Period: "previous", FromMS: resetMS - 5_000, ToMS: resetMS,
+			ModelScope: AccountWindowModelScope{Kind: "all"}, AccountSnapshot: "quota@example.com",
+			AuthIndex: "auth-1", Source: "antigravity.json",
+		},
+		{
+			RequestKey: "five-hour-current", RowKey: "row-1", ProviderWindowID: "five-hour",
+			Period: "current", FromMS: resetMS, ToMS: resetMS + 5_000,
+			ModelScope:      AccountWindowModelScope{Kind: "family", Key: "claude_gpt"},
+			AccountSnapshot: "quota@example.com", AuthIndex: "auth-1", Source: "antigravity.json",
+		},
+		{
+			RequestKey: "weekly-current", RowKey: "row-1", ProviderWindowID: "weekly",
+			Period: "current", FromMS: resetMS - 10_000, ToMS: resetMS + 5_000,
+			ModelScope: AccountWindowModelScope{Kind: "all"}, AccountSnapshot: "quota@example.com",
+			AuthIndex: "auth-1", Source: "antigravity.json",
+		},
+		{
+			RequestKey: "exact-billing-model", RowKey: "row-1", ProviderWindowID: "gemini-weekly",
+			Period: "current", FromMS: resetMS, ToMS: resetMS + 5_000,
+			ModelScope:      AccountWindowModelScope{Kind: "models", Models: []string{"gemini-2.5-pro"}},
+			AccountSnapshot: "quota@example.com", AuthIndex: "auth-1", Source: "antigravity.json",
+		},
+		{
+			RequestKey: "exact-unmatched", RowKey: "row-1", ProviderWindowID: "missing-weekly",
+			Period: "current", FromMS: resetMS, ToMS: resetMS + 5_000,
+			ModelScope:      AccountWindowModelScope{Kind: "models", Models: []string{"missing-model"}},
+			AccountSnapshot: "quota@example.com", AuthIndex: "auth-1", Source: "antigravity.json",
+		},
+	}})
+	if err != nil {
+		t.Fatalf("account window usage: %v", err)
+	}
+	if len(resp.Items) != 5 {
+		t.Fatalf("items = %#v", resp.Items)
+	}
+	if resp.Items[0].RequestKey != "five-hour-previous" || resp.Items[0].TotalRequests != 1 {
+		t.Fatalf("previous period included reset boundary: %#v", resp.Items[0])
+	}
+	if resp.Items[1].RequestKey != "five-hour-current" || resp.Items[1].TotalRequests != 1 || resp.Items[1].ScopeMatchStatus != "partial" || resp.Items[1].UnmatchedRequests != 1 {
+		t.Fatalf("scoped current period = %#v", resp.Items[1])
+	}
+	if resp.Items[2].RequestKey != "weekly-current" || resp.Items[2].TotalRequests != 4 {
+		t.Fatalf("overlapping weekly period = %#v", resp.Items[2])
+	}
+	if resp.Items[3].RequestKey != "exact-billing-model" || resp.Items[3].TotalRequests != 1 || resp.Items[3].ScopeMatchStatus != "complete" {
+		t.Fatalf("exact billing-model scope = %#v", resp.Items[3])
+	}
+	if resp.Items[4].RequestKey != "exact-unmatched" || resp.Items[4].Matched || resp.Items[4].ScopeMatchStatus != "unmatched" {
+		t.Fatalf("unmatched exact scope = %#v", resp.Items[4])
+	}
+}
+
 func TestAccountWindowUsagePricesContextLongContextAndServiceTierBands(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()

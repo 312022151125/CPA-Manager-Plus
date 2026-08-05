@@ -187,8 +187,8 @@ func validateAccountWindowUsageRequest(req monitoringsvc.AccountWindowUsageReque
 		if strings.TrimSpace(window.RowKey) == "" {
 			return errors.New("row_key is required")
 		}
-		if strings.TrimSpace(window.WindowKey) == "" {
-			return errors.New("window_key is required")
+		if strings.TrimSpace(window.ProviderWindowID) == "" && strings.TrimSpace(window.WindowKey) == "" {
+			return errors.New("provider_window_id is required")
 		}
 		if window.FromMS <= 0 || window.ToMS <= 0 || window.FromMS >= window.ToMS {
 			return errors.New("from_ms and to_ms are required and from_ms must be less than to_ms")

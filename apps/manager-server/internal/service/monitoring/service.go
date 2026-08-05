@@ -281,14 +281,24 @@ type AccountWindowUsageRequest struct {
 }
 
 type AccountWindowUsageTarget struct {
-	RowKey            string `json:"row_key"`
-	WindowKey         string `json:"window_key"`
-	FromMS            int64  `json:"from_ms"`
-	ToMS              int64  `json:"to_ms"`
-	AccountSnapshot   string `json:"account_snapshot,omitempty"`
-	AuthLabelSnapshot string `json:"auth_label_snapshot,omitempty"`
-	AuthIndex         string `json:"auth_index,omitempty"`
-	Source            string `json:"source,omitempty"`
+	RequestKey        string                  `json:"request_key,omitempty"`
+	RowKey            string                  `json:"row_key"`
+	WindowKey         string                  `json:"window_key,omitempty"`
+	ProviderWindowID  string                  `json:"provider_window_id,omitempty"`
+	Period            string                  `json:"period,omitempty"`
+	FromMS            int64                   `json:"from_ms"`
+	ToMS              int64                   `json:"to_ms"`
+	ModelScope        AccountWindowModelScope `json:"model_scope,omitempty"`
+	AccountSnapshot   string                  `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot string                  `json:"auth_label_snapshot,omitempty"`
+	AuthIndex         string                  `json:"auth_index,omitempty"`
+	Source            string                  `json:"source,omitempty"`
+}
+
+type AccountWindowModelScope struct {
+	Kind   string   `json:"kind,omitempty"`
+	Key    string   `json:"key,omitempty"`
+	Models []string `json:"models,omitempty"`
 }
 
 type AccountWindowUsageResponse struct {
@@ -297,19 +307,24 @@ type AccountWindowUsageResponse struct {
 }
 
 type AccountWindowUsageItem struct {
-	RowKey        string   `json:"row_key"`
-	WindowKey     string   `json:"window_key"`
-	FromMS        int64    `json:"from_ms"`
-	ToMS          int64    `json:"to_ms"`
-	Matched       bool     `json:"matched"`
-	TotalRequests int64    `json:"total_requests"`
-	SuccessCalls  int64    `json:"success_calls"`
-	FailureCalls  int64    `json:"failure_calls"`
-	TotalTokens   int64    `json:"total_tokens"`
-	TotalCost     float64  `json:"total_cost"`
-	SuccessRate   *float64 `json:"success_rate"`
-	LastSeenMS    *int64   `json:"last_seen_ms"`
-	SyncStatus    string   `json:"sync_status"`
+	RequestKey        string   `json:"request_key"`
+	RowKey            string   `json:"row_key"`
+	WindowKey         string   `json:"window_key,omitempty"`
+	ProviderWindowID  string   `json:"provider_window_id"`
+	Period            string   `json:"period"`
+	FromMS            int64    `json:"from_ms"`
+	ToMS              int64    `json:"to_ms"`
+	Matched           bool     `json:"matched"`
+	TotalRequests     int64    `json:"total_requests"`
+	SuccessCalls      int64    `json:"success_calls"`
+	FailureCalls      int64    `json:"failure_calls"`
+	TotalTokens       int64    `json:"total_tokens"`
+	TotalCost         float64  `json:"total_cost"`
+	SuccessRate       *float64 `json:"success_rate"`
+	LastSeenMS        *int64   `json:"last_seen_ms"`
+	SyncStatus        string   `json:"sync_status"`
+	ScopeMatchStatus  string   `json:"scope_match_status"`
+	UnmatchedRequests int64    `json:"unmatched_requests"`
 }
 
 type Summary struct {
@@ -1433,17 +1448,33 @@ func (s *Service) accountWindowUsage(ctx context.Context, req AccountWindowUsage
 	}
 
 	queries := make([]store.AccountWindowUsageQuery, 0, len(req.Windows))
-	for index, window := range req.Windows {
+	for index := range req.Windows {
+		window := &req.Windows[index]
 		if strings.TrimSpace(window.RowKey) == "" {
 			return AccountWindowUsageResponse{}, errors.New("row_key is required")
 		}
-		if strings.TrimSpace(window.WindowKey) == "" {
-			return AccountWindowUsageResponse{}, errors.New("window_key is required")
+		window.ProviderWindowID = strings.TrimSpace(window.ProviderWindowID)
+		if window.ProviderWindowID == "" {
+			window.ProviderWindowID = strings.TrimSpace(window.WindowKey)
+		}
+		if window.ProviderWindowID == "" {
+			return AccountWindowUsageResponse{}, errors.New("provider_window_id is required")
+		}
+		window.Period = normalizeAccountWindowPeriod(window.Period)
+		if window.Period == "" {
+			return AccountWindowUsageResponse{}, errors.New("period must be current, previous, or previous_equal_range")
+		}
+		window.ModelScope = normalizeAccountWindowModelScope(window.ModelScope)
+		if window.ModelScope.Kind == "" {
+			return AccountWindowUsageResponse{}, errors.New("model_scope is invalid")
+		}
+		if window.RequestKey = strings.TrimSpace(window.RequestKey); window.RequestKey == "" {
+			window.RequestKey = strings.Join([]string{window.RowKey, window.ProviderWindowID, window.ModelScope.Key, window.Period}, "\x00")
 		}
 		if window.FromMS <= 0 || window.ToMS <= 0 || window.FromMS >= window.ToMS {
 			return AccountWindowUsageResponse{}, errors.New("from_ms and to_ms are required and from_ms must be less than to_ms")
 		}
-		if !accountWindowUsageTargetValid(window) {
+		if !accountWindowUsageTargetValid(*window) {
 			return AccountWindowUsageResponse{}, errors.New("at least one account target field is required")
 		}
 		queries = append(queries, store.AccountWindowUsageQuery{
@@ -1466,18 +1497,18 @@ func (s *Service) accountWindowUsage(ctx context.Context, req AccountWindowUsage
 		return AccountWindowUsageResponse{}, err
 	}
 
-	totals := buildAccountWindowUsageTotals(stats, prices)
+	totals, scopeResults := buildScopedAccountWindowUsageTotals(stats, req.Windows, prices)
 	items := make([]AccountWindowUsageItem, 0, len(req.Windows))
 	for index, window := range req.Windows {
 		total := totals[index]
 		if total == nil {
 			items = append(items, AccountWindowUsageItem{
-				RowKey:     window.RowKey,
-				WindowKey:  window.WindowKey,
-				FromMS:     window.FromMS,
-				ToMS:       window.ToMS,
-				Matched:    false,
-				SyncStatus: "empty",
+				RequestKey: window.RequestKey, RowKey: window.RowKey,
+				WindowKey: window.WindowKey, ProviderWindowID: window.ProviderWindowID,
+				Period: window.Period, FromMS: window.FromMS, ToMS: window.ToMS,
+				Matched: false, SyncStatus: "empty",
+				ScopeMatchStatus:  scopeResults[index].status,
+				UnmatchedRequests: scopeResults[index].unmatchedRequests,
 			})
 			continue
 		}
@@ -1487,19 +1518,24 @@ func (s *Service) accountWindowUsage(ctx context.Context, req AccountWindowUsage
 			successRate = &value
 		}
 		items = append(items, AccountWindowUsageItem{
-			RowKey:        window.RowKey,
-			WindowKey:     window.WindowKey,
-			FromMS:        window.FromMS,
-			ToMS:          window.ToMS,
-			Matched:       true,
-			TotalRequests: total.requests,
-			SuccessCalls:  total.successCalls,
-			FailureCalls:  total.failureCalls,
-			TotalTokens:   total.totalTokens,
-			TotalCost:     total.cost,
-			SuccessRate:   successRate,
-			LastSeenMS:    nullableMSPointer(total.lastSeenMS),
-			SyncStatus:    "ready",
+			RequestKey:        window.RequestKey,
+			RowKey:            window.RowKey,
+			WindowKey:         window.WindowKey,
+			ProviderWindowID:  window.ProviderWindowID,
+			Period:            window.Period,
+			FromMS:            window.FromMS,
+			ToMS:              window.ToMS,
+			Matched:           true,
+			TotalRequests:     total.requests,
+			SuccessCalls:      total.successCalls,
+			FailureCalls:      total.failureCalls,
+			TotalTokens:       total.totalTokens,
+			TotalCost:         total.cost,
+			SuccessRate:       successRate,
+			LastSeenMS:        nullableMSPointer(total.lastSeenMS),
+			SyncStatus:        "ready",
+			ScopeMatchStatus:  scopeResults[index].status,
+			UnmatchedRequests: scopeResults[index].unmatchedRequests,
 		})
 	}
 
@@ -3332,6 +3368,153 @@ func accountWindowUsageTargetValid(target AccountWindowUsageTarget) bool {
 		strings.TrimSpace(target.AuthLabelSnapshot) != "" ||
 		strings.TrimSpace(target.Source) != "" ||
 		strings.TrimSpace(target.AuthIndex) != ""
+}
+
+type accountWindowScopeResult struct {
+	status            string
+	unmatchedRequests int64
+}
+
+func normalizeAccountWindowPeriod(value string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	if trimmed == "" {
+		return "current"
+	}
+	switch trimmed {
+	case "current", "previous", "previous_equal_range":
+		return trimmed
+	default:
+		return ""
+	}
+}
+
+func normalizeAccountWindowModelScope(scope AccountWindowModelScope) AccountWindowModelScope {
+	scope.Kind = strings.ToLower(strings.TrimSpace(scope.Kind))
+	if scope.Kind == "" {
+		scope.Kind = "all"
+	}
+	switch scope.Kind {
+	case "all", "family", "models", "product", "feature":
+	default:
+		return AccountWindowModelScope{}
+	}
+	scope.Key = strings.ToLower(strings.TrimSpace(scope.Key))
+	seen := make(map[string]struct{}, len(scope.Models))
+	models := make([]string, 0, len(scope.Models))
+	for _, modelName := range scope.Models {
+		normalized := normalizeQuotaModelName(modelName)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		models = append(models, normalized)
+	}
+	scope.Models = models
+	if scope.Kind == "models" && len(scope.Models) == 0 {
+		return AccountWindowModelScope{}
+	}
+	if (scope.Kind == "family" || scope.Kind == "product" || scope.Kind == "feature") && scope.Key == "" && len(scope.Models) == 0 {
+		return AccountWindowModelScope{}
+	}
+	return scope
+}
+
+func normalizeQuotaModelName(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func classifyQuotaModelFamily(modelName string) string {
+	normalized := normalizeQuotaModelName(modelName)
+	switch {
+	case normalized == "":
+		return "unknown"
+	case strings.Contains(normalized, "claude"),
+		strings.Contains(normalized, "gpt"),
+		strings.Contains(normalized, "o1"),
+		strings.Contains(normalized, "o3"),
+		strings.Contains(normalized, "o4"):
+		return "claude_gpt"
+	case strings.Contains(normalized, "gemini"):
+		return "gemini"
+	default:
+		return "unknown"
+	}
+}
+
+func accountWindowStatMatchesScope(row store.AccountWindowModelStat, scope AccountWindowModelScope) (matched bool, unmatched bool) {
+	if scope.Kind == "all" {
+		return true, false
+	}
+	models := map[string]struct{}{}
+	for _, modelName := range scope.Models {
+		models[modelName] = struct{}{}
+	}
+	rowModels := []string{normalizeQuotaModelName(row.Model), normalizeQuotaModelName(row.BillingModel)}
+	if len(models) > 0 {
+		for _, modelName := range rowModels {
+			if _, ok := models[modelName]; ok {
+				return true, false
+			}
+		}
+		if scope.Kind != "family" {
+			return false, false
+		}
+	}
+	if scope.Kind == "family" {
+		families := map[string]struct{}{}
+		for _, modelName := range rowModels {
+			families[classifyQuotaModelFamily(modelName)] = struct{}{}
+		}
+		if _, ok := families[scope.Key]; ok {
+			return true, false
+		}
+		_, unknown := families["unknown"]
+		return false, unknown
+	}
+	return false, len(models) == 0
+}
+
+func buildScopedAccountWindowUsageTotals(
+	rows []store.AccountWindowModelStat,
+	windows []AccountWindowUsageTarget,
+	prices map[string]store.ModelPrice,
+) (map[int]*accountHistoryTotal, map[int]accountWindowScopeResult) {
+	filtered := make([]store.AccountWindowModelStat, 0, len(rows))
+	results := make(map[int]accountWindowScopeResult, len(windows))
+	for index, window := range windows {
+		status := "complete"
+		if window.ModelScope.Kind != "all" {
+			status = "unmatched"
+		}
+		results[index] = accountWindowScopeResult{status: status}
+	}
+	for _, row := range rows {
+		if row.RequestIndex < 0 || row.RequestIndex >= len(windows) {
+			continue
+		}
+		matched, unmatched := accountWindowStatMatchesScope(row, windows[row.RequestIndex].ModelScope)
+		result := results[row.RequestIndex]
+		if unmatched {
+			result.unmatchedRequests += row.Calls
+		}
+		if matched {
+			filtered = append(filtered, row)
+			if result.status == "unmatched" {
+				result.status = "complete"
+			}
+		}
+		results[row.RequestIndex] = result
+	}
+	for index, result := range results {
+		if result.unmatchedRequests > 0 && result.status == "complete" {
+			result.status = "partial"
+		}
+		results[index] = result
+	}
+	return buildAccountWindowUsageTotals(filtered, prices), results
 }
 
 func buildAccountWindowUsageTotals(rows []store.AccountWindowModelStat, prices map[string]store.ModelPrice) map[int]*accountHistoryTotal {
