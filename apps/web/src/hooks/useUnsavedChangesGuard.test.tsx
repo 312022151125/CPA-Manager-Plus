@@ -10,8 +10,7 @@ const { mocks } = vi.hoisted(() => ({
     blocker: {
       state: 'unblocked' as 'unblocked' | 'blocked' | 'proceeding',
       location: undefined as
-        | { pathname: string; search: string; hash: string; key: string; state: null }
-        | undefined,
+        { pathname: string; search: string; hash: string; key: string; state: null } | undefined,
       proceed: vi.fn(),
       reset: vi.fn(),
     },
@@ -19,7 +18,7 @@ const { mocks } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('react-router', () => ({
+vi.mock('react-router-dom', () => ({
   useLocation: () => mocks.location,
   useBlocker: () => mocks.blocker,
 }));

@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAppRoutes } from '@/app/appRoutes';
 import { CODEX_INSPECTION_LAST_RUN_STORAGE_KEY } from '@/features/monitoring/model/codexInspectionStorage';
 import { CODEX_INSPECTION_SETTINGS_STORAGE_KEY } from '@/features/monitoring/model/codexInspectionSettings';
+import { accountQuotaSnapshotApi } from '@/services/api/usageService';
 import {
   getDemoAccountActionCandidates,
   getDemoAccountHistory,
+  getDemoAccountWindowUsage,
   getDemoAuthFiles,
   getDemoCodexInspectionRun,
   getDemoDashboardSummary,
@@ -109,6 +111,45 @@ describe('DemoPage', () => {
     });
 
     expect(isDemoMode()).toBe(false);
+  });
+
+  it('returns the xAI rolling response-body quota snapshot in demo mode', async () => {
+    const generatedAtMs = Date.parse('2026-08-04T12:00:00Z');
+    setDemoMode(true);
+
+    const response = await accountQuotaSnapshotApi.query(
+      '',
+      undefined,
+      [
+        {
+          row_key: 'xai-ops.json\u0000xai-ops-01',
+          provider: 'xai',
+          account: { auth_index: 'xai-ops-01' },
+        },
+        {
+          row_key: 'xai-email-user.json\u0000xai-email-user-01',
+          provider: 'xai',
+          account: { auth_index: 'xai-email-user-01' },
+        },
+      ],
+      generatedAtMs
+    );
+
+    expect(response.generated_at_ms).toBe(generatedAtMs);
+    expect(response.items[0]?.windows).toEqual([
+      expect.objectContaining({
+        provider_window_id: 'included-free-rolling-24h',
+        window_kind: 'rolling_24h',
+        window_mode: 'rolling',
+        model_scope_kind: 'models',
+        model_ids: ['grok-4.5-build-free'],
+        source: 'response_body',
+        boundary_accuracy: 'estimated',
+        duration_seconds: 86_400,
+        stale: false,
+      }),
+    ]);
+    expect(response.items[1]?.windows).toEqual([]);
   });
 
   it('does not infer demo mode from the deployment pathname without a demo hash route', () => {
@@ -435,6 +476,37 @@ describe('DemoPage', () => {
       total_cost: 88.1,
     });
     expect(response.items[0]?.account_key).not.toBe('stale-account-key');
+  });
+
+  it('echoes stable window identities for quota-tab current and previous usage', () => {
+    const response = getDemoAccountWindowUsage({
+      windows: [
+        {
+          request_key: 'platform-team-row\u0000rate_limit:weekly\u0000all\u0000previous',
+          row_key: 'platform-team-row',
+          window_key: 'weekly',
+          provider_window_id: 'rate_limit:weekly',
+          period: 'previous',
+          from_ms: Date.now() - 14 * 24 * 60 * 60 * 1000,
+          to_ms: Date.now() - 7 * 24 * 60 * 60 * 1000,
+          model_scope: { kind: 'all' },
+          account_snapshot: 'Platform Team',
+          auth_index: 'codex-team-01',
+          source: 'codex-team-01.json',
+        },
+      ],
+    });
+
+    expect(response.items[0]).toMatchObject({
+      request_key: 'platform-team-row\u0000rate_limit:weekly\u0000all\u0000previous',
+      row_key: 'platform-team-row',
+      window_key: 'weekly',
+      provider_window_id: 'rate_limit:weekly',
+      period: 'previous',
+      matched: true,
+      scope_match_status: 'complete',
+      unmatched_requests: 0,
+    });
   });
 
   it('fills the dashboard request health timeline with real dashboard granularity', () => {

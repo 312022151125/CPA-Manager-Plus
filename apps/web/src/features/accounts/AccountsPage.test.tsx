@@ -7,6 +7,7 @@ import { DropdownMenu } from '@/components/ui/DropdownMenu';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { ProviderStatusBar } from '@/components/providers/ProviderStatusBar';
+import { accountQuotaSnapshotApi } from '@/services/api';
 import type { AuthFileItem, OAuthModelAliasEntry } from '@/types';
 import type {
   AccountActionCandidatesResponse,
@@ -25,6 +26,7 @@ import {
   getAuthFileSelectionKey,
 } from '@/features/authFiles/model/authFilesPageModel';
 import { AccountModelsTab } from './components/accountDetail/AccountModelsTab';
+import { AccountQuotaTab } from './components/accountDetail/AccountQuotaTab';
 import { formatQuotaResetTimestamp } from './model/accountsPagePresentation';
 import { AccountsPage } from './AccountsPage';
 
@@ -308,9 +310,9 @@ const { mocks } = vi.hoisted(() => {
       loadModelAlias: vi.fn(async () => undefined),
       oauthExcluded: {} as Record<string, string[]>,
       oauthModelAlias: {} as Record<string, OAuthModelAliasEntry[]>,
-      listCodexInspectionRuns: vi.fn(
-        async (): Promise<{ items: CodexInspectionRun[] }> => ({ items: [] })
-      ),
+      listCodexInspectionRuns: vi.fn(async (): Promise<{ items: CodexInspectionRun[] }> => ({
+        items: [],
+      })),
       getCodexInspectionRun: vi.fn(
         async (): Promise<{
           run: CodexInspectionRun | null;
@@ -318,9 +320,10 @@ const { mocks } = vi.hoisted(() => {
         }> => ({ run: null, results: [] })
       ),
       getActiveQuotaCooldowns: vi.fn(async (): Promise<QuotaCooldownInfo[]> => []),
-      listAccountActionCandidates: vi.fn(
-        async (): Promise<AccountActionCandidatesResponse> => ({ items: [], pendingCount: 0 })
-      ),
+      listAccountActionCandidates: vi.fn(async (): Promise<AccountActionCandidatesResponse> => ({
+        items: [],
+        pendingCount: 0,
+      })),
       getAnalytics: vi.fn(
         async (_base: string, _key: string | undefined, _request: unknown): Promise<unknown> => ({
           generated_at_ms: 1,
@@ -329,14 +332,12 @@ const { mocks } = vi.hoisted(() => {
           timeline: [],
         })
       ),
-      getHeaderSnapshots: vi.fn(
-        async (): Promise<HeaderSnapshotsResponseForTest> => ({
-          generated_at_ms: 1,
-          from_ms: 0,
-          to_ms: 1,
-          items: [],
-        })
-      ),
+      getHeaderSnapshots: vi.fn(async (): Promise<HeaderSnapshotsResponseForTest> => ({
+        generated_at_ms: 1,
+        from_ms: 0,
+        to_ms: 1,
+        items: [],
+      })),
       getAccountHistory: vi.fn(
         async (
           _base: string,
@@ -644,6 +645,23 @@ vi.mock('@/features/oauth/CodexReauthDialog', () => ({
 }));
 
 vi.mock('@/services/api', () => ({
+  accountQuotaSnapshotApi: {
+    write: vi.fn(async (_base, _managementKey, entries: unknown[]) => ({
+      observed_at_ms: Date.now(),
+      items: entries.map(() => ({})),
+    })),
+    query: vi.fn(
+      async (_base, _managementKey, accounts: Array<{ row_key: string; provider: string }>) => ({
+        generated_at_ms: Date.now(),
+        items: accounts.map((account) => ({
+          row_key: account.row_key,
+          account_key: account.row_key,
+          provider: account.provider,
+          windows: [],
+        })),
+      })
+    ),
+  },
   monitoringAnalyticsApi: {
     getAnalytics: mocks.getAnalytics,
     getHeaderSnapshots: mocks.getHeaderSnapshots,
@@ -659,6 +677,11 @@ vi.mock('@/services/api', () => ({
 }));
 
 vi.mock('@/stores', () => ({
+  captureQuotaCacheGeneration: () => 0,
+  commitIfQuotaCacheCurrent: (_generation: number, commit: () => void) => {
+    commit();
+    return true;
+  },
   useNotificationStore: (
     selector?: (state: {
       showNotification: typeof mocks.showNotification;
@@ -911,6 +934,8 @@ describe('AccountsPage replacement flows', () => {
     mocks.getAccountHistory.mockResolvedValue(makeAccountHistoryResponse([]));
     mocks.getAccountWindowUsage.mockReset();
     mocks.getAccountWindowUsage.mockResolvedValue({ generated_at_ms: 1, items: [] });
+    vi.mocked(accountQuotaSnapshotApi.write).mockClear();
+    vi.mocked(accountQuotaSnapshotApi.query).mockClear();
     mocks.listCodexInspectionRuns.mockReset();
     mocks.listCodexInspectionRuns.mockResolvedValue({ items: [] });
     mocks.getCodexInspectionRun.mockReset();
@@ -2081,8 +2106,7 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.batchDelete).toHaveBeenCalledTimes(1);
     expect(mocks.batchDelete.mock.calls[0]?.[0]).toEqual([mocks.files[0]]);
     const options = mocks.batchDelete.mock.calls[0]?.[1] as
-      | { message?: unknown; confirmText?: string }
-      | undefined;
+      { message?: unknown; confirmText?: string } | undefined;
     expect(options?.confirmText).toBe('common.delete');
     expect(
       isValidElement<{
@@ -3562,6 +3586,40 @@ describe('AccountsPage replacement flows', () => {
     expect(cardText).not.toContain('auth_files.health_status_label');
     expect(cardText).not.toContain('accounts.activity_success_failure');
     expect(cardText).not.toContain('999');
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'healthy.json').props.onClick();
+    });
+    await flushPromises();
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    const quotaSummary = renderer.root.findByProps({
+      'data-account-quota-usage-summary': 'true',
+    });
+    expect(
+      quotaSummary.findAllByProps({ 'data-account-quota-metric-header': 'true' })
+    ).toHaveLength(4);
+    expect(quotaSummary.findAllByProps({ 'data-account-quota-metric-value': 'true' })).toHaveLength(
+      4
+    );
+    const compactSummaryValues = quotaSummary
+      .findAll(
+        (node) => node.type === 'strong' && typeof node.props['aria-describedby'] === 'string'
+      )
+      .map((node) => readText(node));
+    expect(compactSummaryValues).toEqual(expect.arrayContaining(['1.2K', '5.7M']));
+    const summaryTooltips = quotaSummary
+      .findAll((node) => node.props.role === 'tooltip')
+      .map((node) => readText(node));
+    expect(summaryTooltips).toEqual(
+      expect.arrayContaining([
+        'accounts.detail_total_requests1,234',
+        'accounts.detail_total_tokens5,678,900',
+      ])
+    );
   });
 
   it('renders the latest real request from the existing account-history response without polling again', async () => {
@@ -3754,7 +3812,7 @@ describe('AccountsPage replacement flows', () => {
     expect(treeText(renderer)).toContain('usage_limit_reached');
   });
 
-  it('loads overview evidence once and keeps window usage scoped to the quota tab', async () => {
+  it('loads overview evidence once and refreshes window usage on each quota-tab entry', async () => {
     mocks.files = [
       makeCodexFile('codex-a.json', 'auth-a', 'first@example.com'),
       makeCodexFile('codex-b.json', 'auth-b', 'second@example.com'),
@@ -3766,6 +3824,7 @@ describe('AccountsPage replacement flows', () => {
       serverCodexInspectionAvailable: false,
     };
     const resetLabel = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const resetAtMs = Date.parse(resetLabel);
     mocks.quotaState.codexQuota = {
       ...buildCredentialScopedQuotaRecord(mocks.files[0], {
         status: 'success',
@@ -3775,6 +3834,8 @@ describe('AccountsPage replacement flows', () => {
             label: 'Five hours',
             usedPercent: 20,
             resetLabel,
+            resetAtMs,
+            resetAccuracy: 'exact',
             limitWindowSeconds: 5 * 60 * 60,
           },
         ],
@@ -3787,6 +3848,8 @@ describe('AccountsPage replacement flows', () => {
             label: 'Five hours',
             usedPercent: 30,
             resetLabel,
+            resetAtMs,
+            resetAccuracy: 'exact',
             limitWindowSeconds: 5 * 60 * 60,
           },
         ],
@@ -3829,15 +3892,163 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
     expect(mocks.listAccountActionCandidates).toHaveBeenCalledTimes(1);
     expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(1);
+    expect(mocks.quotaState.setCodexQuota).toHaveBeenCalled();
+    expect(treeText(renderer)).toContain('accounts.detail_total_requests');
+    expect(treeText(renderer)).toContain('accounts.detail_total_tokens');
+    expect(treeText(renderer)).toContain('accounts.detail_total_cost');
+    expect(
+      renderer.root.findAllByProps({ 'data-account-quota-summary-strip': 'true' })
+    ).toHaveLength(0);
+    expect(
+      renderer.root.findAllByProps({ 'data-account-quota-usage-summary': 'true' })
+    ).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-account-quota-metrics': 'true' })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-quota-window-group': 'standard' })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-quota-card-mode': 'standard' })).toHaveLength(1);
+    expect(treeText(renderer)).toContain('accounts.detail_quota_standard_title');
+    expect(treeText(renderer)).toContain('accounts.detail_quota_evidence_title');
+    const quotaRefreshCommitCount = mocks.quotaState.setCodexQuota.mock.calls.length;
     const windowUsageRequest = mocks.getAccountWindowUsage.mock.calls[0]?.[2] as
-      | AccountWindowUsageRequestForTest
-      | undefined;
-    expect(windowUsageRequest?.windows).toHaveLength(1);
-    expect(windowUsageRequest?.windows[0]).toMatchObject({
+      AccountWindowUsageRequestForTest | undefined;
+    expect(windowUsageRequest?.windows).toHaveLength(2);
+    const windowUsageTargets = windowUsageRequest?.windows as Array<Record<string, unknown>>;
+    expect(windowUsageTargets[0]).toMatchObject({
       row_key: 'codex-a.json\u0000auth-a',
       source: 'codex-a.json',
       auth_index: 'auth-a',
+      provider_window_id: 'five-hour',
+      period: 'current',
     });
+    expect(windowUsageTargets[1]).toMatchObject({
+      provider_window_id: 'five-hour',
+      period: 'previous',
+    });
+
+    await act(async () => {
+      await renderer.root.findByType(AccountQuotaTab).props.onRefresh();
+    });
+    await flushPromises();
+
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(2);
+    expect(mocks.quotaState.setCodexQuota.mock.calls.length).toBeGreaterThan(
+      quotaRefreshCommitCount
+    );
+    const manualRefreshCommitCount = mocks.quotaState.setCodexQuota.mock.calls.length;
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_overview').props.onClick();
+    });
+    await flushPromises();
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(3);
+    expect(mocks.quotaState.setCodexQuota.mock.calls.length).toBeGreaterThan(
+      manualRefreshCommitCount
+    );
+  });
+
+  it('does not loop window usage loading when a rolling quota snapshot is merged', async () => {
+    const xaiFile = {
+      name: 'xai-ops.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-ops-01',
+      account: 'xai@example.com',
+      disabled: true,
+    } as AuthFileItem;
+    const rowKey = 'xai-ops.json\u0000xai-ops-01';
+    mocks.files = [xaiFile];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=xai-ops.json%00xai-ops-01&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    vi.mocked(accountQuotaSnapshotApi.query).mockResolvedValue({
+      generated_at_ms: 1,
+      items: [
+        {
+          row_key: rowKey,
+          account_key: rowKey,
+          provider: 'xai',
+          windows: [
+            {
+              provider_window_id: 'included-free-rolling-24h',
+              window_kind: 'rolling_24h',
+              window_mode: 'rolling',
+              model_scope_kind: 'models',
+              model_scope_key: 'grok-4.5-build-free',
+              model_ids: ['grok-4.5-build-free'],
+              source: 'response_body',
+              observed_at_ms: 1,
+              boundary_accuracy: 'estimated',
+              duration_seconds: 24 * 60 * 60,
+              used_percent: 100,
+              remaining_percent: 0,
+              stale: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    expect(renderer.root.findByProps({ 'data-account-quota-usage-summary': 'true' })).toBeTruthy();
+    expect(accountQuotaSnapshotApi.query).toHaveBeenCalledTimes(2);
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(2);
+    const lastWindowUsageRequest = mocks.getAccountWindowUsage.mock.calls[
+      mocks.getAccountWindowUsage.mock.calls.length - 1
+    ]?.[2] as AccountWindowUsageRequestForTest | undefined;
+    expect(lastWindowUsageRequest?.windows).toHaveLength(2);
+  });
+
+  it('keeps quota display available when the Manager Server monitoring path is unavailable', async () => {
+    const resetAtMs = Date.now() + 60 * 60 * 1000;
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: '',
+      requestMonitoringAvailable: false,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(mocks.files[0], {
+      status: 'success',
+      windows: [
+        {
+          id: 'five-hour',
+          label: 'Five hours',
+          usedPercent: 20,
+          resetLabel: new Date(resetAtMs).toISOString(),
+          resetAtMs,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 5 * 60 * 60,
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    expect(treeText(renderer)).toContain('Five hours');
+    expect(treeText(renderer)).toContain('accounts.detail_used');
+    expect(accountQuotaSnapshotApi.write).not.toHaveBeenCalled();
+    expect(accountQuotaSnapshotApi.query).not.toHaveBeenCalled();
+    expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
   });
 
   it('associates credential detail tabs with their active panel', async () => {
@@ -4191,8 +4402,7 @@ describe('AccountsPage replacement flows', () => {
       .map((call) => call[2] as AnalyticsRequestForTest)
       .find((request) => {
         const page = request.include?.events_page as
-          | { before_ms?: number | null; before_id?: number | null }
-          | undefined;
+          { before_ms?: number | null; before_id?: number | null } | undefined;
         return page?.before_ms === 100 && page.before_id === 7;
       });
     expect(paginatedRequest).toBeDefined();

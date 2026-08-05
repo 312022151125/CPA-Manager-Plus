@@ -5478,8 +5478,11 @@ export const getDemoAccountWindowUsage = (
       const history = historyByKey.get(key);
       if (!valid || !history) {
         return {
+          request_key: window.request_key,
           row_key: window.row_key,
           window_key: window.window_key,
+          provider_window_id: window.provider_window_id,
+          period: window.period,
           from_ms: window.from_ms,
           to_ms: window.to_ms,
           matched: false,
@@ -5491,6 +5494,8 @@ export const getDemoAccountWindowUsage = (
           success_rate: null,
           last_seen_ms: null,
           sync_status: 'empty',
+          scope_match_status: window.model_scope?.kind === 'all' ? 'complete' : 'unmatched',
+          unmatched_requests: 0,
         };
       }
 
@@ -5504,8 +5509,11 @@ export const getDemoAccountWindowUsage = (
       const successCalls = Math.max(0, totalRequests - failureCalls);
 
       return {
+        request_key: window.request_key,
         row_key: window.row_key,
         window_key: window.window_key,
+        provider_window_id: window.provider_window_id,
+        period: window.period,
         from_ms: window.from_ms,
         to_ms: window.to_ms,
         matched: true,
@@ -5517,6 +5525,8 @@ export const getDemoAccountWindowUsage = (
         success_rate: totalRequests > 0 ? successCalls / totalRequests : null,
         last_seen_ms: Math.min(generatedAtMS, window.to_ms),
         sync_status: 'ready',
+        scope_match_status: 'complete',
+        unmatched_requests: 0,
       };
     }),
   });

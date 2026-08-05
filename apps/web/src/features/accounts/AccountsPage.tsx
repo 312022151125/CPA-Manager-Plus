@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
-import type { BlockerFunction } from 'react-router';
 import { createPortal } from 'react-dom';
 import type { TFunction } from 'i18next';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, type BlockerFunction } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Drawer } from '@/components/ui/Drawer';
@@ -114,6 +113,16 @@ import {
   type AccountQuotaDisplayWindow,
 } from '@/features/accounts/model/accountQuotaDisplayWindows';
 import {
+  buildAccountQuotaWindowDefinitions,
+  type AccountQuotaWindowDefinition,
+} from '@/features/accounts/model/accountQuotaWindowDefinitions';
+import {
+  buildAccountQuotaSnapshotQueryAccounts,
+  buildAccountQuotaSnapshotWriteEntries,
+  mergeCodexResetCreditsFromQuotaSnapshots,
+  mergeAccountQuotaSnapshotWindows,
+} from '@/features/accounts/model/accountQuotaSnapshots';
+import {
   ACCOUNT_OVERVIEW_ACTIVITY_RANGE_MS,
   buildAccountDetailViewModel,
 } from '@/features/accounts/model/accountDetailViewModel';
@@ -185,9 +194,11 @@ import {
   AccountsBatchDeletePreview,
 } from '@/features/accounts/components';
 import {
+  accountQuotaSnapshotApi,
   monitoringAnalyticsApi,
   usageServiceApi,
   type AccountActionCandidate,
+  type AccountQuotaSnapshotWindow,
   type MonitoringAnalyticsAccountStatRow,
   type MonitoringAnalyticsEventRow,
   type MonitoringAnalyticsRecentFailure,
@@ -448,6 +459,7 @@ export function AccountsPage() {
     managementKey,
   });
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
+  const [quotaSnapshotRevision, setQuotaSnapshotRevision] = useState(0);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(
     () => initialWorkspaceUrlState.current.account
@@ -491,6 +503,9 @@ export function AccountsPage() {
   >(() => new Map());
   const [accountWindowUsageLoading, setAccountWindowUsageLoading] = useState(false);
   const [accountWindowUsageError, setAccountWindowUsageError] = useState('');
+  const [quotaSnapshotWindowsByRowKey, setQuotaSnapshotWindowsByRowKey] = useState<
+    Map<string, AccountQuotaSnapshotWindow[]>
+  >(() => new Map());
   const [accountActionCandidates, setAccountActionCandidates] = useState<AccountActionCandidate[]>(
     []
   );
@@ -543,6 +558,8 @@ export function AccountsPage() {
   const accountHistoryAutoLoadKeyRef = useRef<string | null>(null);
   const accountWindowUsageReqIdRef = useRef(0);
   const accountWindowUsageAutoLoadKeyRef = useRef<string | null>(null);
+  const quotaDetailAutoRefreshKeyRef = useRef<string | null>(null);
+  const quotaDetailAutoRefreshPendingKeyRef = useRef<string | null>(null);
   const usageValuesRequestIdRef = useRef(0);
   const accountActionCandidatesReqIdRef = useRef(0);
   const accountActionCandidatesRef = useRef<AccountActionCandidate[]>([]);
@@ -1290,32 +1307,74 @@ export function AccountsPage() {
     }
     return result;
   }, [buildQuotaDisplayWindows, pageRows, selectedRow]);
+  const quotaWindowDefinitionsByRowKey = useMemo(() => {
+    const result = new Map<string, AccountQuotaWindowDefinition[]>();
+    quotaDisplayWindowsByRowKey.forEach((windows, rowKey) => {
+      result.set(rowKey, buildAccountQuotaWindowDefinitions(windows));
+    });
+    return result;
+  }, [quotaDisplayWindowsByRowKey]);
+  const effectiveQuotaWindowDefinitionsByRowKey = useMemo(() => {
+    const result = new Map<string, AccountQuotaWindowDefinition[]>();
+    quotaWindowDefinitionsByRowKey.forEach((definitions, rowKey) => {
+      const provider = selectedRow?.selectionKey === rowKey ? selectedRow.provider : undefined;
+      result.set(
+        rowKey,
+        mergeAccountQuotaSnapshotWindows(
+          definitions,
+          quotaSnapshotWindowsByRowKey.get(rowKey) ?? [],
+          {
+            provider,
+            getLabel: (snapshot) => {
+              const kind = snapshot.window_kind;
+              if (kind === 'rolling_24h') {
+                return t('accounts.detail_snapshot_window_rolling_24h');
+              }
+              if (kind === 'five_hour') return t('accounts.detail_snapshot_window_five_hour');
+              if (kind === 'daily') return t('accounts.detail_snapshot_window_daily');
+              if (kind === 'weekly') return t('accounts.detail_snapshot_window_weekly');
+              if (kind === 'monthly') return t('accounts.detail_snapshot_window_monthly');
+              return snapshot.provider_window_id;
+            },
+          }
+        )
+      );
+    });
+    return result;
+  }, [quotaSnapshotWindowsByRowKey, quotaWindowDefinitionsByRowKey, selectedRow, t]);
   const accountWindowUsageTargets = useMemo(() => {
     if (!selectedRow) return [];
-    const windowsByRowKey = new Map<string, AccountQuotaDisplayWindow[]>();
+    const windowsByRowKey = new Map<string, AccountQuotaWindowDefinition[]>();
     windowsByRowKey.set(
       selectedRow.selectionKey,
-      quotaDisplayWindowsByRowKey.get(selectedRow.selectionKey) ??
-        buildQuotaDisplayWindows(selectedRow)
+      effectiveQuotaWindowDefinitionsByRowKey.get(selectedRow.selectionKey) ??
+        buildAccountQuotaWindowDefinitions(buildQuotaDisplayWindows(selectedRow))
     );
     return buildAccountWindowUsageTargetEntries([selectedRow], windowsByRowKey);
-  }, [buildQuotaDisplayWindows, quotaDisplayWindowsByRowKey, selectedRow]);
+  }, [buildQuotaDisplayWindows, effectiveQuotaWindowDefinitionsByRowKey, selectedRow]);
   const accountWindowUsageAutoLoadKey = useMemo(
     () =>
       JSON.stringify({
         checking: featureAvailability.checking,
         managerServiceBase: featureAvailability.managerServiceBase,
         managementKey,
+        quotaSnapshotRevision,
         requestMonitoringAvailable: featureAvailability.requestMonitoringAvailable,
-        targets: accountWindowUsageTargets.map(({ rowKey, windowKey, target }) => ({
-          rowKey,
-          windowKey,
-          fromMs: target.from_ms,
-          accountSnapshot: target.account_snapshot,
-          authLabelSnapshot: target.auth_label_snapshot,
-          authIndex: target.auth_index,
-          source: target.source,
-        })),
+        // Rolling window bounds are time-relative; keep them in the request, not this dedupe key.
+        targets: accountWindowUsageTargets.map(
+          ({ rowKey, windowKey, providerWindowId, period, requestKey, target }) => ({
+            rowKey,
+            windowKey,
+            providerWindowId,
+            period,
+            requestKey,
+            modelScope: target.model_scope,
+            accountSnapshot: target.account_snapshot,
+            authLabelSnapshot: target.auth_label_snapshot,
+            authIndex: target.auth_index,
+            source: target.source,
+          })
+        ),
       }),
     [
       accountWindowUsageTargets,
@@ -1323,6 +1382,7 @@ export function AccountsPage() {
       featureAvailability.managerServiceBase,
       featureAvailability.requestMonitoringAvailable,
       managementKey,
+      quotaSnapshotRevision,
     ]
   );
   const accountDisplayHint = t(
@@ -1745,14 +1805,14 @@ export function AccountsPage() {
   const loadAccountWindowUsage = useCallback(async () => {
     const requestId = accountWindowUsageReqIdRef.current + 1;
     accountWindowUsageReqIdRef.current = requestId;
-    const entries = accountWindowUsageTargets;
+    let entries = accountWindowUsageTargets;
 
     if (
       featureAvailability.checking ||
       !featureAvailability.requestMonitoringAvailable ||
       !featureAvailability.managerServiceBase ||
       !managementKey ||
-      entries.length === 0
+      !selectedRow
     ) {
       setAccountWindowUsageByKey(new Map());
       setAccountWindowUsageLoading(false);
@@ -1763,6 +1823,61 @@ export function AccountsPage() {
     setAccountWindowUsageLoading(true);
     setAccountWindowUsageError('');
     try {
+      const localDefinitions = quotaWindowDefinitionsByRowKey.get(selectedRow.selectionKey) ?? [];
+      const definitionsByRowKey = new Map([[selectedRow.selectionKey, localDefinitions]]);
+      const writeEntries = buildAccountQuotaSnapshotWriteEntries(
+        [selectedRow],
+        definitionsByRowKey,
+        {
+          getCodexQuota: (row) =>
+            row.provider === CODEX_CONFIG.type ? getDisplayCodexQuota(row.raw) : undefined,
+        }
+      );
+      try {
+        if (writeEntries.length > 0) {
+          await accountQuotaSnapshotApi.write(
+            featureAvailability.managerServiceBase,
+            managementKey,
+            writeEntries
+          );
+        }
+        const queryAccounts = buildAccountQuotaSnapshotQueryAccounts([selectedRow]);
+        if (queryAccounts.length > 0) {
+          const snapshotResponse = await accountQuotaSnapshotApi.query(
+            featureAvailability.managerServiceBase,
+            managementKey,
+            queryAccounts
+          );
+          if (accountWindowUsageReqIdRef.current !== requestId) return;
+          const snapshotWindows = snapshotResponse.items.find(
+            (item) => item.row_key === selectedRow.selectionKey
+          )?.windows;
+          if (snapshotWindows) {
+            setQuotaSnapshotWindowsByRowKey((current) => {
+              const next = new Map(current);
+              next.set(selectedRow.selectionKey, snapshotWindows);
+              return next;
+            });
+            const mergedDefinitions = mergeAccountQuotaSnapshotWindows(
+              localDefinitions,
+              snapshotWindows,
+              { provider: selectedRow.provider }
+            );
+            entries = buildAccountWindowUsageTargetEntries(
+              [selectedRow],
+              new Map([[selectedRow.selectionKey, mergedDefinitions]])
+            );
+          }
+        }
+      } catch {
+        // Snapshot persistence is additive. Older Manager Server versions or
+        // transient failures must not block the existing usage query path.
+      }
+      if (entries.length === 0) {
+        if (accountWindowUsageReqIdRef.current !== requestId) return;
+        setAccountWindowUsageByKey(new Map());
+        return;
+      }
       const response = await monitoringAnalyticsApi.getAccountWindowUsage(
         featureAvailability.managerServiceBase,
         managementKey,
@@ -1789,23 +1904,10 @@ export function AccountsPage() {
     featureAvailability.managerServiceBase,
     featureAvailability.requestMonitoringAvailable,
     managementKey,
+    getDisplayCodexQuota,
+    quotaWindowDefinitionsByRowKey,
+    selectedRow,
     t,
-  ]);
-
-  useEffect(() => {
-    if (activeView !== 'accounts' || detailTab !== 'quota' || !selectedRowKey) {
-      accountWindowUsageAutoLoadKeyRef.current = null;
-      return;
-    }
-    if (accountWindowUsageAutoLoadKeyRef.current === accountWindowUsageAutoLoadKey) return;
-    accountWindowUsageAutoLoadKeyRef.current = accountWindowUsageAutoLoadKey;
-    void loadAccountWindowUsage();
-  }, [
-    accountWindowUsageAutoLoadKey,
-    activeView,
-    detailTab,
-    loadAccountWindowUsage,
-    selectedRowKey,
   ]);
 
   const loadUsageValues = useCallback(async () => {
@@ -1906,7 +2008,11 @@ export function AccountsPage() {
           }
         );
         if (accountHistoryReqIdRef.current !== requestId) return;
-        const nextHistory = buildAccountHistoryByRowKey(entries, response.items);
+        const nextHistory = buildAccountHistoryByRowKey(
+          entries,
+          response.items,
+          response.generated_at_ms
+        );
         setAccountHistoryByRowKey((current) => {
           if (!mergeResult) return nextHistory;
           const merged = new Map(current);
@@ -2149,9 +2255,67 @@ export function AccountsPage() {
     async (row: AccountRow) => {
       await refreshQuotaRows([row]);
       await loadAccountHistory(buildAccountHistoryTargetEntries([row]));
+      setQuotaSnapshotRevision((current) => current + 1);
     },
     [loadAccountHistory, refreshQuotaRows]
   );
+
+  useEffect(() => {
+    if (
+      activeView !== 'accounts' ||
+      detailTab !== 'quota' ||
+      !selectedRow ||
+      selectedRow.disabled ||
+      selectedRow.runtimeOnly
+    ) {
+      quotaDetailAutoRefreshKeyRef.current = null;
+      quotaDetailAutoRefreshPendingKeyRef.current = null;
+      return;
+    }
+    const refreshKey = `${connectionFingerprint}:${selectedRow.selectionKey}`;
+    if (quotaDetailAutoRefreshKeyRef.current === refreshKey) return;
+    quotaDetailAutoRefreshKeyRef.current = refreshKey;
+    quotaDetailAutoRefreshPendingKeyRef.current = refreshKey;
+    void (async () => {
+      try {
+        await refreshQuotaForRow(selectedRow);
+        if (quotaDetailAutoRefreshKeyRef.current !== refreshKey) return;
+        await loadAccountHistory(buildAccountHistoryTargetEntries([selectedRow]));
+      } finally {
+        if (quotaDetailAutoRefreshKeyRef.current === refreshKey) {
+          quotaDetailAutoRefreshPendingKeyRef.current = null;
+          setQuotaSnapshotRevision((current) => current + 1);
+        }
+      }
+    })();
+  }, [
+    activeView,
+    connectionFingerprint,
+    detailTab,
+    loadAccountHistory,
+    refreshQuotaForRow,
+    selectedRow,
+  ]);
+
+  useEffect(() => {
+    if (activeView !== 'accounts' || detailTab !== 'quota' || !selectedRowKey) {
+      accountWindowUsageAutoLoadKeyRef.current = null;
+      return;
+    }
+    const refreshKey = selectedRow ? `${connectionFingerprint}:${selectedRow.selectionKey}` : null;
+    if (refreshKey && quotaDetailAutoRefreshPendingKeyRef.current === refreshKey) return;
+    if (accountWindowUsageAutoLoadKeyRef.current === accountWindowUsageAutoLoadKey) return;
+    accountWindowUsageAutoLoadKeyRef.current = accountWindowUsageAutoLoadKey;
+    void loadAccountWindowUsage();
+  }, [
+    accountWindowUsageAutoLoadKey,
+    activeView,
+    connectionFingerprint,
+    detailTab,
+    loadAccountWindowUsage,
+    selectedRow,
+    selectedRowKey,
+  ]);
 
   const canResetCodexQuota = useCallback(
     (row: AccountRow) => {
@@ -2206,6 +2370,7 @@ export function AccountsPage() {
               }));
             });
             if (!committed) return;
+            setQuotaSnapshotRevision((current) => current + 1);
             showNotification(t('codex_quota.reset_success', { name: displayName }), 'success');
           } catch (err: unknown) {
             if (!isCurrent()) return;
@@ -3555,13 +3720,29 @@ export function AccountsPage() {
     const valueRow =
       usageRows.find((row) => row.row?.selectionKey === selectedRow.selectionKey) ??
       usageRows.find((row) => !row.row && row.fileName === selectedRow.fileName);
-    const selectedQuotaWindows =
-      quotaDisplayWindowsByRowKey.get(selectedRow.selectionKey) ??
-      buildQuotaDisplayWindows(selectedRow);
+    const selectedQuotaWindows = (
+      effectiveQuotaWindowDefinitionsByRowKey.get(selectedRow.selectionKey) ??
+      buildAccountQuotaWindowDefinitions(buildQuotaDisplayWindows(selectedRow))
+    ).map((definition) => ({
+      ...definition.display,
+      providerWindowId: definition.providerWindowId,
+      observationSource: definition.observationSource,
+      observedAtMs: definition.observedAtMs,
+      windowMode: definition.windowMode,
+      cycleStartMs: definition.cycleStartMs,
+      cycleEndMs: definition.cycleEndMs,
+      limitWindowSeconds: definition.durationSeconds,
+      modelScope: definition.modelScope,
+      boundaryAccuracy: definition.boundaryAccuracy,
+      stale: definition.stale,
+    }));
     const selectedQuotaCooldown = quotaCooldownsByRowKey.get(selectedRow.selectionKey)?.[0] ?? null;
     const selectedCodexQuota =
       selectedRow.provider === CODEX_CONFIG.type
-        ? getDisplayCodexQuota(selectedRow.raw)
+        ? mergeCodexResetCreditsFromQuotaSnapshots(
+            getDisplayCodexQuota(selectedRow.raw),
+            quotaSnapshotWindowsByRowKey.get(selectedRow.selectionKey) ?? []
+          )
         : undefined;
     const selectedCodexStatus = codexStatusBySelectionKey.get(selectedRow.selectionKey) ?? null;
     const hasMatchingDetailEvents = detailEventsRowKey === selectedRow.selectionKey;

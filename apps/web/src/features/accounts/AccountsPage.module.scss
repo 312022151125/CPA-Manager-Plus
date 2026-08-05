@@ -16,7 +16,7 @@
   --accounts-warning: var(--data-amber-base);
   --accounts-danger: var(--data-red-base);
   --accounts-info: var(--data-blue-base);
-  --accounts-indigo: var(--data-indigo-base, var(--primary-color));
+  --accounts-indigo: var(--data-violet-base, var(--primary-color));
   --accounts-neutral: var(--accounts-muted);
   --accounts-overlay: color-mix(in srgb, var(--accounts-brand-active) 30%, transparent);
 }
@@ -1481,7 +1481,6 @@
   border-left: 0;
   border-radius: 0;
   background: var(--accounts-muted-surface);
-  box-shadow: 0 6px 12px color-mix(in srgb, var(--accounts-text) 7%, transparent);
 
   button {
     flex: 0 0 auto;
@@ -2775,6 +2774,477 @@
   }
 }
 
+.quotaTab {
+  --color-surface: var(--accounts-surface);
+  --color-surface-muted: var(--accounts-muted-surface);
+  --color-border: var(--accounts-border);
+  --color-text: var(--accounts-text);
+  --color-text-secondary: var(--accounts-muted);
+  --color-text-tertiary: var(--accounts-muted);
+  --color-primary: var(--accounts-brand);
+  --color-success: var(--accounts-success);
+  --color-warning: var(--accounts-warning);
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.quotaTabHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.quotaPageHeading {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+
+  p {
+    margin: 0;
+    color: var(--accounts-muted);
+    font-size: 11px;
+    line-height: 1.45;
+  }
+}
+
+.quotaPageTitle {
+  margin: 0;
+  color: var(--accounts-text);
+  font-size: 18px;
+  line-height: 25px;
+  font-weight: 750;
+}
+
+.quotaTabActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  :global(svg) {
+    display: block;
+  }
+}
+
+.quotaSummaryPanel,
+.quotaAdditionalSection {
+  min-width: 0;
+  background: var(--accounts-surface);
+}
+
+.quotaSection {
+  min-width: 0;
+  padding: 0;
+}
+
+.quotaSummaryPanel {
+  display: grid;
+  gap: 12px;
+}
+
+.quotaSummaryHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+
+  h3 {
+    flex: 0 0 auto;
+    margin: 0;
+    color: var(--accounts-text);
+    font-size: 15px;
+    line-height: 21px;
+    font-weight: 750;
+  }
+}
+
+.quotaSummaryMetrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: $spacing-sm;
+  min-width: 0;
+}
+
+.quotaSummaryMetric {
+  display: grid;
+  align-content: center;
+  justify-items: left;
+  gap: $spacing-xs;
+  min-width: 0;
+  min-height: 84px;
+  padding: $spacing-sm;
+  border: 1px solid color-mix(in srgb, var(--accounts-border) 78%, transparent);
+  border-radius: $radius-md;
+  background: var(--accounts-surface);
+}
+
+.quotaSummaryMetricBlue {
+  --quota-summary-accent: var(--accounts-brand);
+}
+
+.quotaSummaryMetricGreen {
+  --quota-summary-accent: var(--accounts-success);
+}
+
+.quotaSummaryMetricPurple {
+  --quota-summary-accent: var(--accounts-indigo);
+}
+
+.quotaSummaryMetricOrange {
+  --quota-summary-accent: var(--accounts-warning);
+}
+
+.quotaSummaryMetricHeader {
+  display: inline-flex;
+  align-items: center;
+  justify-content: left;
+  gap: $spacing-xs;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.quotaSummaryMetricLabel {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accounts-muted);
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quotaSummaryValueWrap {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  text-align: left;
+}
+
+.quotaSummaryValue {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--accounts-text);
+  font-size: 18px;
+  line-height: 24px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quotaSummaryValue[tabindex='0'] {
+  cursor: help;
+  outline: 0;
+}
+
+.quotaSummaryValue[tabindex='0']:focus-visible {
+  border-radius: $radius-sm;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accounts-brand) 28%, transparent);
+}
+
+.quotaSummaryValueTooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + $spacing-sm);
+  z-index: $z-dropdown;
+  display: grid;
+  gap: 3px;
+  width: max-content;
+  min-width: 140px;
+  max-width: min(240px, calc(100vw - 32px));
+  padding: $spacing-sm $spacing-md;
+  border: 1px solid color-mix(in srgb, var(--quota-summary-accent) 78%, var(--accounts-border));
+  border-radius: $radius-md;
+  background: color-mix(in srgb, var(--quota-summary-accent) 92%, var(--accounts-text));
+  color: var(--primary-contrast, #fff);
+  box-shadow: $shadow-md;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition:
+    opacity $transition-fast,
+    transform $transition-fast;
+}
+
+.quotaSummaryValueTooltip::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  border-right: 1px solid
+    color-mix(in srgb, var(--quota-summary-accent) 78%, var(--accounts-border));
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--quota-summary-accent) 78%, var(--accounts-border));
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.quotaSummaryValueWrap:hover .quotaSummaryValueTooltip,
+.quotaSummaryValueWrap:focus-within .quotaSummaryValueTooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.quotaSummaryValueTooltipLabel {
+  color: color-mix(in srgb, var(--primary-contrast, #fff) 72%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.quotaSummaryValueTooltipValue {
+  color: var(--primary-contrast, #fff);
+  font-size: 13px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.quotaSummaryMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: $spacing-xs $spacing-sm;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+  color: var(--accounts-muted);
+  font-size: 11px;
+  text-align: right;
+
+  strong {
+    min-width: 0;
+    max-width: 100%;
+    color: var(--accounts-text);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+    text-align: right;
+  }
+}
+
+.quotaTabStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accounts-muted);
+  font-size: 12px;
+}
+
+.quotaSection,
+.quotaAdditionalSection {
+  display: grid;
+  gap: $spacing-sm;
+}
+
+.quotaAdditionalSection {
+  background: color-mix(in srgb, var(--accounts-muted-surface) 28%, var(--accounts-surface));
+}
+
+.quotaSectionHeading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+
+  h3 {
+    flex: 0 0 auto;
+    margin: 0;
+    color: var(--accounts-text);
+    font-size: 15px;
+    line-height: 21px;
+    font-weight: 750;
+  }
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--accounts-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.quotaCardList {
+  display: grid;
+  gap: $spacing-md;
+  min-width: 0;
+}
+
+.quotaEmpty {
+  margin: 0;
+  color: var(--accounts-muted);
+  font-size: 12px;
+}
+
+.detailQuotaUsageSummary {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+  background: color-mix(in srgb, var(--accounts-accent-soft) 48%, var(--accounts-surface));
+}
+
+.detailQuotaUsageSummaryHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+
+  strong {
+    color: var(--accounts-text);
+    font-size: 13px;
+  }
+
+  span {
+    color: var(--accounts-muted);
+    font-size: 11px;
+  }
+}
+
+.detailQuotaUsageTitle,
+.detailQuotaUsageRange {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.detailQuotaUsageTitle {
+  gap: 8px;
+}
+
+.detailQuotaUsageTitle strong {
+  font-size: 14px;
+}
+
+.detailQuotaUsageTitleIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accounts-primary) 12%, transparent);
+  color: var(--accounts-primary);
+}
+
+.detailQuotaUsageRange {
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 3px;
+  text-align: right;
+
+  strong {
+    overflow: hidden;
+    max-width: 100%;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.detailQuotaUsageMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--accounts-muted);
+  font-size: 11px;
+
+  span {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  strong {
+    color: var(--accounts-text);
+    font-weight: 700;
+  }
+}
+
+.detailQuotaUsageMetrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+
+  > div {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 8px;
+    border-radius: 8px;
+    background: var(--accounts-surface);
+  }
+
+  > div > div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  span {
+    overflow: hidden;
+    color: var(--accounts-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    color: var(--accounts-text);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.metricIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.metricIconBlue {
+  background: color-mix(in srgb, var(--accounts-brand) 12%, transparent);
+  color: var(--accounts-brand);
+}
+
+.metricIconGreen {
+  background: color-mix(in srgb, var(--accounts-success) 12%, transparent);
+  color: var(--accounts-success);
+}
+
+.metricIconPurple {
+  background: color-mix(in srgb, var(--accounts-indigo) 12%, transparent);
+  color: var(--accounts-indigo);
+}
+
+.metricIconOrange {
+  background: color-mix(in srgb, var(--accounts-warning) 12%, transparent);
+  color: var(--accounts-warning);
+}
+
 .detailInlineNote {
   display: flex;
   align-items: center;
@@ -3138,20 +3608,247 @@
   }
 }
 
-.quotaSectionHeader {
+.quotaEvidenceGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.quotaEvidenceGridSingle {
+  grid-template-columns: 1fr;
+}
+
+.quotaEvidencePanel {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accounts-muted-surface) 26%, var(--accounts-surface));
+
+  h4 {
+    display: inline-flex;
+    align-items: center;
+    margin: 0;
+    color: var(--accounts-text);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  dl {
+    gap: 6px;
+  }
+
+  dl > div {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  }
+}
+
+.quotaEvidenceSummary {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--accounts-border);
+  color: var(--accounts-muted);
+  font-size: 12px;
 
-  h3 {
-    margin-bottom: 0;
+  strong {
+    color: var(--accounts-text);
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.quotaPanelIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-right: 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accounts-primary) 10%, var(--accounts-surface));
+  color: var(--accounts-primary);
+}
+
+.quotaWindowFilters {
+  display: inline-flex;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--accounts-border);
+  border-radius: 8px;
+
+  button {
+    min-height: 30px;
+    padding: 0 10px;
+    border: 0;
+    border-right: 1px solid var(--accounts-border);
+    background: var(--accounts-surface);
+    color: var(--accounts-muted);
+    font-size: 11px;
+    font-weight: 800;
+    cursor: pointer;
+
+    &:last-child {
+      border-right: 0;
+    }
+
+    &:hover {
+      background: var(--accounts-muted-surface);
+      color: var(--accounts-text);
+    }
+  }
+}
+
+.quotaWindowHeaderActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.quotaWindowFilterActive {
+  background: color-mix(in srgb, var(--accounts-primary) 10%, var(--accounts-surface)) !important;
+  color: var(--accounts-primary) !important;
+}
+
+.quotaWindowGroups {
+  display: grid;
+  gap: 14px;
+}
+
+.quotaWindowGroup {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.quotaWindowGroupHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+
+  > div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
   }
 
-  @include mobile {
+  h4 {
+    display: inline-flex;
+    align-items: center;
+    margin: 0;
+    color: var(--accounts-text);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--accounts-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > strong {
+    flex: 0 0 auto;
+    min-width: 22px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--accounts-muted-surface);
+    color: var(--accounts-muted);
+    font-size: 11px;
+    text-align: center;
+  }
+}
+
+@include mobile {
+  .quotaTabHeader {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .quotaTabActions {
+    justify-content: flex-start;
+
+    :global(.btn) {
+      flex: 1 1 auto;
+    }
+  }
+
+  .quotaSummaryMetrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .quotaSectionHeading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+
+    span {
+      overflow: visible;
+      text-overflow: clip;
+      white-space: normal;
+    }
+  }
+
+  .quotaEvidenceGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .detailQuotaUsageSummaryHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .detailQuotaUsageRange {
+    align-items: flex-start;
+    text-align: left;
+
+    strong {
+      white-space: normal;
+    }
+  }
+
+  .detailQuotaUsageMeta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .quotaWindowSection .sectionHeaderInline {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .quotaWindowHeaderActions {
+    align-items: stretch;
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .quotaWindowFilters {
+    align-self: stretch;
+
+    button {
+      flex: 1 1 0;
+    }
+  }
+
+  .quotaWindowGroupHeader span {
+    white-space: normal;
   }
 }
 
@@ -4429,6 +5126,10 @@
   }
 
   .overviewMetricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detailQuotaUsageMetrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
