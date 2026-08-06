@@ -344,12 +344,19 @@ export const QuotaWindowCard = ({
     cost: t('accounts.detail_usage_cost', { defaultValue: '预计花费' }),
     successRate: t('accounts.detail_success_rate'),
   };
+  const hasUsageScopeWarning = (item: AccountDetailWindowUsageSummary | null | undefined) =>
+    item?.scopeMatchStatus === 'partial' || item?.scopeMatchStatus === 'unmatched';
   const hasScopeWarning =
     q.modelScope?.complete === false ||
-    usage?.scopeMatchStatus === 'partial' ||
-    usage?.scopeMatchStatus === 'unmatched';
-  const modelUsage = resolvedMode === 'model' && usage?.matched ? usage : null;
-  const modelWindowStatsUnavailable = resolvedMode === 'model' && !modelUsage;
+    hasUsageScopeWarning(usage) ||
+    hasUsageScopeWarning(previousUsage);
+  const unmatchedScopeRequests = [usage, previousUsage].reduce(
+    (total, item) => (hasUsageScopeWarning(item) ? total + (item?.unmatchedRequests ?? 0) : total),
+    0
+  );
+  const modelHasUsableUsage =
+    resolvedMode === 'model' && Boolean(usage?.matched || previousUsage?.matched || q.forecast);
+  const modelWindowStatsUnavailable = resolvedMode === 'model' && !modelHasUsableUsage;
   const hasSourceWarnings = Boolean(q.stale) || (hasScopeWarning && !modelWindowStatsUnavailable);
 
   if (variant === 'compact') {
@@ -378,12 +385,12 @@ export const QuotaWindowCard = ({
         </span>
       ) : null}
       {!modelWindowStatsUnavailable &&
-      (usage?.scopeMatchStatus === 'partial' || usage?.scopeMatchStatus === 'unmatched') ? (
+      (hasUsageScopeWarning(usage) || hasUsageScopeWarning(previousUsage)) ? (
         <span className={styles.sourceMetaWarn}>
           <IconCircleHelp size={12} />
           {t('accounts.detail_scope_incomplete', {
             defaultValue: '模型范围用量可能不完整',
-            count: usage.unmatchedRequests,
+            count: unmatchedScopeRequests,
           })}
         </span>
       ) : null}
@@ -523,14 +530,57 @@ export const QuotaWindowCard = ({
         {header}
         {progress}
         {modelWarning}
-        {modelUsage ? (
-            <div className={styles.modelUsage} data-quota-usage-period="current">
-              <div className={styles.modelUsageHeader}>
-                <strong>{t('accounts.detail_current_window', { defaultValue: '当前窗口' })}</strong>
-                <span>{formatRange(modelUsage.fromMs, modelUsage.toMs, resolvedLocale)}</span>
-              </div>
-              <UsageMetricList usage={modelUsage} labels={usageLabels} />
-            </div>
+        {modelHasUsableUsage ? (
+          <div className={styles.compareColumns} data-quota-model-comparison="true">
+            <UsageColumn
+              title={
+                q.previousPeriod === 'previous_equal_range'
+                  ? t('accounts.detail_previous_equal_range', { defaultValue: '前一等长区间' })
+                  : t('accounts.detail_previous_usage', { defaultValue: '上个窗口用量' })
+              }
+              subtitle={formatRange(previousUsage?.fromMs, previousUsage?.toMs, resolvedLocale)}
+              period="previous"
+              usage={previousUsage}
+              labels={usageLabels}
+              emptyMessage={t('accounts.detail_window_stats_empty', {
+                defaultValue: '窗口统计暂未采集',
+              })}
+            />
+            <UsageColumn
+              title={t('accounts.detail_current_used', { defaultValue: '当前窗口已用' })}
+              subtitle={formatRange(usage?.fromMs, usage?.toMs, resolvedLocale)}
+              period="current"
+              usage={usage}
+              labels={usageLabels}
+              emptyMessage={t('accounts.detail_window_stats_empty', {
+                defaultValue: '窗口统计暂未采集',
+              })}
+            />
+            <ForecastColumn
+              forecast={q.forecast}
+              title={t('accounts.detail_current_forecast', { defaultValue: '当前窗口预测' })}
+              subtitle={
+                q.forecast?.basis === 'previous'
+                  ? t('accounts.detail_forecast_basis_previous', {
+                      defaultValue: '基于上个窗口实际值',
+                    })
+                  : t('accounts.detail_forecast_basis_current', {
+                      defaultValue: '基于当前窗口进度',
+                    })
+              }
+              labels={{
+                requests: t('accounts.detail_forecast_requests', { defaultValue: '预计请求' }),
+                tokens: t('accounts.detail_forecast_tokens', { defaultValue: '预计 Token' }),
+                cost: t('accounts.detail_forecast_cost', { defaultValue: '预计花费' }),
+              }}
+              unavailableMessage={t('accounts.detail_forecast_success_rate_unavailable', {
+                defaultValue: '暂不预测成功率',
+              })}
+              emptyMessage={t('accounts.detail_window_stats_empty', {
+                defaultValue: '窗口统计暂未采集',
+              })}
+            />
+          </div>
         ) : null}
         {sourceMeta}
       </div>

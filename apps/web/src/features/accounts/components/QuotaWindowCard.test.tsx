@@ -175,6 +175,44 @@ describe('QuotaWindowCard', () => {
     expect(readText(renderer.root)).toContain('accounts.detail_model_window_stats_unavailable');
   });
 
+  it('renders model quota cards with previous, current, and forecast columns', () => {
+    const renderer = renderCard(
+      makeWindow({
+        modelScope: { kind: 'family', key: 'gemini', complete: true },
+      }),
+      'model'
+    );
+
+    const comparison = renderer.root.findByProps({ 'data-quota-model-comparison': 'true' });
+    expect(comparison.findByProps({ 'data-quota-usage-period': 'previous' })).toBeTruthy();
+    expect(comparison.findByProps({ 'data-quota-usage-period': 'current' })).toBeTruthy();
+    expect(comparison.findByProps({ 'data-quota-usage-forecast': 'true' })).toBeTruthy();
+    expect(readText(comparison)).toContain('accounts.detail_forecast_requests');
+    expect(readText(comparison)).toContain('accounts.detail_forecast_tokens');
+    expect(readText(comparison)).toContain('accounts.detail_forecast_cost');
+    expect(readText(comparison)).not.toContain('accounts.detail_model_window_stats_unavailable');
+    expect(renderer.root.findAllByProps({ 'data-quota-standard-comparison': 'true' })).toHaveLength(
+      0
+    );
+  });
+
+  it('keeps model comparisons when only the previous window has actual usage', () => {
+    const renderer = renderCard(
+      makeWindow({
+        modelScope: { kind: 'family', key: 'gemini', complete: true },
+        usage: usage({ matched: false }),
+        currentUsage: usage({ matched: false }),
+        forecast: { requests: 120, tokens: 1_200_000, cost: 120, basis: 'previous' },
+      }),
+      'model'
+    );
+
+    expect(renderer.root.findByProps({ 'data-quota-model-comparison': 'true' })).toBeTruthy();
+    expect(renderer.root.findAllByProps({ 'data-quota-model-warning': 'true' })).toHaveLength(0);
+    expect(readText(renderer.root)).toContain('accounts.detail_window_stats_empty');
+    expect(readText(renderer.root)).toContain('accounts.detail_forecast_basis_previous');
+  });
+
   it('merges missing model scope into the single alert while keeping stale evidence separate', () => {
     const renderer = renderCard(
       makeWindow({

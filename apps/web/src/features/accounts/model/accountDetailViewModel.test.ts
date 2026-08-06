@@ -320,6 +320,82 @@ describe('accountDetailViewModel', () => {
     });
   });
 
+  it('keeps previous usage and forecast for model-scoped windows', () => {
+    const row = makeRow({ provider: 'antigravity' });
+    const nowMs = Date.now();
+    const modelScope = { kind: 'family' as const, key: 'gemini', complete: true };
+    const currentKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'antigravity-gemini',
+      'current',
+      modelScope
+    );
+    const previousKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'antigravity-gemini',
+      'previous',
+      modelScope
+    );
+    const windowUsageByKey = new Map<string, MonitoringAccountWindowUsageItem>([
+      [
+        currentKey,
+        makeWindowUsage({
+          window_key: 'antigravity-gemini',
+          from_ms: nowMs - 60 * 60 * 1000,
+          to_ms: nowMs,
+          total_requests: 30,
+          total_tokens: 300_000,
+          total_cost: 3,
+        }),
+      ],
+      [
+        previousKey,
+        makeWindowUsage({
+          window_key: 'antigravity-gemini',
+          from_ms: nowMs - 25 * 60 * 60 * 1000,
+          to_ms: nowMs - 24 * 60 * 60 * 1000,
+          total_requests: 20,
+          total_tokens: 200_000,
+          total_cost: 2,
+        }),
+      ],
+    ]);
+
+    const viewModel = buildAccountDetailViewModel(row, {
+      quotaWindows: [
+        {
+          key: 'antigravity-gemini',
+          providerWindowId: 'antigravity-gemini',
+          label: 'Gemini',
+          kind: 'daily',
+          remainingPercent: 60,
+          usedPercent: 40,
+          resetLabel: 'later',
+          resetAtMs: nowMs + 24 * 60 * 60 * 1000,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 24 * 60 * 60,
+          windowMode: 'fixed',
+          cycleStartMs: nowMs - 60 * 60 * 1000,
+          cycleEndMs: nowMs + 23 * 60 * 60 * 1000,
+          modelScope,
+        },
+      ],
+      windowUsageByKey,
+    });
+
+    expect(viewModel.quota.windows[0].previousUsage).toMatchObject({
+      matched: true,
+      totalRequests: 20,
+      totalTokens: 200_000,
+    });
+    expect(viewModel.quota.windows[0].forecast).toMatchObject({
+      basis: 'current',
+      requests: 720,
+      tokens: 7_200_000,
+      cost: 72,
+    });
+  });
+
   it('accepts safely pre-scoped file-level action candidates', () => {
     const row = makeRow({ authIndex: '1' });
     const fileLevelCandidate = makeCandidate({
