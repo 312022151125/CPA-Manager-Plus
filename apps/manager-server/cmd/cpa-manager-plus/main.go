@@ -111,9 +111,9 @@ func runServer() {
 	)
 	accountHistoryRollupWorker := worker.NewAccountHistoryRollupWorker(db)
 	accountHistoryRollupWorker.Start(ctx)
-	usagePricingRollupWorker := worker.NewUsagePricingRollupWorker(db)
-	usagePricingRollupWorker.Start(ctx)
-	serverApp.AppContext().ModelPriceService.SetPricesChangedNotifier(usagePricingRollupWorker.Wake)
+	usageDerivedRollupWorker := worker.NewUsagePricingRollupWorker(db)
+	usageDerivedRollupWorker.Start(ctx)
+	serverApp.AppContext().ModelPriceService.SetPricesChangedNotifier(usageDerivedRollupWorker.Wake)
 	var usageHourlyAggregateWorker *worker.UsageHourlyAggregateWorker
 	if cfg.DashboardHourlyRollupEnabled {
 		usageHourlyAggregateWorker = worker.NewUsageHourlyAggregateWorker(db)
@@ -121,7 +121,7 @@ func runServer() {
 	}
 	serverApp.AppContext().UsageService.SetEventsInsertedNotifier(func() {
 		accountHistoryRollupWorker.Wake()
-		usagePricingRollupWorker.Wake()
+		usageDerivedRollupWorker.Wake()
 		if usageHourlyAggregateWorker != nil {
 			usageHourlyAggregateWorker.Wake()
 		}
@@ -137,7 +137,7 @@ func runServer() {
 	manager.SetUsageEventHandler(worker.NewUsageEventFanout(
 		automationRuntime.UsageEventHandler(),
 		accountHistoryRollupWorker,
-		usagePricingRollupWorker,
+		usageDerivedRollupWorker,
 		usageHourlyAggregateWorker,
 	))
 
@@ -178,12 +178,12 @@ func runServer() {
 	}()
 
 	usageCacheAccountingMigrationWorker := worker.NewUsageCacheAccountingMigrationWorker(db, func() {
-		go runUsageResponseMetadataBackfill(ctx, db)
 		accountHistoryRollupWorker.Wake()
-		usagePricingRollupWorker.Wake()
+		usageDerivedRollupWorker.Wake()
 		if usageHourlyAggregateWorker != nil {
 			usageHourlyAggregateWorker.Wake()
 		}
+		go runUsageResponseMetadataBackfill(ctx, db)
 	})
 	usageCacheAccountingMigrationWorker.Start(ctx)
 
