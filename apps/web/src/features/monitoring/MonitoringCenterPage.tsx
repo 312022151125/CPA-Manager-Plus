@@ -121,6 +121,7 @@ import { sha256Hex } from '@/utils/apiKeyHash';
 import { formatCompactNumber } from '@/utils/usage';
 import {
   buildUsageHeaderSnapshotLookup,
+  filterFreshUsageHeaderQuotaSnapshots,
   getHighConfidenceUsageHeaderSnapshotForAuthFile,
 } from '@/utils/usageHeaderSnapshots';
 import { buildSourceInfoMap, buildSourceProviderStateMap } from '@/utils/sourceResolver';
@@ -197,6 +198,7 @@ export function MonitoringCenterPage() {
     () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
   );
   const [headerSnapshots, setHeaderSnapshots] = useState<UsageHeaderSnapshot[]>([]);
+  const [headerSnapshotGeneratedAtMs, setHeaderSnapshotGeneratedAtMs] = useState(0);
   const [selectedAccount, setSelectedAccount] = useState(
     () => initialMonitoringCenterUiState.current.selectedAccount
   );
@@ -415,6 +417,7 @@ export function MonitoringCenterPage() {
   const loadHeaderSnapshots = useCallback(async () => {
     if (!requestMonitoringAvailability.serviceBase) {
       setHeaderSnapshots([]);
+      setHeaderSnapshotGeneratedAtMs(0);
       return;
     }
     try {
@@ -424,6 +427,7 @@ export function MonitoringCenterPage() {
         { days: 30, limit: 1000 }
       );
       setHeaderSnapshots(response.items ?? []);
+      setHeaderSnapshotGeneratedAtMs(response.generated_at_ms || Date.now());
     } catch {
       setHeaderSnapshots((current) => current);
     }
@@ -744,8 +748,14 @@ export function MonitoringCenterPage() {
     [accountAuthStateByRowId, accountRows]
   );
   const headerSnapshotLookup = useMemo(
-    () => buildUsageHeaderSnapshotLookup(headerSnapshots),
-    [headerSnapshots]
+    () =>
+      buildUsageHeaderSnapshotLookup(
+        filterFreshUsageHeaderQuotaSnapshots(
+          headerSnapshots,
+          headerSnapshotGeneratedAtMs || Date.now()
+        )
+      ),
+    [headerSnapshotGeneratedAtMs, headerSnapshots]
   );
   const scopedFailureCount = scopedSummary.failureCalls;
   const accountQuotaStatesWithObservedHeaders = useMemo(() => {

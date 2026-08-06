@@ -391,8 +391,12 @@ const buildCodexQuotaDisplayWindows = (
       resetAccuracy: window.resetAccuracy,
       limitWindowSeconds: window.limitWindowSeconds ?? null,
       source: 'codex',
-      observationSource: quota.observedFromUsageHeaders ? 'response_header' : 'api_query',
-      observedAtMs: quota.observedAtMs ?? quota.fetchedAtMs ?? null,
+      observationSource:
+        window.observationSource ??
+        (quota.observedFromUsageHeaders && quota.fetchedAtMs === undefined
+          ? 'response_header'
+          : 'api_query'),
+      observedAtMs: window.observedAtMs ?? quota.observedAtMs ?? quota.fetchedAtMs ?? null,
       nowMs: options.nowMs,
     })
   );

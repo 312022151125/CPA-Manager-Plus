@@ -47,6 +47,7 @@ import {
   fetchAntigravityQuota,
   fetchClaudeQuota,
   fetchCodexQuota,
+  fetchKimiQuota,
   mergeXaiBillingSummaries,
   probeXaiBilling,
   probeXaiInference,
@@ -156,6 +157,7 @@ describe('fetchCodexQuota', () => {
     expect(result.rateLimitResetCreditsAvailableCount).toBe(2);
     expect(result.rateLimitResetCredits).toHaveLength(1);
     expect(result.rateLimitResetCreditsError).toBeNull();
+    expect(result.quotaInventoryObserved).toBe(false);
     expect(result.subscriptionActiveUntil).toBe(1_788_220_799);
     expect(result).toMatchObject({
       creditsHasCredits: true,
@@ -167,6 +169,69 @@ describe('fetchCodexQuota', () => {
       spendControlReached: false,
       spendControlIndividualLimit: 200,
     });
+  });
+
+  it('marks an explicit rate-limit object as a complete quota inventory', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { rate_limit: {} },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { available_count: 0, credits: [] },
+      });
+
+    const result = await fetchCodexQuota(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    expect(result.quotaInventoryObserved).toBe(true);
+    expect(result.windows).toEqual([]);
+  });
+
+  it.each([
+    ['code-review family', { code_review_rate_limit: {} }],
+    ['additional families', { additional_rate_limits: [] }],
+  ])('marks an explicit empty %s as a complete quota inventory', async (_name, body) => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body,
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { available_count: 0, credits: [] },
+      });
+
+    const result = await fetchCodexQuota(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    expect(result.quotaInventoryObserved).toBe(true);
+    expect(result.windows).toEqual([]);
   });
 
   it('keeps usage quota data when reset credit details fail', async () => {
@@ -1681,6 +1746,89 @@ describe('fetchClaudeQuota', () => {
         modelScope: { kind: 'models', models: [], complete: false },
       },
     ]);
+    expect(result.quotaInventoryObserved).toBe(true);
+  });
+
+  it('does not treat an unrecognized successful Claude payload as a complete inventory', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {},
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {},
+      });
+
+    const result = await fetchClaudeQuota(
+      { name: 'claude.json', type: 'claude', authIndex: 'claude-1' },
+      t
+    );
+
+    expect(result.windows).toEqual([]);
+    expect(result.quotaInventoryObserved).toBe(false);
+  });
+
+  it('accepts an explicit empty Claude limits array as a complete inventory', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { limits: [] },
+      })
+      .mockRejectedValueOnce(new Error('profile unavailable'));
+
+    const result = await fetchClaudeQuota(
+      { name: 'claude.json', type: 'claude', authIndex: 'claude-1' },
+      t
+    );
+
+    expect(result.windows).toEqual([]);
+    expect(result.quotaInventoryObserved).toBe(true);
+  });
+});
+
+describe('fetchKimiQuota', () => {
+  it('does not treat an unrecognized successful payload as a complete inventory', async () => {
+    mocks.request.mockResolvedValueOnce({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: {},
+    });
+
+    const result = await fetchKimiQuota(
+      { name: 'kimi.json', type: 'kimi', authIndex: 'kimi-1' },
+      t
+    );
+
+    expect(result).toEqual({ rows: [], quotaInventoryObserved: false });
+  });
+
+  it('accepts an explicit empty limits array as a complete inventory', async () => {
+    mocks.request.mockResolvedValueOnce({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: { limits: [] },
+    });
+
+    const result = await fetchKimiQuota(
+      { name: 'kimi.json', type: 'kimi', authIndex: 'kimi-1' },
+      t
+    );
+
+    expect(result).toEqual({ rows: [], quotaInventoryObserved: true });
   });
 });
 
@@ -2702,6 +2850,7 @@ describe('fetchAntigravityQuota', () => {
         },
       ],
     });
+    expect(result.quotaInventoryObserved).toBe(true);
   });
 
   it('falls back to available models when summary endpoints have no usable data', async () => {
@@ -2786,5 +2935,51 @@ describe('fetchAntigravityQuota', () => {
         'User-Agent': ANTIGRAVITY_USER_AGENT,
       }),
     });
+  });
+
+  it('does not treat unrecognized successful endpoint payloads as a complete inventory', async () => {
+    mocks.request.mockResolvedValue({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: {},
+    });
+
+    const result = await fetchAntigravityQuota(
+      {
+        name: 'antigravity.json',
+        type: 'antigravity',
+        authIndex: 'ag-1',
+        project_id: 'project-1',
+      },
+      t
+    );
+
+    expect(result.groups).toEqual([]);
+    expect(result.quotaInventoryObserved).toBe(false);
+  });
+
+  it('accepts an explicit empty Antigravity group list as a complete inventory', async () => {
+    mocks.request.mockResolvedValue({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: { groups: [] },
+    });
+
+    const result = await fetchAntigravityQuota(
+      {
+        name: 'antigravity.json',
+        type: 'antigravity',
+        authIndex: 'ag-1',
+        project_id: 'project-1',
+      },
+      t
+    );
+
+    expect(result.groups).toEqual([]);
+    expect(result.quotaInventoryObserved).toBe(true);
   });
 });

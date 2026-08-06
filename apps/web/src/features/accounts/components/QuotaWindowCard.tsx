@@ -344,6 +344,19 @@ export const QuotaWindowCard = ({
     cost: t('accounts.detail_usage_cost', { defaultValue: '预计花费' }),
     successRate: t('accounts.detail_success_rate'),
   };
+  const forecastSubtitle =
+    q.forecast?.basis === 'previous'
+      ? t('accounts.detail_forecast_basis_previous', {
+          defaultValue: '基于上个窗口实际值',
+        })
+      : q.forecast?.basis === 'quota'
+        ? t('accounts.detail_forecast_basis_quota', {
+            defaultValue: '基于 Provider 已用额度比例',
+          })
+        : '';
+  const forecastEmptyMessage = t('accounts.detail_forecast_unavailable', {
+    defaultValue: '暂无可用预测依据，暂不预测',
+  });
   const hasUsageScopeWarning = (item: AccountDetailWindowUsageSummary | null | undefined) =>
     item?.scopeMatchStatus === 'partial' || item?.scopeMatchStatus === 'unmatched';
   const hasScopeWarning =
@@ -357,7 +370,16 @@ export const QuotaWindowCard = ({
   const modelHasUsableUsage =
     resolvedMode === 'model' && Boolean(usage?.matched || previousUsage?.matched || q.forecast);
   const modelWindowStatsUnavailable = resolvedMode === 'model' && !modelHasUsableUsage;
-  const hasSourceWarnings = Boolean(q.stale) || (hasScopeWarning && !modelWindowStatsUnavailable);
+  const lifecycleUnavailable = q.availability === 'pending_absent' || q.availability === 'inactive';
+  const reopened = q.availability === 'active' && (q.activationGeneration ?? 0) > 1;
+  const previousEndReason = q.previousCycle?.endReason ?? '';
+  const hasEarlyReset = previousEndReason === 'early_reset';
+  const hasProviderReset = previousEndReason === 'provider_reset';
+  const hasLifecycleNotice = lifecycleUnavailable || reopened || hasEarlyReset || hasProviderReset;
+  const hasSourceWarnings =
+    (Boolean(q.stale) && !lifecycleUnavailable) ||
+    hasLifecycleNotice ||
+    (hasScopeWarning && !modelWindowStatsUnavailable);
 
   if (variant === 'compact') {
     return (
@@ -372,10 +394,42 @@ export const QuotaWindowCard = ({
 
   const sourceMetaWarnings = hasSourceWarnings ? (
     <div className={styles.sourceMetaWarnings} data-quota-source-warnings="true">
-      {q.stale ? (
+      {q.stale && !lifecycleUnavailable ? (
         <span className={styles.sourceMetaWarn}>
           <IconTriangleAlert size={12} />
           {t('accounts.detail_quota_snapshot_stale')}
+        </span>
+      ) : null}
+      {q.availability === 'pending_absent' ? (
+        <span className={styles.sourceMetaWarn} data-quota-lifecycle-notice="pending_absent">
+          <IconTriangleAlert size={12} />
+          {t('accounts.detail_quota_window_pending_absent')}
+        </span>
+      ) : null}
+      {q.availability === 'inactive' ? (
+        <span className={styles.sourceMetaWarn} data-quota-lifecycle-notice="inactive">
+          <IconTriangleAlert size={12} />
+          {t('accounts.detail_quota_window_inactive')}
+        </span>
+      ) : null}
+      {reopened ? (
+        <span className={styles.sourceMetaWarn} data-quota-lifecycle-notice="reopened">
+          <IconCircleHelp size={12} />
+          {t('accounts.detail_quota_window_reopened', {
+            generation: q.activationGeneration,
+          })}
+        </span>
+      ) : null}
+      {hasEarlyReset ? (
+        <span className={styles.sourceMetaWarn} data-quota-lifecycle-notice="early_reset">
+          <IconTriangleAlert size={12} />
+          {t('accounts.detail_quota_window_early_reset')}
+        </span>
+      ) : null}
+      {hasProviderReset ? (
+        <span className={styles.sourceMetaWarn} data-quota-lifecycle-notice="provider_reset">
+          <IconTriangleAlert size={12} />
+          {t('accounts.detail_quota_window_provider_reset')}
         </span>
       ) : null}
       {!modelWindowStatsUnavailable && q.modelScope?.complete === false ? (
@@ -427,6 +481,14 @@ export const QuotaWindowCard = ({
             defaultValue: q.boundaryAccuracy ?? 'unknown',
           })}
         </span>
+        {q.relationshipKind === 'concurrent_subwindow' && q.containerProviderWindowId ? (
+          <span className={styles.sourceMetaItem} data-quota-window-relationship="subwindow">
+            <IconTimer size={13} />
+            {t('accounts.detail_quota_window_subwindow', {
+              container: q.containerProviderWindowId,
+            })}
+          </span>
+        ) : null}
       </div>
       {sourceMetaWarnings}
     </div>
@@ -500,6 +562,7 @@ export const QuotaWindowCard = ({
       <div
         className={`${styles.card} ${styles.otherCard}`}
         data-quota-window-mode={q.windowMode ?? 'unknown'}
+        data-quota-window-availability={q.availability ?? 'unknown'}
         data-quota-card-mode="other"
       >
         {header}
@@ -525,6 +588,7 @@ export const QuotaWindowCard = ({
       <div
         className={`${styles.card} ${styles.modelCard}`}
         data-quota-window-mode={q.windowMode ?? 'unknown'}
+        data-quota-window-availability={q.availability ?? 'unknown'}
         data-quota-card-mode="model"
       >
         {header}
@@ -559,15 +623,7 @@ export const QuotaWindowCard = ({
             <ForecastColumn
               forecast={q.forecast}
               title={t('accounts.detail_current_forecast', { defaultValue: '当前窗口预测' })}
-              subtitle={
-                q.forecast?.basis === 'previous'
-                  ? t('accounts.detail_forecast_basis_previous', {
-                      defaultValue: '基于上个窗口实际值',
-                    })
-                  : t('accounts.detail_forecast_basis_current', {
-                      defaultValue: '基于当前窗口进度',
-                    })
-              }
+              subtitle={forecastSubtitle}
               labels={{
                 requests: t('accounts.detail_forecast_requests', { defaultValue: '预计请求' }),
                 tokens: t('accounts.detail_forecast_tokens', { defaultValue: '预计 Token' }),
@@ -576,9 +632,7 @@ export const QuotaWindowCard = ({
               unavailableMessage={t('accounts.detail_forecast_success_rate_unavailable', {
                 defaultValue: '暂不预测成功率',
               })}
-              emptyMessage={t('accounts.detail_window_stats_empty', {
-                defaultValue: '窗口统计暂未采集',
-              })}
+              emptyMessage={forecastEmptyMessage}
             />
           </div>
         ) : null}
@@ -591,6 +645,7 @@ export const QuotaWindowCard = ({
     <div
       className={`${styles.card} ${styles.standardCard}`}
       data-quota-window-mode={q.windowMode ?? 'unknown'}
+      data-quota-window-availability={q.availability ?? 'unknown'}
       data-quota-card-mode="standard"
     >
       {header}
@@ -623,15 +678,7 @@ export const QuotaWindowCard = ({
         <ForecastColumn
           forecast={q.forecast}
           title={t('accounts.detail_current_forecast', { defaultValue: '当前窗口预测' })}
-          subtitle={
-            q.forecast?.basis === 'previous'
-              ? t('accounts.detail_forecast_basis_previous', {
-                  defaultValue: '基于上个窗口实际值',
-                })
-              : t('accounts.detail_forecast_basis_current', {
-                  defaultValue: '基于当前窗口进度',
-                })
-          }
+          subtitle={forecastSubtitle}
           labels={{
             requests: t('accounts.detail_forecast_requests', { defaultValue: '预计请求' }),
             tokens: t('accounts.detail_forecast_tokens', { defaultValue: '预计 Token' }),
@@ -640,9 +687,7 @@ export const QuotaWindowCard = ({
           unavailableMessage={t('accounts.detail_forecast_success_rate_unavailable', {
             defaultValue: '暂不预测成功率',
           })}
-          emptyMessage={t('accounts.detail_window_stats_empty', {
-            defaultValue: '窗口统计暂未采集',
-          })}
+          emptyMessage={forecastEmptyMessage}
         />
       </div>
       {sourceMeta}

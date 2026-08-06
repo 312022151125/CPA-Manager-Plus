@@ -620,14 +620,15 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
   });
 
   it('passes observed Codex quota from usage response headers to auth file cards', async () => {
+    const observedAtMs = Date.now();
     mocks.getHeaderSnapshots.mockResolvedValue({
-      generated_at_ms: 1_700_000_000_000,
-      from_ms: 1_700_000_000_000,
-      to_ms: 1_700_000_000_000,
+      generated_at_ms: observedAtMs,
+      from_ms: observedAtMs,
+      to_ms: observedAtMs,
       items: [
         {
           event_hash: 'event-1',
-          timestamp_ms: 1_700_000_000_000,
+          timestamp_ms: observedAtMs,
           auth_file_snapshot: 'codex-one.json',
           auth_provider_snapshot: 'codex',
           response_metadata: {
@@ -636,7 +637,7 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
               active_limit: 'premium',
               primary: {
                 used_percent: 20,
-                reset_at_ms: 1_784_805_897_000,
+                reset_at_ms: observedAtMs + 30 * 24 * 60 * 60 * 1000,
                 window_minutes: 43_200,
               },
               credits_has_credits: false,
@@ -1095,6 +1096,7 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
   });
 
   it('merges observed Codex header quota without clearing stored quota-only fields', async () => {
+    const observedAtMs = Date.now();
     mocks.codexQuota = {
       'codex-one.json::-': {
         status: 'success',
@@ -1126,13 +1128,13 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
       },
     };
     mocks.getHeaderSnapshots.mockResolvedValue({
-      generated_at_ms: 1_700_000_000_000,
-      from_ms: 1_700_000_000_000,
-      to_ms: 1_700_000_000_000,
+      generated_at_ms: observedAtMs,
+      from_ms: observedAtMs,
+      to_ms: observedAtMs,
       items: [
         {
           event_hash: 'event-1',
-          timestamp_ms: 1_700_000_000_000,
+          timestamp_ms: observedAtMs,
           auth_file_snapshot: 'codex-one.json',
           auth_provider_snapshot: 'codex',
           response_metadata: {
@@ -1140,7 +1142,7 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
               plan_type: 'free',
               primary: {
                 used_percent: 20,
-                reset_at_ms: 1_700_018_000_000,
+                reset_at_ms: observedAtMs + 5 * 60 * 60 * 1000,
                 window_minutes: 300,
               },
             },
@@ -1238,6 +1240,7 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
   });
 
   it('uses newer header snapshots after manual Codex quota refresh failures', async () => {
+    const observedAtMs = Date.now();
     mocks.codexQuota = {
       'codex-one.json::-': {
         status: 'error',
@@ -1268,13 +1271,13 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
       },
     };
     mocks.getHeaderSnapshots.mockResolvedValue({
-      generated_at_ms: 1_700_000_000_000,
-      from_ms: 1_700_000_000_000,
-      to_ms: 1_700_000_000_000,
+      generated_at_ms: observedAtMs,
+      from_ms: observedAtMs,
+      to_ms: observedAtMs,
       items: [
         {
           event_hash: 'event-1',
-          timestamp_ms: 1_700_000_000_000,
+          timestamp_ms: observedAtMs,
           auth_file_snapshot: 'codex-one.json',
           auth_provider_snapshot: 'codex',
           response_metadata: {
@@ -1282,7 +1285,7 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
               plan_type: 'free',
               primary: {
                 used_percent: 20,
-                reset_at_ms: 1_700_018_000_000,
+                reset_at_ms: observedAtMs + 5 * 60 * 60 * 1000,
                 window_minutes: 300,
               },
             },

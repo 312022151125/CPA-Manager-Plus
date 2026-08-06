@@ -13,6 +13,7 @@ import type {
   CodexQuotaWindow,
   CodexUsagePayload,
   KimiQuotaRow,
+  KimiUsagePayload,
   XaiBillingConfig,
   XaiBillingPayload,
   XaiBillingDiagnostic,
@@ -58,6 +59,7 @@ import {
   formatQuotaResetTime,
   getStatusFromError,
   resolveAbsoluteQuotaReset,
+  type CodexQuotaResetSource,
 } from './formatters';
 import {
   normalizeAuthIndex,
@@ -85,6 +87,8 @@ const CODEX_RESET_CREDITS_REQUEST_TIMEOUT_MS = 8000;
 export type CodexQuotaData = {
   planType: string | null;
   windows: CodexQuotaWindow[];
+  observedAtMs?: number;
+  quotaInventoryObserved: boolean;
   subscriptionActiveUntil: string | number | null;
   creditsHasCredits?: boolean | null;
   creditsUnlimited?: boolean | null;
@@ -99,16 +103,43 @@ export type CodexQuotaData = {
   rateLimitResetCreditsError: string | null;
 };
 
+const isCodexRateLimitInventory = (value: unknown): boolean =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const hasCodexQuotaInventory = (payload: CodexUsagePayload): boolean =>
+  [
+    payload.rate_limit,
+    payload.rateLimit,
+    payload.code_review_rate_limit,
+    payload.codeReviewRateLimit,
+  ].some(isCodexRateLimitInventory) ||
+  [payload.additional_rate_limits, payload.additionalRateLimits].some(Array.isArray);
+
 export type ClaudeQuotaData = {
   windows: ClaudeQuotaWindow[];
+  quotaInventoryObserved: boolean;
   extraUsage?: ClaudeExtraUsage | null;
   planType?: string | null;
 };
 
 export type AntigravityQuotaData = {
   groups: AntigravityQuotaGroup[];
+  quotaInventoryObserved: boolean;
   subscription?: AntigravityQuotaSubscription | null;
   serverTimeOffsetMs: number | null;
+};
+
+export type KimiQuotaData = {
+  rows: KimiQuotaRow[];
+  quotaInventoryObserved: boolean;
+};
+
+const hasOwn = (value: object, key: PropertyKey): boolean =>
+  Object.prototype.hasOwnProperty.call(value, key);
+
+const hasExplicitEmptyAntigravityInventory = (payload: AntigravityQuotaSummaryPayload): boolean => {
+  if (Array.isArray(payload.groups) && payload.groups.length === 0) return true;
+  return isRecord(payload.models) && Object.keys(payload.models).length === 0;
 };
 
 const antigravitySubscriptionRequests = new Map<
@@ -229,6 +260,7 @@ export const fetchAntigravityQuota = async (
   let lastStatus: number | undefined;
   let priorityStatus: number | undefined;
   let hadSuccess = false;
+  let quotaInventoryObserved = false;
 
   for (const url of [...ANTIGRAVITY_QUOTA_SUMMARY_URLS, ...ANTIGRAVITY_AVAILABLE_MODELS_URLS]) {
     try {
@@ -260,12 +292,14 @@ export const fetchAntigravityQuota = async (
 
       const groups = buildAntigravityQuotaGroups(payload);
       if (groups.length === 0) {
+        quotaInventoryObserved ||= hasExplicitEmptyAntigravityInventory(payload);
         lastError = t('antigravity_quota.empty_models');
         continue;
       }
 
       return {
         groups,
+        quotaInventoryObserved: true,
         subscription: await subscriptionPromise,
         serverTimeOffsetMs: resolveResponseServerTimeOffsetMs(result.header),
       };
@@ -284,6 +318,7 @@ export const fetchAntigravityQuota = async (
   if (hadSuccess) {
     return {
       groups: [],
+      quotaInventoryObserved,
       subscription: await subscriptionPromise,
       serverTimeOffsetMs: null,
     };
@@ -296,9 +331,10 @@ export const buildCodexQuotaWindows = (
   payload: CodexUsagePayload,
   t: TFunction,
   planType?: string | null,
-  observedAtMs = Date.now()
+  observedAtMs = Date.now(),
+  source: CodexQuotaResetSource = 'provider_api'
 ): CodexQuotaWindow[] =>
-  buildCodexQuotaWindowInfos(payload, { planType, observedAtMs }).map((window) => ({
+  buildCodexQuotaWindowInfos(payload, { planType, observedAtMs, source }).map((window) => ({
     id: window.id,
     label: t(window.labelKey, window.labelParams),
     labelKey: window.labelKey,
@@ -308,6 +344,8 @@ export const buildCodexQuotaWindows = (
     resetAtMs: window.resetAtMs,
     resetAccuracy: window.resetAccuracy,
     limitWindowSeconds: window.limitWindowSeconds,
+    observationSource: source === 'response_header' ? 'response_header' : 'api_query',
+    observedAtMs,
   }));
 
 const resolveCodexRateLimitResetCreditsAvailableCount = (
@@ -464,6 +502,8 @@ export const fetchCodexQuota = async (
   return {
     planType,
     windows,
+    observedAtMs,
+    quotaInventoryObserved: hasCodexQuotaInventory(payload),
     subscriptionActiveUntil: resolveCodexSubscriptionActiveUntil(payload),
     ...resolveCodexCreditsInfo(payload),
     ...resolveCodexSpendControlInfo(payload),
@@ -903,6 +943,18 @@ const buildClaudeQuotaWindows = (
   return windows;
 };
 
+const hasClaudeQuotaInventory = (
+  payload: ClaudeUsagePayload,
+  windows: ClaudeQuotaWindow[]
+): boolean => {
+  if (windows.length > 0) return true;
+  if (Array.isArray(payload.limits) && payload.limits.length === 0) return true;
+
+  return CLAUDE_USAGE_WINDOW_KEYS.some(({ key }) =>
+    hasOwn(payload, key) ? payload[key as keyof ClaudeUsagePayload] === null : false
+  );
+};
+
 export const fetchClaudeQuota = async (
   file: AuthFileItem,
   t: TFunction
@@ -953,10 +1005,22 @@ export const fetchClaudeQuota = async (
         )
       : null;
 
-  return { windows, extraUsage: payload.extra_usage, planType };
+  return {
+    windows,
+    quotaInventoryObserved: hasClaudeQuotaInventory(payload, windows),
+    extraUsage: payload.extra_usage,
+    planType,
+  };
 };
 
-export const fetchKimiQuota = async (file: AuthFileItem, t: TFunction): Promise<KimiQuotaRow[]> => {
+const hasKimiQuotaInventory = (payload: KimiUsagePayload, rows: KimiQuotaRow[]): boolean => {
+  if (rows.length > 0) return true;
+  if (Array.isArray(payload.limits) && payload.limits.length === 0) return true;
+  if (Array.isArray(payload.usages) && payload.usages.length === 0) return true;
+  return hasOwn(payload, 'usage') && payload.usage === null;
+};
+
+export const fetchKimiQuota = async (file: AuthFileItem, t: TFunction): Promise<KimiQuotaData> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
   if (!authIndex) {
@@ -979,7 +1043,11 @@ export const fetchKimiQuota = async (file: AuthFileItem, t: TFunction): Promise<
     throw new Error(t('kimi_quota.empty_data'));
   }
 
-  return buildKimiQuotaRows(payload, { observedAtMs: Date.now() });
+  const rows = buildKimiQuotaRows(payload, { observedAtMs: Date.now() });
+  return {
+    rows,
+    quotaInventoryObserved: hasKimiQuotaInventory(payload, rows),
+  };
 };
 
 const normalizeXaiCentValue = (value: unknown): number | null => {

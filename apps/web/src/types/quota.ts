@@ -315,6 +315,7 @@ export interface CredentialScopedQuotaState {
 export interface ClaudeQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   windows: ClaudeQuotaWindow[];
+  quotaInventoryObserved?: boolean;
   extraUsage?: ClaudeExtraUsage | null;
   planType?: string | null;
   error?: string;
@@ -348,6 +349,7 @@ export interface AntigravityQuotaBucket {
 export interface AntigravityQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   groups: AntigravityQuotaGroup[];
+  quotaInventoryObserved?: boolean;
   subscription?: AntigravityQuotaSubscription | null;
   serverTimeOffsetMs?: number | null;
   error?: string;
@@ -364,11 +366,14 @@ export interface CodexQuotaWindow {
   resetAtMs?: number | null;
   resetAccuracy?: QuotaResetAccuracy;
   limitWindowSeconds?: number | null;
+  observationSource?: QuotaObservationSource;
+  observedAtMs?: number | null;
 }
 
 export interface CodexQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   windows: CodexQuotaWindow[];
+  quotaInventoryObserved?: boolean;
   planType?: string | null;
   activeLimit?: string | null;
   creditsHasCredits?: boolean | null;
@@ -465,6 +470,7 @@ export interface KimiQuotaRow {
 export interface KimiQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   rows: KimiQuotaRow[];
+  quotaInventoryObserved?: boolean;
   error?: string;
   errorStatus?: number;
 }

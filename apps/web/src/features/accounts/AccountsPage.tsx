@@ -198,6 +198,8 @@ import {
   monitoringAnalyticsApi,
   usageServiceApi,
   type AccountActionCandidate,
+  type AccountQuotaSnapshotObservationInput,
+  type AccountQuotaSnapshotWriteEntry,
   type AccountQuotaSnapshotWindow,
   type MonitoringAnalyticsAccountStatRow,
   type MonitoringAnalyticsEventRow,
@@ -208,13 +210,7 @@ import {
   type QuotaCooldownInfo,
   type UsageHeaderSnapshot,
 } from '@/services/api';
-import type {
-  AuthFileItem,
-  ClaudeQuotaState,
-  CodexQuotaState,
-  KimiQuotaState,
-  XaiQuotaState,
-} from '@/types';
+import type { AuthFileItem, CodexQuotaState, XaiQuotaState } from '@/types';
 import type { AuthJsonInputType } from '@/features/authFiles/sessionAuthConverter';
 import { type QuotaAccountDisplayMode } from '@/features/quota/quotaPageUiState';
 import { maskQuotaAccountText } from '@/components/quota/quotaDisplay';
@@ -230,6 +226,7 @@ import { copyToClipboard } from '@/utils/clipboard';
 import {
   buildUsageHeaderSnapshotLookup,
   getHighConfidenceUsageHeaderSnapshotForAuthFile,
+  hasUsageHeaderQuotaSignal,
   isUsageHeaderQuotaSnapshotExpired,
 } from '@/utils/usageHeaderSnapshots';
 import {
@@ -581,6 +578,7 @@ export function AccountsPage() {
   const headerSnapshotContextRef = useRef({
     managerServiceBase: featureAvailability.managerServiceBase,
     managementKey,
+    connectionFingerprint,
   });
 
   const loadQuotaCooldowns = useCallback(async () => {
@@ -692,23 +690,34 @@ export function AccountsPage() {
     const prev = headerSnapshotContextRef.current;
     if (
       prev.managerServiceBase === featureAvailability.managerServiceBase &&
-      prev.managementKey === managementKey
+      prev.managementKey === managementKey &&
+      prev.connectionFingerprint === connectionFingerprint
     ) {
       return;
     }
     headerSnapshotContextRef.current = {
       managerServiceBase: featureAvailability.managerServiceBase,
       managementKey,
+      connectionFingerprint,
     };
     quotaCooldownRequestIdRef.current += 1;
     headerSnapshotReqIdRef.current += 1;
     accountActionCandidatesReqIdRef.current += 1;
+    accountWindowUsageReqIdRef.current += 1;
     accountActionCandidatesRef.current = [];
+    accountWindowUsageAutoLoadKeyRef.current = null;
+    quotaDetailAutoRefreshKeyRef.current = null;
+    quotaDetailAutoRefreshPendingKeyRef.current = null;
     setQuotaCooldowns(new Map());
     setAccountActionCandidates([]);
     setHeaderSnapshots((current) => (current.length === 0 ? current : []));
     setHeaderSnapshotGeneratedAtMs(0);
-  }, [featureAvailability.managerServiceBase, managementKey]);
+    setQuotaSnapshotWindowsByRowKey((current) => (current.size === 0 ? current : new Map()));
+    setAccountWindowUsageByKey((current) => (current.size === 0 ? current : new Map()));
+    setAccountWindowUsageLoading(false);
+    setAccountWindowUsageError('');
+    setQuotaSnapshotRevision((current) => current + 1);
+  }, [connectionFingerprint, featureAvailability.managerServiceBase, managementKey]);
 
   const loadOauthExcluded = oauthState.loadExcluded;
   const loadOauthModelAlias = oauthState.loadModelAlias;
@@ -831,30 +840,143 @@ export function AccountsPage() {
     (file: AuthFileItem): CodexQuotaState | undefined => {
       if (normalizeAccountProvider(file) !== CODEX_CONFIG.type) return undefined;
       const activeQuota = getActiveCodexQuota(file);
-      if (activeQuota && activeQuota.status !== 'idle' && activeQuota.status !== 'error') {
-        return activeQuota;
-      }
+      const observedQuota = buildObservedCodexQuotaState(
+        file,
+        getFreshCodexHeaderSnapshot(file),
+        t,
+        headerSnapshotGeneratedAtMs || Date.now()
+      );
       if (activeQuota?.status === 'error' && activeQuota.errorStatus === 401) {
         return activeQuota;
       }
-      const observedQuota = buildObservedCodexQuotaState(
-        file,
-        getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, file),
-        t
-      );
-      return observedQuota ?? activeQuota;
+      return resolveQuotaDisplayState(activeQuota, observedQuota);
     },
-    [getActiveCodexQuota, headerSnapshotLookup, t]
+    [getActiveCodexQuota, getFreshCodexHeaderSnapshot, headerSnapshotGeneratedAtMs, t]
+  );
+  const getQuotaSnapshotObservation = useCallback(
+    (row: AccountRow): AccountQuotaSnapshotObservationInput | undefined => {
+      let fetchedAtMs: number | undefined;
+      let inventoryMode: AccountQuotaSnapshotObservationInput['inventory_mode'] = 'complete';
+      switch (row.provider) {
+        case CODEX_CONFIG.type: {
+          const state = getActiveCodexQuota(row.raw);
+          if (
+            state?.status === 'success' &&
+            (state.quotaInventoryObserved === true || state.windows.length > 0)
+          ) {
+            fetchedAtMs = state.fetchedAtMs;
+            if (state.quotaInventoryObserved !== true) inventoryMode = 'partial';
+            break;
+          }
+          break;
+        }
+        case CLAUDE_CONFIG.type: {
+          const state = getCredentialScopedQuotaState(baseQuotaStores.claudeQuota, row.raw);
+          if (
+            state?.status === 'success' &&
+            (state.quotaInventoryObserved === true || state.windows.length > 0)
+          ) {
+            fetchedAtMs = state.fetchedAtMs;
+            if (state.quotaInventoryObserved !== true) inventoryMode = 'partial';
+          }
+          break;
+        }
+        case ANTIGRAVITY_CONFIG.type: {
+          const state = getCredentialScopedQuotaState(baseQuotaStores.antigravityQuota, row.raw);
+          if (
+            state?.status === 'success' &&
+            (state.quotaInventoryObserved === true || state.groups.length > 0)
+          ) {
+            fetchedAtMs = state.fetchedAtMs;
+            if (state.quotaInventoryObserved !== true) inventoryMode = 'partial';
+          }
+          break;
+        }
+        case KIMI_CONFIG.type: {
+          const state = getCredentialScopedQuotaState(baseQuotaStores.kimiQuota, row.raw);
+          if (
+            state?.status === 'success' &&
+            (state.quotaInventoryObserved === true || state.rows.length > 0)
+          ) {
+            fetchedAtMs = state.fetchedAtMs;
+            if (state.quotaInventoryObserved !== true) inventoryMode = 'partial';
+          }
+          break;
+        }
+        case XAI_CONFIG.type: {
+          const state = getCredentialScopedQuotaState(baseQuotaStores.xaiQuota, row.raw);
+          if (state?.status === 'success' && state.billing && !state.billing.officialApiHealth) {
+            fetchedAtMs = state.fetchedAtMs;
+            if (state.billing.partial !== false) inventoryMode = 'partial';
+          }
+          break;
+        }
+        default:
+          return undefined;
+      }
+      if (typeof fetchedAtMs !== 'number' || !Number.isFinite(fetchedAtMs) || fetchedAtMs <= 0) {
+        return undefined;
+      }
+      return {
+        source: 'api_query',
+        source_observation_id: `accounts-provider-query:${Math.trunc(fetchedAtMs)}`,
+        observed_at_ms: Math.trunc(fetchedAtMs),
+        inventory_scope_key:
+          row.provider === CODEX_CONFIG.type
+            ? 'codex:rate-limits'
+            : `${row.provider}:quota-windows`,
+        inventory_mode: inventoryMode,
+      };
+    },
+    [baseQuotaStores, getActiveCodexQuota]
+  );
+  const getCodexHeaderQuotaSnapshotObservation = useCallback(
+    (row: AccountRow): AccountQuotaSnapshotObservationInput | undefined => {
+      if (row.provider !== CODEX_CONFIG.type) return undefined;
+      const activeQuota = getActiveCodexQuota(row.raw);
+      if (activeQuota?.status === 'error' && activeQuota.errorStatus === 401) return undefined;
+      const headerSnapshot = getFreshCodexHeaderSnapshot(row.raw);
+      if (
+        !headerSnapshot ||
+        !hasUsageHeaderQuotaSignal(headerSnapshot) ||
+        !Number.isFinite(headerSnapshot.timestamp_ms) ||
+        headerSnapshot.timestamp_ms <= 0
+      ) {
+        return undefined;
+      }
+      if (
+        activeQuota?.status === 'success' &&
+        activeQuota.quotaInventoryObserved === true &&
+        typeof activeQuota.fetchedAtMs === 'number' &&
+        Number.isFinite(activeQuota.fetchedAtMs) &&
+        headerSnapshot.timestamp_ms <= activeQuota.fetchedAtMs
+      ) {
+        return undefined;
+      }
+      return {
+        source: 'response_header',
+        source_observation_id: headerSnapshot.event_hash,
+        observed_at_ms: Math.trunc(headerSnapshot.timestamp_ms),
+        inventory_scope_key: 'codex:rate-limits',
+        inventory_mode: 'partial',
+      };
+    },
+    [getActiveCodexQuota, getFreshCodexHeaderSnapshot]
+  );
+  const getQuotaSnapshotObservations = useCallback(
+    (row: AccountRow): AccountQuotaSnapshotObservationInput[] =>
+      [getQuotaSnapshotObservation(row), getCodexHeaderQuotaSnapshotObservation(row)].filter(
+        (observation): observation is AccountQuotaSnapshotObservationInput =>
+          observation !== undefined
+      ),
+    [getCodexHeaderQuotaSnapshotObservation, getQuotaSnapshotObservation]
   );
   const accountQuotaOverrides = useMemo(() => {
     const codexQuotaBySelectionKey = new Map<string, CodexQuotaState>();
     const codexHeaderSnapshotBySelectionKey = new Map<string, UsageHeaderSnapshot>();
     files.forEach((file) => {
       const selectionKey = getAuthFileSelectionKey(file);
-      const headerSnapshot = getHighConfidenceUsageHeaderSnapshotForAuthFile(
-        headerSnapshotLookup,
-        file
-      );
+      const headerSnapshot = getFreshCodexHeaderSnapshot(file);
       if (headerSnapshot) {
         codexHeaderSnapshotBySelectionKey.set(selectionKey, headerSnapshot);
       }
@@ -864,7 +986,7 @@ export function AccountsPage() {
       }
     });
     return { codexQuotaBySelectionKey, codexHeaderSnapshotBySelectionKey };
-  }, [files, getDisplayCodexQuota, headerSnapshotLookup]);
+  }, [files, getDisplayCodexQuota, getFreshCodexHeaderSnapshot]);
 
   const rows = useMemo(
     () => buildAccountRows(files, baseQuotaStores, inspectionResults, accountQuotaOverrides),
@@ -887,7 +1009,12 @@ export function AccountsPage() {
         row.provider === CODEX_CONFIG.type
           ? resolveQuotaDisplayState(
               activeQuota,
-              buildObservedCodexQuotaState(row.raw, sources.headerSnapshot, t)
+              buildObservedCodexQuotaState(
+                row.raw,
+                sources.headerSnapshot,
+                t,
+                headerSnapshotGeneratedAtMs || Date.now()
+              )
             )
           : undefined;
       statusMap.set(
@@ -896,7 +1023,7 @@ export function AccountsPage() {
       );
     });
     return statusMap;
-  }, [getActiveCodexQuota, getFreshCodexHeaderSnapshot, rows, t]);
+  }, [getActiveCodexQuota, getFreshCodexHeaderSnapshot, headerSnapshotGeneratedAtMs, rows, t]);
   const actionCandidatesByRowKey = useMemo(
     () =>
       buildAccountOperationalItemsByRowKey(
@@ -1297,6 +1424,18 @@ export function AccountsPage() {
     },
     [baseQuotaStores, getDisplayCodexQuota, t, translateQuotaWindowLabel]
   );
+  const buildCodexSnapshotDefinitions = useCallback(
+    (row: AccountRow, quota: CodexQuotaState | undefined): AccountQuotaWindowDefinition[] =>
+      buildAccountQuotaWindowDefinitions(
+        buildAccountQuotaDisplayWindows(row, {
+          stores: baseQuotaStores,
+          getDisplayCodexQuota: () => quota,
+          translateQuotaWindowLabel,
+          t,
+        })
+      ).filter((definition) => definition.provider === CODEX_CONFIG.type),
+    [baseQuotaStores, t, translateQuotaWindowLabel]
+  );
   const quotaDisplayWindowsByRowKey = useMemo(() => {
     const result = new Map<string, AccountQuotaDisplayWindow[]>();
     pageRows.forEach((row) => {
@@ -1360,6 +1499,7 @@ export function AccountsPage() {
         managementKey,
         quotaSnapshotRevision,
         requestMonitoringAvailable: featureAvailability.requestMonitoringAvailable,
+        observations: selectedRow ? getQuotaSnapshotObservations(selectedRow) : [],
         // Rolling window bounds are time-relative; keep them in the request, not this dedupe key.
         targets: accountWindowUsageTargets.map(
           ({ rowKey, windowKey, providerWindowId, period, requestKey, target }) => ({
@@ -1381,8 +1521,10 @@ export function AccountsPage() {
       featureAvailability.checking,
       featureAvailability.managerServiceBase,
       featureAvailability.requestMonitoringAvailable,
+      getQuotaSnapshotObservations,
       managementKey,
       quotaSnapshotRevision,
+      selectedRow,
     ]
   );
   const accountDisplayHint = t(
@@ -1824,29 +1966,71 @@ export function AccountsPage() {
     setAccountWindowUsageError('');
     try {
       const localDefinitions = quotaWindowDefinitionsByRowKey.get(selectedRow.selectionKey) ?? [];
-      const definitionsByRowKey = new Map([[selectedRow.selectionKey, localDefinitions]]);
-      const writeEntries = buildAccountQuotaSnapshotWriteEntries(
-        [selectedRow],
-        definitionsByRowKey,
-        {
-          getCodexQuota: (row) =>
-            row.provider === CODEX_CONFIG.type ? getDisplayCodexQuota(row.raw) : undefined,
+      let writeEntries: AccountQuotaSnapshotWriteEntry[] = [];
+      if (selectedRow.provider === CODEX_CONFIG.type) {
+        const activeQuota = getActiveCodexQuota(selectedRow.raw);
+        const apiObservation = getQuotaSnapshotObservation(selectedRow);
+        if (apiObservation) {
+          const apiDefinitions = buildCodexSnapshotDefinitions(selectedRow, activeQuota);
+          writeEntries.push(
+            ...buildAccountQuotaSnapshotWriteEntries(
+              [selectedRow],
+              new Map([[selectedRow.selectionKey, apiDefinitions]]),
+              {
+                getCodexQuota: () => activeQuota,
+                getObservation: () => apiObservation,
+              }
+            )
+          );
         }
-      );
-      try {
-        if (writeEntries.length > 0) {
+
+        const headerObservation = getCodexHeaderQuotaSnapshotObservation(selectedRow);
+        if (headerObservation) {
+          const headerQuota = buildObservedCodexQuotaState(
+            selectedRow.raw,
+            getFreshCodexHeaderSnapshot(selectedRow.raw),
+            t,
+            headerSnapshotGeneratedAtMs || Date.now()
+          );
+          const headerDefinitions = buildCodexSnapshotDefinitions(selectedRow, headerQuota);
+          writeEntries.push(
+            ...buildAccountQuotaSnapshotWriteEntries(
+              [selectedRow],
+              new Map([[selectedRow.selectionKey, headerDefinitions]]),
+              {
+                getCodexQuota: () => headerQuota,
+                getObservation: () => headerObservation,
+              }
+            )
+          );
+        }
+      } else {
+        writeEntries = buildAccountQuotaSnapshotWriteEntries(
+          [selectedRow],
+          new Map([[selectedRow.selectionKey, localDefinitions]]),
+          { getObservation: getQuotaSnapshotObservation }
+        );
+      }
+      if (writeEntries.length > 0) {
+        try {
           await accountQuotaSnapshotApi.write(
             featureAvailability.managerServiceBase,
             managementKey,
             writeEntries
           );
+        } catch {
+          // Snapshot persistence is additive. A write failure must not block
+          // reading previously persisted lifecycle evidence.
         }
-        const queryAccounts = buildAccountQuotaSnapshotQueryAccounts([selectedRow]);
-        if (queryAccounts.length > 0) {
+      }
+      const queryAccounts = buildAccountQuotaSnapshotQueryAccounts([selectedRow]);
+      if (queryAccounts.length > 0) {
+        try {
           const snapshotResponse = await accountQuotaSnapshotApi.query(
             featureAvailability.managerServiceBase,
             managementKey,
-            queryAccounts
+            queryAccounts,
+            { includeInactive: true }
           );
           if (accountWindowUsageReqIdRef.current !== requestId) return;
           const snapshotWindows = snapshotResponse.items.find(
@@ -1868,10 +2052,10 @@ export function AccountsPage() {
               new Map([[selectedRow.selectionKey, mergedDefinitions]])
             );
           }
+        } catch {
+          // Older Manager Server versions or transient query failures must not
+          // block the existing usage query path.
         }
-      } catch {
-        // Snapshot persistence is additive. Older Manager Server versions or
-        // transient failures must not block the existing usage query path.
       }
       if (entries.length === 0) {
         if (accountWindowUsageReqIdRef.current !== requestId) return;
@@ -1900,11 +2084,16 @@ export function AccountsPage() {
     }
   }, [
     accountWindowUsageTargets,
+    buildCodexSnapshotDefinitions,
     featureAvailability.checking,
     featureAvailability.managerServiceBase,
     featureAvailability.requestMonitoringAvailable,
+    getActiveCodexQuota,
+    getCodexHeaderQuotaSnapshotObservation,
+    getFreshCodexHeaderSnapshot,
+    getQuotaSnapshotObservation,
+    headerSnapshotGeneratedAtMs,
     managementKey,
-    getDisplayCodexQuota,
     quotaWindowDefinitionsByRowKey,
     selectedRow,
     t,
@@ -2188,21 +2377,11 @@ export function AccountsPage() {
         case CODEX_CONFIG.type:
           return refreshWithConfig(CODEX_CONFIG, setCodexQuota);
         case CLAUDE_CONFIG.type:
-          return refreshWithConfig<
-            ClaudeQuotaState,
-            {
-              windows: ClaudeQuotaState['windows'];
-              extraUsage?: ClaudeQuotaState['extraUsage'];
-              planType?: string | null;
-            }
-          >(CLAUDE_CONFIG, setClaudeQuota);
+          return refreshWithConfig(CLAUDE_CONFIG, setClaudeQuota);
         case ANTIGRAVITY_CONFIG.type:
           return refreshWithConfig(ANTIGRAVITY_CONFIG, setAntigravityQuota);
         case KIMI_CONFIG.type:
-          return refreshWithConfig<KimiQuotaState, KimiQuotaState['rows']>(
-            KIMI_CONFIG,
-            setKimiQuota
-          );
+          return refreshWithConfig(KIMI_CONFIG, setKimiQuota);
         case XAI_CONFIG.type:
           return refreshWithConfig<XaiQuotaState, NonNullable<XaiQuotaState['billing']>>(
             XAI_CONFIG,
@@ -3726,6 +3905,15 @@ export function AccountsPage() {
     ).map((definition) => ({
       ...definition.display,
       providerWindowId: definition.providerWindowId,
+      resetAtMs: definition.cycleEndMs,
+      resetAccuracy:
+        definition.boundaryAccuracy === 'exact'
+          ? ('exact' as const)
+          : definition.boundaryAccuracy === 'derived' || definition.boundaryAccuracy === 'estimated'
+            ? ('estimated' as const)
+            : ('unknown' as const),
+      fromMs: definition.cycleStartMs,
+      toMs: definition.cycleEndMs,
       observationSource: definition.observationSource,
       observedAtMs: definition.observedAtMs,
       windowMode: definition.windowMode,
@@ -3735,6 +3923,17 @@ export function AccountsPage() {
       modelScope: definition.modelScope,
       boundaryAccuracy: definition.boundaryAccuracy,
       stale: definition.stale,
+      logicalWindowId: definition.logicalWindowId,
+      activationGeneration: definition.activationGeneration,
+      availability: definition.availability,
+      relationshipKind: definition.relationshipKind,
+      containerProviderWindowId: definition.containerProviderWindowId,
+      firstSeenAtMs: definition.firstSeenAtMs,
+      lastSeenAtMs: definition.lastSeenAtMs,
+      missingSinceMs: definition.missingSinceMs,
+      deactivatedAtMs: definition.deactivatedAtMs,
+      currentCycle: definition.currentCycle,
+      previousCycle: definition.previousCycle,
     }));
     const selectedQuotaCooldown = quotaCooldownsByRowKey.get(selectedRow.selectionKey)?.[0] ?? null;
     const selectedCodexQuota =

@@ -11,6 +11,7 @@ import { accountQuotaSnapshotApi } from '@/services/api';
 import type { AuthFileItem, OAuthModelAliasEntry } from '@/types';
 import type {
   AccountActionCandidatesResponse,
+  AccountQuotaSnapshotWriteEntry,
   CodexInspectionResult,
   CodexInspectionRun,
   QuotaCooldownInfo,
@@ -27,6 +28,7 @@ import {
 } from '@/features/authFiles/model/authFilesPageModel';
 import { AccountModelsTab } from './components/accountDetail/AccountModelsTab';
 import { AccountQuotaTab } from './components/accountDetail/AccountQuotaTab';
+import { QuotaWindowCard } from './components/QuotaWindowCard';
 import { formatQuotaResetTimestamp } from './model/accountsPagePresentation';
 import { AccountsPage } from './AccountsPage';
 
@@ -310,9 +312,11 @@ const { mocks } = vi.hoisted(() => {
       loadModelAlias: vi.fn(async () => undefined),
       oauthExcluded: {} as Record<string, string[]>,
       oauthModelAlias: {} as Record<string, OAuthModelAliasEntry[]>,
-      listCodexInspectionRuns: vi.fn(async (): Promise<{ items: CodexInspectionRun[] }> => ({
-        items: [],
-      })),
+      listCodexInspectionRuns: vi.fn(
+        async (): Promise<{ items: CodexInspectionRun[] }> => ({
+          items: [],
+        })
+      ),
       getCodexInspectionRun: vi.fn(
         async (): Promise<{
           run: CodexInspectionRun | null;
@@ -320,10 +324,12 @@ const { mocks } = vi.hoisted(() => {
         }> => ({ run: null, results: [] })
       ),
       getActiveQuotaCooldowns: vi.fn(async (): Promise<QuotaCooldownInfo[]> => []),
-      listAccountActionCandidates: vi.fn(async (): Promise<AccountActionCandidatesResponse> => ({
-        items: [],
-        pendingCount: 0,
-      })),
+      listAccountActionCandidates: vi.fn(
+        async (): Promise<AccountActionCandidatesResponse> => ({
+          items: [],
+          pendingCount: 0,
+        })
+      ),
       getAnalytics: vi.fn(
         async (_base: string, _key: string | undefined, _request: unknown): Promise<unknown> => ({
           generated_at_ms: 1,
@@ -332,12 +338,14 @@ const { mocks } = vi.hoisted(() => {
           timeline: [],
         })
       ),
-      getHeaderSnapshots: vi.fn(async (): Promise<HeaderSnapshotsResponseForTest> => ({
-        generated_at_ms: 1,
-        from_ms: 0,
-        to_ms: 1,
-        items: [],
-      })),
+      getHeaderSnapshots: vi.fn(
+        async (): Promise<HeaderSnapshotsResponseForTest> => ({
+          generated_at_ms: 1,
+          from_ms: 0,
+          to_ms: 1,
+          items: [],
+        })
+      ),
       getAccountHistory: vi.fn(
         async (
           _base: string,
@@ -934,8 +942,30 @@ describe('AccountsPage replacement flows', () => {
     mocks.getAccountHistory.mockResolvedValue(makeAccountHistoryResponse([]));
     mocks.getAccountWindowUsage.mockReset();
     mocks.getAccountWindowUsage.mockResolvedValue({ generated_at_ms: 1, items: [] });
-    vi.mocked(accountQuotaSnapshotApi.write).mockClear();
-    vi.mocked(accountQuotaSnapshotApi.query).mockClear();
+    vi.mocked(accountQuotaSnapshotApi.write).mockReset();
+    vi.mocked(accountQuotaSnapshotApi.write).mockImplementation(
+      async (_base, _managementKey, entries) => ({
+        observed_at_ms: Date.now(),
+        items: entries.map((entry) => ({
+          row_key: entry.row_key,
+          account_key: entry.row_key ?? 'account-key',
+          provider: entry.provider,
+          inserted_count: entry.windows.length,
+        })),
+      })
+    );
+    vi.mocked(accountQuotaSnapshotApi.query).mockReset();
+    vi.mocked(accountQuotaSnapshotApi.query).mockImplementation(
+      async (_base, _managementKey, accounts) => ({
+        generated_at_ms: Date.now(),
+        items: accounts.map((account) => ({
+          row_key: account.row_key,
+          account_key: account.row_key,
+          provider: account.provider,
+          windows: [],
+        })),
+      })
+    );
     mocks.listCodexInspectionRuns.mockReset();
     mocks.listCodexInspectionRuns.mockResolvedValue({ items: [] });
     mocks.getCodexInspectionRun.mockReset();
@@ -1013,6 +1043,91 @@ describe('AccountsPage replacement flows', () => {
     });
 
     expect(mocks.loadFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears quota snapshot state and ignores a late query from the previous connection', async () => {
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    const rowKey = 'codex.json\u0000auth-1';
+    const fetchedAtMs = Date.now();
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: `?account=${encodeURIComponent(rowKey)}&tab=quota`,
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      fetchedAtMs,
+      quotaInventoryObserved: true,
+      windows: [
+        {
+          id: 'five-hour',
+          label: 'Five hours',
+          usedPercent: 20,
+          resetAtMs: fetchedAtMs + 60 * 60 * 1000,
+          resetLabel: new Date(fetchedAtMs + 60 * 60 * 1000).toISOString(),
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 5 * 60 * 60,
+        },
+      ],
+    });
+    const lateQuery = createDeferred<Awaited<ReturnType<typeof accountQuotaSnapshotApi.query>>>();
+    vi.mocked(accountQuotaSnapshotApi.query)
+      .mockImplementationOnce(() => lateQuery.promise)
+      .mockResolvedValue({ generated_at_ms: fetchedAtMs, items: [] });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    expect(accountQuotaSnapshotApi.query).toHaveBeenCalledTimes(1);
+
+    mocks.apiBase = 'http://cpa-b.local:8317';
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    lateQuery.resolve({
+      generated_at_ms: fetchedAtMs + 1,
+      items: [
+        {
+          row_key: rowKey,
+          account_key: rowKey,
+          provider: 'codex',
+          windows: [
+            {
+              provider_window_id: 'five-hour',
+              window_kind: 'five_hour',
+              window_mode: 'fixed',
+              model_scope_kind: 'all',
+              source: 'response_header',
+              observed_at_ms: fetchedAtMs + 1,
+              boundary_accuracy: 'derived',
+              cycle_start_ms: fetchedAtMs - 1_000,
+              cycle_end_ms: fetchedAtMs + 60 * 60 * 1000,
+              duration_seconds: 5 * 60 * 60,
+              used_percent: 95,
+              remaining_percent: 5,
+              stale: false,
+            },
+          ],
+        },
+      ],
+    });
+    await flushPromises();
+
+    const quotaCard = renderer.root
+      .findAllByType(QuotaWindowCard)
+      .find((node) => node.props.window.providerWindowId === 'five-hour');
+    expect(quotaCard?.props.window.usedPercent).toBe(20);
   });
 
   it('restarts the initial credential load when StrictMode replays effects', async () => {
@@ -2106,7 +2221,8 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.batchDelete).toHaveBeenCalledTimes(1);
     expect(mocks.batchDelete.mock.calls[0]?.[0]).toEqual([mocks.files[0]]);
     const options = mocks.batchDelete.mock.calls[0]?.[1] as
-      { message?: unknown; confirmText?: string } | undefined;
+      | { message?: unknown; confirmText?: string }
+      | undefined;
     expect(options?.confirmText).toBe('common.delete');
     expect(
       isValidElement<{
@@ -3909,7 +4025,8 @@ describe('AccountsPage replacement flows', () => {
     expect(treeText(renderer)).toContain('accounts.detail_quota_evidence_title');
     const quotaRefreshCommitCount = mocks.quotaState.setCodexQuota.mock.calls.length;
     const windowUsageRequest = mocks.getAccountWindowUsage.mock.calls[0]?.[2] as
-      AccountWindowUsageRequestForTest | undefined;
+      | AccountWindowUsageRequestForTest
+      | undefined;
     expect(windowUsageRequest?.windows).toHaveLength(2);
     const windowUsageTargets = windowUsageRequest?.windows as Array<Record<string, unknown>>;
     expect(windowUsageTargets[0]).toMatchObject({
@@ -4010,6 +4127,788 @@ describe('AccountsPage replacement flows', () => {
       mocks.getAccountWindowUsage.mock.calls.length - 1
     ]?.[2] as AccountWindowUsageRequestForTest | undefined;
     expect(lastWindowUsageRequest?.windows).toHaveLength(2);
+  });
+
+  it('persists a successful empty provider inventory as a complete observation', async () => {
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      windows: [],
+      quotaInventoryObserved: true,
+      fetchedAtMs: 123_456,
+    });
+
+    await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    expect(accountQuotaSnapshotApi.write).toHaveBeenCalled();
+    const writeCalls = vi.mocked(accountQuotaSnapshotApi.write).mock.calls;
+    const entries = writeCalls[writeCalls.length - 1]?.[2];
+    expect(entries).toEqual([
+      expect.objectContaining({
+        windows: [],
+        observation: {
+          source: 'api_query',
+          source_observation_id: 'accounts-provider-query:123456',
+          observed_at_ms: 123_456,
+          inventory_scope_key: 'codex:rate-limits',
+          inventory_mode: 'complete',
+        },
+      }),
+    ]);
+    const queryCalls = vi.mocked(accountQuotaSnapshotApi.query).mock.calls;
+    expect(queryCalls[queryCalls.length - 1]?.[3]).toEqual({
+      includeInactive: true,
+    });
+  });
+
+  it('does not persist an unrecognized Codex success payload as an empty complete inventory', async () => {
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      windows: [],
+      quotaInventoryObserved: false,
+      fetchedAtMs: 123_456,
+    });
+
+    await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    expect(accountQuotaSnapshotApi.write).not.toHaveBeenCalled();
+    expect(accountQuotaSnapshotApi.query).toHaveBeenCalled();
+  });
+
+  it.each(['claude', 'antigravity', 'kimi'] as const)(
+    'does not persist an unrecognized %s success payload as a complete inventory',
+    async (provider) => {
+      const file = {
+        name: `${provider}.json`,
+        type: provider,
+        provider,
+        authIndex: `${provider}-1`,
+        account: `${provider}@example.com`,
+        disabled: true,
+      } as AuthFileItem;
+      mocks.files = [file];
+      mocks.location = {
+        pathname: '/accounts',
+        search: `?account=${encodeURIComponent(`${file.name}\u0000${file.authIndex}`)}&tab=quota`,
+      };
+      mocks.panelFeatureAvailability = {
+        checking: false,
+        managerServiceBase: 'http://manager.local:18317',
+        requestMonitoringAvailable: true,
+        serverCodexInspectionAvailable: false,
+      };
+      const commonState = {
+        status: 'success' as const,
+        quotaInventoryObserved: false,
+        fetchedAtMs: 123_456,
+      };
+      if (provider === 'claude') {
+        mocks.quotaState.claudeQuota = buildCredentialScopedQuotaRecord(file, {
+          ...commonState,
+          windows: [],
+        });
+      } else if (provider === 'antigravity') {
+        mocks.quotaState.antigravityQuota = buildCredentialScopedQuotaRecord(file, {
+          ...commonState,
+          groups: [],
+          subscription: null,
+          serverTimeOffsetMs: null,
+        });
+      } else {
+        mocks.quotaState.kimiQuota = buildCredentialScopedQuotaRecord(file, {
+          ...commonState,
+          rows: [],
+        });
+      }
+
+      await renderAccountsPage();
+      await flushPromises();
+      await flushPromises();
+
+      expect(accountQuotaSnapshotApi.write).not.toHaveBeenCalled();
+      expect(accountQuotaSnapshotApi.query).toHaveBeenCalled();
+    }
+  );
+
+  it.each(['codex', 'claude', 'antigravity', 'kimi'] as const)(
+    'persists legacy cached %s windows with no inventory marker as partial evidence',
+    async (provider) => {
+      const fetchedAtMs = Date.now();
+      const resetAtMs = fetchedAtMs + 7 * 24 * 60 * 60 * 1000;
+      const file = {
+        name: `${provider}.json`,
+        type: provider,
+        provider,
+        authIndex: `${provider}-1`,
+        account: `${provider}@example.com`,
+        disabled: true,
+      } as AuthFileItem;
+      mocks.files = [file];
+      mocks.location = {
+        pathname: '/accounts',
+        search: `?account=${encodeURIComponent(`${file.name}\u0000${file.authIndex}`)}&tab=quota`,
+      };
+      mocks.panelFeatureAvailability = {
+        checking: false,
+        managerServiceBase: 'http://manager.local:18317',
+        requestMonitoringAvailable: true,
+        serverCodexInspectionAvailable: false,
+      };
+      const commonState = {
+        status: 'success' as const,
+        fetchedAtMs,
+      };
+      if (provider === 'codex') {
+        mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+          ...commonState,
+          windows: [
+            {
+              id: 'weekly',
+              label: 'Weekly',
+              usedPercent: 20,
+              resetLabel: new Date(resetAtMs).toISOString(),
+              resetAtMs,
+              resetAccuracy: 'exact',
+              limitWindowSeconds: 7 * 24 * 60 * 60,
+            },
+          ],
+        });
+      } else if (provider === 'claude') {
+        mocks.quotaState.claudeQuota = buildCredentialScopedQuotaRecord(file, {
+          ...commonState,
+          windows: [
+            {
+              id: 'seven-day',
+              label: 'Seven days',
+              usedPercent: 20,
+              resetLabel: new Date(resetAtMs).toISOString(),
+              resetAtMs,
+              resetAccuracy: 'exact',
+              limitWindowSeconds: 7 * 24 * 60 * 60,
+            },
+          ],
+        });
+      } else if (provider === 'antigravity') {
+        mocks.quotaState.antigravityQuota = buildCredentialScopedQuotaRecord(file, {
+          ...commonState,
+          groups: [
+            {
+              id: 'gemini',
+              label: 'Gemini models',
+              models: ['gemini-2.5-pro'],
+              buckets: [
+                {
+                  id: 'weekly',
+                  label: 'Weekly limit',
+                  window: '7d',
+                  remainingFraction: 0.8,
+                  resetTime: new Date(resetAtMs).toISOString(),
+                },
+              ],
+            },
+          ],
+          subscription: null,
+          serverTimeOffsetMs: null,
+        });
+      } else {
+        mocks.quotaState.kimiQuota = buildCredentialScopedQuotaRecord(file, {
+          ...commonState,
+          rows: [
+            {
+              id: 'weekly',
+              label: 'Weekly',
+              used: 20,
+              limit: 100,
+              resetHint: new Date(resetAtMs).toISOString(),
+              resetAtMs,
+              resetAccuracy: 'exact',
+              limitWindowSeconds: 7 * 24 * 60 * 60,
+            },
+          ],
+        });
+      }
+
+      await renderAccountsPage();
+      await flushPromises();
+      await flushPromises();
+
+      const writtenEntries: AccountQuotaSnapshotWriteEntry[] = vi
+        .mocked(accountQuotaSnapshotApi.write)
+        .mock.calls.flatMap((call) => call[2] ?? []);
+      expect(writtenEntries).toContainEqual(
+        expect.objectContaining({
+          provider,
+          observation: expect.objectContaining({
+            source: 'api_query',
+            observed_at_ms: fetchedAtMs,
+            inventory_mode: 'partial',
+          }),
+        })
+      );
+    }
+  );
+
+  it('treats legacy xAI billing without a partial marker as partial evidence', async () => {
+    const fetchedAtMs = Date.now();
+    const resetAtMs = fetchedAtMs + 30 * 24 * 60 * 60 * 1000;
+    const file = {
+      name: 'xai.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-1',
+      account: 'xai@example.com',
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=xai.json%00xai-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.xaiQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      fetchedAtMs,
+      billing: {
+        periodType: 'monthly',
+        usagePercent: null,
+        productUsage: [],
+        monthlyLimitCents: 10_000,
+        usedCents: 2_500,
+        includedUsedCents: 2_500,
+        onDemandCapCents: null,
+        onDemandUsedCents: null,
+        onDemandUsedPercent: null,
+        usedPercent: 25,
+        billingPeriodStart: new Date(fetchedAtMs).toISOString(),
+        billingPeriodEnd: new Date(resetAtMs).toISOString(),
+      },
+    });
+
+    await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    const writtenEntries: AccountQuotaSnapshotWriteEntry[] = vi
+      .mocked(accountQuotaSnapshotApi.write)
+      .mock.calls.flatMap((call) => call[2] ?? []);
+    expect(writtenEntries).toContainEqual(
+      expect.objectContaining({
+        provider: 'xai',
+        observation: expect.objectContaining({
+          source: 'api_query',
+          observed_at_ms: fetchedAtMs,
+          inventory_scope_key: 'xai:quota-windows',
+          inventory_mode: 'partial',
+        }),
+      })
+    );
+  });
+
+  it('does not persist legacy xAI success state without billing inventory', async () => {
+    const file = {
+      name: 'xai.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-1',
+      account: 'xai@example.com',
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=xai.json%00xai-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.xaiQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      fetchedAtMs: Date.now(),
+      billing: null,
+    });
+
+    await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    expect(accountQuotaSnapshotApi.write).not.toHaveBeenCalled();
+    expect(accountQuotaSnapshotApi.query).toHaveBeenCalled();
+  });
+
+  it('persists partial Codex API and Header windows as separate observations', async () => {
+    const fetchedAtMs = Date.now();
+    const headerTimestampMs = fetchedAtMs - 1_000;
+    const resetAtMs = fetchedAtMs + 7 * 24 * 60 * 60 * 1000;
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      quotaInventoryObserved: false,
+      fetchedAtMs,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly',
+          usedPercent: 20,
+          resetLabel: new Date(resetAtMs).toISOString(),
+          resetAtMs,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 7 * 24 * 60 * 60,
+        },
+      ],
+    });
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: headerTimestampMs,
+      from_ms: headerTimestampMs - 1_000,
+      to_ms: headerTimestampMs,
+      items: [
+        {
+          event_hash: 'newer-header-event',
+          timestamp_ms: headerTimestampMs,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_quota_used_percent: 80,
+          header_quota_recover_at_ms: headerTimestampMs + 5 * 60 * 60 * 1000,
+        },
+      ],
+    });
+
+    await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    const writeCalls = vi.mocked(accountQuotaSnapshotApi.write).mock.calls;
+    const writtenEntries: AccountQuotaSnapshotWriteEntry[] =
+      writeCalls[writeCalls.length - 1]?.[2] ?? [];
+    const codexEntries = writtenEntries.filter((item) => item.provider === 'codex');
+    expect(codexEntries).toHaveLength(2);
+    const apiEntry = codexEntries.find((item) => item.observation?.source === 'api_query');
+    expect(apiEntry).toMatchObject({
+      observation: {
+        source: 'api_query',
+        source_observation_id: `accounts-provider-query:${fetchedAtMs}`,
+        observed_at_ms: fetchedAtMs,
+        inventory_scope_key: 'codex:rate-limits',
+        inventory_mode: 'partial',
+      },
+      windows: [
+        expect.objectContaining({
+          provider_window_id: 'weekly',
+          source: 'api_query',
+          observed_at_ms: fetchedAtMs,
+        }),
+      ],
+    });
+    expect(apiEntry?.windows.some((window) => window.source === 'response_header')).toBe(false);
+
+    const headerEntry = codexEntries.find((item) => item.observation?.source === 'response_header');
+    expect(headerEntry).toMatchObject({
+      observation: {
+        source: 'response_header',
+        source_observation_id: 'newer-header-event',
+        observed_at_ms: headerTimestampMs,
+        inventory_scope_key: 'codex:rate-limits',
+        inventory_mode: 'partial',
+      },
+      windows: [
+        expect.objectContaining({
+          provider_window_id: 'usage-header-observed',
+          source: 'response_header',
+          observed_at_ms: headerTimestampMs,
+        }),
+      ],
+    });
+  });
+
+  it('does not persist an older Header inventory behind a newer complete Codex API observation', async () => {
+    const fetchedAtMs = Date.now();
+    const headerTimestampMs = fetchedAtMs - 1_000;
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      quotaInventoryObserved: true,
+      fetchedAtMs,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly',
+          usedPercent: 20,
+          resetLabel: new Date(fetchedAtMs + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          resetAtMs: fetchedAtMs + 7 * 24 * 60 * 60 * 1000,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 7 * 24 * 60 * 60,
+        },
+      ],
+    });
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: fetchedAtMs,
+      from_ms: headerTimestampMs - 1_000,
+      to_ms: fetchedAtMs,
+      items: [
+        {
+          event_hash: 'older-header-event',
+          timestamp_ms: headerTimestampMs,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_quota_used_percent: 80,
+          header_quota_recover_at_ms: headerTimestampMs + 5 * 60 * 60 * 1000,
+        },
+      ],
+    });
+
+    await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    const writeCalls = vi.mocked(accountQuotaSnapshotApi.write).mock.calls;
+    const entries = writeCalls[writeCalls.length - 1]?.[2] ?? [];
+    const codexEntries = entries.filter((item) => item.provider === 'codex');
+    expect(codexEntries).toHaveLength(1);
+    expect(codexEntries[0]?.observation?.source).toBe('api_query');
+    expect(codexEntries.some((item) => item.observation?.source === 'response_header')).toBe(false);
+  });
+
+  it('persists partial xAI billing evidence without treating omitted periods as removed', async () => {
+    const file = {
+      name: 'xai.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-1',
+      account: 'xai@example.com',
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=xai.json%00xai-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.xaiQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      fetchedAtMs: 123_456,
+      billing: {
+        periodType: 'monthly',
+        usagePercent: null,
+        productUsage: [],
+        monthlyLimitCents: 10_000,
+        usedCents: 2_500,
+        includedUsedCents: 2_500,
+        onDemandCapCents: null,
+        onDemandUsedCents: null,
+        onDemandUsedPercent: null,
+        usedPercent: 25,
+        billingPeriodStart: '2026-08-01T00:00:00Z',
+        billingPeriodEnd: '2026-09-01T00:00:00Z',
+        partial: true,
+      },
+    });
+
+    await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    const writtenEntries: AccountQuotaSnapshotWriteEntry[] = vi
+      .mocked(accountQuotaSnapshotApi.write)
+      .mock.calls.flatMap((call) => call[2] ?? []);
+    expect(writtenEntries).toContainEqual(
+      expect.objectContaining({
+        provider: 'xai',
+        observation: expect.objectContaining({
+          source: 'api_query',
+          observed_at_ms: 123_456,
+          inventory_scope_key: 'xai:quota-windows',
+          inventory_mode: 'partial',
+        }),
+      })
+    );
+  });
+
+  it('persists a Codex usage-header fallback as a partial rate-limit observation', async () => {
+    const timestampMs = Date.now();
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      windows: [],
+      quotaInventoryObserved: false,
+      fetchedAtMs: timestampMs + 1_000,
+    });
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: timestampMs,
+      from_ms: timestampMs - 1_000,
+      to_ms: timestampMs,
+      items: [
+        {
+          event_hash: 'header-fallback-event',
+          timestamp_ms: timestampMs,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_quota_used_percent: 25,
+          header_quota_recover_at_ms: timestampMs + 60 * 60 * 1000,
+        },
+      ],
+    });
+
+    await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    const writtenEntries: AccountQuotaSnapshotWriteEntry[] = vi
+      .mocked(accountQuotaSnapshotApi.write)
+      .mock.calls.flatMap((call) => call[2] ?? []);
+    const headerEntry = writtenEntries.find(
+      (entry) => entry.observation?.source === 'response_header'
+    );
+    expect(headerEntry).toEqual(
+      expect.objectContaining({
+        observation: {
+          source: 'response_header',
+          source_observation_id: 'header-fallback-event',
+          observed_at_ms: timestampMs,
+          inventory_scope_key: 'codex:rate-limits',
+          inventory_mode: 'partial',
+        },
+        windows: expect.arrayContaining([
+          expect.objectContaining({
+            source: 'response_header',
+            observed_at_ms: timestampMs,
+          }),
+        ]),
+      })
+    );
+  });
+
+  it('does not revive an unrecognized Codex inventory from an expired Header window', async () => {
+    const generatedAtMs = Date.now();
+    const timestampMs = generatedAtMs - 60 * 60 * 1000;
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      windows: [],
+      quotaInventoryObserved: false,
+      fetchedAtMs: generatedAtMs,
+    });
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: generatedAtMs,
+      from_ms: timestampMs,
+      to_ms: generatedAtMs,
+      items: [
+        {
+          event_hash: 'expired-header-event',
+          timestamp_ms: timestampMs,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_quota_used_percent: 100,
+          header_quota_recover_at_ms: generatedAtMs - 1,
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    expect(accountQuotaSnapshotApi.write).not.toHaveBeenCalled();
+    expect(renderer.root.findAllByType(QuotaWindowCard)).toHaveLength(0);
+  });
+
+  it('does not persist a diagnostic-only Codex header as an empty partial observation', async () => {
+    const timestampMs = Date.now();
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: timestampMs,
+      from_ms: timestampMs - 1_000,
+      to_ms: timestampMs,
+      items: [
+        {
+          event_hash: 'diagnostic-only-event',
+          timestamp_ms: timestampMs,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_trace_id: 'trace-diagnostic-only',
+          response_metadata: {
+            trace: { primary_trace_id: 'trace-diagnostic-only' },
+          },
+        },
+      ],
+    });
+
+    await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    expect(accountQuotaSnapshotApi.write).not.toHaveBeenCalled();
+    expect(accountQuotaSnapshotApi.query).toHaveBeenCalled();
+  });
+
+  it('queries persisted quota lifecycle evidence when snapshot writing fails', async () => {
+    const fetchedAtMs = Date.now();
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      fetchedAtMs,
+      quotaInventoryObserved: true,
+      windows: [
+        {
+          id: 'five-hour',
+          label: 'Five hours',
+          usedPercent: 20,
+          resetLabel: new Date(fetchedAtMs + 5 * 60 * 60 * 1000).toISOString(),
+          resetAtMs: fetchedAtMs + 5 * 60 * 60 * 1000,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 5 * 60 * 60,
+        },
+      ],
+    });
+    vi.mocked(accountQuotaSnapshotApi.write).mockRejectedValue(
+      new Error('snapshot write unavailable')
+    );
+
+    await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    expect(accountQuotaSnapshotApi.write).toHaveBeenCalled();
+    expect(accountQuotaSnapshotApi.query).toHaveBeenCalled();
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalled();
   });
 
   it('keeps quota display available when the Manager Server monitoring path is unavailable', async () => {
@@ -4402,7 +5301,8 @@ describe('AccountsPage replacement flows', () => {
       .map((call) => call[2] as AnalyticsRequestForTest)
       .find((request) => {
         const page = request.include?.events_page as
-          { before_ms?: number | null; before_id?: number | null } | undefined;
+          | { before_ms?: number | null; before_id?: number | null }
+          | undefined;
         return page?.before_ms === 100 && page.before_id === 7;
       });
     expect(paginatedRequest).toBeDefined();

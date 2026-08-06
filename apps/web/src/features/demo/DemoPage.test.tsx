@@ -132,7 +132,7 @@ describe('DemoPage', () => {
           account: { auth_index: 'xai-email-user-01' },
         },
       ],
-      generatedAtMs
+      { nowMs: generatedAtMs }
     );
 
     expect(response.generated_at_ms).toBe(generatedAtMs);
@@ -150,6 +150,45 @@ describe('DemoPage', () => {
       }),
     ]);
     expect(response.items[1]?.windows).toEqual([]);
+  });
+
+  it('returns Codex lifecycle cycles and filters inactive periods on demand', async () => {
+    const generatedAtMs = Date.parse('2026-08-04T12:00:00Z');
+    setDemoMode(true);
+    const account = {
+      row_key: 'codex-team-01.json\u0000codex-team-01',
+      provider: 'codex',
+      account: { auth_index: 'codex-team-01' },
+    };
+
+    const activeOnly = await accountQuotaSnapshotApi.query('', undefined, [account], {
+      nowMs: generatedAtMs,
+    });
+    expect(activeOnly.items[0]?.windows.map((window) => window.provider_window_id)).toEqual([
+      'five-hour',
+      'weekly',
+    ]);
+
+    const withInactive = await accountQuotaSnapshotApi.query('', undefined, [account], {
+      nowMs: generatedAtMs,
+      includeInactive: true,
+    });
+    expect(withInactive.items[0]?.windows).toHaveLength(3);
+    expect(withInactive.items[0]?.windows[0]).toMatchObject({
+      provider_window_id: 'five-hour',
+      activation_generation: 2,
+      relationship_kind: 'concurrent_subwindow',
+      current_cycle: { parent_cycle_id: 302 },
+    });
+    expect(withInactive.items[0]?.windows[1]?.previous_cycle).toMatchObject({
+      end_reason: 'early_reset',
+      forecast_eligible: false,
+    });
+    expect(withInactive.items[0]?.windows[2]).toMatchObject({
+      provider_window_id: 'monthly',
+      availability: 'inactive',
+      stale: true,
+    });
   });
 
   it('does not infer demo mode from the deployment pathname without a demo hash route', () => {

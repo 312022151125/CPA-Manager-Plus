@@ -42,6 +42,7 @@ import {
   fetchKimiQuota,
   fetchXaiQuota,
   buildCodexQuotaWindowInfos,
+  filterFreshCodexQuotaWindows,
   formatKimiResetHint,
   formatQuotaResetTime,
 } from '@/utils/quota';
@@ -1208,7 +1209,8 @@ export const buildAccountQuotaErrorEntry = (
 export const buildObservedCodexAccountQuotaEntry = (
   target: MonitoringAccountQuotaTarget,
   snapshot: UsageHeaderSnapshot | undefined,
-  t: TFunction
+  t: TFunction,
+  nowMs = Date.now()
 ): AccountQuotaEntry | null => {
   if (target.provider !== 'codex' || !hasUsageHeaderQuotaSignal(snapshot)) return null;
   const planType = target.planType ?? getHeaderSnapshotPlanType(snapshot) ?? null;
@@ -1235,32 +1237,49 @@ export const buildObservedCodexAccountQuotaEntry = (
     traceID ? `Trace: ${traceID}` : '',
   ].filter(Boolean);
 
-  const observedWindows: CodexQuotaWindow[] = observedQuota?.payload
-    ? buildCodexQuotaWindowInfos(observedQuota.payload, { planType }).map((window) => ({
-        id: window.id,
-        label: t(window.labelKey, window.labelParams),
-        labelKey: window.labelKey,
-        labelParams: window.labelParams,
-        usedPercent: window.usedPercent,
-        resetLabel: window.resetLabel,
-        limitWindowSeconds: window.limitWindowSeconds,
-      }))
+  const rawObservedWindowInfos = observedQuota?.payload
+    ? buildCodexQuotaWindowInfos(observedQuota.payload, {
+        planType,
+        observedAtMs,
+        source: 'response_header',
+      })
     : [];
+  const observedWindows: CodexQuotaWindow[] = filterFreshCodexQuotaWindows(
+    rawObservedWindowInfos,
+    nowMs
+  ).map((window) => ({
+    id: window.id,
+    label: t(window.labelKey, window.labelParams),
+    labelKey: window.labelKey,
+    labelParams: window.labelParams,
+    usedPercent: window.usedPercent,
+    resetLabel: window.resetLabel,
+    resetAtMs: window.resetAtMs,
+    resetAccuracy: window.resetAccuracy,
+    limitWindowSeconds: window.limitWindowSeconds,
+    observationSource: 'response_header',
+    observedAtMs,
+  }));
+  const fallbackExpired = recoverAtMS !== null && recoverAtMS <= nowMs;
+  const fallbackUsedPercent = fallbackExpired ? null : usedPercent;
+  const fallbackRecoverAtMS = fallbackExpired ? null : recoverAtMS;
   const windows: AccountQuotaWindow[] =
-    observedWindows.length > 0
+    rawObservedWindowInfos.length > 0
       ? buildCodexAccountQuotaWindows(observedWindows, t)
-      : usedPercent !== null || recoverAtMS
+      : fallbackUsedPercent !== null || fallbackRecoverAtMS
         ? [
             {
               id: 'usage-header-observed',
               label: t('codex_quota.observed_window', { defaultValue: 'Latest request' }),
-              remainingPercent: buildRemainingFromUsedPercent(usedPercent),
-              resetLabel: recoverAtMS ? new Date(recoverAtMS).toLocaleString() : '-',
+              remainingPercent: buildRemainingFromUsedPercent(fallbackUsedPercent),
+              resetLabel: fallbackRecoverAtMS
+                ? new Date(fallbackRecoverAtMS).toLocaleString()
+                : '-',
               usageLabel:
-                usedPercent !== null
+                fallbackUsedPercent !== null
                   ? t('monitoring.account_quota_observed_used', {
-                      percent: `${Math.round(usedPercent)}%`,
-                      defaultValue: `Observed used ${Math.round(usedPercent)}%`,
+                      percent: `${Math.round(fallbackUsedPercent)}%`,
+                      defaultValue: `Observed used ${Math.round(fallbackUsedPercent)}%`,
                     })
                   : null,
             },
@@ -1306,7 +1325,7 @@ export const requestAccountQuota = async (
       });
     }
     case 'kimi': {
-      const rows = await fetchKimiQuota(target.file, t);
+      const { rows } = await fetchKimiQuota(target.file, t);
       return stampAccountQuotaFetchTime({
         ...buildBaseAccountQuotaEntry(target, t),
         windows: buildKimiAccountQuotaWindows(rows, t),

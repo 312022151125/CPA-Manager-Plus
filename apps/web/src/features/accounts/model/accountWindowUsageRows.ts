@@ -30,9 +30,13 @@ export interface AccountWindowUsageTargetEntry {
 }
 
 const modelScopeRequestPart = (scope: MonitoringAccountWindowModelScope | undefined) =>
-  [scope?.kind ?? 'all', scope?.key ?? '', ...(scope?.models ?? []).map((model) => model.trim())]
-    .join(':')
-    .toLowerCase();
+  JSON.stringify([
+    (scope?.kind ?? 'all').trim().toLowerCase(),
+    scope?.key?.trim().toLowerCase() ?? '',
+    ...Array.from(
+      new Set((scope?.models ?? []).map((model) => model.trim().toLowerCase()).filter(Boolean))
+    ).sort(),
+  ]);
 
 export const accountWindowUsageRequestKey = (
   rowKey: string,
@@ -130,20 +134,105 @@ export const buildAccountWindowUsageByKey = (
   items: MonitoringAccountWindowUsageItem[]
 ): Map<string, MonitoringAccountWindowUsageItem> => {
   const result = new Map<string, MonitoringAccountWindowUsageItem>();
-  entries.forEach((entry, index) => {
-    const item =
-      items.find((candidate) => candidate.request_key === entry.requestKey) ??
-      items.find(
-        (candidate) =>
-          candidate.row_key === entry.rowKey &&
-          (candidate.provider_window_id === entry.providerWindowId ||
-            candidate.window_key === entry.windowKey) &&
-          (candidate.period ?? 'current') === entry.period
-      ) ??
-      items[index];
-    if (item) {
+  const matchedEntries = new Set<number>();
+  const matchedItems = new Set<number>();
+  const normalizedPeriod = (value: MonitoringAccountWindowUsageItem['period']) =>
+    value ?? 'current';
+  const responseHasRequestKey = (item: MonitoringAccountWindowUsageItem) =>
+    Boolean(item.request_key?.trim());
+
+  const uniqueIndexByKey = <T>(
+    values: Array<{ index: number; value: T }>,
+    getKey: (value: T) => string | null
+  ): Map<string, number> => {
+    const unique = new Map<string, number>();
+    const duplicates = new Set<string>();
+    values.forEach(({ index, value }) => {
+      const key = getKey(value);
+      if (!key || duplicates.has(key)) return;
+      if (unique.has(key)) {
+        unique.delete(key);
+        duplicates.add(key);
+        return;
+      }
+      unique.set(key, index);
+    });
+    return unique;
+  };
+
+  const matchUnique = (
+    entryKey: (entry: AccountWindowUsageTargetEntry) => string | null,
+    itemKey: (item: MonitoringAccountWindowUsageItem) => string | null
+  ) => {
+    const availableEntries = entries
+      .map((entry, index) => ({ index, value: entry }))
+      .filter(({ index }) => !matchedEntries.has(index));
+    const availableItems = items
+      .map((item, index) => ({ index, value: item }))
+      .filter(({ index }) => !matchedItems.has(index));
+    const entryIndexes = uniqueIndexByKey(availableEntries, entryKey);
+    const itemIndexes = uniqueIndexByKey(availableItems, itemKey);
+    entryIndexes.forEach((entryIndex, key) => {
+      const itemIndex = itemIndexes.get(key);
+      if (itemIndex === undefined) return;
+      matchedEntries.add(entryIndex);
+      matchedItems.add(itemIndex);
+      result.set(entries[entryIndex].requestKey, items[itemIndex]);
+    });
+  };
+
+  matchUnique(
+    (entry) => entry.requestKey.trim() || null,
+    (item) => item.request_key?.trim() || null
+  );
+  matchUnique(
+    (entry) =>
+      [entry.rowKey.trim(), entry.windowKey.trim(), entry.period].every(Boolean)
+        ? [entry.rowKey.trim(), entry.windowKey.trim(), entry.period].join('\u0000')
+        : null,
+    (item) => {
+      if (responseHasRequestKey(item)) return null;
+      const rowKey = item.row_key?.trim();
+      const windowKey = item.window_key?.trim();
+      return rowKey && windowKey
+        ? [rowKey, windowKey, normalizedPeriod(item.period)].join('\u0000')
+        : null;
+    }
+  );
+  matchUnique(
+    (entry) =>
+      [entry.rowKey.trim(), entry.providerWindowId.trim(), entry.period].every(Boolean)
+        ? [entry.rowKey.trim(), entry.providerWindowId.trim(), entry.period].join('\u0000')
+        : null,
+    (item) => {
+      if (responseHasRequestKey(item) || item.window_key?.trim()) return null;
+      const rowKey = item.row_key?.trim();
+      const providerWindowId = item.provider_window_id?.trim();
+      return rowKey && providerWindowId
+        ? [rowKey, providerWindowId, normalizedPeriod(item.period)].join('\u0000')
+        : null;
+    }
+  );
+
+  const remainingEntryIndexes = entries
+    .map((_, index) => index)
+    .filter((index) => !matchedEntries.has(index));
+  const remainingItemIndexes = items
+    .map((_, index) => index)
+    .filter((index) => !matchedItems.has(index));
+  if (remainingEntryIndexes.length === 1 && remainingItemIndexes.length === 1) {
+    const entry = entries[remainingEntryIndexes[0]];
+    const item = items[remainingItemIndexes[0]];
+    const compatible =
+      !responseHasRequestKey(item) &&
+      (!item.row_key?.trim() || item.row_key.trim() === entry.rowKey) &&
+      (!item.window_key?.trim() || item.window_key.trim() === entry.windowKey) &&
+      (!item.provider_window_id?.trim() ||
+        item.provider_window_id.trim() === entry.providerWindowId) &&
+      (!item.period || normalizedPeriod(item.period) === entry.period);
+    if (compatible) {
       result.set(entry.requestKey, item);
     }
-  });
+  }
   return result;
 };

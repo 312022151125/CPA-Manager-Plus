@@ -36,6 +36,77 @@ describe('accountQuotaWindowDefinitions', () => {
     ]);
   });
 
+  it('classifies a complete fixed relative Header boundary as derived', () => {
+    const [definition] = buildAccountQuotaWindowDefinitions([
+      makeWindow({
+        observationSource: 'response_header',
+        resetAccuracy: 'estimated',
+      }),
+    ]);
+
+    expect(definition.boundaryAccuracy).toBe('derived');
+  });
+
+  it('uses actual lifecycle cycle bounds instead of subtracting the nominal duration', () => {
+    const [definition] = buildAccountQuotaWindowDefinitions([makeWindow({})], 30_000_000);
+    definition.currentCycle = {
+      id: 2,
+      activationId: 1,
+      state: 'active',
+      scheduledStartMs: 20_000_000,
+      scheduledEndMs: 38_000_000,
+      actualStartMs: 20_000_000,
+      actualEndMs: null,
+      durationSeconds: 18_000,
+      boundaryAccuracy: 'exact',
+      endReason: '',
+      parentCycleId: null,
+      forecastEligible: true,
+    };
+    definition.previousCycle = {
+      id: 1,
+      activationId: 1,
+      state: 'closed',
+      scheduledStartMs: 2_000_000,
+      scheduledEndMs: 20_000_000,
+      actualStartMs: 8_000_000,
+      actualEndMs: 20_000_000,
+      durationSeconds: 18_000,
+      boundaryAccuracy: 'exact',
+      endReason: 'early_reset',
+      parentCycleId: null,
+      forecastEligible: false,
+    };
+
+    expect(buildAccountQuotaUsageRanges(definition, 30_000_000)).toEqual([
+      { period: 'current', fromMs: 20_000_000, toMs: 30_000_000 },
+      { period: 'previous', fromMs: 8_000_000, toMs: 20_000_000 },
+    ]);
+  });
+
+  it('does not invent a previous range for the first lifecycle cycle', () => {
+    const [definition] = buildAccountQuotaWindowDefinitions([makeWindow({})], 30_000_000);
+    definition.currentCycle = {
+      id: 1,
+      activationId: 1,
+      state: 'active',
+      scheduledStartMs: 20_000_000,
+      scheduledEndMs: 38_000_000,
+      actualStartMs: 20_000_000,
+      actualEndMs: null,
+      durationSeconds: 18_000,
+      boundaryAccuracy: 'exact',
+      endReason: '',
+      parentCycleId: null,
+      forecastEligible: true,
+    };
+    definition.previousCycle = null;
+
+    expect(buildAccountQuotaUsageRanges(definition, 30_000_000)).toEqual([
+      { period: 'current', fromMs: 20_000_000, toMs: 30_000_000 },
+    ]);
+  });
+
   it('uses previous_equal_range for rolling windows and never labels it previous', () => {
     const [definition] = buildAccountQuotaWindowDefinitions(
       [
@@ -78,6 +149,14 @@ describe('accountQuotaWindowDefinitions', () => {
       [makeWindow({ windowMode: 'unknown', resetAccuracy: 'unknown', cycleStartMs: null })],
       20_000_000
     );
+    expect(buildAccountQuotaUsageRanges(definition, 20_000_000)).toEqual([]);
+  });
+
+  it('rejects non-finite usage durations instead of producing invalid ranges', () => {
+    const [definition] = buildAccountQuotaWindowDefinitions([
+      makeWindow({ limitWindowSeconds: Number.POSITIVE_INFINITY }),
+    ]);
+
     expect(buildAccountQuotaUsageRanges(definition, 20_000_000)).toEqual([]);
   });
 });

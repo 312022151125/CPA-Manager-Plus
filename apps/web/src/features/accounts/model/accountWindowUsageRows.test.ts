@@ -84,6 +84,144 @@ describe('accountWindowUsageRows', () => {
     });
   });
 
+  it('uses unique window keys instead of provider order for legacy scoped responses', () => {
+    const row = makeRow({});
+    const alphaScope = { kind: 'models' as const, models: ['model-alpha'] };
+    const betaScope = { kind: 'models' as const, models: ['model-beta'] };
+    const alphaRequestKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'shared-window',
+      'current',
+      alphaScope
+    );
+    const betaRequestKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'shared-window',
+      'current',
+      betaScope
+    );
+    const entries = [
+      {
+        rowKey: row.selectionKey,
+        windowKey: 'shared-window::scope::models::-::model-alpha',
+        providerWindowId: 'shared-window',
+        period: 'current' as const,
+        requestKey: alphaRequestKey,
+        target: {
+          row_key: row.selectionKey,
+          window_key: 'shared-window::scope::models::-::model-alpha',
+          provider_window_id: 'shared-window',
+          period: 'current' as const,
+          from_ms: 1_000,
+          to_ms: 2_000,
+          model_scope: alphaScope,
+        },
+      },
+      {
+        rowKey: row.selectionKey,
+        windowKey: 'shared-window::scope::models::-::model-beta',
+        providerWindowId: 'shared-window',
+        period: 'current' as const,
+        requestKey: betaRequestKey,
+        target: {
+          row_key: row.selectionKey,
+          window_key: 'shared-window::scope::models::-::model-beta',
+          provider_window_id: 'shared-window',
+          period: 'current' as const,
+          from_ms: 1_000,
+          to_ms: 2_000,
+          model_scope: betaScope,
+        },
+      },
+    ];
+    const byKey = buildAccountWindowUsageByKey(entries, [
+      {
+        row_key: row.selectionKey,
+        window_key: entries[1].windowKey,
+        provider_window_id: 'shared-window',
+        period: 'current',
+        from_ms: 1_000,
+        to_ms: 2_000,
+        matched: true,
+        total_requests: 22,
+        success_calls: 22,
+        failure_calls: 0,
+        total_tokens: 2_200,
+        total_cost: 2.2,
+        success_rate: 1,
+        last_seen_ms: 1_900,
+        sync_status: 'ready',
+      },
+      {
+        row_key: row.selectionKey,
+        window_key: entries[0].windowKey,
+        provider_window_id: 'shared-window',
+        period: 'current',
+        from_ms: 1_000,
+        to_ms: 2_000,
+        matched: true,
+        total_requests: 11,
+        success_calls: 11,
+        failure_calls: 0,
+        total_tokens: 1_100,
+        total_cost: 1.1,
+        success_rate: 1,
+        last_seen_ms: 1_900,
+        sync_status: 'ready',
+      },
+    ]);
+
+    expect(byKey.get(alphaRequestKey)?.total_requests).toBe(11);
+    expect(byKey.get(betaRequestKey)?.total_requests).toBe(22);
+  });
+
+  it('does not assign an ambiguous provider-only response to either model scope', () => {
+    const row = makeRow({});
+    const entries = ['model-alpha', 'model-beta'].map((model) => {
+      const modelScope = { kind: 'models' as const, models: [model] };
+      return {
+        rowKey: row.selectionKey,
+        windowKey: `shared-window::${model}`,
+        providerWindowId: 'shared-window',
+        period: 'current' as const,
+        requestKey: accountWindowUsageRequestKey(
+          row.selectionKey,
+          'shared-window',
+          'current',
+          modelScope
+        ),
+        target: {
+          row_key: row.selectionKey,
+          provider_window_id: 'shared-window',
+          period: 'current' as const,
+          from_ms: 1_000,
+          to_ms: 2_000,
+          model_scope: modelScope,
+        },
+      };
+    });
+    const byKey = buildAccountWindowUsageByKey(entries, [
+      {
+        row_key: row.selectionKey,
+        provider_window_id: 'shared-window',
+        period: 'current',
+        from_ms: 1_000,
+        to_ms: 2_000,
+        matched: true,
+        total_requests: 99,
+        success_calls: 99,
+        failure_calls: 0,
+        total_tokens: 9_900,
+        total_cost: 9.9,
+        success_rate: 1,
+        last_seen_ms: 1_900,
+        sync_status: 'ready',
+      },
+    ]);
+
+    expect(byKey).toHaveLength(0);
+  });
+
   it('skips an incomplete model scope without dropping other quota windows', () => {
     const row = makeRow({});
     const incompleteDefinition = {

@@ -70,6 +70,7 @@ import {
 import {
   buildUsageHeaderSnapshotLookup,
   getHighConfidenceUsageHeaderSnapshotForAuthFile,
+  hasExpiredUsageHeaderQuotaWindow,
   isUsageHeaderQuotaSnapshotExpired,
 } from '@/utils/usageHeaderSnapshots';
 import { useAuthFilesData } from '@/features/authFiles/hooks/useAuthFilesData';
@@ -1075,7 +1076,7 @@ export function AuthFilesPage() {
         headerSnapshotLookup,
         file
       );
-      if (!isUsageHeaderQuotaSnapshotExpired(headerSnapshot, nowMs)) continue;
+      if (!hasExpiredUsageHeaderQuotaWindow(headerSnapshot, nowMs)) continue;
 
       const activeQuota = getActiveCodexQuota(file);
       const fetchedAtMs =

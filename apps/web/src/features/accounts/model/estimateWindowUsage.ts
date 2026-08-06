@@ -5,37 +5,58 @@ export interface WindowUsageForecastMetrics {
 }
 
 export interface WindowUsageForecast extends WindowUsageForecastMetrics {
-  basis: 'current' | 'previous';
+  basis: 'quota' | 'previous';
 }
 
-const roundForecastCost = (value: number): number => Math.round(value * 100) / 100;
+const isUsableMetrics = (
+  metrics: WindowUsageForecastMetrics | null | undefined
+): metrics is WindowUsageForecastMetrics =>
+  metrics !== null &&
+  metrics !== undefined &&
+  Number.isFinite(metrics.requests) &&
+  metrics.requests >= 0 &&
+  Number.isFinite(metrics.tokens) &&
+  metrics.tokens >= 0 &&
+  Number.isFinite(metrics.cost) &&
+  metrics.cost >= 0;
+
+const hasUsage = (metrics: WindowUsageForecastMetrics): boolean =>
+  metrics.requests > 0 || metrics.tokens > 0 || metrics.cost > 0;
+
+const roundForecastCost = (value: number): number => {
+  const scaled = value * 100;
+  return Number.isFinite(scaled) ? Math.round(scaled) / 100 : value;
+};
 
 export const estimateWindowUsage = (input: {
-  nowMs: number;
-  cycleStartMs: number;
-  cycleEndMs: number;
+  usedPercent: number | null;
   current: WindowUsageForecastMetrics | null;
   previous?: WindowUsageForecastMetrics | null;
 }): WindowUsageForecast | null => {
-  const durationMs = input.cycleEndMs - input.cycleStartMs;
-  const elapsedMs = Math.min(input.nowMs, input.cycleEndMs) - input.cycleStartMs;
-  if (durationMs <= 0 || elapsedMs <= 0) return null;
-
-  const minimumSampleMs = Math.min(15 * 60 * 1000, durationMs * 0.05);
-  const hasCurrentSample =
-    input.current !== null &&
-    elapsedMs >= minimumSampleMs &&
-    (input.current.requests > 0 || input.current.tokens > 0 || input.current.cost > 0);
-  if (hasCurrentSample && input.current) {
-    const multiplier = durationMs / elapsedMs;
-    return {
+  const hasCurrentUsage = isUsableMetrics(input.current) && hasUsage(input.current);
+  const hasQuotaProgress =
+    input.usedPercent !== null &&
+    Number.isFinite(input.usedPercent) &&
+    input.usedPercent > 0 &&
+    input.usedPercent <= 100;
+  if (hasCurrentUsage && hasQuotaProgress && input.current && input.usedPercent !== null) {
+    const multiplier = 100 / input.usedPercent;
+    const forecast = {
       requests: Math.max(input.current.requests, Math.round(input.current.requests * multiplier)),
       tokens: Math.max(input.current.tokens, Math.round(input.current.tokens * multiplier)),
       cost: Math.max(input.current.cost, roundForecastCost(input.current.cost * multiplier)),
-      basis: 'current',
-    };
+      basis: 'quota',
+    } satisfies WindowUsageForecast;
+    if (
+      Number.isFinite(multiplier) &&
+      Number.isFinite(forecast.requests) &&
+      Number.isFinite(forecast.tokens) &&
+      Number.isFinite(forecast.cost)
+    ) {
+      return forecast;
+    }
   }
-  if (input.previous) {
+  if (isUsableMetrics(input.previous)) {
     return { ...input.previous, basis: 'previous' };
   }
   return null;

@@ -302,6 +302,7 @@ describe('accountDetailViewModel', () => {
           resetLabel: 'later',
           resetAtMs: nowMs + 60 * 60 * 1000,
           resetAccuracy: 'exact',
+          observedAtMs: nowMs,
           limitWindowSeconds: 7 * 24 * 60 * 60,
           windowMode: 'calendar',
           cycleStartMs: nowMs - 60 * 60 * 1000,
@@ -313,7 +314,7 @@ describe('accountDetailViewModel', () => {
     });
 
     expect(viewModel.quota.windows[0].forecast).toMatchObject({
-      basis: 'current',
+      basis: 'quota',
       requests: 100,
       tokens: 1_000_000,
       cost: 10,
@@ -343,9 +344,9 @@ describe('accountDetailViewModel', () => {
           window_key: 'antigravity-gemini',
           from_ms: nowMs - 60 * 60 * 1000,
           to_ms: nowMs,
-          total_requests: 30,
-          total_tokens: 300_000,
-          total_cost: 3,
+          total_requests: 2,
+          total_tokens: 6_400,
+          total_cost: 0.02,
         }),
       ],
       [
@@ -368,11 +369,12 @@ describe('accountDetailViewModel', () => {
           providerWindowId: 'antigravity-gemini',
           label: 'Gemini',
           kind: 'daily',
-          remainingPercent: 60,
-          usedPercent: 40,
+          remainingPercent: 99,
+          usedPercent: 1,
           resetLabel: 'later',
           resetAtMs: nowMs + 24 * 60 * 60 * 1000,
           resetAccuracy: 'exact',
+          observedAtMs: nowMs,
           limitWindowSeconds: 24 * 60 * 60,
           windowMode: 'fixed',
           cycleStartMs: nowMs - 60 * 60 * 1000,
@@ -389,11 +391,408 @@ describe('accountDetailViewModel', () => {
       totalTokens: 200_000,
     });
     expect(viewModel.quota.windows[0].forecast).toMatchObject({
-      basis: 'current',
-      requests: 720,
-      tokens: 7_200_000,
-      cost: 72,
+      basis: 'quota',
+      requests: 200,
+      tokens: 640_000,
+      cost: 2,
     });
+  });
+
+  it('does not use partial model-scope usage as a forecast basis', () => {
+    const row = makeRow({ provider: 'antigravity' });
+    const nowMs = Date.now();
+    const modelScope = { kind: 'family' as const, key: 'gemini', complete: true };
+    const currentKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'antigravity-gemini',
+      'current',
+      modelScope
+    );
+    const previousKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'antigravity-gemini',
+      'previous',
+      modelScope
+    );
+    const windowUsageByKey = new Map<string, MonitoringAccountWindowUsageItem>([
+      [
+        currentKey,
+        makeWindowUsage({
+          window_key: 'antigravity-gemini',
+          total_requests: 2,
+          total_tokens: 6_400,
+          total_cost: 0.02,
+          last_seen_ms: nowMs,
+          scope_match_status: 'partial',
+          unmatched_requests: 1,
+        }),
+      ],
+      [
+        previousKey,
+        makeWindowUsage({
+          window_key: 'antigravity-gemini',
+          total_requests: 20,
+          total_tokens: 200_000,
+          total_cost: 2,
+          scope_match_status: 'partial',
+          unmatched_requests: 2,
+        }),
+      ],
+    ]);
+
+    const viewModel = buildAccountDetailViewModel(row, {
+      quotaWindows: [
+        {
+          key: 'antigravity-gemini',
+          providerWindowId: 'antigravity-gemini',
+          label: 'Gemini',
+          kind: 'daily',
+          remainingPercent: 99,
+          usedPercent: 1,
+          resetLabel: 'later',
+          resetAtMs: nowMs + 24 * 60 * 60 * 1000,
+          resetAccuracy: 'exact',
+          observedAtMs: nowMs,
+          limitWindowSeconds: 24 * 60 * 60,
+          windowMode: 'fixed',
+          cycleStartMs: nowMs - 60 * 60 * 1000,
+          cycleEndMs: nowMs + 23 * 60 * 60 * 1000,
+          modelScope,
+        },
+      ],
+      windowUsageByKey,
+    });
+
+    expect(viewModel.quota.windows[0].currentUsage).toMatchObject({
+      matched: true,
+      scopeMatchStatus: 'partial',
+      unmatchedRequests: 1,
+    });
+    expect(viewModel.quota.windows[0].previousUsage).toMatchObject({
+      matched: true,
+      scopeMatchStatus: 'partial',
+      unmatchedRequests: 2,
+    });
+    expect(viewModel.quota.windows[0].forecast).toBeNull();
+  });
+
+  it('falls back to an eligible previous cycle when usage is newer than quota progress', () => {
+    const row = makeRow({ provider: 'antigravity' });
+    const nowMs = Date.now();
+    const modelScope = { kind: 'family' as const, key: 'gemini', complete: true };
+    const currentKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'antigravity-gemini',
+      'current',
+      modelScope
+    );
+    const previousKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'antigravity-gemini',
+      'previous',
+      modelScope
+    );
+    const windowUsageByKey = new Map<string, MonitoringAccountWindowUsageItem>([
+      [
+        currentKey,
+        makeWindowUsage({
+          window_key: 'antigravity-gemini',
+          total_requests: 2,
+          total_tokens: 6_400,
+          total_cost: 0.02,
+          last_seen_ms: nowMs,
+        }),
+      ],
+      [
+        previousKey,
+        makeWindowUsage({
+          window_key: 'antigravity-gemini',
+          total_requests: 20,
+          total_tokens: 200_000,
+          total_cost: 2,
+        }),
+      ],
+    ]);
+
+    const viewModel = buildAccountDetailViewModel(row, {
+      quotaWindows: [
+        {
+          key: 'antigravity-gemini',
+          providerWindowId: 'antigravity-gemini',
+          label: 'Gemini',
+          kind: 'daily',
+          remainingPercent: 99,
+          usedPercent: 1,
+          resetLabel: 'later',
+          resetAtMs: nowMs + 24 * 60 * 60 * 1000,
+          resetAccuracy: 'exact',
+          observedAtMs: nowMs - 1_000,
+          limitWindowSeconds: 24 * 60 * 60,
+          windowMode: 'fixed',
+          cycleStartMs: nowMs - 60 * 60 * 1000,
+          cycleEndMs: nowMs + 23 * 60 * 60 * 1000,
+          modelScope,
+          availability: 'active',
+          previousCycle: {
+            id: 1,
+            activationId: 1,
+            state: 'closed',
+            scheduledStartMs: nowMs - 25 * 60 * 60 * 1000,
+            scheduledEndMs: nowMs - 24 * 60 * 60 * 1000,
+            actualStartMs: nowMs - 25 * 60 * 60 * 1000,
+            actualEndMs: nowMs - 24 * 60 * 60 * 1000,
+            durationSeconds: 24 * 60 * 60,
+            boundaryAccuracy: 'exact',
+            endReason: 'scheduled',
+            parentCycleId: null,
+            forecastEligible: true,
+          },
+        },
+      ],
+      windowUsageByKey,
+    });
+
+    expect(viewModel.quota.windows[0].currentUsage).toMatchObject({
+      totalRequests: 2,
+      lastSeenMs: nowMs,
+    });
+    expect(viewModel.quota.windows[0].forecast).toEqual({
+      basis: 'previous',
+      requests: 20,
+      tokens: 200_000,
+      cost: 2,
+    });
+  });
+
+  it('does not use dynamic quota progress when the current cycle is not forecast eligible', () => {
+    const row = makeRow({ provider: 'codex' });
+    const nowMs = Date.now();
+    const currentKey = accountWindowUsageRequestKey(row.selectionKey, 'weekly', 'current');
+    const previousKey = accountWindowUsageRequestKey(row.selectionKey, 'weekly', 'previous');
+    const windowUsageByKey = new Map<string, MonitoringAccountWindowUsageItem>([
+      [
+        currentKey,
+        makeWindowUsage({
+          window_key: 'weekly',
+          total_requests: 2,
+          total_tokens: 6_400,
+          total_cost: 0.02,
+          last_seen_ms: nowMs,
+        }),
+      ],
+      [
+        previousKey,
+        makeWindowUsage({
+          window_key: 'weekly',
+          total_requests: 20,
+          total_tokens: 200_000,
+          total_cost: 2,
+        }),
+      ],
+    ]);
+
+    const viewModel = buildAccountDetailViewModel(row, {
+      quotaWindows: [
+        {
+          key: 'weekly',
+          providerWindowId: 'weekly',
+          label: 'Weekly',
+          kind: 'weekly',
+          remainingPercent: 99,
+          usedPercent: 1,
+          resetLabel: 'later',
+          resetAtMs: nowMs + 7 * 24 * 60 * 60 * 1000,
+          resetAccuracy: 'estimated',
+          observedAtMs: nowMs,
+          limitWindowSeconds: 7 * 24 * 60 * 60,
+          windowMode: 'fixed',
+          cycleStartMs: nowMs,
+          cycleEndMs: nowMs + 7 * 24 * 60 * 60 * 1000,
+          modelScope: { kind: 'all', complete: true },
+          availability: 'active',
+          currentCycle: {
+            id: 2,
+            activationId: 1,
+            state: 'active',
+            scheduledStartMs: nowMs,
+            scheduledEndMs: nowMs + 7 * 24 * 60 * 60 * 1000,
+            actualStartMs: nowMs,
+            actualEndMs: null,
+            durationSeconds: 7 * 24 * 60 * 60,
+            boundaryAccuracy: 'estimated',
+            endReason: '',
+            parentCycleId: null,
+            forecastEligible: false,
+          },
+          previousCycle: {
+            id: 1,
+            activationId: 1,
+            state: 'closed',
+            scheduledStartMs: nowMs - 7 * 24 * 60 * 60 * 1000,
+            scheduledEndMs: nowMs,
+            actualStartMs: nowMs - 7 * 24 * 60 * 60 * 1000,
+            actualEndMs: nowMs,
+            durationSeconds: 7 * 24 * 60 * 60,
+            boundaryAccuracy: 'exact',
+            endReason: 'scheduled',
+            parentCycleId: null,
+            forecastEligible: true,
+          },
+        },
+      ],
+      windowUsageByKey,
+    });
+
+    expect(viewModel.quota.windows[0].forecast).toEqual({
+      basis: 'previous',
+      requests: 20,
+      tokens: 200_000,
+      cost: 2,
+    });
+  });
+
+  it('does not use stale quota progress without matched previous usage', () => {
+    const row = makeRow({ provider: 'antigravity' });
+    const nowMs = Date.now();
+    const modelScope = { kind: 'family' as const, key: 'gemini', complete: true };
+    const currentKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'antigravity-gemini',
+      'current',
+      modelScope
+    );
+    const previousKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'antigravity-gemini',
+      'previous',
+      modelScope
+    );
+    const windowUsageByKey = new Map<string, MonitoringAccountWindowUsageItem>([
+      [
+        currentKey,
+        makeWindowUsage({
+          window_key: 'antigravity-gemini',
+          total_requests: 2,
+          total_tokens: 6_400,
+          total_cost: 0.02,
+          last_seen_ms: nowMs,
+        }),
+      ],
+      [
+        previousKey,
+        makeWindowUsage({
+          window_key: 'antigravity-gemini',
+          matched: false,
+          total_requests: 0,
+          total_tokens: 0,
+          total_cost: 0,
+        }),
+      ],
+    ]);
+
+    const viewModel = buildAccountDetailViewModel(row, {
+      quotaWindows: [
+        {
+          key: 'antigravity-gemini',
+          providerWindowId: 'antigravity-gemini',
+          label: 'Gemini',
+          kind: 'weekly',
+          remainingPercent: 99,
+          usedPercent: 1,
+          resetLabel: 'later',
+          resetAtMs: nowMs + 7 * 24 * 60 * 60 * 1000,
+          resetAccuracy: 'exact',
+          observedAtMs: nowMs - 1_000,
+          limitWindowSeconds: 7 * 24 * 60 * 60,
+          windowMode: 'fixed',
+          cycleStartMs: nowMs,
+          cycleEndMs: nowMs + 7 * 24 * 60 * 60 * 1000,
+          modelScope,
+        },
+      ],
+      windowUsageByKey,
+    });
+
+    expect(viewModel.quota.windows[0].currentUsage).toMatchObject({
+      matched: true,
+      totalRequests: 2,
+    });
+    expect(viewModel.quota.windows[0].previousUsage).toMatchObject({ matched: false });
+    expect(viewModel.quota.windows[0].forecast).toBeNull();
+  });
+
+  it('does not fall back to a previous cycle that ended early', () => {
+    const row = makeRow({ provider: 'codex' });
+    const nowMs = Date.now();
+    const previousKey = accountWindowUsageRequestKey(row.selectionKey, 'weekly', 'previous');
+    const windowUsageByKey = new Map<string, MonitoringAccountWindowUsageItem>([
+      [
+        previousKey,
+        makeWindowUsage({
+          window_key: 'weekly',
+          total_requests: 200,
+          total_tokens: 2_000_000,
+          total_cost: 20,
+        }),
+      ],
+    ]);
+
+    const viewModel = buildAccountDetailViewModel(row, {
+      quotaWindows: [
+        {
+          key: 'weekly',
+          providerWindowId: 'weekly',
+          label: 'Weekly',
+          kind: 'weekly',
+          remainingPercent: null,
+          usedPercent: null,
+          resetLabel: 'later',
+          resetAtMs: nowMs + 7 * 24 * 60 * 60 * 1000,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 7 * 24 * 60 * 60,
+          windowMode: 'fixed',
+          cycleStartMs: nowMs,
+          cycleEndMs: nowMs + 7 * 24 * 60 * 60 * 1000,
+          modelScope: { kind: 'all', complete: true },
+          availability: 'active',
+          currentCycle: {
+            id: 2,
+            activationId: 1,
+            state: 'active',
+            scheduledStartMs: nowMs,
+            scheduledEndMs: nowMs + 7 * 24 * 60 * 60 * 1000,
+            actualStartMs: nowMs,
+            actualEndMs: null,
+            durationSeconds: 7 * 24 * 60 * 60,
+            boundaryAccuracy: 'exact',
+            endReason: '',
+            parentCycleId: null,
+            forecastEligible: true,
+          },
+          previousCycle: {
+            id: 1,
+            activationId: 1,
+            state: 'closed',
+            scheduledStartMs: nowMs - 7 * 24 * 60 * 60 * 1000,
+            scheduledEndMs: nowMs,
+            actualStartMs: nowMs - 3 * 24 * 60 * 60 * 1000,
+            actualEndMs: nowMs,
+            durationSeconds: 7 * 24 * 60 * 60,
+            boundaryAccuracy: 'exact',
+            endReason: 'early_reset',
+            parentCycleId: null,
+            forecastEligible: false,
+          },
+        },
+      ],
+      windowUsageByKey,
+    });
+
+    expect(viewModel.quota.windows[0].previousUsage).toMatchObject({
+      matched: true,
+      totalRequests: 200,
+    });
+    expect(viewModel.quota.windows[0].forecast).toBeNull();
   });
 
   it('accepts safely pre-scoped file-level action candidates', () => {

@@ -913,6 +913,7 @@ export type AccountQuotaSnapshotSource =
   | 'response_body'
   | 'inspection';
 export type AccountQuotaSnapshotBoundaryAccuracy = 'exact' | 'derived' | 'estimated' | 'unknown';
+export type AccountQuotaSnapshotInventoryMode = 'complete' | 'partial' | 'delta';
 
 export interface AccountQuotaSnapshotTarget {
   account_snapshot?: string;
@@ -927,6 +928,21 @@ export interface AccountQuotaSnapshotTarget {
 export interface AccountQuotaSnapshotResetCredit {
   id: string;
   expires_at_ms: number;
+}
+
+export interface AccountQuotaSnapshotObservationInput {
+  source: AccountQuotaSnapshotSource;
+  source_observation_id?: string;
+  observed_at_ms?: number;
+  inventory_scope_key: string;
+  inventory_mode: AccountQuotaSnapshotInventoryMode;
+}
+
+export interface AccountQuotaSnapshotRemovedWindowInput {
+  provider_window_id: string;
+  model_scope_kind?: MonitoringAccountWindowModelScope['kind'];
+  model_scope_key?: string;
+  model_ids?: string[];
 }
 
 export interface AccountQuotaSnapshotWindowInput {
@@ -951,13 +967,17 @@ export interface AccountQuotaSnapshotWindowInput {
   reset_credits_available?: number;
   reset_credits?: AccountQuotaSnapshotResetCredit[];
   plan_type?: string;
+  relationship_kind?: string;
+  container_provider_window_id?: string;
 }
 
 export interface AccountQuotaSnapshotWriteEntry {
   row_key?: string;
   provider: string;
   account: AccountQuotaSnapshotTarget;
+  observation?: AccountQuotaSnapshotObservationInput;
   windows: AccountQuotaSnapshotWindowInput[];
+  removed_windows?: AccountQuotaSnapshotRemovedWindowInput[];
 }
 
 export interface AccountQuotaSnapshotWriteResponse {
@@ -970,9 +990,33 @@ export interface AccountQuotaSnapshotWriteResponse {
   }>;
 }
 
+export interface AccountQuotaSnapshotCycle {
+  id: number;
+  activation_id: number;
+  state: string;
+  scheduled_start_ms?: number;
+  scheduled_end_ms?: number;
+  actual_start_ms: number;
+  actual_end_ms?: number;
+  duration_seconds?: number;
+  boundary_accuracy: AccountQuotaSnapshotBoundaryAccuracy;
+  end_reason?: string;
+  parent_cycle_id?: number;
+  forecast_eligible: boolean;
+}
+
 export interface AccountQuotaSnapshotWindow extends AccountQuotaSnapshotWindowInput {
   stale: boolean;
   field_sources?: Record<string, { source: AccountQuotaSnapshotSource; observed_at_ms: number }>;
+  logical_window_id?: number;
+  activation_generation?: number;
+  availability?: string;
+  first_seen_at_ms?: number;
+  last_seen_at_ms?: number;
+  missing_since_ms?: number;
+  deactivated_at_ms?: number;
+  current_cycle?: AccountQuotaSnapshotCycle;
+  previous_cycle?: AccountQuotaSnapshotCycle;
 }
 
 export interface AccountQuotaSnapshotQueryAccount {
@@ -995,6 +1039,131 @@ const buildDemoAccountQuotaSnapshotWindows = (
   account: AccountQuotaSnapshotQueryAccount,
   nowMs: number
 ): AccountQuotaSnapshotWindow[] => {
+  if (account.provider === 'codex' && account.account.auth_index === 'codex-team-01') {
+    const fiveHourDuration = 5 * 60 * 60;
+    const weeklyDuration = 7 * 24 * 60 * 60;
+    const fiveHourEndMs = nowMs + 2 * 60 * 60 * 1000 + 18 * 60 * 1000;
+    const fiveHourStartMs = fiveHourEndMs - fiveHourDuration * 1000;
+    const weeklyEndMs = nowMs + (3 * 24 * 60 * 60 + 8 * 60 * 60) * 1000;
+    const weeklyStartMs = weeklyEndMs - weeklyDuration * 1000;
+    const observedAtMs = nowMs - 8 * 60 * 1000;
+    return [
+      {
+        provider_window_id: 'five-hour',
+        window_kind: 'five_hour',
+        window_mode: 'fixed',
+        model_scope_kind: 'all',
+        source: 'api_query',
+        observed_at_ms: observedAtMs,
+        boundary_accuracy: 'exact',
+        cycle_start_ms: fiveHourStartMs,
+        cycle_end_ms: fiveHourEndMs,
+        duration_seconds: fiveHourDuration,
+        used_percent: 36,
+        remaining_percent: 64,
+        relationship_kind: 'concurrent_subwindow',
+        container_provider_window_id: 'weekly',
+        stale: false,
+        logical_window_id: 101,
+        activation_generation: 2,
+        availability: 'active',
+        first_seen_at_ms: weeklyStartMs - weeklyDuration * 1000,
+        last_seen_at_ms: observedAtMs,
+        current_cycle: {
+          id: 301,
+          activation_id: 201,
+          state: 'active',
+          scheduled_start_ms: fiveHourStartMs,
+          scheduled_end_ms: fiveHourEndMs,
+          actual_start_ms: fiveHourStartMs,
+          duration_seconds: fiveHourDuration,
+          boundary_accuracy: 'exact',
+          parent_cycle_id: 302,
+          forecast_eligible: true,
+        },
+        previous_cycle: {
+          id: 299,
+          activation_id: 201,
+          state: 'closed',
+          scheduled_start_ms: fiveHourStartMs - fiveHourDuration * 1000,
+          scheduled_end_ms: fiveHourStartMs,
+          actual_start_ms: fiveHourStartMs - fiveHourDuration * 1000,
+          actual_end_ms: fiveHourStartMs,
+          duration_seconds: fiveHourDuration,
+          boundary_accuracy: 'exact',
+          end_reason: 'scheduled',
+          parent_cycle_id: 298,
+          forecast_eligible: true,
+        },
+      },
+      {
+        provider_window_id: 'weekly',
+        window_kind: 'weekly',
+        window_mode: 'fixed',
+        model_scope_kind: 'all',
+        source: 'api_query',
+        observed_at_ms: observedAtMs,
+        boundary_accuracy: 'exact',
+        cycle_start_ms: weeklyStartMs,
+        cycle_end_ms: weeklyEndMs,
+        duration_seconds: weeklyDuration,
+        used_percent: 41,
+        remaining_percent: 59,
+        stale: false,
+        logical_window_id: 102,
+        activation_generation: 1,
+        availability: 'active',
+        first_seen_at_ms: weeklyStartMs - weeklyDuration * 1000,
+        last_seen_at_ms: observedAtMs,
+        current_cycle: {
+          id: 302,
+          activation_id: 202,
+          state: 'active',
+          scheduled_start_ms: weeklyStartMs,
+          scheduled_end_ms: weeklyEndMs,
+          actual_start_ms: weeklyStartMs,
+          duration_seconds: weeklyDuration,
+          boundary_accuracy: 'exact',
+          forecast_eligible: true,
+        },
+        previous_cycle: {
+          id: 300,
+          activation_id: 202,
+          state: 'closed',
+          scheduled_start_ms: weeklyStartMs - weeklyDuration * 1000,
+          scheduled_end_ms: weeklyStartMs + 3 * 24 * 60 * 60 * 1000,
+          actual_start_ms: weeklyStartMs - 3 * 24 * 60 * 60 * 1000,
+          actual_end_ms: weeklyStartMs,
+          duration_seconds: weeklyDuration,
+          boundary_accuracy: 'exact',
+          end_reason: 'early_reset',
+          forecast_eligible: false,
+        },
+      },
+      {
+        provider_window_id: 'monthly',
+        window_kind: 'monthly',
+        window_mode: 'fixed',
+        model_scope_kind: 'all',
+        source: 'inspection',
+        observed_at_ms: nowMs - 5 * 24 * 60 * 60 * 1000,
+        boundary_accuracy: 'exact',
+        cycle_start_ms: nowMs - 20 * 24 * 60 * 60 * 1000,
+        cycle_end_ms: nowMs + 10 * 24 * 60 * 60 * 1000,
+        duration_seconds: 30 * 24 * 60 * 60,
+        used_percent: 12,
+        remaining_percent: 88,
+        stale: true,
+        logical_window_id: 103,
+        activation_generation: 1,
+        availability: 'inactive',
+        first_seen_at_ms: nowMs - 20 * 24 * 60 * 60 * 1000,
+        last_seen_at_ms: nowMs - 5 * 24 * 60 * 60 * 1000,
+        missing_since_ms: nowMs - 4 * 24 * 60 * 60 * 1000,
+        deactivated_at_ms: nowMs - 4 * 24 * 60 * 60 * 1000,
+      },
+    ];
+  }
   if (account.provider !== 'xai' || account.account.auth_index !== 'xai-ops-01') return [];
   const observedAtMs = nowMs - 60_000;
   return [
@@ -1017,6 +1186,11 @@ const buildDemoAccountQuotaSnapshotWindows = (
       limit_value: 1_000_000,
       quota_unit: 'tokens',
       stale: false,
+      logical_window_id: 201,
+      activation_generation: 1,
+      availability: 'active',
+      first_seen_at_ms: observedAtMs,
+      last_seen_at_ms: observedAtMs,
     },
   ];
 };
@@ -3252,24 +3426,30 @@ export const accountQuotaSnapshotApi = {
     base: string,
     managementKey: string | undefined,
     accounts: AccountQuotaSnapshotQueryAccount[],
-    nowMs?: number
+    options: { nowMs?: number; includeInactive?: boolean } = {}
   ): Promise<AccountQuotaSnapshotQueryResponse> => {
     if (__DEMO_SITE__ && isDemoMode()) {
-      const generatedAtMs = nowMs ?? Date.now();
+      const generatedAtMs = options.nowMs ?? Date.now();
       return {
         generated_at_ms: generatedAtMs,
         items: accounts.map((account) => ({
           row_key: account.row_key,
           account_key: account.row_key,
           provider: account.provider,
-          windows: buildDemoAccountQuotaSnapshotWindows(account, generatedAtMs),
+          windows: buildDemoAccountQuotaSnapshotWindows(account, generatedAtMs).filter(
+            (window) => options.includeInactive || window.availability !== 'inactive'
+          ),
         })),
       };
     }
     return withUsageServiceError(async () => {
       const response = await axios.post<AccountQuotaSnapshotQueryResponse>(
         buildUrl(base, '/v0/management/quota-snapshots/query'),
-        { accounts, now_ms: nowMs },
+        {
+          accounts,
+          now_ms: options.nowMs,
+          include_inactive: options.includeInactive,
+        },
         {
           timeout: USAGE_SERVICE_TIMEOUT_MS,
           headers: authHeaders(managementKey),

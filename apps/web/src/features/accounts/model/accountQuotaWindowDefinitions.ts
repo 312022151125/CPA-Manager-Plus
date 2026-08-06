@@ -8,6 +8,21 @@ import type {
 export type AccountQuotaBoundaryAccuracy = 'exact' | 'derived' | 'estimated' | 'unknown';
 export type AccountQuotaUsagePeriod = 'current' | 'previous' | 'previous_equal_range';
 
+export interface AccountQuotaCycleDefinition {
+  id: number;
+  activationId: number;
+  state: string;
+  scheduledStartMs: number | null;
+  scheduledEndMs: number | null;
+  actualStartMs: number;
+  actualEndMs: number | null;
+  durationSeconds: number | null;
+  boundaryAccuracy: AccountQuotaBoundaryAccuracy;
+  endReason: string;
+  parentCycleId: number | null;
+  forecastEligible: boolean;
+}
+
 export interface AccountQuotaWindowDefinition {
   key: string;
   providerWindowId: string;
@@ -25,6 +40,17 @@ export interface AccountQuotaWindowDefinition {
   remainingPercent: number | null;
   usedPercent: number | null;
   stale: boolean;
+  logicalWindowId?: number;
+  activationGeneration?: number;
+  availability?: string;
+  relationshipKind?: string;
+  containerProviderWindowId?: string;
+  firstSeenAtMs?: number;
+  lastSeenAtMs?: number;
+  missingSinceMs?: number | null;
+  deactivatedAtMs?: number | null;
+  currentCycle?: AccountQuotaCycleDefinition | null;
+  previousCycle?: AccountQuotaCycleDefinition | null;
   display: AccountQuotaDisplayWindow;
 }
 
@@ -101,8 +127,16 @@ export const buildAccountQuotaUsageRanges = (
   definition: AccountQuotaWindowDefinition,
   nowMs = Date.now()
 ): AccountQuotaUsageRange[] => {
-  const durationMs = (definition.durationSeconds ?? 0) * 1000;
-  if (durationMs <= 0) return [];
+  const durationSeconds = definition.durationSeconds ?? 0;
+  const durationMs = durationSeconds * 1000;
+  if (
+    !Number.isFinite(durationSeconds) ||
+    !Number.isFinite(durationMs) ||
+    !Number.isFinite(durationMs * 2) ||
+    durationMs <= 0
+  ) {
+    return [];
+  }
 
   if (definition.windowMode === 'rolling') {
     const ranges: AccountQuotaUsageRange[] = [
@@ -124,6 +158,33 @@ export const buildAccountQuotaUsageRanges = (
     definition.cycleEndMs === null
   ) {
     return [];
+  }
+
+  if (definition.currentCycle) {
+    const currentEnd = Math.min(
+      nowMs,
+      definition.currentCycle.scheduledEndMs ?? definition.cycleEndMs
+    );
+    const ranges: AccountQuotaUsageRange[] = [];
+    if (definition.currentCycle.actualStartMs < currentEnd) {
+      ranges.push({
+        period: 'current',
+        fromMs: definition.currentCycle.actualStartMs,
+        toMs: currentEnd,
+      });
+    }
+    if (
+      definition.previousCycle?.actualEndMs !== null &&
+      definition.previousCycle?.actualEndMs !== undefined &&
+      definition.previousCycle.actualStartMs < definition.previousCycle.actualEndMs
+    ) {
+      ranges.push({
+        period: 'previous',
+        fromMs: definition.previousCycle.actualStartMs,
+        toMs: definition.previousCycle.actualEndMs,
+      });
+    }
+    return ranges.filter((range) => range.fromMs > 0 && range.fromMs < range.toMs);
   }
 
   const currentEnd = Math.min(nowMs, definition.cycleEndMs);

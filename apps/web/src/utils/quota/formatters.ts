@@ -12,6 +12,8 @@ export interface QuotaResetResolution {
   resetAccuracy: QuotaResetAccuracy;
 }
 
+export type CodexQuotaResetSource = 'provider_api' | 'response_header';
+
 const LEGACY_RESET_ROLLOVER_MS = 30 * 24 * 60 * 60 * 1000;
 
 const resolveLegacyResetDateOrder = (locale?: string): 'month-day' | 'day-month' => {
@@ -152,15 +154,20 @@ export function resolveRelativeQuotaReset(
 
 export function resolveCodexQuotaReset(
   window?: CodexUsageWindow | null,
-  observedAtMs = Date.now()
+  observedAtMs = Date.now(),
+  source: CodexQuotaResetSource = 'provider_api'
 ): QuotaResetResolution {
   if (!window) return { resetAtMs: null, resetAccuracy: 'unknown' };
-  const absoluteReset = resolveAbsoluteQuotaReset(window.reset_at ?? window.resetAt);
-  if (absoluteReset.resetAtMs !== null) return absoluteReset;
-  return resolveRelativeQuotaReset(
-    window.reset_after_seconds ?? window.resetAfterSeconds,
-    observedAtMs
+  const resetAfterSeconds = normalizeNumberValue(
+    window.reset_after_seconds ?? window.resetAfterSeconds
   );
+  const absoluteReset = resolveAbsoluteQuotaReset(window.reset_at ?? window.resetAt);
+  if (absoluteReset.resetAtMs !== null) {
+    return source === 'response_header' && resetAfterSeconds !== null && resetAfterSeconds > 0
+      ? { resetAtMs: absoluteReset.resetAtMs, resetAccuracy: 'estimated' }
+      : absoluteReset;
+  }
+  return resolveRelativeQuotaReset(resetAfterSeconds, observedAtMs);
 }
 
 export function formatQuotaResetTime(value?: string | number | null): string {
@@ -191,9 +198,10 @@ export function formatUnixSeconds(value: number | null): string {
 
 export function formatCodexResetLabel(
   window?: CodexUsageWindow | null,
-  observedAtMs = Date.now()
+  observedAtMs = Date.now(),
+  source: CodexQuotaResetSource = 'provider_api'
 ): string {
-  const reset = resolveCodexQuotaReset(window, observedAtMs);
+  const reset = resolveCodexQuotaReset(window, observedAtMs, source);
   return reset.resetAtMs === null
     ? '-'
     : formatQuotaResetTime(new Date(reset.resetAtMs).toISOString());

@@ -73,7 +73,7 @@ const makeWindow = (overrides: Partial<AccountDetailQuotaWindow> = {}): AccountD
     currentUsage: usage(),
     previousUsage: usage({ fromMs: -17_999_000, toMs: 1_000, successRate: 98 }),
     previousPeriod: 'previous',
-    forecast: { requests: 200, tokens: 2_000_000, cost: 200, basis: 'current' },
+    forecast: { requests: 200, tokens: 2_000_000, cost: 200, basis: 'quota' },
     ...overrides,
   }) as AccountDetailQuotaWindow;
 
@@ -101,6 +101,7 @@ describe('QuotaWindowCard', () => {
     expect(forecastText).toContain('accounts.detail_forecast_requests');
     expect(forecastText).toContain('accounts.detail_forecast_tokens');
     expect(forecastText).toContain('accounts.detail_forecast_cost');
+    expect(forecastText).toContain('accounts.detail_forecast_basis_quota');
     expect(forecastText).not.toContain('accounts.detail_success_rate');
     expect(
       forecast.findByProps({ 'data-quota-forecast-success-rate': 'unavailable' })
@@ -130,7 +131,67 @@ describe('QuotaWindowCard', () => {
     expect(text).toContain('accounts.detail_rolling_estimated_recovery');
     expect(text).toContain('accounts.quota_boundary_estimated');
     expect(text).toContain('accounts.detail_quota_snapshot_stale');
+    expect(text).toContain('accounts.detail_forecast_unavailable');
     expect(renderer.root.findAllByProps({ 'data-quota-usage-forecast': 'true' })).toHaveLength(0);
+  });
+
+  it('renders lifecycle, reset, reopening, and subwindow evidence', () => {
+    const renderer = renderCard(
+      makeWindow({
+        availability: 'active',
+        activationGeneration: 2,
+        relationshipKind: 'concurrent_subwindow',
+        containerProviderWindowId: 'weekly',
+        previousCycle: {
+          id: 1,
+          activationId: 1,
+          state: 'closed',
+          scheduledStartMs: 1_000,
+          scheduledEndMs: 2_000,
+          actualStartMs: 1_000,
+          actualEndMs: 1_500,
+          durationSeconds: 1,
+          boundaryAccuracy: 'exact',
+          endReason: 'provider_reset',
+          parentCycleId: null,
+          forecastEligible: false,
+        },
+      })
+    );
+
+    expect(renderer.root.findByProps({ 'data-quota-window-availability': 'active' })).toBeTruthy();
+    expect(renderer.root.findByProps({ 'data-quota-lifecycle-notice': 'reopened' })).toBeTruthy();
+    expect(
+      renderer.root.findByProps({ 'data-quota-lifecycle-notice': 'provider_reset' })
+    ).toBeTruthy();
+    expect(
+      renderer.root.findByProps({ 'data-quota-window-relationship': 'subwindow' })
+    ).toBeTruthy();
+    const text = readText(renderer.root);
+    expect(text).toContain('accounts.detail_quota_window_reopened');
+    expect(text).toContain('accounts.detail_quota_window_provider_reset');
+    expect(text).toContain('accounts.detail_quota_window_subwindow');
+  });
+
+  it('uses the specific inactive lifecycle warning instead of the generic stale warning', () => {
+    const renderer = renderCard(
+      makeWindow({
+        availability: 'inactive',
+        stale: true,
+        usage: null,
+        currentUsage: null,
+        previousUsage: null,
+        forecast: null,
+      })
+    );
+
+    expect(
+      renderer.root.findByProps({ 'data-quota-window-availability': 'inactive' })
+    ).toBeTruthy();
+    expect(renderer.root.findByProps({ 'data-quota-lifecycle-notice': 'inactive' })).toBeTruthy();
+    const text = readText(renderer.root);
+    expect(text).toContain('accounts.detail_quota_window_inactive');
+    expect(text).not.toContain('accounts.detail_quota_snapshot_stale');
   });
 
   it('does not render interval usage for non-window quota', () => {

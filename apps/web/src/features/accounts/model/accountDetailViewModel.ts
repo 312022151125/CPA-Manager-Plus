@@ -30,7 +30,10 @@ import {
 } from './accountQuotaDisplayWindows';
 import { accountWindowUsageRequestKey } from './accountWindowUsageRows';
 import { estimateWindowUsage, type WindowUsageForecast } from './estimateWindowUsage';
-import type { AccountQuotaBoundaryAccuracy } from './accountQuotaWindowDefinitions';
+import type {
+  AccountQuotaBoundaryAccuracy,
+  AccountQuotaCycleDefinition,
+} from './accountQuotaWindowDefinitions';
 import { accountOperationalItemMatchesRow } from './accountOperationalScope';
 import type { AccountRecommendation, AccountRecommendationPriority } from './quotaRecommendations';
 import type { UsageValueRow, UsageValueSource } from './usageValueRows';
@@ -70,6 +73,17 @@ export interface AccountDetailQuotaWindowInput extends Omit<
   toMs?: number | null;
   boundaryAccuracy?: AccountQuotaBoundaryAccuracy;
   stale?: boolean;
+  logicalWindowId?: number;
+  activationGeneration?: number;
+  availability?: string;
+  relationshipKind?: string;
+  containerProviderWindowId?: string;
+  firstSeenAtMs?: number;
+  lastSeenAtMs?: number;
+  missingSinceMs?: number | null;
+  deactivatedAtMs?: number | null;
+  currentCycle?: AccountQuotaCycleDefinition | null;
+  previousCycle?: AccountQuotaCycleDefinition | null;
 }
 
 export interface AccountDetailWindowUsageSummary {
@@ -551,28 +565,54 @@ const buildQuotaWindows = (
           )
         )
       : null;
+    const hasLifecycleEvidence =
+      window.availability !== undefined ||
+      window.currentCycle !== undefined ||
+      window.previousCycle !== undefined;
+    const lifecycleActive = window.availability === undefined || window.availability === 'active';
+    const previousForecastEligible = window.previousCycle
+      ? window.previousCycle.forecastEligible
+      : !hasLifecycleEvidence;
+    const currentForecastEligible = window.currentCycle
+      ? window.currentCycle.forecastEligible
+      : !hasLifecycleEvidence;
+    const quotaObservedAtMs =
+      typeof window.observedAtMs === 'number' &&
+      Number.isFinite(window.observedAtMs) &&
+      window.observedAtMs > 0
+        ? window.observedAtMs
+        : null;
+    const currentForecastUsage =
+      currentUsage?.matched &&
+      currentUsage.scopeMatchStatus === 'complete' &&
+      currentForecastEligible &&
+      quotaObservedAtMs !== null &&
+      currentUsage.lastSeenMs !== null &&
+      currentUsage.lastSeenMs <= quotaObservedAtMs
+        ? {
+            requests: currentUsage.totalRequests,
+            tokens: currentUsage.totalTokens,
+            cost: currentUsage.totalCost,
+          }
+        : null;
     const forecast =
+      lifecycleActive &&
       (window.windowMode === 'fixed' || window.windowMode === 'calendar') &&
       typeof window.cycleStartMs === 'number' &&
       typeof window.cycleEndMs === 'number'
         ? estimateWindowUsage({
-            nowMs: Date.now(),
-            cycleStartMs: window.cycleStartMs,
-            cycleEndMs: window.cycleEndMs,
-            current: currentUsage
-              ? {
-                  requests: currentUsage.totalRequests,
-                  tokens: currentUsage.totalTokens,
-                  cost: currentUsage.totalCost,
-                }
-              : null,
-            previous: previousUsage
-              ? {
-                  requests: previousUsage.totalRequests,
-                  tokens: previousUsage.totalTokens,
-                  cost: previousUsage.totalCost,
-                }
-              : null,
+            usedPercent: window.usedPercent,
+            current: currentForecastUsage,
+            previous:
+              previousForecastEligible &&
+              previousUsage?.matched &&
+              previousUsage.scopeMatchStatus === 'complete'
+                ? {
+                    requests: previousUsage.totalRequests,
+                    tokens: previousUsage.totalTokens,
+                    cost: previousUsage.totalCost,
+                  }
+                : null,
           })
         : null;
     return {
