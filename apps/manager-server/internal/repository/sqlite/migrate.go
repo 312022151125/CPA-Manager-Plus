@@ -1,11 +1,13 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"time"
 
+	quotasnapshotrepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/quotasnapshot"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
@@ -545,7 +547,25 @@ func Migrate(db *sql.DB) error {
 			updated_at_ms integer not null
 		)`,
 		`create index if not exists idx_quota_cooldowns_due on quota_cooldowns(status, recover_at_ms)`,
-		`create table if not exists account_quota_snapshots (
+		`create table if not exists account_quota_observations (
+			id integer primary key autoincrement,
+			observation_hash text not null unique,
+			account_key text not null,
+			provider text not null,
+			source text not null,
+			source_observation_id text,
+			inventory_scope_key text not null,
+			inventory_mode text not null,
+			observed_at_ms integer not null,
+			window_count integer not null default 0,
+			lifecycle_applied integer not null default 1,
+			created_at_ms integer not null
+		)`,
+		`create index if not exists idx_quota_observations_account_time
+			on account_quota_observations(account_key, provider, observed_at_ms desc)`,
+		`create index if not exists idx_quota_observations_inventory
+			on account_quota_observations(account_key, provider, inventory_scope_key, observed_at_ms desc)`,
+		`create table if not exists account_quota_windows (
 			id integer primary key autoincrement,
 			account_key text not null,
 			provider text not null,
@@ -555,6 +575,90 @@ func Migrate(db *sql.DB) error {
 			model_scope_kind text not null,
 			model_scope_key text,
 			model_ids_json text,
+			scope_fingerprint text not null,
+			inventory_scope_key text not null,
+			relationship_kind text,
+			container_provider_window_id text,
+			availability text not null,
+			generation integer not null default 1,
+			absence_count integer not null default 0,
+			first_seen_at_ms integer not null,
+			last_seen_at_ms integer not null,
+			missing_since_ms integer,
+			deactivated_at_ms integer,
+			last_observation_id integer,
+			created_at_ms integer not null,
+			updated_at_ms integer not null,
+			unique(account_key, provider, provider_window_id, scope_fingerprint),
+			foreign key(last_observation_id) references account_quota_observations(id)
+		)`,
+		`create index if not exists idx_quota_windows_account_state
+			on account_quota_windows(account_key, provider, availability, updated_at_ms desc)`,
+		`create index if not exists idx_quota_windows_inventory
+			on account_quota_windows(account_key, provider, inventory_scope_key, availability)`,
+		`create table if not exists account_quota_window_activations (
+			id integer primary key autoincrement,
+			window_id integer not null,
+			generation integer not null,
+			status text not null,
+			activated_at_ms integer not null,
+			deactivated_at_ms integer,
+			activation_accuracy text not null,
+			deactivation_reason text,
+			activate_observation_id integer,
+			deactivate_observation_id integer,
+			created_at_ms integer not null,
+			updated_at_ms integer not null,
+			unique(window_id, generation),
+			foreign key(window_id) references account_quota_windows(id),
+			foreign key(activate_observation_id) references account_quota_observations(id),
+			foreign key(deactivate_observation_id) references account_quota_observations(id)
+		)`,
+		`create unique index if not exists idx_quota_activations_active
+			on account_quota_window_activations(window_id) where deactivated_at_ms is null`,
+		`create table if not exists account_quota_cycles (
+			id integer primary key autoincrement,
+			activation_id integer not null,
+			provider_cycle_key text not null,
+			state text not null,
+			scheduled_start_ms integer,
+			scheduled_end_ms integer,
+			actual_start_ms integer not null,
+			actual_end_ms integer,
+			duration_seconds integer,
+			boundary_accuracy text not null,
+			end_reason text,
+			first_observation_id integer,
+			last_observation_id integer,
+			parent_cycle_id integer,
+			created_at_ms integer not null,
+			updated_at_ms integer not null,
+			unique(activation_id, provider_cycle_key),
+			foreign key(activation_id) references account_quota_window_activations(id),
+			foreign key(first_observation_id) references account_quota_observations(id),
+			foreign key(last_observation_id) references account_quota_observations(id),
+			foreign key(parent_cycle_id) references account_quota_cycles(id)
+		)`,
+		`create unique index if not exists idx_quota_cycles_active
+			on account_quota_cycles(activation_id) where actual_end_ms is null`,
+		`create index if not exists idx_quota_cycles_history
+			on account_quota_cycles(activation_id, actual_start_ms desc)`,
+		`create table if not exists account_quota_snapshots (
+			id integer primary key autoincrement,
+			observation_id integer,
+			logical_window_id integer,
+			activation_id integer,
+			cycle_id integer,
+			account_key text not null,
+			provider text not null,
+			provider_window_id text not null,
+			window_kind text not null,
+			window_mode text not null,
+			model_scope_kind text not null,
+			model_scope_key text,
+			model_ids_json text,
+			scope_fingerprint text not null default '',
+			content_hash text not null default '',
 			source text not null,
 			source_observation_id text,
 			observed_at_ms integer not null,
@@ -605,6 +709,12 @@ func Migrate(db *sql.DB) error {
 		return err
 	}
 	if err := ensureQuotaCooldownColumns(db); err != nil {
+		return err
+	}
+	if err := ensureQuotaSnapshotLifecycleColumns(db); err != nil {
+		return err
+	}
+	if err := quotasnapshotrepo.BackfillLegacySnapshots(context.Background(), db); err != nil {
 		return err
 	}
 	if err := ensureQuotaCooldownIdentityIndex(db); err != nil {
@@ -1033,6 +1143,105 @@ func ensureAccountActionCandidateColumns(db *sql.DB) error {
 	}
 	_, err = db.Exec(`drop index if exists idx_account_action_candidates_pending_file_action`)
 	return err
+}
+
+func ensureQuotaSnapshotLifecycleColumns(db *sql.DB) error {
+	observationRows, err := db.Query(`pragma table_info(account_quota_observations)`)
+	if err != nil {
+		return err
+	}
+	observationColumns := map[string]struct{}{}
+	for observationRows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := observationRows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			_ = observationRows.Close()
+			return err
+		}
+		observationColumns[name] = struct{}{}
+	}
+	if err := observationRows.Err(); err != nil {
+		_ = observationRows.Close()
+		return err
+	}
+	if err := observationRows.Close(); err != nil {
+		return err
+	}
+	if _, ok := observationColumns["lifecycle_applied"]; !ok {
+		if _, err := db.Exec(`alter table account_quota_observations
+			add column lifecycle_applied integer not null default 1`); err != nil {
+			return err
+		}
+	}
+	if _, err := db.Exec(`create index if not exists idx_quota_observations_lifecycle_watermark
+		on account_quota_observations(
+			account_key, provider, inventory_scope_key, lifecycle_applied, observed_at_ms desc
+		)`); err != nil {
+		return err
+	}
+
+	rows, err := db.Query(`pragma table_info(account_quota_snapshots)`)
+	if err != nil {
+		return err
+	}
+	existing := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "observation_id", definition: "integer"},
+		{name: "logical_window_id", definition: "integer"},
+		{name: "activation_id", definition: "integer"},
+		{name: "cycle_id", definition: "integer"},
+		{name: "scope_fingerprint", definition: "text not null default ''"},
+		{name: "content_hash", definition: "text not null default ''"},
+	}
+	for _, column := range columns {
+		if _, ok := existing[column.name]; ok {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf(
+			`alter table account_quota_snapshots add column %s %s`,
+			column.name,
+			column.definition,
+		)); err != nil {
+			return err
+		}
+	}
+	for _, statement := range []string{
+		`create index if not exists idx_quota_snapshots_observation on account_quota_snapshots(observation_id)`,
+		`create index if not exists idx_quota_snapshots_window_cycle on account_quota_snapshots(logical_window_id, cycle_id, observed_at_ms desc)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureCodexInspectionRunColumns(db *sql.DB) error {

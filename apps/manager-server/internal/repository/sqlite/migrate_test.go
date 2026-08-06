@@ -1,10 +1,13 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
 
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
+	quotasnapshotrepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/quotasnapshot"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
@@ -106,6 +109,10 @@ func TestMigrateCreatesAccountQuotaSnapshotSchema(t *testing.T) {
 
 	columns := migrationTableColumns(t, db, "account_quota_snapshots")
 	for _, column := range []string{
+		"observation_id",
+		"logical_window_id",
+		"activation_id",
+		"cycle_id",
 		"account_key",
 		"provider",
 		"provider_window_id",
@@ -114,6 +121,8 @@ func TestMigrateCreatesAccountQuotaSnapshotSchema(t *testing.T) {
 		"model_scope_kind",
 		"model_scope_key",
 		"model_ids_json",
+		"scope_fingerprint",
+		"content_hash",
 		"source",
 		"source_observation_id",
 		"observed_at_ms",
@@ -156,8 +165,284 @@ func TestMigrateCreatesAccountQuotaSnapshotSchema(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate account quota snapshot indexes: %v", err)
 	}
-	if !indexes["idx_quota_snapshots_latest"] {
-		t.Fatalf("account quota snapshot indexes = %#v", indexes)
+	for _, name := range []string{
+		"idx_quota_snapshots_latest",
+		"idx_quota_snapshots_observation",
+		"idx_quota_snapshots_window_cycle",
+	} {
+		if !indexes[name] {
+			t.Fatalf("account quota snapshot indexes = %#v, missing %s", indexes, name)
+		}
+	}
+
+	for _, table := range []string{
+		"account_quota_observations",
+		"account_quota_windows",
+		"account_quota_window_activations",
+		"account_quota_cycles",
+	} {
+		var count int
+		if err := db.QueryRow(`select count(*) from sqlite_master where type = 'table' and name = ?`, table).Scan(&count); err != nil {
+			t.Fatalf("query quota lifecycle table %s: %v", table, err)
+		}
+		if count != 1 {
+			t.Fatalf("quota lifecycle table %s count = %d, want 1", table, count)
+		}
+	}
+
+	observationColumns := migrationTableColumns(t, db, "account_quota_observations")
+	if !observationColumns["lifecycle_applied"] {
+		t.Fatalf("account quota observation columns = %#v, missing lifecycle_applied", observationColumns)
+	}
+
+	cycleColumns := migrationTableColumns(t, db, "account_quota_cycles")
+	for _, column := range []string{"actual_start_ms", "actual_end_ms", "end_reason", "parent_cycle_id"} {
+		if !cycleColumns[column] {
+			t.Fatalf("account quota cycle columns = %#v, missing %s", cycleColumns, column)
+		}
+	}
+}
+
+func TestMigrateBackfillsLegacyQuotaSnapshotsIntoLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-account-quota-snapshots.sqlite")
+	db, err := sql.Open("sqlite", dataSourceName(path))
+	if err != nil {
+		t.Fatalf("open legacy quota snapshot sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := db.Exec(`create table account_quota_snapshots (
+		id integer primary key autoincrement,
+		account_key text not null,
+		provider text not null,
+		provider_window_id text not null,
+		window_kind text not null,
+		window_mode text not null,
+		model_scope_kind text not null,
+		model_scope_key text,
+		model_ids_json text,
+		source text not null,
+		source_observation_id text,
+		observed_at_ms integer not null,
+		boundary_accuracy text not null,
+		cycle_start_ms integer,
+		cycle_end_ms integer,
+		duration_seconds integer,
+		used_percent real,
+		remaining_percent real,
+		used_value real,
+		limit_value real,
+		quota_unit text,
+		reset_credits_available integer,
+		reset_credits_json text,
+		plan_type text,
+		created_at_ms integer not null
+	)`); err != nil {
+		t.Fatalf("create legacy quota snapshot table: %v", err)
+	}
+	if _, err := db.Exec(`insert into account_quota_snapshots (
+		account_key, provider, provider_window_id, window_kind, window_mode,
+		model_scope_kind, source, source_observation_id, observed_at_ms,
+		boundary_accuracy, cycle_start_ms, cycle_end_ms, duration_seconds,
+		used_percent, remaining_percent, plan_type, created_at_ms
+	) values (
+		'account-1', 'codex', 'weekly', 'weekly', 'fixed',
+		'all', 'inspection', 'legacy-inspection', 2000,
+		'exact', 1000, 605801000, 604800, 25, 75, 'plus', 2000
+	)`); err != nil {
+		t.Fatalf("insert legacy quota snapshot: %v", err)
+	}
+	if _, err := db.Exec(`insert into account_quota_snapshots (
+		account_key, provider, provider_window_id, window_kind, window_mode,
+		model_scope_kind, model_scope_key, model_ids_json, source,
+		source_observation_id, observed_at_ms, boundary_accuracy,
+		duration_seconds, used_value, limit_value, quota_unit, created_at_ms
+	) values (
+		'account-xai', 'xai', 'included-free-rolling-24h', 'rolling_24h', 'rolling',
+		'models', ' Grok-4.5-Build-Free ',
+		'[" GROK-4.5-BUILD-FREE ","","grok-4.5-build-free"]', 'response_body',
+		'legacy-xai-body', 2000, 'estimated', 86400, 100, 1000, 'tokens', 2000
+	)`); err != nil {
+		t.Fatalf("insert legacy xai quota snapshot: %v", err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate legacy quota snapshots: %v", err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatalf("repeat legacy quota snapshot migration: %v", err)
+	}
+
+	var observationID, logicalWindowID, activationID, cycleID sql.NullInt64
+	var scopeFingerprint string
+	if err := db.QueryRow(`select observation_id, logical_window_id, activation_id, cycle_id,
+		scope_fingerprint from account_quota_snapshots where id = 1`).Scan(
+		&observationID,
+		&logicalWindowID,
+		&activationID,
+		&cycleID,
+		&scopeFingerprint,
+	); err != nil {
+		t.Fatalf("read migrated quota snapshot lifecycle: %v", err)
+	}
+	if !observationID.Valid || !logicalWindowID.Valid || !activationID.Valid || !cycleID.Valid || scopeFingerprint == "" {
+		t.Fatalf(
+			"migrated quota snapshot lifecycle = observation:%#v window:%#v activation:%#v cycle:%#v scope:%q",
+			observationID,
+			logicalWindowID,
+			activationID,
+			cycleID,
+			scopeFingerprint,
+		)
+	}
+	for table, count := range map[string]int{
+		"account_quota_observations":       2,
+		"account_quota_windows":            2,
+		"account_quota_window_activations": 2,
+		"account_quota_cycles":             1,
+	} {
+		assertTableCount(t, db, table, count)
+	}
+	repository := quotasnapshotrepo.New(db)
+
+	var legacyXAIWindowID int64
+	var legacyXAIInventoryScope string
+	if err := db.QueryRow(`select s.logical_window_id, w.inventory_scope_key
+		from account_quota_snapshots s
+		join account_quota_windows w on w.id = s.logical_window_id
+		where s.account_key = 'account-xai'`).Scan(
+		&legacyXAIWindowID,
+		&legacyXAIInventoryScope,
+	); err != nil {
+		t.Fatalf("read migrated xai quota lifecycle: %v", err)
+	}
+	if legacyXAIInventoryScope != "xai:included-free" {
+		t.Fatalf("legacy xai inventory scope = %q, want xai:included-free", legacyXAIInventoryScope)
+	}
+
+	modelIDs := []string{"grok-4.5-build-free"}
+	duration := int64(86_400)
+	usedValue := 200.0
+	limitValue := 1_000.0
+	liveXAI := model.AccountQuotaSnapshot{
+		AccountKey:          "account-xai",
+		Provider:            "xai",
+		ProviderWindowID:    "included-free-rolling-24h",
+		WindowKind:          "rolling_24h",
+		WindowMode:          "rolling",
+		ModelScopeKind:      "models",
+		ModelScopeKey:       "grok-4.5-build-free",
+		ModelIDsJSON:        `["grok-4.5-build-free"]`,
+		ScopeFingerprint:    quotasnapshotrepo.ScopeFingerprint("models", "grok-4.5-build-free", modelIDs),
+		ContentHash:         "live-xai-content",
+		InventoryScopeKey:   "xai:included-free",
+		Source:              "response_body",
+		SourceObservationID: "live-xai-body",
+		ObservedAtMS:        3000,
+		BoundaryAccuracy:    "estimated",
+		DurationSeconds:     &duration,
+		UsedValue:           &usedValue,
+		LimitValue:          &limitValue,
+		QuotaUnit:           "tokens",
+		CreatedAtMS:         3000,
+	}
+	if err := repository.InsertObservationWrites(context.Background(), []model.AccountQuotaObservationWrite{{
+		Observation: model.AccountQuotaObservation{
+			ObservationHash:     "live-xai-observation",
+			AccountKey:          "account-xai",
+			Provider:            "xai",
+			Source:              "response_body",
+			SourceObservationID: "live-xai-body",
+			InventoryScopeKey:   "xai:included-free",
+			InventoryMode:       "partial",
+			ObservedAtMS:        3000,
+			WindowCount:         1,
+			CreatedAtMS:         3000,
+		},
+		Snapshots: []model.AccountQuotaSnapshot{liveXAI},
+	}}); err != nil {
+		t.Fatalf("write live xai evidence after migration: %v", err)
+	}
+	var liveXAIWindowID int64
+	if err := db.QueryRow(`select logical_window_id from account_quota_snapshots
+		where source_observation_id = 'live-xai-body'`).Scan(&liveXAIWindowID); err != nil {
+		t.Fatalf("read live xai quota snapshot: %v", err)
+	}
+	if liveXAIWindowID != legacyXAIWindowID {
+		t.Fatalf("live xai logical window = %d, want migrated window %d", liveXAIWindowID, legacyXAIWindowID)
+	}
+
+	for index, observedAtMS := range []int64{3000, 4000} {
+		observation := model.AccountQuotaObservation{
+			ObservationHash:   []string{"complete-empty-1", "complete-empty-2"}[index],
+			AccountKey:        "account-1",
+			Provider:          "codex",
+			Source:            "inspection",
+			InventoryScopeKey: "codex:rate-limits",
+			InventoryMode:     "complete",
+			ObservedAtMS:      observedAtMS,
+			CreatedAtMS:       observedAtMS,
+		}
+		if err := repository.InsertObservationWrites(context.Background(), []model.AccountQuotaObservationWrite{{
+			Observation: observation,
+		}}); err != nil {
+			t.Fatalf("write complete empty observation %d: %v", index+1, err)
+		}
+	}
+	states, err := repository.ListWindowStates(context.Background(), "account-1", "codex")
+	if err != nil {
+		t.Fatalf("list migrated quota lifecycle: %v", err)
+	}
+	if len(states) != 1 || states[0].Availability != "inactive" || states[0].DeactivatedAtMS == nil ||
+		*states[0].DeactivatedAtMS != 3000 {
+		t.Fatalf("retired migrated quota lifecycle = %#v", states)
+	}
+}
+
+func TestMigrateAddsQuotaObservationLifecycleAppliedColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "account-quota-observation-upgrade.sqlite")
+	db, err := sql.Open("sqlite", dataSourceName(path))
+	if err != nil {
+		t.Fatalf("open legacy quota observation sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := db.Exec(`create table account_quota_observations (
+		id integer primary key autoincrement,
+		observation_hash text not null unique,
+		account_key text not null,
+		provider text not null,
+		source text not null,
+		source_observation_id text,
+		inventory_scope_key text not null,
+		inventory_mode text not null,
+		observed_at_ms integer not null,
+		window_count integer not null default 0,
+		created_at_ms integer not null
+	)`); err != nil {
+		t.Fatalf("create legacy quota observation table: %v", err)
+	}
+	if _, err := db.Exec(`insert into account_quota_observations (
+		observation_hash, account_key, provider, source, inventory_scope_key,
+		inventory_mode, observed_at_ms, window_count, created_at_ms
+	) values ('legacy-observation', 'account-1', 'codex', 'inspection',
+		'codex:rate-limits', 'complete', 1000, 1, 1000)`); err != nil {
+		t.Fatalf("insert legacy quota observation: %v", err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate legacy quota observation schema: %v", err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatalf("repeat quota observation migration: %v", err)
+	}
+	var lifecycleApplied int
+	if err := db.QueryRow(`select lifecycle_applied from account_quota_observations
+		where observation_hash = 'legacy-observation'`).Scan(&lifecycleApplied); err != nil {
+		t.Fatalf("read migrated lifecycle marker: %v", err)
+	}
+	if lifecycleApplied != 1 {
+		t.Fatalf("legacy lifecycle_applied = %d, want 1", lifecycleApplied)
 	}
 }
 
