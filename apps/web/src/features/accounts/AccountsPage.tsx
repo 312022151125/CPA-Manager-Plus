@@ -3893,7 +3893,7 @@ export function AccountsPage() {
       { id: 'overview', label: t('accounts.detail_tab_overview') },
       { id: 'quota', label: t('accounts.detail_tab_quota') },
       { id: 'config', label: t('accounts.detail_tab_config') },
-      { id: 'models', label: t('auth_files.models_button') },
+      { id: 'models', label: t('accounts.detail_tab_models') },
       { id: 'diagnostics', label: t('accounts.detail_tab_diagnostics') },
     ];
     const valueRow =

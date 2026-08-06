@@ -95,10 +95,26 @@ describe('accounts workspace wiring', () => {
     expect(locale.accounts.tab_health).toBe(expectedLabel);
   });
 
+  it.each([
+    [en, ['Overview', 'Quota', 'Settings', 'Models', 'Diagnostics']],
+    [ru, ['Обзор', 'Квота', 'Настройки', 'Модели', 'Диагностика']],
+    [zhCN, ['概览', '额度', '配置', '模型', '诊断']],
+    [zhTW, ['概覽', '額度', '設定', '模型', '診斷']],
+  ])('uses concise credential detail tab labels', (locale, expectedLabels) => {
+    expect([
+      locale.accounts.detail_tab_overview,
+      locale.accounts.detail_tab_quota,
+      locale.accounts.detail_tab_config,
+      locale.accounts.detail_tab_models,
+      locale.accounts.detail_tab_diagnostics,
+    ]).toEqual(expectedLabels);
+  });
+
   it.each([en, ru, zhCN, zhTW])('keeps credential-configuration copy complete', (locale) => {
     const accounts = locale.accounts as Record<string, unknown>;
     [
       'detail_tab_config',
+      'detail_tab_models',
       'detail_runtime_config_unavailable',
       'config_view_raw_data',
       'config_raw_data_redacted',

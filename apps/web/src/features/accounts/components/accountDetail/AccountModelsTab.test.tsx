@@ -167,6 +167,14 @@ const findButtonByText = (root: ReactTestInstance, label: string): ReactTestInst
 };
 
 describe('AccountModelsTab', () => {
+  it('uses the credential detail models label for its region', () => {
+    const { renderer } = renderTab();
+
+    expect(renderer.root.findByProps({ role: 'region' }).props['aria-label']).toBe(
+      'accounts.detail_tab_models'
+    );
+  });
+
   it('distinguishes available, credential, global, and combined exclusions', () => {
     const editor = makeEditor({ rules: 'credential-model\nboth-model' });
     const onManageGlobalRules = vi.fn();

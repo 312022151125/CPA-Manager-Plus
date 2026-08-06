@@ -1304,9 +1304,9 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
     await flushPromises();
 
-    expect(findHostButtonByText(renderer, 'auth_files.models_button').props['aria-selected']).toBe(
-      true
-    );
+    expect(
+      findHostButtonByText(renderer, 'accounts.detail_tab_models').props['aria-selected']
+    ).toBe(true);
     expect(mocks.showModels).toHaveBeenCalledWith(mocks.files[0]);
     expect(mocks.loadExcluded).toHaveBeenCalledTimes(1);
     expect(mocks.loadModelAlias).toHaveBeenCalledTimes(1);
@@ -1431,16 +1431,16 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
 
     await act(async () => {
-      findHostButtonByText(renderer, 'auth_files.models_button').props.onClick();
+      findHostButtonByText(renderer, 'accounts.detail_tab_models').props.onClick();
       await Promise.resolve();
     });
 
     expect(mocks.showConfirmation).not.toHaveBeenCalled();
     expect(mocks.configurationReset).not.toHaveBeenCalled();
     expect(mocks.allowNextNavigation).toHaveBeenCalledTimes(1);
-    expect(findHostButtonByText(renderer, 'auth_files.models_button').props['aria-selected']).toBe(
-      true
-    );
+    expect(
+      findHostButtonByText(renderer, 'accounts.detail_tab_models').props['aria-selected']
+    ).toBe(true);
     expect(mocks.navigate).toHaveBeenCalledWith(
       {
         pathname: '/accounts',
@@ -2997,7 +2997,7 @@ describe('AccountsPage replacement flows', () => {
 
     const modelsTab = renderer.root
       .findAll((node) => node.type === 'button' && node.props.role === 'tab')
-      .find((node) => readText(node.props.children) === 'auth_files.models_button');
+      .find((node) => readText(node.props.children) === 'accounts.detail_tab_models');
     expect(modelsTab?.props['aria-selected']).toBe(true);
 
     await act(async () => {

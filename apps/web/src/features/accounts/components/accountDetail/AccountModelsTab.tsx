@@ -293,7 +293,7 @@ export function AccountModelsTab({
     <div
       className={styles.accountModelsStack}
       role="region"
-      aria-label={t('auth_files.models_button')}
+      aria-label={t('accounts.detail_tab_models')}
     >
       <div className={styles.accountModelsHeader}>
         <div className={styles.accountModelsSummary}>
