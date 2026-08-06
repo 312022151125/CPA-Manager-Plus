@@ -38,8 +38,12 @@ func (s *Service) WriteUsageEvents(ctx context.Context, events []usage.Event) er
 // parsed here; only the normalized reset timestamp carried by the result is
 // trusted as a fixed-window boundary.
 func (s *Service) WriteCodexInspectionResult(ctx context.Context, result model.CodexInspectionResult) error {
-	if normalizeProvider(result.Provider) != "codex" || len(result.QuotaWindows) == 0 {
+	if normalizeProvider(result.Provider) != "codex" {
 		return nil
+	}
+	inventoryMode := "partial"
+	if codexInspectionInventoryComplete(result) {
+		inventoryMode = "complete"
 	}
 	observedAtMS := result.CreatedAtMS
 	if observedAtMS <= 0 {
@@ -64,7 +68,7 @@ func (s *Service) WriteCodexInspectionResult(ctx context.Context, result model.C
 		mode := "unknown"
 		accuracy := normalizeInspectionAccuracy(window.ResetAccuracy)
 		var cycleStartMS, cycleEndMS *int64
-		if duration != nil && window.ResetAtMS > 0 && (accuracy == "exact" || accuracy == "derived") {
+		if duration != nil && window.ResetAtMS > 0 && accuracy != "unknown" {
 			mode = "fixed"
 			end := window.ResetAtMS
 			start := end - *duration*1000
@@ -96,11 +100,29 @@ func (s *Service) WriteCodexInspectionResult(ctx context.Context, result model.C
 			PlanType:            result.PlanType,
 		})
 	}
+	if len(windows) == 0 && inventoryMode != "complete" {
+		return nil
+	}
+	applyCodexWindowRelationships(windows)
 	return s.writeEvidenceEntries(ctx, []WriteEntry{{
 		Provider: "codex",
 		Account:  account,
-		Windows:  windows,
+		Observation: &ObservationInput{
+			Source: "inspection", SourceObservationID: inspectionObservationID(result),
+			ObservedAtMS: observedAtMS, InventoryScopeKey: "codex:rate-limits",
+			InventoryMode: inventoryMode,
+		},
+		Windows: windows,
 	}})
+}
+
+func codexInspectionInventoryComplete(result model.CodexInspectionResult) bool {
+	return result.StatusCode != nil &&
+		*result.StatusCode >= 200 &&
+		*result.StatusCode < 300 &&
+		strings.TrimSpace(result.Error) == "" &&
+		strings.TrimSpace(result.ErrorKind) == "" &&
+		(result.QuotaInventoryObserved || strings.TrimSpace(result.QuotaWindowsJSON) == "[]")
 }
 
 func (s *Service) writeEvidenceEntries(ctx context.Context, entries []WriteEntry) error {
@@ -108,7 +130,7 @@ func (s *Service) writeEvidenceEntries(ctx context.Context, entries []WriteEntry
 		return nil
 	}
 	batch := make([]WriteEntry, 0, maxWriteEntries)
-	windowsInBatch := 0
+	mutationsInBatch := 0
 	flush := func() error {
 		if len(batch) == 0 {
 			return nil
@@ -117,20 +139,24 @@ func (s *Service) writeEvidenceEntries(ctx context.Context, entries []WriteEntry
 			return err
 		}
 		batch = make([]WriteEntry, 0, maxWriteEntries)
-		windowsInBatch = 0
+		mutationsInBatch = 0
 		return nil
 	}
 	for _, entry := range entries {
-		if len(entry.Windows) == 0 {
+		completeEmptyObservation := entry.Observation != nil &&
+			entry.Observation.InventoryMode == "complete" &&
+			len(entry.RemovedWindows) == 0
+		if len(entry.Windows) == 0 && !completeEmptyObservation && len(entry.RemovedWindows) == 0 {
 			continue
 		}
-		if len(batch) == maxWriteEntries || windowsInBatch+len(entry.Windows) > maxWriteEntries {
+		entryMutations := len(entry.Windows) + len(entry.RemovedWindows)
+		if len(batch) == maxWriteEntries || mutationsInBatch+entryMutations > maxWriteEntries {
 			if err := flush(); err != nil {
 				return err
 			}
 		}
 		batch = append(batch, entry)
-		windowsInBatch += len(entry.Windows)
+		mutationsInBatch += entryMutations
 	}
 	return flush()
 }
@@ -162,10 +188,19 @@ func quotaSnapshotEntryFromUsageEvent(event usage.Event) (WriteEntry, bool) {
 				windows = append(windows, window)
 			}
 		}
+		applyCodexWindowRelationships(windows)
 		if len(windows) == 0 {
 			return WriteEntry{}, false
 		}
-		return WriteEntry{Provider: provider, Account: account, Windows: windows}, true
+		return WriteEntry{
+			Provider: provider, Account: account,
+			Observation: &ObservationInput{
+				Source: "response_header", SourceObservationID: observationID,
+				ObservedAtMS: event.TimestampMS, InventoryScopeKey: "codex:rate-limits",
+				InventoryMode: "partial",
+			},
+			Windows: windows,
+		}, true
 	case "xai":
 		if event.ResponseMetadata == nil {
 			return WriteEntry{}, false
@@ -206,10 +241,89 @@ func quotaSnapshotEntryFromUsageEvent(event usage.Event) (WriteEntry, bool) {
 		if providerUsage.RecoverAtMS > 0 {
 			window.CycleEndMS = int64Pointer(providerUsage.RecoverAtMS)
 		}
-		return WriteEntry{Provider: provider, Account: account, Windows: []WindowInput{window}}, true
+		return WriteEntry{
+			Provider: provider, Account: account,
+			Observation: &ObservationInput{
+				Source: "response_body", SourceObservationID: observationID,
+				ObservedAtMS: observedAtMS, InventoryScopeKey: "xai:included-free",
+				InventoryMode: "partial",
+			},
+			Windows: []WindowInput{window},
+		}, true
 	default:
 		return WriteEntry{}, false
 	}
+}
+
+func applyCodexWindowRelationships(windows []WindowInput) {
+	type familyWindows struct {
+		fiveHourIndex int
+		hasFiveHour   bool
+		weeklyID      string
+		monthlyID     string
+	}
+	families := make(map[string]familyWindows)
+	for index := range windows {
+		family, role, ok := codexWindowFamilyRole(windows[index].ProviderWindowID)
+		if !ok {
+			continue
+		}
+		item := families[family]
+		switch role {
+		case "five-hour":
+			item.fiveHourIndex = index
+			item.hasFiveHour = true
+		case "weekly":
+			item.weeklyID = windows[index].ProviderWindowID
+		case "monthly":
+			item.monthlyID = windows[index].ProviderWindowID
+		}
+		families[family] = item
+	}
+	for _, item := range families {
+		if !item.hasFiveHour {
+			continue
+		}
+		containerID := item.weeklyID
+		if containerID == "" {
+			containerID = item.monthlyID
+		}
+		if containerID == "" {
+			continue
+		}
+		windows[item.fiveHourIndex].RelationshipKind = "concurrent_subwindow"
+		windows[item.fiveHourIndex].ContainerWindowID = containerID
+	}
+}
+
+func codexWindowFamilyRole(providerWindowID string) (string, string, bool) {
+	id := strings.TrimSpace(providerWindowID)
+	switch id {
+	case "five-hour", "weekly", "monthly":
+		return "main", id, true
+	case "code-review-five-hour":
+		return "code-review", "five-hour", true
+	case "code-review-weekly":
+		return "code-review", "weekly", true
+	case "code-review-monthly":
+		return "code-review", "monthly", true
+	}
+	for _, role := range []string{"five-hour", "weekly", "monthly"} {
+		marker := "-" + role + "-"
+		position := strings.LastIndex(id, marker)
+		if position <= 0 {
+			continue
+		}
+		index := id[position+len(marker):]
+		if index == "" {
+			continue
+		}
+		if _, err := strconv.Atoi(index); err != nil {
+			continue
+		}
+		return id[:position] + "\x00" + index, role, true
+	}
+	return "", "", false
 }
 
 func codexHeaderWindowInput(window *usage.HeaderQuotaWindow, index int, observedAtMS int64, planType, observationID string) (WindowInput, bool) {
@@ -220,6 +334,9 @@ func codexHeaderWindowInput(window *usage.HeaderQuotaWindow, index int, observed
 	mode := "unknown"
 	accuracy := "unknown"
 	var cycleStartMS, cycleEndMS *int64
+	if window.ResetAtMS > 0 {
+		cycleEndMS = int64Pointer(window.ResetAtMS)
+	}
 	if duration != nil && window.ResetAtMS > 0 {
 		mode = "fixed"
 		accuracy = "exact"
@@ -237,7 +354,7 @@ func codexHeaderWindowInput(window *usage.HeaderQuotaWindow, index int, observed
 		}
 	}
 	usedPercent := validPercent(window.UsedPercent)
-	if duration == nil && usedPercent == nil {
+	if duration == nil && cycleEndMS == nil && (usedPercent == nil || *usedPercent == 0) {
 		return WindowInput{}, false
 	}
 	return WindowInput{
@@ -366,6 +483,8 @@ func normalizeInspectionAccuracy(value string) string {
 	case "exact":
 		return "exact"
 	case "derived":
+		return "derived"
+	case "estimated":
 		return "derived"
 	default:
 		return "unknown"

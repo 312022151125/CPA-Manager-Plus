@@ -5,6 +5,10 @@ package model
 // not persisted here.
 type AccountQuotaSnapshot struct {
 	ID                    int64
+	ObservationID         int64
+	LogicalWindowID       int64
+	ActivationID          int64
+	CycleID               int64
 	AccountKey            string
 	Provider              string
 	ProviderWindowID      string
@@ -13,6 +17,11 @@ type AccountQuotaSnapshot struct {
 	ModelScopeKind        string
 	ModelScopeKey         string
 	ModelIDsJSON          string
+	ScopeFingerprint      string
+	ContentHash           string
+	InventoryScopeKey     string
+	RelationshipKind      string
+	ContainerWindowID     string
 	Source                string
 	SourceObservationID   string
 	ObservedAtMS          int64
