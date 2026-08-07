@@ -118,6 +118,51 @@ describe('useAuthFilesModels', () => {
     expect(latest?.modelDefinitions).toEqual([{ id: 'gpt-5-mini' }]);
   });
 
+  it('only marks an explicit refresh as refreshing', async () => {
+    let resolveInitial!: (models: AuthFileModelItem[]) => void;
+    const initialPromise = new Promise<AuthFileModelItem[]>((resolve) => {
+      resolveInitial = resolve;
+    });
+    mocks.getModelsForAuthFile.mockReturnValueOnce(initialPromise);
+
+    await mount();
+    let initialRequest!: Promise<void>;
+    await act(async () => {
+      initialRequest = latest!.showModels(file);
+      await Promise.resolve();
+    });
+
+    expect(latest?.modelsLoading).toBe(true);
+    expect(latest?.modelsRefreshing).toBe(false);
+
+    await act(async () => {
+      resolveInitial([{ id: 'gpt-5-codex' }]);
+      await initialRequest;
+    });
+
+    let resolveRefresh!: (models: AuthFileModelItem[]) => void;
+    const refreshPromise = new Promise<AuthFileModelItem[]>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    mocks.getModelsForAuthFile.mockReturnValueOnce(refreshPromise);
+
+    let refreshRequest!: Promise<void>;
+    await act(async () => {
+      refreshRequest = latest!.refreshModels(file);
+      await Promise.resolve();
+    });
+
+    expect(latest?.modelsLoading).toBe(true);
+    expect(latest?.modelsRefreshing).toBe(true);
+
+    await act(async () => {
+      resolveRefresh([{ id: 'gpt-5-mini' }]);
+      await refreshRequest;
+    });
+
+    expect(latest?.modelsRefreshing).toBe(false);
+  });
+
   it('keeps last-known model data visible when a force refresh fails', async () => {
     await mount();
     await act(async () => {

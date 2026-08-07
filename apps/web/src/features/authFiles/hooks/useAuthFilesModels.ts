@@ -25,6 +25,7 @@ const isUnsupportedEndpointError = (error: unknown, includeBadRequest = false): 
 export type UseAuthFilesModelsResult = {
   modelsModalOpen: boolean;
   modelsLoading: boolean;
+  modelsRefreshing: boolean;
   modelsList: AuthFileModelItem[];
   modelDefinitions: AuthFileModelItem[];
   modelDefinitionsLoading: boolean;
@@ -64,6 +65,7 @@ export function useAuthFilesModels(
 
   const [modelsModalOpen, setModelsModalOpen] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsRefreshing, setModelsRefreshing] = useState(false);
   const [modelsList, setModelsList] = useState<AuthFileModelItem[]>([]);
   const [modelDefinitions, setModelDefinitions] = useState<AuthFileModelItem[]>([]);
   const [modelDefinitionsLoading, setModelDefinitionsLoading] = useState(false);
@@ -88,6 +90,7 @@ export function useAuthFilesModels(
       if (cancelled) return;
       setModelsModalOpen(false);
       setModelsLoading(false);
+      setModelsRefreshing(false);
       setModelsList([]);
       setModelDefinitions([]);
       setModelDefinitionsLoading(false);
@@ -130,6 +133,7 @@ export function useAuthFilesModels(
       setModelsFileType(provider);
       setModelsError(null);
       setModelsModalOpen(true);
+      setModelsRefreshing(force);
 
       const cachedModels = modelsCacheRef.current.get(cacheKey);
       const cachedDefinitions = definitionsChannel
@@ -191,6 +195,7 @@ export function useAuthFilesModels(
       }
 
       setModelsLoading(false);
+      setModelsRefreshing(false);
       setModelDefinitionsLoading(false);
     },
     [normalizedConnectionKey, showNotification, t]
@@ -227,6 +232,7 @@ export function useAuthFilesModels(
   return {
     modelsModalOpen: hasCurrentConnection && modelsModalOpen,
     modelsLoading: hasCurrentConnection && modelsLoading,
+    modelsRefreshing: hasCurrentConnection && modelsRefreshing,
     modelsList: hasCurrentConnection ? modelsList : [],
     modelDefinitions: hasCurrentConnection ? modelDefinitions : [],
     modelDefinitionsLoading: hasCurrentConnection && modelDefinitionsLoading,
