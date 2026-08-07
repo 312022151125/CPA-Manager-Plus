@@ -2,6 +2,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -120,6 +121,11 @@ import { downloadBlob } from '@/utils/download';
 import { sha256Hex } from '@/utils/apiKeyHash';
 import { formatCompactNumber } from '@/utils/usage';
 import {
+  buildProviderCredentialTaskPlan,
+  createKeyedSerialTaskQueue,
+  runProviderCredentialTaskPlan,
+} from '@/utils/quota/providerRefreshScheduler';
+import {
   buildUsageHeaderSnapshotLookup,
   filterFreshUsageHeaderQuotaSnapshots,
   getHighConfidenceUsageHeaderSnapshotForAuthFile,
@@ -128,6 +134,9 @@ import { buildSourceInfoMap, buildSourceProviderStateMap } from '@/utils/sourceR
 import styles from './MonitoringCenterPage.module.scss';
 
 export { AccountExpandedDetails, AccountOverviewCard };
+
+const MAX_CONCURRENT_ACCOUNT_QUOTA_PROVIDERS = 3;
+const MAX_CONCURRENT_ACCOUNT_QUOTA_REQUESTS_PER_PROVIDER = 1;
 
 const DEFAULT_ACCOUNT_PAGE_SIZE = ACCOUNT_OVERVIEW_TABLE_PAGE_SIZE_OPTIONS[0];
 const EMPTY_STATUS_BAR_DATA: StatusBarData = {
@@ -149,10 +158,20 @@ export function MonitoringCenterPage() {
   const location = useLocation();
   const config = useConfigStore((state) => state.config);
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
+  const apiBase = useAuthStore((state) => state.apiBase);
   const managementKey = useAuthStore((state) => state.managementKey);
   const showNotification = useNotificationStore((state) => state.showNotification);
   const showConfirmation = useNotificationStore((state) => state.showConfirmation);
   const requestMonitoringAvailability = useRequestMonitoringAvailability();
+  const accountQuotaContextKey = useMemo(
+    () =>
+      JSON.stringify({
+        apiBase,
+        managementKey,
+        serviceBase: requestMonitoringAvailability.serviceBase,
+      }),
+    [apiBase, managementKey, requestMonitoringAvailability.serviceBase]
+  );
   const pageTransitionLayer = usePageTransitionLayer();
   const isCurrentLayer = pageTransitionLayer ? pageTransitionLayer.status === 'current' : true;
   const initialAccountOverviewUiState = useRef(readAccountOverviewUiState());
@@ -282,6 +301,11 @@ export function MonitoringCenterPage() {
   const previousAccountPageResetStateRef = useRef<AccountOverviewPageResetState | null>(null);
   const accountQuotaStatesRef = useRef<Record<string, AccountQuotaState>>({});
   const accountQuotaRequestIdsRef = useRef<Record<string, number>>({});
+  const accountQuotaContextGenerationRef = useRef(0);
+  const accountQuotaContextKeyRef = useRef(accountQuotaContextKey);
+  const [accountQuotaRefreshQueue] = useState(() => createKeyedSerialTaskQueue());
+  const headerSnapshotRequestIdRef = useRef(0);
+  const headerSnapshotAbortRef = useRef<AbortController | null>(null);
   const usageImportInputRef = useRef<HTMLInputElement | null>(null);
   const usageImportAbortRef = useRef<AbortController | null>(null);
   const usageImportCancelPendingRef = useRef(false);
@@ -415,23 +439,59 @@ export function MonitoringCenterPage() {
   });
 
   const loadHeaderSnapshots = useCallback(async () => {
+    const requestId = headerSnapshotRequestIdRef.current + 1;
+    headerSnapshotRequestIdRef.current = requestId;
+    headerSnapshotAbortRef.current?.abort();
+    headerSnapshotAbortRef.current = null;
     if (!requestMonitoringAvailability.serviceBase) {
       setHeaderSnapshots([]);
       setHeaderSnapshotGeneratedAtMs(0);
       return;
     }
+    const controller = new AbortController();
+    headerSnapshotAbortRef.current = controller;
     try {
       const response = await monitoringAnalyticsApi.getHeaderSnapshots(
         requestMonitoringAvailability.serviceBase,
         managementKey,
-        { days: 30, limit: 1000 }
+        { days: 30, limit: 1000 },
+        controller.signal
       );
+      if (requestId !== headerSnapshotRequestIdRef.current || controller.signal.aborted) return;
       setHeaderSnapshots(response.items ?? []);
       setHeaderSnapshotGeneratedAtMs(response.generated_at_ms || Date.now());
     } catch {
-      setHeaderSnapshots((current) => current);
+      // Header snapshots are passive evidence. Preserve the latest valid state
+      // on transient errors and ignore cancellations from a context switch.
+    } finally {
+      if (headerSnapshotAbortRef.current === controller) {
+        headerSnapshotAbortRef.current = null;
+      }
     }
   }, [managementKey, requestMonitoringAvailability.serviceBase]);
+
+  useLayoutEffect(() => {
+    if (accountQuotaContextKeyRef.current === accountQuotaContextKey) return;
+    accountQuotaContextKeyRef.current = accountQuotaContextKey;
+    accountQuotaContextGenerationRef.current += 1;
+    accountQuotaRequestIdsRef.current = {};
+    accountQuotaStatesRef.current = {};
+    headerSnapshotRequestIdRef.current += 1;
+    headerSnapshotAbortRef.current?.abort();
+    headerSnapshotAbortRef.current = null;
+    setAccountQuotaStates((current) => (Object.keys(current).length === 0 ? current : {}));
+    setHeaderSnapshots((current) => (current.length === 0 ? current : []));
+    setHeaderSnapshotGeneratedAtMs(0);
+  }, [accountQuotaContextKey]);
+
+  useEffect(
+    () => () => {
+      accountQuotaContextGenerationRef.current += 1;
+      accountQuotaRequestIdsRef.current = {};
+      headerSnapshotAbortRef.current?.abort();
+    },
+    []
+  );
 
   const refreshAll = useCallback(async () => {
     await Promise.all([loadApiKeyAliases(), refreshMeta(false), loadHeaderSnapshots()]);
@@ -750,10 +810,7 @@ export function MonitoringCenterPage() {
   const headerSnapshotLookup = useMemo(
     () =>
       buildUsageHeaderSnapshotLookup(
-        filterFreshUsageHeaderQuotaSnapshots(
-          headerSnapshots,
-          headerSnapshotGeneratedAtMs || Date.now()
-        )
+        filterFreshUsageHeaderQuotaSnapshots(headerSnapshots, headerSnapshotGeneratedAtMs)
       ),
     [headerSnapshotGeneratedAtMs, headerSnapshots]
   );
@@ -986,11 +1043,27 @@ export function MonitoringCenterPage() {
     }));
   }, []);
 
+  const commitAccountQuotaState = useCallback((account: string, state: AccountQuotaState) => {
+    accountQuotaStatesRef.current = {
+      ...accountQuotaStatesRef.current,
+      [account]: state,
+    };
+    setAccountQuotaStates((previous) => {
+      const next = { ...previous, [account]: state };
+      accountQuotaStatesRef.current = next;
+      return next;
+    });
+  }, []);
+
   const loadAccountQuota = useCallback(
-    async (account: string, force: boolean = false) => {
+    (account: string, force: boolean = false): Promise<void> => {
       const currentState = accountQuotaStatesRef.current[account];
       const targets = accountQuotaTargetsByAccount.get(account) ?? [];
       const targetKey = targets.map((target) => target.key).join('|');
+      const requestKey = `${accountQuotaContextKey}\u0000${account}\u0000${targetKey}`;
+      if (accountQuotaRefreshQueue.isPending(requestKey)) {
+        return accountQuotaRefreshQueue.run(requestKey, async () => undefined);
+      }
       const previousEntriesByKey =
         currentState?.targetKey === targetKey
           ? new Map(currentState.entries.map((entry) => [entry.key, entry]))
@@ -1004,106 +1077,129 @@ export function MonitoringCenterPage() {
           )
         )
         .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+      if (currentState?.status === 'loading' && currentState.targetKey === targetKey) {
+        return Promise.resolve();
+      }
       if (
         !force &&
         currentState &&
         currentState.status !== 'idle' &&
         currentState.targetKey === targetKey
       ) {
-        return;
+        return Promise.resolve();
       }
 
+      const contextGeneration = accountQuotaContextGenerationRef.current;
       const requestId = (accountQuotaRequestIdsRef.current[account] ?? 0) + 1;
       accountQuotaRequestIdsRef.current[account] = requestId;
+      const isCurrentRequest = () =>
+        accountQuotaContextGenerationRef.current === contextGeneration &&
+        accountQuotaRequestIdsRef.current[account] === requestId;
 
-      setAccountQuotaStates((previous) => ({
-        ...previous,
-        [account]: {
-          status: 'loading',
-          targetKey,
-          entries:
-            previous[account]?.targetKey === targetKey
-              ? (previous[account]?.entries ?? observedEntries)
-              : observedEntries,
-          lastRefreshedAt: previous[account]?.lastRefreshedAt,
-        },
-      }));
+      commitAccountQuotaState(account, {
+        status: 'loading',
+        targetKey,
+        entries: currentState?.targetKey === targetKey ? currentState.entries : observedEntries,
+        lastRefreshedAt: currentState?.lastRefreshedAt,
+      });
 
-      if (targets.length === 0) {
-        if (accountQuotaRequestIdsRef.current[account] !== requestId) return;
-        setAccountQuotaStates((previous) => ({
-          ...previous,
-          [account]: {
+      return accountQuotaRefreshQueue.run(requestKey, async () => {
+        if (!isCurrentRequest()) return;
+        if (targets.length === 0) {
+          commitAccountQuotaState(account, {
             status: 'success',
             targetKey,
             entries: [],
             lastRefreshedAt: Date.now(),
-          },
-        }));
-        return;
-      }
-
-      const settled = await Promise.allSettled(
-        targets.map((target) => requestAccountQuota(target, t))
-      );
-      if (accountQuotaRequestIdsRef.current[account] !== requestId) return;
-
-      const hasFailure = settled.some((result) => result.status === 'rejected');
-      const completedAtMs = Date.now();
-      const entries = settled.map((result, index) => {
-        const fallback = targets[index];
-        if (result.status === 'fulfilled') {
-          return result.value;
+          });
+          return;
         }
-
-        const error =
-          result.reason instanceof Error
-            ? result.reason.message
-            : String(result.reason || t('common.unknown_error'));
-        const observedEntry = buildObservedCodexAccountQuotaEntry(
-          fallback,
-          getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, fallback.file),
-          t
+        const taskPlan = buildProviderCredentialTaskPlan(targets, {
+          getProviderKey: (target) => target.provider,
+          getCredentialKey: (target) => target.key,
+        });
+        const settled = await runProviderCredentialTaskPlan(
+          taskPlan,
+          {
+            perProviderConcurrency: MAX_CONCURRENT_ACCOUNT_QUOTA_REQUESTS_PER_PROVIDER,
+            maxConcurrentProviders: MAX_CONCURRENT_ACCOUNT_QUOTA_PROVIDERS,
+          },
+          async ({ item: target }) => {
+            try {
+              return {
+                target,
+                result: {
+                  status: 'fulfilled' as const,
+                  value: await requestAccountQuota(target, t),
+                },
+              };
+            } catch (reason: unknown) {
+              return {
+                target,
+                result: {
+                  status: 'rejected' as const,
+                  reason,
+                },
+              };
+            }
+          }
         );
-        return buildAccountQuotaRefreshFailureEntry(
-          fallback,
-          error,
-          t,
-          previousEntriesByKey.get(fallback.key),
-          observedEntry,
-          completedAtMs
-        );
-      });
+        if (!isCurrentRequest()) return;
 
-      const hasSuccess = entries.some((entry) => !entry.error);
-      const firstError = entries.find((entry) => entry.error)?.error;
-      setAccountQuotaStates((previous) => ({
-        ...previous,
-        [account]: {
+        const hasFailure = settled.some(({ result }) => result.status === 'rejected');
+        const completedAtMs = Date.now();
+        const entries = settled.map(({ result, target: fallback }) => {
+          if (result.status === 'fulfilled') {
+            return result.value;
+          }
+
+          const error =
+            result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason || t('common.unknown_error'));
+          const observedEntry = buildObservedCodexAccountQuotaEntry(
+            fallback,
+            getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, fallback.file),
+            t
+          );
+          return buildAccountQuotaRefreshFailureEntry(
+            fallback,
+            error,
+            t,
+            previousEntriesByKey.get(fallback.key),
+            observedEntry,
+            completedAtMs
+          );
+        });
+
+        const hasSuccess = entries.some((entry) => !entry.error);
+        const firstError = entries.find((entry) => entry.error)?.error;
+        commitAccountQuotaState(account, {
           status: hasFailure ? 'error' : hasSuccess ? 'success' : 'error',
           targetKey,
           entries,
           error: hasFailure ? firstError || t('common.unknown_error') : '',
           failedAtMs: hasFailure ? completedAtMs : undefined,
-          lastRefreshedAt: hasFailure ? previous[account]?.lastRefreshedAt : completedAtMs,
-        },
-      }));
+          lastRefreshedAt: hasFailure ? currentState?.lastRefreshedAt : completedAtMs,
+        });
+      });
     },
-    [accountQuotaTargetsByAccount, headerSnapshotLookup, t]
+    [
+      accountQuotaContextKey,
+      accountQuotaRefreshQueue,
+      accountQuotaTargetsByAccount,
+      commitAccountQuotaState,
+      headerSnapshotLookup,
+      t,
+    ]
   );
 
-  const toggleAccountExpanded = useCallback(
-    (accountId: string, account: string) => {
-      if (!expandedAccounts[accountId]) {
-        void loadAccountQuota(account);
-      }
-      setExpandedAccounts((previous) => ({
-        ...previous,
-        [accountId]: !previous[accountId],
-      }));
-    },
-    [expandedAccounts, loadAccountQuota]
-  );
+  const toggleAccountExpanded = useCallback((accountId: string) => {
+    setExpandedAccounts((previous) => ({
+      ...previous,
+      [accountId]: !previous[accountId],
+    }));
+  }, []);
 
   const focusAccount = useCallback(
     (row: MonitoringAccountRow) => {
