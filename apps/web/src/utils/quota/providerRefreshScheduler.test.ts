@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildProviderCredentialTaskPlan,
+  createKeyedSerialTaskQueue,
   runProviderCredentialTaskPlan,
 } from './providerRefreshScheduler';
 
@@ -43,17 +44,17 @@ describe('providerRefreshScheduler', () => {
       tasks,
       { perProviderConcurrency: 1 },
       async (task) => {
-      const providerActive = (activeByProvider.get(task.providerKey) ?? 0) + 1;
-      activeByProvider.set(task.providerKey, providerActive);
-      peakByProvider.set(
-        task.providerKey,
-        Math.max(peakByProvider.get(task.providerKey) ?? 0, providerActive)
-      );
-      active += 1;
-      globalPeak = Math.max(globalPeak, active);
-      await Promise.resolve();
-      active -= 1;
-      activeByProvider.set(task.providerKey, providerActive - 1);
+        const providerActive = (activeByProvider.get(task.providerKey) ?? 0) + 1;
+        activeByProvider.set(task.providerKey, providerActive);
+        peakByProvider.set(
+          task.providerKey,
+          Math.max(peakByProvider.get(task.providerKey) ?? 0, providerActive)
+        );
+        active += 1;
+        globalPeak = Math.max(globalPeak, active);
+        await Promise.resolve();
+        active -= 1;
+        activeByProvider.set(task.providerKey, providerActive - 1);
         return task.credentialKey;
       }
     );
@@ -94,5 +95,51 @@ describe('providerRefreshScheduler', () => {
     );
 
     expect(peak).toBe(2);
+  });
+
+  it('serializes separate batches and coalesces repeated keys', async () => {
+    const queue = createKeyedSerialTaskQueue();
+    const starts: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = queue.run('account-a', async () => {
+      starts.push('account-a');
+      await firstGate;
+    });
+    const duplicate = queue.run('account-a', async () => {
+      throw new Error('duplicate task must not run');
+    });
+    const second = queue.run('account-b', async () => {
+      starts.push('account-b');
+    });
+
+    await Promise.resolve();
+    expect(duplicate).toBe(first);
+    expect(queue.isPending('account-a')).toBe(true);
+    expect(starts).toEqual(['account-a']);
+
+    releaseFirst();
+    await expect(Promise.all([first, duplicate, second])).resolves.toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(starts).toEqual(['account-a', 'account-b']);
+    expect(queue.isPending('account-a')).toBe(false);
+    expect(queue.isPending('account-b')).toBe(false);
+  });
+
+  it('continues the queue after a failed batch', async () => {
+    const queue = createKeyedSerialTaskQueue();
+    const failed = queue.run('failed', async () => {
+      throw new Error('failed batch');
+    });
+    const recovered = queue.run('recovered', async () => {});
+
+    await expect(failed).rejects.toThrow('failed batch');
+    await expect(recovered).resolves.toBeUndefined();
   });
 });

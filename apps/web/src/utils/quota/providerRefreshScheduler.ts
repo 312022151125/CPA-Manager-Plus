@@ -15,6 +15,11 @@ export interface ProviderCredentialSchedulerOptions {
   maxConcurrentProviders?: number;
 }
 
+export interface KeyedSerialTaskQueue {
+  isPending: (key: string) => boolean;
+  run: (key: string, task: () => Promise<void>) => Promise<void>;
+}
+
 const normalizeTaskKey = (value: string): string => value.trim().toLowerCase();
 
 export function buildProviderCredentialTaskPlan<T>(
@@ -96,4 +101,32 @@ export async function runProviderCredentialTaskPlan<T, TResult>(
   return [...tasks]
     .sort((left, right) => left.originalIndex - right.originalIndex)
     .map((task) => resultsByIndex.get(task.originalIndex) as TResult);
+}
+
+/**
+ * Serializes independently-triggered batches and coalesces repeated work with
+ * the same key. This keeps separate UI actions from bypassing the concurrency
+ * limits enforced inside each provider task plan.
+ */
+export function createKeyedSerialTaskQueue(): KeyedSerialTaskQueue {
+  let tail: Promise<void> = Promise.resolve();
+  const pendingByKey = new Map<string, Promise<void>>();
+
+  return {
+    isPending: (key) => pendingByKey.has(key),
+    run: (key, task) => {
+      const pending = pendingByKey.get(key);
+      if (pending) return pending;
+
+      const result = tail.then(task, task);
+      const tracked = result.finally(() => {
+        if (pendingByKey.get(key) === tracked) {
+          pendingByKey.delete(key);
+        }
+      });
+      pendingByKey.set(key, tracked);
+      tail = tracked.catch(() => {});
+      return tracked;
+    },
+  };
 }

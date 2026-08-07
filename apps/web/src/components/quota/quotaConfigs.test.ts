@@ -373,6 +373,71 @@ describe('resolveQuotaDisplayState', () => {
     expect(resolveQuotaDisplayState(activeQuota, observedQuota)).toBe(activeQuota);
   });
 
+  it('keeps a manual Codex inventory when its timestamp equals the Header snapshot', () => {
+    const activeQuota: CodexQuotaState = {
+      status: 'success',
+      fetchedAtMs: 2_000,
+      quotaInventoryObserved: true,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly limit',
+          usedPercent: 20,
+          resetLabel: '07/07 12:00',
+        },
+      ],
+    };
+    const observedQuota: CodexQuotaState = {
+      status: 'success',
+      observedAtMs: 2_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly limit',
+          usedPercent: 80,
+          resetLabel: '07/07 13:00',
+        },
+      ],
+    };
+
+    expect(resolveQuotaDisplayState(activeQuota, observedQuota)).toBe(activeQuota);
+  });
+
+  it('does not append older Header-only windows to a newer complete manual inventory', () => {
+    const activeQuota: CodexQuotaState = {
+      status: 'success',
+      fetchedAtMs: 2_000,
+      quotaInventoryObserved: true,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly limit',
+          usedPercent: 20,
+          resetLabel: '07/07 12:00',
+        },
+      ],
+    };
+    const observedQuota: CodexQuotaState = {
+      status: 'success',
+      observedAtMs: 1_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5-hour limit',
+          usedPercent: 80,
+          resetLabel: '07/01 13:00',
+        },
+      ],
+    };
+
+    const result = resolveQuotaDisplayState(activeQuota, observedQuota) as CodexQuotaState;
+
+    expect(result).toBe(activeQuota);
+    expect(result.windows.map((window) => window.id)).toEqual(['weekly']);
+  });
+
   it('adds missing Header windows to a newer partial Codex inventory without retagging API windows', () => {
     const activeQuota: CodexQuotaState = {
       status: 'success',

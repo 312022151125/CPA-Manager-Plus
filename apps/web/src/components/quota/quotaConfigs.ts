@@ -710,7 +710,7 @@ export const buildObservedCodexQuotaState = (
         observedQuota.payload,
         t,
         planType,
-        snapshot?.timestamp_ms ?? Date.now(),
+        snapshot?.timestamp_ms ?? nowMs,
         'response_header'
       )
     : [];

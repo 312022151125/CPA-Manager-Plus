@@ -3308,7 +3308,8 @@ export const monitoringAnalyticsApi = {
   getHeaderSnapshots: async (
     base: string,
     managementKey: string | undefined,
-    params: { days?: number; limit?: number } = {}
+    params: { days?: number; limit?: number } = {},
+    signal?: AbortSignal
   ): Promise<UsageHeaderSnapshotsResponse> => {
     if (__DEMO_SITE__ && isDemoMode()) {
       return getDemoHeaderSnapshots();
@@ -3321,6 +3322,7 @@ export const monitoringAnalyticsApi = {
           timeout: USAGE_SERVICE_TIMEOUT_MS,
           headers: authHeaders(managementKey),
           params,
+          signal,
         }
       );
       return response.data;
@@ -3329,7 +3331,8 @@ export const monitoringAnalyticsApi = {
   getAccountHistory: async (
     base: string,
     managementKey: string | undefined,
-    request: MonitoringAccountHistoryRequest
+    request: MonitoringAccountHistoryRequest,
+    signal?: AbortSignal
   ): Promise<MonitoringAccountHistoryResponse> => {
     if (__DEMO_SITE__ && isDemoMode()) {
       return getDemoAccountHistory(request);
@@ -3342,6 +3345,7 @@ export const monitoringAnalyticsApi = {
         {
           timeout: USAGE_SERVICE_TIMEOUT_MS,
           headers: authHeaders(managementKey),
+          signal,
         }
       );
       return response.data;
@@ -3350,7 +3354,8 @@ export const monitoringAnalyticsApi = {
   getAccountWindowUsage: async (
     base: string,
     managementKey: string | undefined,
-    request: MonitoringAccountWindowUsageRequest
+    request: MonitoringAccountWindowUsageRequest,
+    signal?: AbortSignal
   ): Promise<MonitoringAccountWindowUsageResponse> => {
     if (__DEMO_SITE__ && isDemoMode()) {
       return getDemoAccountWindowUsage(request);
@@ -3363,6 +3368,7 @@ export const monitoringAnalyticsApi = {
         {
           timeout: USAGE_SERVICE_TIMEOUT_MS,
           headers: authHeaders(managementKey),
+          signal,
         }
       );
       return response.data;
@@ -3397,7 +3403,8 @@ export const accountQuotaSnapshotApi = {
   write: async (
     base: string,
     managementKey: string | undefined,
-    entries: AccountQuotaSnapshotWriteEntry[]
+    entries: AccountQuotaSnapshotWriteEntry[],
+    signal?: AbortSignal
   ): Promise<AccountQuotaSnapshotWriteResponse> => {
     if (__DEMO_SITE__ && isDemoMode()) {
       return {
@@ -3417,6 +3424,7 @@ export const accountQuotaSnapshotApi = {
         {
           timeout: USAGE_SERVICE_TIMEOUT_MS,
           headers: authHeaders(managementKey),
+          signal,
         }
       );
       return response.data;
@@ -3426,7 +3434,8 @@ export const accountQuotaSnapshotApi = {
     base: string,
     managementKey: string | undefined,
     accounts: AccountQuotaSnapshotQueryAccount[],
-    options: { nowMs?: number; includeInactive?: boolean } = {}
+    options: { nowMs?: number; includeInactive?: boolean } = {},
+    signal?: AbortSignal
   ): Promise<AccountQuotaSnapshotQueryResponse> => {
     if (__DEMO_SITE__ && isDemoMode()) {
       const generatedAtMs = options.nowMs ?? Date.now();
@@ -3453,6 +3462,7 @@ export const accountQuotaSnapshotApi = {
         {
           timeout: USAGE_SERVICE_TIMEOUT_MS,
           headers: authHeaders(managementKey),
+          signal,
         }
       );
       return response.data;
