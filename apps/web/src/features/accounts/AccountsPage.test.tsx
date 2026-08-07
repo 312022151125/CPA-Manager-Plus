@@ -4411,7 +4411,7 @@ describe('AccountsPage replacement flows', () => {
     });
   });
 
-  it('searches and renders diagnostic-only Codex usage header snapshots', async () => {
+  it('searches diagnostic-only Codex usage header snapshots without rendering them in quota', async () => {
     mocks.files = [
       makeCodexFile('codex-diagnostic.json', 'auth-1', 'diagnostic@example.com'),
       makeCodexFile('codex-other.json', 'auth-2', 'other@example.com'),
@@ -4469,9 +4469,9 @@ describe('AccountsPage replacement flows', () => {
     expect(rowTexts).toHaveLength(1);
     expect(rowTexts[0]).toContain('codex-diagnostic.json');
 
-    expect(treeText(renderer)).toContain('accounts.quota_source_observed_header');
-    expect(treeText(renderer)).toContain('trace-diagnostic-only');
-    expect(treeText(renderer)).toContain('usage_limit_reached');
+    expect(treeText(renderer)).not.toContain('accounts.quota_source_observed_header');
+    expect(treeText(renderer)).not.toContain('trace-diagnostic-only');
+    expect(treeText(renderer)).not.toContain('usage_limit_reached');
   });
 
   it('loads quota history without automatically refreshing provider quota', async () => {
@@ -4580,7 +4580,8 @@ describe('AccountsPage replacement flows', () => {
     expect(renderer.root.findAllByProps({ 'data-quota-window-group': 'standard' })).toHaveLength(1);
     expect(renderer.root.findAllByProps({ 'data-quota-card-mode': 'standard' })).toHaveLength(1);
     expect(treeText(renderer)).toContain('accounts.detail_quota_standard_title');
-    expect(treeText(renderer)).toContain('accounts.detail_quota_evidence_title');
+    expect(renderer.root.findAllByProps({ 'data-account-quota-evidence': 'true' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ 'data-quota-evidence-panel': 'reset' })).toHaveLength(0);
     const windowUsageRequest = mocks.getAccountWindowUsage.mock.calls[0]?.[2] as
       | AccountWindowUsageRequestForTest
       | undefined;
@@ -5690,7 +5691,7 @@ describe('AccountsPage replacement flows', () => {
     await flushPromises();
 
     expect(treeText(renderer)).toContain('Five hours');
-    expect(treeText(renderer)).toContain('accounts.detail_used');
+    expect(treeText(renderer)).toContain('accounts.detail_quota_remaining_label');
     expect(accountQuotaSnapshotApi.write).not.toHaveBeenCalled();
     expect(accountQuotaSnapshotApi.query).not.toHaveBeenCalled();
     expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
@@ -5782,6 +5783,68 @@ describe('AccountsPage replacement flows', () => {
     expect(
       readText(renderer.root.findByProps({ 'data-quota-reset-credit-expiry': 'reset-credit-1' }))
     ).toBe(formatQuotaResetTimestamp(resetCreditExpiresAtMs, 'en'));
+    expect(
+      renderer.root.findAllByProps({ 'data-account-quota-reset-records': 'true' })
+    ).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-quota-evidence-panel': 'reset' })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ 'data-quota-evidence-panel': 'fields' })).toHaveLength(0);
+    expect(
+      renderer.root.findAllByProps({ 'data-quota-evidence-panel': 'diagnostics' })
+    ).toHaveLength(0);
+    expect(treeText(renderer)).toContain('codex_quota.reset_credits_card_subtitle');
+    expect(treeText(renderer)).toContain('codex_quota.reset_credits_available_label');
+    expect(treeText(renderer)).toContain('codex_quota.reset_credits_unit');
+    expect(treeText(renderer)).toContain('codex_quota.reset_credits_expected_expiry_label');
+
+    const resetAction = renderer.root.findByProps({ 'data-quota-reset-action': 'true' });
+    expect(resetAction.props.disabled).toBe(false);
+    expect(resetAction.props.className).toContain('quotaResetAction');
+    expect(renderer.root.findAllByProps({ 'data-quota-reset-count': 'true' })).toHaveLength(1);
+    await act(async () => {
+      resetAction.props.onClick();
+    });
+    expect(mocks.showConfirmation).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'codex_quota.reset_confirm_title' })
+    );
+  });
+
+  it('keeps reset records visible but disables reset when no credits remain', async () => {
+    const resetCreditExpiresAtMs = Date.now() + 24 * 60 * 60 * 1000;
+    mocks.quotaState.codexQuota = {
+      'codex.json': {
+        status: 'success',
+        authFileKey: 'codex.json::auth-1',
+        windows: [],
+        rateLimitResetCreditsAvailableCount: 0,
+        rateLimitResetCredits: [
+          {
+            id: 'expired-reset-credit-1',
+            status: 'available',
+            grantedAt: new Date(resetCreditExpiresAtMs - 24 * 60 * 60 * 1000).toISOString(),
+            expiresAt: new Date(resetCreditExpiresAtMs).toISOString(),
+          },
+        ],
+      },
+    };
+
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    expect(
+      renderer.root.findAllByProps({ 'data-account-quota-reset-records': 'true' })
+    ).toHaveLength(1);
+    const resetAction = renderer.root.findByProps({ 'data-quota-reset-action': 'true' });
+    expect(resetAction.props.disabled).toBe(true);
+    expect(treeText(renderer)).toContain('codex_quota.reset_credits_unavailable_label');
+    expect(mocks.showConfirmation).not.toHaveBeenCalled();
   });
 
   it('loads detail events filtered by auth file and auth index', async () => {

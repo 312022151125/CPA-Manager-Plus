@@ -4246,6 +4246,8 @@ export function AccountsPage() {
             windowUsageError={accountWindowUsageError}
             historyRefreshing={historyRefreshing}
             onRefreshHistory={() => void refreshAccountHistory(selectedRow)}
+            onResetQuota={() => resetCodexQuotaForRow(selectedRow)}
+            resetQuotaDisabled={!canResetCodexQuota(selectedRow) || configurationSaving}
           />
         );
       }
