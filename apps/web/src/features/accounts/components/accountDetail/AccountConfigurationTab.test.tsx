@@ -27,6 +27,13 @@ const readText = (value: unknown): string => {
   return '';
 };
 
+const findLoadingSpinners = (renderer: ReactTestRenderer) =>
+  renderer.root.findAll(
+    (node) =>
+      typeof node.props.className === 'string' &&
+      node.props.className.split(/\s+/).includes('loading-spinner')
+  );
+
 const makeDraft = (
   overrides: Partial<AuthFileConfigurationDraft> = {}
 ): AuthFileConfigurationDraft => ({
@@ -118,6 +125,17 @@ const renderTab = (
 };
 
 describe('AccountConfigurationTab', () => {
+  it('keeps the initial configuration state free of animated loading icons', () => {
+    const editor = makeEditor('codex');
+    editor.state = null;
+    editor.draft = null;
+
+    const renderer = renderTab(makeRow('codex'), editor);
+
+    expect(findLoadingSpinners(renderer)).toHaveLength(0);
+    expect(readText(renderer.toJSON())).toContain('accounts.config_loading');
+  });
+
   it('keeps credential refresh out of the configuration toolbar', () => {
     const renderer = renderTab(makeRow('codex'), makeEditor('codex'));
 

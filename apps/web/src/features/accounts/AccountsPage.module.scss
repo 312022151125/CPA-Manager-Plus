@@ -1561,7 +1561,9 @@
 .overviewStack {
   display: grid;
   gap: 12px;
+  max-width: 100%;
   min-width: 0;
+  overflow-x: clip;
 }
 
 .overviewDecisionCard,
@@ -1775,6 +1777,12 @@
 }
 
 .overviewActivityCard {
+  --usage-surface: var(--accounts-surface);
+  --usage-border: var(--accounts-border);
+  --usage-strong-border: var(--accounts-strong-border);
+  --usage-text: var(--accounts-text);
+  --usage-muted: var(--accounts-muted);
+  --usage-primary: var(--accounts-primary);
   background: color-mix(in srgb, var(--accounts-primary) 3%, var(--accounts-surface));
 }
 
@@ -1974,68 +1982,6 @@
 .overviewScopePillFallback {
   background: color-mix(in srgb, var(--accounts-warning) 12%, transparent);
   color: var(--accounts-warning);
-}
-
-.overviewMetricGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-  gap: 8px;
-  min-width: 0;
-}
-
-.overviewMetricCard {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  min-height: 92px;
-  padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--accounts-primary) 12%, var(--accounts-border));
-  border-radius: 10px;
-  background: var(--accounts-surface);
-  box-shadow: 0 6px 16px color-mix(in srgb, var(--accounts-text) 3%, transparent);
-}
-
-.overviewMetricCardHeader {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.overviewMetricLabel {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--accounts-muted);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.overviewMetricCardBody {
-  display: flex;
-  min-width: 0;
-  margin-top: auto;
-}
-
-.overviewMetricValue {
-  display: block;
-  min-width: 0;
-  max-width: 100%;
-  color: var(--accounts-text);
-  font-size: 16px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-.overviewMetricCard[data-overview-metric-kind='timestamp'] .overviewMetricValue {
-  font-size: 13px;
-  line-height: 1.35;
 }
 
 .overviewEmptyState {
@@ -2292,6 +2238,26 @@
   :global(.form-group) {
     margin: 0;
   }
+
+  :global(.input) {
+    min-height: 34px;
+    padding: 6px 8px;
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  :global([role='tablist']) {
+    min-height: 34px;
+    gap: 2px;
+    padding: 1px;
+  }
+
+  :global([role='tablist'] [role='tab']) {
+    min-height: 30px;
+    padding: 0 12px;
+    font-size: 12px;
+    line-height: 1.2;
+  }
 }
 
 .accountModelsRuleStrip {
@@ -2489,6 +2455,12 @@
   :global(.form-group .hint) {
     font-size: 12px;
     line-height: 1.45;
+  }
+
+  :global(.input) {
+    padding: 6px 8px;
+    font-size: 12px;
+    line-height: 1.35;
   }
 }
 
@@ -2892,11 +2864,11 @@
   --quota-summary-accent: var(--accounts-success);
 }
 
-.quotaSummaryMetricPurple {
-  --quota-summary-accent: var(--accounts-indigo);
+.quotaSummaryMetricTeal {
+  --quota-summary-accent: var(--data-teal-base, var(--accounts-primary));
 }
 
-.quotaSummaryMetricOrange {
+.quotaSummaryMetricAmber {
   --quota-summary-accent: var(--accounts-warning);
 }
 
@@ -3235,12 +3207,12 @@
   color: var(--accounts-success);
 }
 
-.metricIconPurple {
-  background: color-mix(in srgb, var(--accounts-indigo) 12%, transparent);
-  color: var(--accounts-indigo);
+.metricIconTeal {
+  background: color-mix(in srgb, var(--data-teal-base, var(--accounts-primary)) 12%, transparent);
+  color: var(--data-teal-base, var(--accounts-primary));
 }
 
-.metricIconOrange {
+.metricIconAmber {
   background: color-mix(in srgb, var(--accounts-warning) 12%, transparent);
   color: var(--accounts-warning);
 }
@@ -5123,10 +5095,6 @@
 
   .overviewCardHeader {
     flex-direction: column;
-  }
-
-  .overviewMetricGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .detailQuotaUsageMetrics {

@@ -2,7 +2,6 @@ import { useId, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { SegmentedTabs } from '@/components/ui/SegmentedTabs';
 import { Select } from '@/components/ui/Select';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
@@ -94,7 +93,6 @@ export function AccountConfigurationTab({
   if (!state || state.loading) {
     return (
       <div className={styles.configurationLoading} role="status" aria-live="polite">
-        <LoadingSpinner size={18} />
         <span>{t('accounts.config_loading')}</span>
       </div>
     );

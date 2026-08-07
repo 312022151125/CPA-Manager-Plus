@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
-import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { SegmentedTabs } from '@/components/ui/SegmentedTabs';
 import { IconCopy, IconRefreshCw } from '@/components/ui/icons';
 import type { AccountRow } from '@/features/accounts/model/accountRows';
@@ -33,6 +32,7 @@ interface AccountModelsTabProps {
   fileName: string;
   fileType: string;
   loading: boolean;
+  refreshing: boolean;
   error: 'unsupported' | 'failed' | null;
   models: AuthFileModelItem[];
   modelDefinitions: AuthFileModelItem[];
@@ -93,6 +93,7 @@ export function AccountModelsTab({
   fileName,
   fileType,
   loading,
+  refreshing,
   error,
   models,
   modelDefinitions,
@@ -294,13 +295,13 @@ export function AccountModelsTab({
       className={styles.accountModelsStack}
       role="region"
       aria-label={t('accounts.detail_tab_models')}
+      aria-busy={loading || modelDefinitionsLoading || globalExcludedState === 'loading'}
     >
       <div className={styles.accountModelsHeader}>
         <div className={styles.accountModelsSummary}>
           <strong>
             {t('accounts.detail_models_summary', { count: projection.rows.length, file: fileName })}
           </strong>
-          {modelDefinitionsLoading ? <LoadingSpinner size={14} /> : null}
         </div>
         <div className={styles.headerActions}>
           <Button variant="secondary" size="sm" onClick={onManageGlobalRules}>
@@ -310,10 +311,10 @@ export function AccountModelsTab({
             variant="secondary"
             size="sm"
             onClick={onRefresh}
-            disabled={loading}
-            loading={loading}
+            disabled={loading || refreshing}
+            loading={refreshing}
           >
-            {!loading ? <IconRefreshCw size={14} /> : null}
+            {!refreshing ? <IconRefreshCw size={14} /> : null}
             {t('common.refresh')}
           </Button>
         </div>
@@ -331,9 +332,8 @@ export function AccountModelsTab({
         <div className={styles.configurationReadOnlyNotice} role="note">
           {t('accounts.config_disabled_read_only')}
         </div>
-      ) : state?.loading ? (
+      ) : !state || state.loading ? (
         <div className={styles.accountModelsInlineStatus} role="status">
-          <LoadingSpinner size={14} />
           <span>{t('accounts.config_loading')}</span>
         </div>
       ) : state?.error ? (
@@ -347,7 +347,6 @@ export function AccountModelsTab({
 
       {globalExcludedState === 'loading' ? (
         <div className={styles.accountModelsInlineStatus} role="status">
-          <LoadingSpinner size={14} />
           <span>{t('accounts.model_global_rules_loading')}</span>
         </div>
       ) : globalExcludedState === 'error' || globalExcludedState === 'unsupported' ? (
@@ -470,7 +469,6 @@ export function AccountModelsTab({
 
       {loading && projection.rows.length === 0 ? (
         <div className={styles.configurationLoading}>
-          <LoadingSpinner size={18} />
           <span>{t('auth_files.models_loading')}</span>
         </div>
       ) : showUnsupported ? (

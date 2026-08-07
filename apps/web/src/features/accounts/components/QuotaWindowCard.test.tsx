@@ -28,6 +28,16 @@ const readText = (value: unknown): string => {
   return '';
 };
 
+const formatDisplayRange = (fromMs: number, toMs: number): string => {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `${formatter.format(fromMs)} — ${formatter.format(toMs)}`;
+};
+
 const usage = (
   overrides: Partial<AccountDetailWindowUsageSummary> = {}
 ): AccountDetailWindowUsageSummary => ({
@@ -112,6 +122,60 @@ describe('QuotaWindowCard', () => {
     const previousText = readText(previous);
     expect(previousText).toContain('accounts.detail_success_rate');
     expect(previousText).not.toContain('accounts.detail_used');
+  });
+
+  it('uses semantic colors for the current usage metric icons', () => {
+    const renderer = renderCard(makeWindow());
+    const current = renderer.root.findByProps({ 'data-quota-usage-period': 'current' });
+    const icons = current.findAll(
+      (node) =>
+        typeof node.props.className === 'string' && node.props.className.includes('rowIcon')
+    );
+
+    expect(icons).toHaveLength(4);
+    expect(icons.map((node) => node.props.className)).toEqual([
+      expect.stringContaining('rowIconBlue'),
+      expect.stringContaining('rowIconTeal'),
+      expect.stringContaining('rowIconAmber'),
+      expect.stringContaining('rowIconGreen'),
+    ]);
+
+    const forecast = renderer.root.findAll(
+      (node) =>
+        typeof node.props.className === 'string' &&
+        node.props.className.includes('compareColumnPrediction')
+    )[0];
+    if (!forecast) throw new Error('forecast column not found');
+    const forecastIcons = forecast.findAll(
+      (node) =>
+        typeof node.props.className === 'string' && node.props.className.includes('rowIcon')
+    );
+    expect(forecastIcons.map((node) => node.props.className)).toEqual([
+      expect.stringContaining('rowIconBlue'),
+      expect.stringContaining('rowIconTeal'),
+      expect.stringContaining('rowIconAmber'),
+    ]);
+  });
+
+  it('uses complete fixed-cycle boundaries instead of the current data cutoff', () => {
+    const cycleStartMs = Date.parse('2026-08-05T10:00:00Z');
+    const cycleEndMs = Date.parse('2026-08-05T15:00:00Z');
+    const dataEndMs = Date.parse('2026-08-05T11:40:00Z');
+    const window = makeWindow({
+      cycleStartMs,
+      cycleEndMs,
+      usage: usage({ fromMs: cycleStartMs, toMs: dataEndMs }),
+      currentUsage: usage({ fromMs: cycleStartMs, toMs: dataEndMs }),
+    });
+
+    for (const mode of ['standard', 'model'] as const) {
+      const renderer = renderCard(window, mode);
+      const current = renderer.root.findByProps({ 'data-quota-usage-period': 'current' });
+      const currentText = readText(current);
+
+      expect(currentText).toContain(formatDisplayRange(cycleStartMs, cycleEndMs));
+      expect(currentText).not.toContain(formatDisplayRange(cycleStartMs, dataEndMs));
+    }
   });
 
   it('labels rolling comparisons separately and exposes stale boundary evidence', () => {

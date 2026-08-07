@@ -128,6 +128,7 @@ const renderTab = (
     fileName: 'credential.json',
     fileType: 'codex',
     loading: false,
+    refreshing: false,
     error: null,
     models: [],
     modelDefinitions: [],
@@ -166,7 +167,34 @@ const findButtonByText = (root: ReactTestInstance, label: string): ReactTestInst
   return button;
 };
 
+const findLoadingSpinners = (renderer: ReactTestRenderer) =>
+  renderer.root.findAll(
+    (node) =>
+      typeof node.props.className === 'string' &&
+      node.props.className.split(/\s+/).includes('loading-spinner')
+  );
+
 describe('AccountModelsTab', () => {
+  it('does not render animated icons for automatic model loading', () => {
+    const editor = makeEditor();
+    editor.state = { ...editor.state!, loading: true };
+
+    const { renderer } = renderTab({
+      loading: true,
+      modelDefinitionsLoading: true,
+      globalExcludedState: 'loading',
+      editor,
+    });
+
+    expect(findLoadingSpinners(renderer)).toHaveLength(0);
+  });
+
+  it('keeps the refresh spinner for an explicit model refresh', () => {
+    const { renderer } = renderTab({ loading: true, refreshing: true });
+
+    expect(findLoadingSpinners(renderer)).toHaveLength(1);
+  });
+
   it('uses the credential detail models label for its region', () => {
     const { renderer } = renderTab();
 

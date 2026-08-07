@@ -16,10 +16,18 @@ import authFileStyles from '@/features/authFiles/AuthFilesPage.module.scss';
 import { isHealthyAuthFileStatusMessage } from '@/features/authFiles/constants';
 import type { AccountListHealthStatusKey } from '@/features/accounts/model/accountListPresentation';
 import {
+  formatCompactNumber,
+  formatMoney,
   formatPercent,
   formatQuotaResetTooltipParams,
+  formatTimestamp,
   formatTimestampTitle,
 } from '@/features/accounts/model/accountsPagePresentation';
+import { UsageSummaryGrid } from '@/features/usage-analytics/components/UsageSummaryCards';
+import type {
+  UsageSummaryCard,
+  UsageSummaryCardTone,
+} from '@/features/usage-analytics/usageAnalyticsPresentation';
 import { statusBarDataFromRecentRequests } from '@/utils/recentRequests';
 import { AccountDetailFieldValue } from './AccountDetailFieldList';
 import styles from '@/features/accounts/AccountsPage.module.scss';
@@ -47,6 +55,52 @@ function OverviewFieldGrid({ fields }: { fields: AccountDetailField[] }) {
   );
 }
 
+type ActivityCardPresentation = Pick<UsageSummaryCard, 'accent' | 'icon' | 'variant'>;
+
+const activityCardPresentations: Record<string, ActivityCardPresentation> = {
+  requests: { accent: 'blue', icon: 'calls' },
+  successRate: { accent: 'green', icon: 'success' },
+  failureCalls: { accent: 'red', icon: 'failure' },
+  cost: { accent: 'amber', icon: 'cost' },
+  tokens: { accent: 'teal', icon: 'tokens', variant: 'secondary' },
+  inputTokens: { accent: 'cyan', icon: 'input', variant: 'secondary' },
+  outputTokens: { accent: 'blue', icon: 'output', variant: 'secondary' },
+  cachedTokens: { accent: 'teal', icon: 'cache', variant: 'secondary' },
+  lastSeenMs: { accent: 'blue', icon: 'trend' },
+  successCalls: { accent: 'green', icon: 'success' },
+};
+
+const formatActivityMetricValue = (metric: AccountDetailField, locale: string): string => {
+  if (metric.value === null || metric.value === '') return '-';
+  if (metric.valueKind === 'percent') {
+    return typeof metric.value === 'number'
+      ? formatPercent(metric.value, metric.key === 'successRate' ? 1 : 0)
+      : String(metric.value);
+  }
+  if (metric.valueKind === 'money') {
+    return typeof metric.value === 'number' ? formatMoney(metric.value) : String(metric.value);
+  }
+  if (metric.valueKind === 'timestamp') {
+    return typeof metric.value === 'number' ? formatTimestamp(metric.value, locale) : '-';
+  }
+  if (metric.valueKind === 'number') {
+    return typeof metric.value === 'number'
+      ? formatCompactNumber(metric.value)
+      : String(metric.value);
+  }
+  return String(metric.value);
+};
+
+const getActivityMetricTone = (metric: AccountDetailField): UsageSummaryCardTone | undefined => {
+  if (metric.key === 'successRate' && typeof metric.value === 'number') {
+    return metric.value >= 95 ? 'good' : metric.value >= 85 ? 'warn' : 'bad';
+  }
+  if (metric.key === 'failureCalls' && typeof metric.value === 'number') {
+    return metric.value > 0 ? 'bad' : 'good';
+  }
+  return undefined;
+};
+
 export function AccountOverviewTab({ detailView, getHealthStatusClass }: AccountOverviewTabProps) {
   const { t, i18n } = useTranslation();
   const { decision, capacity, credential, recentStatus, activity, attention } = detailView.overview;
@@ -65,6 +119,27 @@ export function AccountOverviewTab({ detailView, getHealthStatusClass }: Account
     i18n.language,
     detailView.quota.cooldown?.recoverAtMs
   );
+  const activityCards: UsageSummaryCard[] = activity.metrics.map((metric) => {
+    const presentation =
+      activityCardPresentations[metric.key] ?? activityCardPresentations.lastSeenMs;
+    const label = t(metric.labelKey, { defaultValue: metric.labelKey });
+    return {
+      ...presentation,
+      dataAttributes: {
+        'data-overview-metric-key': metric.key,
+        'data-overview-metric-kind': metric.valueKind ?? 'text',
+      },
+      fullLabel: label,
+      label,
+      meta: t(activity.sourceLabelKey),
+      tone: getActivityMetricTone(metric),
+      value: formatActivityMetricValue(metric, i18n.language),
+      valueTitle:
+        metric.valueKind === 'timestamp' && typeof metric.value === 'number'
+          ? formatTimestampTitle(metric.value, i18n.language)
+          : undefined,
+    };
+  });
 
   return (
     <div className={styles.overviewStack}>
@@ -245,36 +320,7 @@ export function AccountOverviewTab({ detailView, getHealthStatusClass }: Account
           </span>
         </div>
         {activity.hasActivity ? (
-          <div className={styles.overviewMetricGrid}>
-            {activity.metrics.map((metric) => {
-              const valueTitle =
-                metric.valueKind === 'timestamp' && typeof metric.value === 'number'
-                  ? formatTimestampTitle(metric.value, i18n.language)
-                  : undefined;
-              return (
-                <div
-                  key={metric.key}
-                  className={styles.overviewMetricCard}
-                  data-overview-metric-key={metric.key}
-                  data-overview-metric-kind={metric.valueKind ?? 'text'}
-                >
-                  <div className={styles.overviewMetricCardHeader}>
-                    <span
-                      className={styles.overviewMetricLabel}
-                      title={t(metric.labelKey, { defaultValue: metric.labelKey })}
-                    >
-                      {t(metric.labelKey, { defaultValue: metric.labelKey })}
-                    </span>
-                  </div>
-                  <div className={styles.overviewMetricCardBody}>
-                    <strong className={styles.overviewMetricValue} title={valueTitle}>
-                      <AccountDetailFieldValue field={metric} />
-                    </strong>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <UsageSummaryGrid cards={activityCards} density="compact" />
         ) : (
           <div className={styles.overviewEmptyState}>{t(activity.emptyStateKey)}</div>
         )}

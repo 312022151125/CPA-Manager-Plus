@@ -400,6 +400,7 @@ export function AccountsPage() {
   const oauthState = useAuthFilesOauth({ viewMode: oauthViewMode, files });
   const {
     modelsLoading,
+    modelsRefreshing,
     modelsList,
     modelDefinitions,
     modelDefinitionsLoading,
@@ -497,7 +498,10 @@ export function AccountsPage() {
   const [accountWindowUsageByKey, setAccountWindowUsageByKey] = useState<
     Map<string, MonitoringAccountWindowUsageItem>
   >(() => new Map());
-  const [accountWindowUsageLoading, setAccountWindowUsageLoading] = useState(false);
+  const [accountWindowUsageQueryContext, setAccountWindowUsageQueryContext] = useState<{
+    rowKey: string;
+    asOfMs: number;
+  } | null>(null);
   const [accountWindowUsageError, setAccountWindowUsageError] = useState('');
   const [quotaSnapshotWindowsByRowKey, setQuotaSnapshotWindowsByRowKey] = useState<
     Map<string, AccountQuotaSnapshotWindow[]>
@@ -536,6 +540,7 @@ export function AccountsPage() {
   const [detailEventsNextBeforeMs, setDetailEventsNextBeforeMs] = useState<number | null>(null);
   const [detailEventsNextBeforeId, setDetailEventsNextBeforeId] = useState<number | null>(null);
   const [detailEventsLoading, setDetailEventsLoading] = useState(false);
+  const [detailEventsRefreshing, setDetailEventsRefreshing] = useState(false);
   const [detailEventsAppending, setDetailEventsAppending] = useState(false);
   const [detailEventsError, setDetailEventsError] = useState('');
   const [quotaCooldowns, setQuotaCooldowns] = useState<Map<string, QuotaCooldownInfo>>(
@@ -792,7 +797,7 @@ export function AccountsPage() {
     setHistoryRefreshing(false);
     setQuotaSnapshotWindowsByRowKey((current) => (current.size === 0 ? current : new Map()));
     setAccountWindowUsageByKey((current) => (current.size === 0 ? current : new Map()));
-    setAccountWindowUsageLoading(false);
+    setAccountWindowUsageQueryContext(null);
     setAccountWindowUsageError('');
     setUsageRows([]);
     setDetailEventsRowKey(null);
@@ -804,6 +809,7 @@ export function AccountsPage() {
     setDetailEventsNextBeforeMs(null);
     setDetailEventsNextBeforeId(null);
     setDetailEventsLoading(false);
+    setDetailEventsRefreshing(false);
     setDetailEventsAppending(false);
     setDetailEventsError('');
   }, [
@@ -1628,8 +1634,17 @@ export function AccountsPage() {
       effectiveQuotaWindowDefinitionsByRowKey.get(selectedRow.selectionKey) ??
         buildAccountQuotaWindowDefinitions(buildQuotaDisplayWindows(selectedRow))
     );
-    return buildAccountWindowUsageTargetEntries([selectedRow], windowsByRowKey);
-  }, [buildQuotaDisplayWindows, effectiveQuotaWindowDefinitionsByRowKey, selectedRow]);
+    const asOfMs =
+      accountWindowUsageQueryContext?.rowKey === selectedRow.selectionKey
+        ? accountWindowUsageQueryContext.asOfMs
+        : undefined;
+    return buildAccountWindowUsageTargetEntries([selectedRow], windowsByRowKey, asOfMs);
+  }, [
+    accountWindowUsageQueryContext,
+    buildQuotaDisplayWindows,
+    effectiveQuotaWindowDefinitionsByRowKey,
+    selectedRow,
+  ]);
   const matchingAccountWindowUsageByKey = useMemo(
     () =>
       filterAccountWindowUsageByTargetRanges(accountWindowUsageTargets, accountWindowUsageByKey),
@@ -2071,6 +2086,7 @@ export function AccountsPage() {
     setHistoryRefreshing(false);
     usageValuesRequestIdRef.current += 1;
     usageValuesAutoLoadKeyRef.current = null;
+    setAccountWindowUsageQueryContext(null);
     detailEventsRequestIdRef.current += 1;
     detailEventsAutoLoadKeyRef.current = null;
     setDetailEventsLoading(false);
@@ -2094,7 +2110,6 @@ export function AccountsPage() {
     accountWindowUsageReqIdRef.current = requestId;
     accountWindowUsageAbortRef.current?.abort();
     accountWindowUsageAbortRef.current = null;
-    let entries = accountWindowUsageTargets;
 
     if (
       featureAvailability.checking ||
@@ -2104,16 +2119,24 @@ export function AccountsPage() {
       !selectedRow
     ) {
       setAccountWindowUsageByKey(new Map());
-      setAccountWindowUsageLoading(false);
+      setAccountWindowUsageQueryContext(null);
       setAccountWindowUsageError('');
       return;
     }
 
     const controller = new AbortController();
     accountWindowUsageAbortRef.current = controller;
+    const queryAsOfMs = Date.now();
+    const initialDefinitions =
+      effectiveQuotaWindowDefinitionsByRowKey.get(selectedRow.selectionKey) ??
+      buildAccountQuotaWindowDefinitions(buildQuotaDisplayWindows(selectedRow));
+    let entries = buildAccountWindowUsageTargetEntries(
+      [selectedRow],
+      new Map([[selectedRow.selectionKey, initialDefinitions]]),
+      queryAsOfMs
+    );
     const isCurrentRequest = () =>
       accountWindowUsageReqIdRef.current === requestId && !controller.signal.aborted;
-    setAccountWindowUsageLoading(true);
     setAccountWindowUsageError('');
     try {
       const localDefinitions = quotaWindowDefinitionsByRowKey.get(selectedRow.selectionKey) ?? [];
@@ -2203,7 +2226,8 @@ export function AccountsPage() {
             );
             entries = buildAccountWindowUsageTargetEntries(
               [selectedRow],
-              new Map([[selectedRow.selectionKey, mergedDefinitions]])
+              new Map([[selectedRow.selectionKey, mergedDefinitions]]),
+              queryAsOfMs
             );
           }
         } catch {
@@ -2226,6 +2250,10 @@ export function AccountsPage() {
         controller.signal
       );
       if (!isCurrentRequest()) return;
+      setAccountWindowUsageQueryContext({
+        rowKey: selectedRow.selectionKey,
+        asOfMs: queryAsOfMs,
+      });
       setAccountWindowUsageByKey(buildAccountWindowUsageByKey(entries, response.items ?? []));
     } catch (err: unknown) {
       if (!isCurrentRequest()) return;
@@ -2237,12 +2265,12 @@ export function AccountsPage() {
         if (accountWindowUsageAbortRef.current === controller) {
           accountWindowUsageAbortRef.current = null;
         }
-        setAccountWindowUsageLoading(false);
       }
     }
   }, [
-    accountWindowUsageTargets,
     buildCodexSnapshotDefinitions,
+    buildQuotaDisplayWindows,
+    effectiveQuotaWindowDefinitionsByRowKey,
     featureAvailability.checking,
     featureAvailability.managerServiceBase,
     featureAvailability.requestMonitoringAvailable,
@@ -2549,6 +2577,18 @@ export function AccountsPage() {
     ]
   );
 
+  const refreshDetailEvents = useCallback(
+    async (row: AccountRow) => {
+      setDetailEventsRefreshing(true);
+      try {
+        await loadDetailEvents(row);
+      } finally {
+        setDetailEventsRefreshing(false);
+      }
+    },
+    [loadDetailEvents]
+  );
+
   useEffect(() => {
     if (detailTab !== 'diagnostics' || !selectedRow) return;
     if (detailEventsAutoLoadKeyRef.current === detailEventsAutoLoadKey) return;
@@ -2713,7 +2753,6 @@ export function AccountsPage() {
       if (hadInFlightRequest) {
         accountWindowUsageAutoLoadKeyRef.current = null;
       }
-      setAccountWindowUsageLoading(false);
       return;
     }
     if (
@@ -4214,9 +4253,8 @@ export function AccountsPage() {
         return (
           <AccountQuotaTab
             detailView={detailView}
-            windowUsageLoading={accountWindowUsageLoading}
             windowUsageError={accountWindowUsageError}
-            historyRefreshing={historyRefreshing || accountWindowUsageLoading}
+            historyRefreshing={historyRefreshing}
             onRefreshHistory={() => void refreshAccountHistory(selectedRow)}
           />
         );
@@ -4244,6 +4282,7 @@ export function AccountsPage() {
               modelsTargetMatches ? modelsFileType || selectedRow.provider : selectedRow.provider
             }
             loading={modelsTargetMatches ? modelsLoading : true}
+            refreshing={modelsTargetMatches ? modelsRefreshing : false}
             error={modelsTargetMatches ? modelsError : null}
             models={modelsTargetMatches ? modelsList : []}
             modelDefinitions={modelsTargetMatches ? modelDefinitions : []}
@@ -4272,13 +4311,14 @@ export function AccountsPage() {
             eventsTotalCount={rowEventsTotalCount}
             eventsHasMore={detailEventsHasMore}
             eventsLoading={detailEventsLoading}
+            eventsRefreshing={detailEventsRefreshing}
             eventsAppending={detailEventsAppending}
             eventsError={detailEventsError}
             eventsUnavailable={eventsUnavailable}
             nextBeforeMs={detailEventsNextBeforeMs}
             nextBeforeId={detailEventsNextBeforeId}
             getRecommendationPriorityClass={getRecommendationPriorityClass}
-            onRefreshEvents={() => void loadDetailEvents(selectedRow)}
+            onRefreshEvents={() => void refreshDetailEvents(selectedRow)}
             onLoadMoreEvents={(beforeMs, beforeId) =>
               void loadDetailEvents(selectedRow, {
                 append: true,

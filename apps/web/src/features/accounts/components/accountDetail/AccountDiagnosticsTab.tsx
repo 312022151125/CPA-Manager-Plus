@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
-import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { IconRefreshCw } from '@/components/ui/icons';
 import type { AccountDetailViewModel } from '@/features/accounts/model/accountDetailViewModel';
 import type { AccountRecommendationPriority } from '@/features/accounts/model/quotaRecommendations';
@@ -29,6 +28,7 @@ interface AccountDiagnosticsTabProps {
   eventsTotalCount: number;
   eventsHasMore: boolean;
   eventsLoading: boolean;
+  eventsRefreshing: boolean;
   eventsAppending: boolean;
   eventsError: string;
   eventsUnavailable: boolean;
@@ -49,6 +49,7 @@ export function AccountDiagnosticsTab({
   eventsTotalCount,
   eventsHasMore,
   eventsLoading,
+  eventsRefreshing,
   eventsAppending,
   eventsError,
   eventsUnavailable,
@@ -69,12 +70,10 @@ export function AccountDiagnosticsTab({
     outdated: styles.diagnosticEvidenceStatusOutdated,
     conflict: styles.diagnosticEvidenceStatusConflict,
   }[conclusion.evidenceStatus];
-  const hasInspectionEvidence =
-    detailView.strategy.inspectionFields.length > 0 || inspectionLoading;
+  const hasInspectionEvidence = detailView.strategy.inspectionFields.length > 0;
   const hasCodexEvidence = detailView.strategy.codexBadges.length > 0;
   const hasCandidateEvidence =
     detailView.strategy.actionCandidates.length > 0 ||
-    candidatesLoading ||
     Boolean(candidatesError);
   const hasDiagnosticEvidence = hasInspectionEvidence || hasCodexEvidence || hasCandidateEvidence;
   const activityTotalCalls = activity.totalCalls ?? eventsTotalCount;
@@ -91,11 +90,11 @@ export function AccountDiagnosticsTab({
       <section
         className={`${styles.drawerSection} ${styles.diagnosticConclusionSection}`}
         data-diagnostic-evidence-status={conclusion.evidenceStatus}
+        aria-busy={inspectionLoading}
       >
         <div className={styles.diagnosticConclusionHeader}>
           <h3>{t('accounts.detail_diagnostic_conclusion')}</h3>
           <div className={styles.diagnosticConclusionState}>
-            {inspectionLoading ? <LoadingSpinner size={14} /> : null}
             <span className={evidenceStatusClass}>{t(conclusion.evidenceStatusLabelKey)}</span>
           </div>
         </div>
@@ -131,27 +130,22 @@ export function AccountDiagnosticsTab({
         </div>
       </section>
 
-      <section className={styles.drawerSection}>
+      <section className={styles.drawerSection} aria-busy={eventsLoading}>
         <div className={styles.sectionHeaderInline}>
           <h3>{t('accounts.detail_activity_title')}</h3>
           <Button
             variant="secondary"
             size="sm"
             onClick={onRefreshEvents}
-            disabled={eventsUnavailable || eventsLoading || eventsAppending}
-            loading={eventsLoading}
+            disabled={eventsUnavailable || eventsLoading || eventsRefreshing || eventsAppending}
+            loading={eventsRefreshing}
           >
-            {!eventsLoading ? <IconRefreshCw size={14} /> : null}
+            {!eventsRefreshing ? <IconRefreshCw size={14} /> : null}
             {t('common.refresh')}
           </Button>
         </div>
         {eventsUnavailable ? (
           <p>{t('accounts.detail_events_unavailable')}</p>
-        ) : eventsLoading ? (
-          <div className={styles.inlineLoading}>
-            <LoadingSpinner size={16} />
-            <span>{t('common.loading')}</span>
-          </div>
         ) : eventsError ? (
           <div className={styles.errorBox}>{eventsError}</div>
         ) : (
@@ -274,7 +268,10 @@ export function AccountDiagnosticsTab({
       </section>
 
       {hasDiagnosticEvidence ? (
-        <details className={`${styles.drawerSection} ${styles.diagnosticEvidenceDisclosure}`}>
+        <details
+          className={`${styles.drawerSection} ${styles.diagnosticEvidenceDisclosure}`}
+          aria-busy={inspectionLoading || candidatesLoading}
+        >
           <summary>
             <span>{t('accounts.detail_diagnostic_evidence')}</span>
             {candidatesError ? (
@@ -285,14 +282,7 @@ export function AccountDiagnosticsTab({
             {hasInspectionEvidence ? (
               <section className={styles.diagnosticEvidenceGroup}>
                 <h4>{t('accounts.detail_diagnostic_inspection_evidence')}</h4>
-                {detailView.strategy.inspectionFields.length > 0 ? (
-                  <AccountDetailFieldList fields={detailView.strategy.inspectionFields} />
-                ) : (
-                  <div className={styles.inlineLoading}>
-                    <LoadingSpinner size={14} />
-                    <span>{t('common.loading')}</span>
-                  </div>
-                )}
+                <AccountDetailFieldList fields={detailView.strategy.inspectionFields} />
               </section>
             ) : null}
 
@@ -338,7 +328,6 @@ export function AccountDiagnosticsTab({
               <section className={styles.diagnosticEvidenceGroup}>
                 <div className={styles.diagnosticEvidenceGroupHeader}>
                   <h4>{t('accounts.detail_diagnostic_candidate_evidence')}</h4>
-                  {candidatesLoading ? <LoadingSpinner size={14} /> : null}
                 </div>
                 {candidatesError ? (
                   <div className={styles.errorBox}>{candidatesError}</div>

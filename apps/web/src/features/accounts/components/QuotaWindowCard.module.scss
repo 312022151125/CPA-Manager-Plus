@@ -274,13 +274,13 @@
   color: var(--data-green-base);
 }
 
-.rowIconViolet {
-  border-color: color-mix(in srgb, var(--data-violet-base, var(--color-primary)) 34%, transparent);
-  background: var(--data-violet-light-9, var(--color-primary-light-9));
-  color: var(--data-violet-base, var(--color-primary));
+.rowIconTeal {
+  border-color: color-mix(in srgb, var(--data-teal-base, var(--color-primary)) 34%, transparent);
+  background: var(--data-teal-light-9, var(--color-primary-light-9));
+  color: var(--data-teal-base, var(--color-primary));
 }
 
-.rowIconOrange {
+.rowIconAmber {
   border-color: color-mix(in srgb, var(--data-amber-base) 34%, transparent);
   background: var(--data-amber-light-9);
   color: var(--data-amber-base);

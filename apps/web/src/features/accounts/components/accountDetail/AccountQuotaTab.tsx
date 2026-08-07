@@ -11,7 +11,6 @@ import {
   IconScrollText,
   IconSidebarQuota,
 } from '@/components/ui/icons';
-import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import type {
   AccountDetailQuotaWindow,
   AccountDetailViewModel,
@@ -32,7 +31,7 @@ const isIntervalQuotaWindow = (window: AccountDetailQuotaWindow): boolean =>
 const isModelScopedQuotaWindow = (window: AccountDetailQuotaWindow): boolean =>
   window.modelScope?.kind !== undefined && window.modelScope.kind !== 'all';
 
-type MetricTone = 'blue' | 'green' | 'purple' | 'orange';
+type MetricTone = 'blue' | 'green' | 'teal' | 'amber';
 
 interface MetricCellProps {
   icon: JSX.Element;
@@ -48,10 +47,10 @@ const metricIconClass = (tone: MetricTone): string => {
       return `${styles.metricIcon} ${styles.metricIconBlue}`;
     case 'green':
       return `${styles.metricIcon} ${styles.metricIconGreen}`;
-    case 'purple':
-      return `${styles.metricIcon} ${styles.metricIconPurple}`;
-    case 'orange':
-      return `${styles.metricIcon} ${styles.metricIconOrange}`;
+    case 'teal':
+      return `${styles.metricIcon} ${styles.metricIconTeal}`;
+    case 'amber':
+      return `${styles.metricIcon} ${styles.metricIconAmber}`;
     default:
       return styles.metricIcon;
   }
@@ -63,10 +62,10 @@ const metricCardClass = (tone: MetricTone): string => {
       return styles.quotaSummaryMetricBlue;
     case 'green':
       return styles.quotaSummaryMetricGreen;
-    case 'purple':
-      return styles.quotaSummaryMetricPurple;
-    case 'orange':
-      return styles.quotaSummaryMetricOrange;
+    case 'teal':
+      return styles.quotaSummaryMetricTeal;
+    case 'amber':
+      return styles.quotaSummaryMetricAmber;
     default:
       return '';
   }
@@ -105,7 +104,6 @@ const MetricCell = ({ icon, tone, label, value, valueTitle }: MetricCellProps): 
 
 interface AccountQuotaTabProps {
   detailView: AccountDetailViewModel;
-  windowUsageLoading: boolean;
   windowUsageError: string;
   historyRefreshing: boolean;
   onRefreshHistory: () => void;
@@ -113,7 +111,6 @@ interface AccountQuotaTabProps {
 
 export function AccountQuotaTab({
   detailView,
-  windowUsageLoading,
   windowUsageError,
   historyRefreshing,
   onRefreshHistory,
@@ -193,20 +190,20 @@ export function AccountQuotaTab({
           />
           <MetricCell
             icon={<IconBinary size={20} />}
-            tone="green"
+            tone="teal"
             label={t('accounts.detail_total_tokens')}
             value={history ? formatCompactNumber(history.totalTokens) : '-'}
             valueTitle={history ? formatNumber(history.totalTokens) : undefined}
           />
           <MetricCell
             icon={<IconDollarSign size={20} />}
-            tone="purple"
+            tone="amber"
             label={t('accounts.detail_total_cost')}
             value={history ? formatMoney(history.totalCost) : '-'}
           />
           <MetricCell
             icon={<IconCheck size={20} />}
-            tone="orange"
+            tone="green"
             label={t('accounts.detail_success_rate')}
             value={
               history?.successRate !== null && history?.successRate !== undefined
@@ -217,12 +214,6 @@ export function AccountQuotaTab({
         </div>
       </section>
 
-      {windowUsageLoading ? (
-        <div className={styles.quotaTabStatus} role="status">
-          <LoadingSpinner size={16} />
-          <span>{t('common.loading')}</span>
-        </div>
-      ) : null}
       {windowUsageError ? <div className={styles.errorBox}>{windowUsageError}</div> : null}
 
       {standardWindows.length > 0 || allWindows.length === 0 ? (

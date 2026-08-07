@@ -44,7 +44,7 @@ interface QuotaWindowCardProps {
   locale?: string;
 }
 
-type MetricTone = 'blue' | 'green' | 'violet' | 'orange';
+type MetricTone = 'blue' | 'green' | 'teal' | 'amber';
 
 const QUOTA_PROGRESS_HIGH_THRESHOLD = 70;
 const QUOTA_PROGRESS_MEDIUM_THRESHOLD = 30;
@@ -80,6 +80,26 @@ const formatRange = (
     minute: '2-digit',
   });
   return `${formatter.format(fromMs)} — ${formatter.format(toMs)}`;
+};
+
+const formatCurrentWindowRange = (
+  window: AccountDetailQuotaWindow,
+  usage: AccountDetailWindowUsageSummary | null | undefined,
+  locale: string
+): string => {
+  const cycleStartMs = window.cycleStartMs;
+  const cycleEndMs = window.cycleEndMs;
+  if (
+    (window.windowMode === 'fixed' || window.windowMode === 'calendar') &&
+    typeof cycleStartMs === 'number' &&
+    Number.isFinite(cycleStartMs) &&
+    typeof cycleEndMs === 'number' &&
+    Number.isFinite(cycleEndMs) &&
+    cycleStartMs < cycleEndMs
+  ) {
+    return formatRange(cycleStartMs, cycleEndMs, locale);
+  }
+  return formatRange(usage?.fromMs, usage?.toMs, locale);
 };
 
 const formatObservedAt = (value: number, locale: string): string =>
@@ -136,10 +156,10 @@ const metricIconClass = (tone: MetricTone): string => {
       return `${styles.rowIcon} ${styles.rowIconBlue}`;
     case 'green':
       return `${styles.rowIcon} ${styles.rowIconGreen}`;
-    case 'violet':
-      return `${styles.rowIcon} ${styles.rowIconViolet}`;
-    case 'orange':
-      return `${styles.rowIcon} ${styles.rowIconOrange}`;
+    case 'teal':
+      return `${styles.rowIcon} ${styles.rowIconTeal}`;
+    case 'amber':
+      return `${styles.rowIcon} ${styles.rowIconAmber}`;
     default:
       return styles.rowIcon;
   }
@@ -185,19 +205,19 @@ const UsageMetricList = ({
     />
     <MetricItem
       icon={<IconBinary size={16} />}
-      tone="green"
+      tone="teal"
       label={labels.tokens}
       value={formatCompactNumber(usage.totalTokens)}
     />
     <MetricItem
       icon={<IconDollarSign size={16} />}
-      tone="violet"
+      tone="amber"
       label={labels.cost}
       value={formatMoney(usage.totalCost)}
     />
     <MetricItem
       icon={<IconCheck size={16} />}
-      tone="orange"
+      tone="green"
       label={labels.successRate}
       value={formatPercent(usage.successRate, 2)}
     />
@@ -288,13 +308,13 @@ const ForecastColumn = ({
         />
         <MetricItem
           icon={<IconBinary size={16} />}
-          tone="green"
+          tone="teal"
           label={labels.tokens}
           value={formatCompactNumber(forecast.tokens)}
         />
         <MetricItem
           icon={<IconDollarSign size={16} />}
-          tone="violet"
+          tone="amber"
           label={labels.cost}
           value={formatMoney(forecast.cost)}
         />
@@ -612,7 +632,7 @@ export const QuotaWindowCard = ({
             />
             <UsageColumn
               title={t('accounts.detail_current_used', { defaultValue: '当前窗口已用' })}
-              subtitle={formatRange(usage?.fromMs, usage?.toMs, resolvedLocale)}
+              subtitle={formatCurrentWindowRange(q, usage, resolvedLocale)}
               period="current"
               usage={usage}
               labels={usageLabels}
@@ -667,7 +687,7 @@ export const QuotaWindowCard = ({
         />
         <UsageColumn
           title={t('accounts.detail_current_used', { defaultValue: '当前窗口已用' })}
-          subtitle={formatRange(usage?.fromMs, usage?.toMs, resolvedLocale)}
+          subtitle={formatCurrentWindowRange(q, usage, resolvedLocale)}
           period="current"
           usage={usage}
           labels={usageLabels}

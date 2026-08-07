@@ -517,6 +517,7 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesOauth', () => ({
 vi.mock('@/features/authFiles/hooks/useAuthFilesModels', () => ({
   useAuthFilesModels: () => ({
     modelsLoading: false,
+    modelsRefreshing: false,
     modelsList: [],
     modelDefinitions: [],
     modelDefinitionsLoading: false,
@@ -775,6 +776,13 @@ const findHostButtonByText = (renderer: ReactTestRenderer, text: string) => {
   if (!button) throw new Error(`Host button not found: ${text}`);
   return button;
 };
+
+const findLoadingSpinners = (node: ReactTestInstance) =>
+  node.findAll(
+    (candidate) =>
+      typeof candidate.props.className === 'string' &&
+      candidate.props.className.split(/\s+/).includes('loading-spinner')
+  );
 
 const findHostButtonByAriaLabel = (renderer: ReactTestRenderer, label: string) => {
   const button = renderer.root
@@ -3267,6 +3275,16 @@ describe('AccountsPage replacement flows', () => {
     const lastActiveMetric = renderer.root.findByProps({
       'data-overview-metric-key': 'lastSeenMs',
     });
+    const activitySummaryGrid = renderer.root.findByProps({
+      'data-usage-summary-density': 'compact',
+    });
+    expect(activitySummaryGrid.findAllByProps({ 'data-usage-summary-meta': 'true' })).toHaveLength(
+      0
+    );
+    expect(activitySummaryGrid.findAllByProps({ 'data-usage-summary-chart': 'true' })).toHaveLength(
+      0
+    );
+    expect(activitySummaryGrid.findAllByProps({ role: 'tooltip' })).toHaveLength(0);
     expect(lastActiveMetric.props['data-overview-metric-kind']).toBe('timestamp');
     expect(readText(lastActiveMetric)).toContain('accounts.detail_overview_activity_last_active');
     expect(readText(lastActiveMetric)).toContain('08/26 17:44');
@@ -4547,6 +4565,18 @@ describe('AccountsPage replacement flows', () => {
       renderer.root.findAllByProps({ 'data-account-quota-usage-summary': 'true' })
     ).toHaveLength(1);
     expect(renderer.root.findAllByProps({ 'data-account-quota-metrics': 'true' })).toHaveLength(1);
+    const quotaMetrics = renderer.root.findByProps({ 'data-account-quota-metrics': 'true' });
+    const quotaMetricIcons = quotaMetrics.findAll(
+      (node) =>
+        typeof node.props.className === 'string' && node.props.className.includes('metricIcon')
+    );
+    expect(quotaMetricIcons).toHaveLength(4);
+    expect(quotaMetricIcons.map((node) => node.props.className)).toEqual([
+      expect.stringContaining('metricIconBlue'),
+      expect.stringContaining('metricIconTeal'),
+      expect.stringContaining('metricIconAmber'),
+      expect.stringContaining('metricIconGreen'),
+    ]);
     expect(renderer.root.findAllByProps({ 'data-quota-window-group': 'standard' })).toHaveLength(1);
     expect(renderer.root.findAllByProps({ 'data-quota-card-mode': 'standard' })).toHaveLength(1);
     expect(treeText(renderer)).toContain('accounts.detail_quota_standard_title');
@@ -4590,6 +4620,40 @@ describe('AccountsPage replacement flows', () => {
 
     expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(2);
     expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
+  });
+
+  it('does not show an animated icon during automatic quota window loading', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const windowUsage = createDeferred<AccountWindowUsageResponseForTest>();
+    mocks.getAccountWindowUsage.mockReturnValue(windowUsage.promise);
+
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    const quotaTab = renderer.root.findByType(AccountQuotaTab);
+    expect(findLoadingSpinners(quotaTab)).toHaveLength(0);
+    expect(quotaTab.props.historyRefreshing).toBe(false);
+
+    await act(async () => {
+      windowUsage.resolve({ generated_at_ms: 1, items: [] });
+      await windowUsage.promise;
+    });
+    await flushPromises();
+    expect(findLoadingSpinners(renderer.root.findByType(AccountQuotaTab))).toHaveLength(0);
   });
 
   it('does not refresh provider quota when opening a quota-tab deep link', async () => {
@@ -4669,7 +4733,12 @@ describe('AccountsPage replacement flows', () => {
     expect(request.accounts).toContainEqual(expect.objectContaining({ row_key: targetKey }));
   });
 
-  it('does not loop window usage loading when a rolling quota snapshot is merged', async () => {
+  it('keeps rolling window usage visible across snapshot rerenders and history refreshes', async () => {
+    let currentTimeMs = 2_000_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => {
+      currentTimeMs += 1_000;
+      return currentTimeMs;
+    });
     const xaiFile = {
       name: 'xai-ops.json',
       type: 'xai',
@@ -4717,6 +4786,36 @@ describe('AccountsPage replacement flows', () => {
         },
       ],
     });
+    let usageRequestCount = 0;
+    mocks.getAccountWindowUsage.mockImplementation(async (_base, _managementKey, request) => {
+      usageRequestCount += 1;
+      const totalRequests = usageRequestCount === 1 ? 4 : 5;
+      const totalTokens = usageRequestCount === 1 ? 9_939 : 12_460;
+      const windows = request.windows as Array<{
+        request_key: string;
+        row_key: string;
+        window_key: string;
+        provider_window_id: string;
+        period: 'current' | 'previous' | 'previous_equal_range';
+        from_ms: number;
+        to_ms: number;
+      }>;
+      return {
+        generated_at_ms: Date.now(),
+        items: windows.map((window) => ({
+          ...window,
+          matched: true,
+          total_requests: totalRequests,
+          success_calls: totalRequests,
+          failure_calls: 0,
+          total_tokens: totalTokens,
+          total_cost: 0.12,
+          success_rate: 1,
+          last_seen_ms: window.to_ms - 1,
+          sync_status: 'ready',
+        })),
+      };
+    });
 
     const renderer = await renderAccountsPage();
     await flushPromises();
@@ -4729,6 +4828,51 @@ describe('AccountsPage replacement flows', () => {
       mocks.getAccountWindowUsage.mock.calls.length - 1
     ]?.[2] as AccountWindowUsageRequestForTest | undefined;
     expect(lastWindowUsageRequest?.windows).toHaveLength(2);
+    const firstCurrentTarget = (
+      lastWindowUsageRequest?.windows as Array<{
+        period: string;
+        from_ms: number;
+        to_ms: number;
+      }>
+    ).find((window) => window.period === 'current');
+    expect(firstCurrentTarget).toBeDefined();
+    expect(
+      renderer.root.findByType(AccountQuotaTab).props.detailView.quota.windows[0].currentUsage
+    ).toMatchObject({
+      fromMs: firstCurrentTarget?.from_ms,
+      toMs: firstCurrentTarget?.to_ms,
+      totalRequests: 4,
+      totalTokens: 9_939,
+    });
+
+    await act(async () => {
+      renderer.root.findByType(AccountQuotaTab).props.onRefreshHistory();
+      await Promise.resolve();
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(2);
+    const refreshedWindowUsageRequest = mocks.getAccountWindowUsage.mock.calls[1]?.[2] as
+      | AccountWindowUsageRequestForTest
+      | undefined;
+    const refreshedCurrentTarget = (
+      refreshedWindowUsageRequest?.windows as Array<{
+        period: string;
+        from_ms: number;
+        to_ms: number;
+      }>
+    ).find((window) => window.period === 'current');
+    expect(refreshedCurrentTarget?.from_ms).toBeGreaterThan(firstCurrentTarget?.from_ms ?? 0);
+    expect(refreshedCurrentTarget?.to_ms).toBeGreaterThan(firstCurrentTarget?.to_ms ?? 0);
+    expect(
+      renderer.root.findByType(AccountQuotaTab).props.detailView.quota.windows[0].currentUsage
+    ).toMatchObject({
+      fromMs: refreshedCurrentTarget?.from_ms,
+      toMs: refreshedCurrentTarget?.to_ms,
+      totalRequests: 5,
+      totalTokens: 12_460,
+    });
   });
 
   it('persists a successful empty provider inventory as a complete observation', async () => {
@@ -5683,6 +5827,66 @@ describe('AccountsPage replacement flows', () => {
       recent_failures: 1,
     });
     expect(eventRequest?.include?.events_page).toMatchObject({ limit: 20 });
+  });
+
+  it('does not show an animated icon during automatic diagnostic event loading', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const events = createDeferred<AnalyticsResponseForTest>();
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        if (analyticsRequest.include?.events_page) return events.promise;
+        return makeEmptyAnalyticsResponse();
+      }
+    );
+
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const panel = renderer.root.findByProps({ id: 'accounts-detail-tab-panel' });
+    expect(findLoadingSpinners(panel)).toHaveLength(0);
+    const refreshButton = panel
+      .findAllByType(Button)
+      .find((button) => readText(button.props.children).includes('common.refresh'));
+    expect(refreshButton?.props.loading).toBe(false);
+
+    await act(async () => {
+      events.resolve(makeEventsResponse(makeAnalyticsEvent({ request_id: 'event-ready' })));
+      await events.promise;
+    });
+    await flushPromises();
+
+    expect(findLoadingSpinners(panel)).toHaveLength(0);
+
+    const manualEvents = createDeferred<AnalyticsResponseForTest>();
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        if (analyticsRequest.include?.events_page) return manualEvents.promise;
+        return makeEmptyAnalyticsResponse();
+      }
+    );
+    await act(async () => {
+      renderer.root.findByType(AccountDiagnosticsTab).props.onRefreshEvents();
+      await Promise.resolve();
+    });
+
+    expect(findLoadingSpinners(panel)).toHaveLength(1);
+    manualEvents.resolve(makeEventsResponse(makeAnalyticsEvent({ request_id: 'manual-ready' })));
+    await flushPromises();
+    expect(findLoadingSpinners(panel)).toHaveLength(0);
   });
 
   it('renders full-range activity summary and recent failure independently of the event page', async () => {
