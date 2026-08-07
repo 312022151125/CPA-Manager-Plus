@@ -30,20 +30,21 @@ const status: UsageServiceStatus = {
 };
 
 describe('DatabaseStatusCard', () => {
-  it('renders database files and the latest checkpoint snapshot', () => {
+  it('renders the wide storage summary and latest checkpoint snapshot', () => {
     const markup = renderToStaticMarkup(
       <DatabaseStatusCard status={status} loading={false} error="" />
     );
 
-    expect(markup).toContain('dashboard.database_status_title');
+    expect(markup).toContain('system_info.database_status_title');
+    expect(markup).toContain('system_info.database_total_size');
     expect(markup).toContain('1.00 GB');
     expect(markup).toContain('64.00 MB');
     expect(markup).toContain('32.00 KB');
     expect(markup).toContain('256.00 MB');
-    expect(markup).toContain('dashboard.database_checkpoint_passive');
-    expect(markup).toContain('dashboard.database_checkpoint_frames:24|24');
-    expect(markup).toContain('dashboard.database_checkpoint_time:');
-    expect(markup).not.toContain('dashboard.database_checkpoint_error');
+    expect(markup).toContain('system_info.database_checkpoint_passive');
+    expect(markup).toContain('system_info.database_checkpoint_frames:24|24');
+    expect(markup).toContain('system_info.database_checkpoint_time:');
+    expect(markup).not.toContain('system_info.database_checkpoint_error');
   });
 
   it('shows checkpoint errors without hiding the last file-size snapshot', () => {
@@ -65,8 +66,8 @@ describe('DatabaseStatusCard', () => {
       />
     );
 
-    expect(markup).toContain('dashboard.database_checkpoint_truncate');
-    expect(markup).toContain('dashboard.database_checkpoint_error');
+    expect(markup).toContain('system_info.database_checkpoint_truncate');
+    expect(markup).toContain('system_info.database_checkpoint_error');
     expect(markup).toContain('checkpoint deadline exceeded');
     expect(markup).toContain('64.00 MB');
   });
@@ -76,9 +77,9 @@ describe('DatabaseStatusCard', () => {
       <DatabaseStatusCard status={null} loading={false} error="status request failed" />
     );
 
-    expect(markup).toContain('dashboard.database_status_error');
+    expect(markup).toContain('system_info.database_status_error');
     expect(markup).toContain('status request failed');
-    expect(markup).not.toContain('dashboard.database_checkpoint_error');
+    expect(markup).not.toContain('system_info.database_checkpoint_error');
   });
 
   it('treats a missing database payload as unavailable instead of a pending healthy checkpoint', () => {
@@ -86,8 +87,8 @@ describe('DatabaseStatusCard', () => {
       <DatabaseStatusCard status={{ service: 'cpa-manager-plus' }} loading={false} error="" />
     );
 
-    expect(markup).toContain('dashboard.database_checkpoint_unavailable');
-    expect(markup).not.toContain('dashboard.database_checkpoint_pending');
+    expect(markup).toContain('system_info.database_checkpoint_unavailable');
+    expect(markup).not.toContain('system_info.database_checkpoint_pending');
     expect(markup).toContain('statusWarn');
   });
 
@@ -100,8 +101,8 @@ describe('DatabaseStatusCard', () => {
       />
     );
 
-    expect(markup).toContain('dashboard.database_checkpoint_unavailable');
-    expect(markup).not.toContain('dashboard.database_checkpoint_pending');
+    expect(markup).toContain('system_info.database_checkpoint_unavailable');
+    expect(markup).not.toContain('system_info.database_checkpoint_pending');
     expect(markup).toContain('statusWarn');
   });
 });
