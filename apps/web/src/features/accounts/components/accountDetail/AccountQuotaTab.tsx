@@ -1,6 +1,7 @@
 import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { JSX } from 'react';
+import { Button } from '@/components/ui/Button';
 import {
   IconBinary,
   IconChartLine,
@@ -15,7 +16,6 @@ import type {
   AccountDetailQuotaWindow,
   AccountDetailViewModel,
 } from '@/features/accounts/model/accountDetailViewModel';
-import type { AccountRow } from '@/features/accounts/model/accountRows';
 import {
   formatCompactNumber,
   formatQuotaResetTimestamp,
@@ -104,20 +104,19 @@ const MetricCell = ({ icon, tone, label, value, valueTitle }: MetricCellProps): 
 };
 
 interface AccountQuotaTabProps {
-  row: AccountRow;
   detailView: AccountDetailViewModel;
   windowUsageLoading: boolean;
   windowUsageError: string;
-  refreshing: boolean;
-  onRefresh: () => void;
-  canReset: boolean;
-  onReset: () => void;
+  historyRefreshing: boolean;
+  onRefreshHistory: () => void;
 }
 
 export function AccountQuotaTab({
   detailView,
   windowUsageLoading,
   windowUsageError,
+  historyRefreshing,
+  onRefreshHistory,
 }: AccountQuotaTabProps) {
   const { t, i18n } = useTranslation();
   const history = detailView.history;
@@ -153,6 +152,25 @@ export function AccountQuotaTab({
 
   return (
     <div className={styles.quotaTab} data-account-quota-tab="true">
+      <div className={styles.quotaTabHeader}>
+        <div className={styles.quotaPageHeading}>
+          <h2 className={styles.quotaPageTitle}>{t('accounts.detail_tab_quota')}</h2>
+          <p>{t('accounts.detail_quota_window_usage_desc')}</p>
+        </div>
+        <div className={styles.quotaTabActions}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={onRefreshHistory}
+            disabled={historyRefreshing}
+            loading={historyRefreshing}
+          >
+            {!historyRefreshing ? <IconRefreshCw size={15} /> : null}
+            {t('accounts.refresh_history')}
+          </Button>
+        </div>
+      </div>
+
       <section className={styles.quotaSummaryPanel} data-account-quota-usage-summary="true">
         <div className={styles.quotaSummaryHeading}>
           <h3>{t('accounts.detail_total_usage', { defaultValue: '凭证总体用量' })}</h3>

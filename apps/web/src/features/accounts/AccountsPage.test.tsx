@@ -1,14 +1,15 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { isValidElement, StrictMode } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '@/components/ui/Button';
 import { Drawer } from '@/components/ui/Drawer';
 import { DropdownMenu } from '@/components/ui/DropdownMenu';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { ProviderStatusBar } from '@/components/providers/ProviderStatusBar';
+import { CODEX_CONFIG } from '@/components/quota';
 import { accountQuotaSnapshotApi } from '@/services/api';
-import type { AuthFileItem, OAuthModelAliasEntry } from '@/types';
+import type { AuthFileItem, CodexQuotaState, OAuthModelAliasEntry } from '@/types';
 import type {
   AccountActionCandidatesResponse,
   AccountQuotaSnapshotWriteEntry,
@@ -26,6 +27,8 @@ import {
   getAuthFilePatchTarget,
   getAuthFileSelectionKey,
 } from '@/features/authFiles/model/authFilesPageModel';
+import type { CodexQuotaData } from '@/utils/quota/providerRequests';
+import { AccountDiagnosticsTab } from './components/accountDetail/AccountDiagnosticsTab';
 import { AccountModelsTab } from './components/accountDetail/AccountModelsTab';
 import { AccountQuotaTab } from './components/accountDetail/AccountQuotaTab';
 import { QuotaWindowCard } from './components/QuotaWindowCard';
@@ -169,6 +172,16 @@ const makeCodexFile = (name: string, authIndex: string, account: string): AuthFi
     priority: 0,
     disabled: false,
   }) as AuthFileItem;
+
+const makeCodexQuotaData = (): CodexQuotaData => ({
+  planType: 'plus',
+  windows: [],
+  quotaInventoryObserved: true,
+  subscriptionActiveUntil: null,
+  rateLimitResetCreditsAvailableCount: null,
+  rateLimitResetCredits: [],
+  rateLimitResetCreditsError: null,
+});
 
 const buildCredentialScopedQuotaRecord = <TState extends object>(
   file: AuthFileItem,
@@ -350,7 +363,8 @@ const { mocks } = vi.hoisted(() => {
         async (
           _base: string,
           _managementKey: string | undefined,
-          _request: AccountHistoryRequestForTest
+          _request: AccountHistoryRequestForTest,
+          _signal?: AbortSignal
         ): Promise<AccountHistoryResponseForTest> => ({
           generated_at_ms: 1,
           checkpoint: {
@@ -869,10 +883,12 @@ const findAncestorByType = (node: ReactTestInstance, type: string): ReactTestIns
 
 const createDeferred = <T,>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 };
 
 const flushPromises = async () => {
@@ -883,6 +899,10 @@ const flushPromises = async () => {
 };
 
 describe('AccountsPage replacement flows', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     if (typeof window !== 'undefined') {
       window.localStorage.clear();
@@ -1087,6 +1107,10 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
     await flushPromises();
     expect(accountQuotaSnapshotApi.query).toHaveBeenCalledTimes(1);
+    const previousQuerySignal = vi.mocked(accountQuotaSnapshotApi.query).mock.calls[0]?.[4] as
+      | AbortSignal
+      | undefined;
+    expect(previousQuerySignal?.aborted).toBe(false);
 
     mocks.apiBase = 'http://cpa-b.local:8317';
     await act(async () => {
@@ -1094,6 +1118,7 @@ describe('AccountsPage replacement flows', () => {
       await Promise.resolve();
     });
     await flushPromises();
+    expect(previousQuerySignal?.aborted).toBe(true);
 
     lateQuery.resolve({
       generated_at_ms: fetchedAtMs + 1,
@@ -3359,6 +3384,55 @@ describe('AccountsPage replacement flows', () => {
     );
   });
 
+  it('reuses loaded overview and diagnostic analytics until the user refreshes', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const renderer = await renderAccountsPage();
+    mocks.getAnalytics.mockClear();
+
+    const countAnalyticsRequests = () => {
+      const requests = mocks.getAnalytics.mock.calls.map(
+        (call) => call[2] as AnalyticsRequestForTest
+      );
+      return {
+        overview: requests.filter((request) => !request.include?.events_page).length,
+        diagnostics: requests.filter((request) => request.include?.events_page).length,
+      };
+    };
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+    expect(countAnalyticsRequests()).toEqual({ overview: 1, diagnostics: 0 });
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+    });
+    await flushPromises();
+    expect(countAnalyticsRequests()).toEqual({ overview: 1, diagnostics: 1 });
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_overview').props.onClick();
+    });
+    await flushPromises();
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+    });
+    await flushPromises();
+    expect(countAnalyticsRequests()).toEqual({ overview: 1, diagnostics: 1 });
+
+    await act(async () => {
+      renderer.root.findByType(AccountDiagnosticsTab).props.onRefreshEvents();
+    });
+    await flushPromises();
+    expect(countAnalyticsRequests()).toEqual({ overview: 1, diagnostics: 2 });
+  });
+
   it('ignores stale overview activity responses after switching rows', async () => {
     mocks.files = [
       makeCodexFile('codex-a.json', 'auth-a', 'first@example.com'),
@@ -3455,20 +3529,86 @@ describe('AccountsPage replacement flows', () => {
     expect(readText(requestsMetric)).not.toContain('11');
   });
 
-  it('refreshes single-account history from the row refresh action', async () => {
-    mocks.files = [
-      {
-        ...makeCodexFile('generic.json', 'auth-generic', 'generic@example.com'),
-        type: 'generic',
-        provider: 'generic',
-      } as AuthFileItem,
-    ];
+  it('reloads overview analytics after an in-flight request is invalidated by closing the drawer', async () => {
     mocks.panelFeatureAvailability = {
       checking: false,
       managerServiceBase: 'http://manager.local:18317',
       requestMonitoringAvailable: true,
       serverCodexInspectionAvailable: false,
     };
+    const firstActivity = createDeferred<AnalyticsResponseForTest>();
+    let overviewRequestCount = 0;
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        if (analyticsRequest.include?.events_page) {
+          return makeEventsResponse(makeAnalyticsEvent({}));
+        }
+        overviewRequestCount += 1;
+        if (overviewRequestCount === 1) return firstActivity.promise;
+        return {
+          generated_at_ms: 2,
+          granularity: 'day',
+          account_stats: [
+            {
+              id: 'codex-reloaded',
+              account_snapshot: 'codex@example.com',
+              auth_label_snapshot: 'codex@example.com',
+              auth_provider_snapshot: 'codex',
+              auth_indices: ['auth-1'],
+              sources: ['codex.json'],
+              calls: 33,
+              success_rate: 1,
+              input_tokens: 330,
+              output_tokens: 33,
+              cost: 0.33,
+              last_seen_ms: 1_700_000_000_033,
+            },
+          ],
+          timeline: [],
+        };
+      }
+    );
+
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer.root.findByType(Drawer).props.onClose();
+    });
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+
+    expect(overviewRequestCount).toBe(2);
+    expect(
+      readText(renderer.root.findByProps({ 'data-overview-metric-key': 'requests' }))
+    ).toContain('33');
+
+    firstActivity.resolve({
+      generated_at_ms: 1,
+      granularity: 'day',
+      account_stats: [],
+      timeline: [],
+    });
+    await flushPromises();
+    expect(
+      readText(renderer.root.findByProps({ 'data-overview-metric-key': 'requests' }))
+    ).toContain('33');
+  });
+
+  it('keeps the row quota refresh isolated from Manager history', async () => {
+    mocks.files = [makeCodexFile('codex-row.json', 'auth-row', 'row@example.com')];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const quotaFetch = vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
 
     const renderer = await renderAccountsPage();
     await flushPromises();
@@ -3477,31 +3617,15 @@ describe('AccountsPage replacement flows', () => {
     await act(async () => {
       findAccountCardButtonByAriaLabel(
         renderer,
-        'generic.json\u0000auth-generic',
+        'codex-row.json\u0000auth-row',
         'accounts.refresh_quota'
       ).props.onClick();
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(mocks.getAccountHistory).toHaveBeenCalledWith(
-      'http://manager.local:18317',
-      'manager-key',
-      {
-        accounts: [
-          {
-            row_key: 'generic.json\u0000auth-generic',
-            account_snapshot: 'generic@example.com',
-            auth_label_snapshot: undefined,
-            auth_file_snapshot: 'generic.json',
-            auth_provider_snapshot: 'generic',
-            auth_project_id_snapshot: undefined,
-            auth_index: 'auth-generic',
-            source: 'generic.json',
-          },
-        ],
-      }
-    );
+    expect(quotaFetch).toHaveBeenCalledTimes(1);
+    expect(mocks.getAccountHistory).not.toHaveBeenCalled();
   });
 
   it('clears stale single-account history when the refresh response cannot be correlated', async () => {
@@ -3561,19 +3685,422 @@ describe('AccountsPage replacement flows', () => {
     expect(getAccountListItemTexts(renderer).join('\n')).toContain('777');
 
     await act(async () => {
-      findAccountCardButtonByAriaLabel(
-        renderer,
-        'stale.json\u0000auth-stale',
-        'accounts.refresh_quota'
-      ).props.onClick();
-      await Promise.resolve();
-      await Promise.resolve();
+      findDetailButtonByName(renderer, 'stale.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    await act(async () => {
+      await renderer.root.findByType(AccountQuotaTab).props.onRefreshHistory();
     });
     await flushPromises();
 
     const cardText = getAccountListItemTexts(renderer).join('\n');
     expect(cardText).not.toContain('777');
     expect(cardText).not.toContain('999');
+  });
+
+  it('keeps a newer targeted history result when an older page request finishes later', async () => {
+    const firstFile = {
+      ...makeCodexFile('generic-a.json', 'auth-a', 'a@example.com'),
+      type: 'generic',
+      provider: 'generic',
+    } as AuthFileItem;
+    const secondFile = {
+      ...makeCodexFile('generic-b.json', 'auth-b', 'b@example.com'),
+      type: 'generic',
+      provider: 'generic',
+    } as AuthFileItem;
+    mocks.files = [firstFile, secondFile];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const pageHistory = createDeferred<AccountHistoryResponseForTest>();
+    mocks.getAccountHistory
+      .mockImplementationOnce(() => pageHistory.promise)
+      .mockResolvedValueOnce(
+        makeAccountHistoryResponse([
+          {
+            row_key: 'generic-a.json\u0000auth-a',
+            account_key: 'generic-a',
+            matched: true,
+            total_requests: 777,
+            success_calls: 700,
+            failure_calls: 77,
+            total_tokens: 7_777,
+            total_cost: 7.77,
+            success_rate: 0.9,
+            first_seen_ms: 1,
+            last_seen_ms: 2,
+            sync_status: 'ready',
+          },
+        ])
+      );
+
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'generic-a.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    await act(async () => {
+      await renderer.root.findByType(AccountQuotaTab).props.onRefreshHistory();
+    });
+    expect(readText(findAccountCardByKey(renderer, 'generic-a.json\u0000auth-a'))).toContain('777');
+
+    pageHistory.resolve(
+      makeAccountHistoryResponse([
+        {
+          row_key: 'generic-a.json\u0000auth-a',
+          account_key: 'generic-a',
+          matched: true,
+          total_requests: 111,
+          success_calls: 100,
+          failure_calls: 11,
+          total_tokens: 1_111,
+          total_cost: 1.11,
+          success_rate: 0.9,
+          first_seen_ms: 1,
+          last_seen_ms: 2,
+          sync_status: 'ready',
+        },
+        {
+          row_key: 'generic-b.json\u0000auth-b',
+          account_key: 'generic-b',
+          matched: true,
+          total_requests: 222,
+          success_calls: 200,
+          failure_calls: 22,
+          total_tokens: 2_222,
+          total_cost: 2.22,
+          success_rate: 0.9,
+          first_seen_ms: 1,
+          last_seen_ms: 2,
+          sync_status: 'ready',
+        },
+      ])
+    );
+    await flushPromises();
+
+    expect(readText(findAccountCardByKey(renderer, 'generic-a.json\u0000auth-a'))).toContain('777');
+    expect(readText(findAccountCardByKey(renderer, 'generic-a.json\u0000auth-a'))).not.toContain(
+      '111'
+    );
+    expect(readText(findAccountCardByKey(renderer, 'generic-b.json\u0000auth-b'))).toContain('222');
+  });
+
+  it('does not let an older page history failure mark a newer targeted result unavailable', async () => {
+    const firstFile = {
+      ...makeCodexFile('generic-a.json', 'auth-a', 'a@example.com'),
+      type: 'generic',
+      provider: 'generic',
+    } as AuthFileItem;
+    const secondFile = {
+      ...makeCodexFile('generic-b.json', 'auth-b', 'b@example.com'),
+      type: 'generic',
+      provider: 'generic',
+    } as AuthFileItem;
+    mocks.files = [firstFile, secondFile];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const pageHistory = createDeferred<AccountHistoryResponseForTest>();
+    mocks.getAccountHistory
+      .mockImplementationOnce(() => pageHistory.promise)
+      .mockResolvedValueOnce(
+        makeAccountHistoryResponse([
+          {
+            row_key: 'generic-a.json\u0000auth-a',
+            account_key: 'generic-a',
+            matched: true,
+            total_requests: 777,
+            success_calls: 700,
+            failure_calls: 77,
+            total_tokens: 7_777,
+            total_cost: 7.77,
+            success_rate: 0.9,
+            first_seen_ms: 1,
+            last_seen_ms: 2,
+            sync_status: 'ready',
+          },
+        ])
+      );
+
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'generic-a.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    await act(async () => {
+      await renderer.root.findByType(AccountQuotaTab).props.onRefreshHistory();
+    });
+    expect(readText(findAccountCardByKey(renderer, 'generic-a.json\u0000auth-a'))).toContain('777');
+
+    pageHistory.reject(new Error('page history offline'));
+    await flushPromises();
+
+    const refreshedCardText = readText(
+      findAccountCardByKey(renderer, 'generic-a.json\u0000auth-a')
+    );
+    expect(refreshedCardText).toContain('777');
+    expect(refreshedCardText).not.toContain('accounts.history_recent_fallback');
+    expect(refreshedCardText).not.toContain('accounts.history_unavailable');
+    expect(readText(findAccountCardByKey(renderer, 'generic-b.json\u0000auth-b'))).toContain(
+      'accounts.history_unavailable'
+    );
+  });
+
+  it('cancels a manual history refresh across capability changes without blocking the next refresh', async () => {
+    const file = {
+      ...makeCodexFile('generic-history.json', 'auth-history', 'history@example.com'),
+      type: 'generic',
+      provider: 'generic',
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'generic-history.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    const previousRefresh = createDeferred<AccountHistoryResponseForTest>();
+    const nextRefresh = createDeferred<AccountHistoryResponseForTest>();
+    let refreshCall = 0;
+    mocks.getAccountHistory.mockClear();
+    mocks.getAccountHistory.mockImplementation(() => {
+      refreshCall += 1;
+      if (refreshCall === 1) return previousRefresh.promise;
+      if (refreshCall === 3) return nextRefresh.promise;
+      return Promise.resolve(makeAccountHistoryResponse([]));
+    });
+
+    await act(async () => {
+      renderer.root.findByType(AccountQuotaTab).props.onRefreshHistory();
+      await Promise.resolve();
+    });
+
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(1);
+    const previousSignal = mocks.getAccountHistory.mock.calls[0]?.[3] as AbortSignal | undefined;
+    expect(previousSignal?.aborted).toBe(false);
+    expect(renderer.root.findByType(AccountQuotaTab).props.historyRefreshing).toBe(true);
+
+    mocks.panelFeatureAvailability = {
+      ...mocks.panelFeatureAvailability,
+      checking: true,
+    };
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+
+    expect(previousSignal?.aborted).toBe(true);
+    expect(renderer.root.findByType(AccountQuotaTab).props.historyRefreshing).toBe(false);
+
+    mocks.panelFeatureAvailability = {
+      ...mocks.panelFeatureAvailability,
+      checking: false,
+    };
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      renderer.root.findByType(AccountQuotaTab).props.onRefreshHistory();
+      await Promise.resolve();
+    });
+
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(3);
+    expect(renderer.root.findByType(AccountQuotaTab).props.historyRefreshing).toBe(true);
+
+    previousRefresh.resolve(makeAccountHistoryResponse([]));
+    await flushPromises();
+    expect(renderer.root.findByType(AccountQuotaTab).props.historyRefreshing).toBe(true);
+
+    nextRefresh.resolve(makeAccountHistoryResponse([]));
+    await flushPromises();
+    expect(renderer.root.findByType(AccountQuotaTab).props.historyRefreshing).toBe(false);
+  });
+
+  it('refreshes only the visible page and ignores a repeated batch trigger', async () => {
+    mocks.files = Array.from({ length: 11 }, (_, index) =>
+      makeCodexFile(
+        `codex-page-${String(index + 1).padStart(2, '0')}.json`,
+        `auth-page-${index + 1}`,
+        `page-${index + 1}@example.com`
+      )
+    );
+    const quotaResult = createDeferred<CodexQuotaData>();
+    const quotaFetch = vi
+      .spyOn(CODEX_CONFIG, 'fetchQuota')
+      .mockImplementation(() => quotaResult.promise);
+    const renderer = await renderAccountsPage();
+    const visibleNames = renderer.root
+      .findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+      .map((node) => String(node.props['data-account-card']).split('\u0000')[0])
+      .sort();
+    expect(visibleNames).toHaveLength(10);
+
+    const refreshButton = findButtonByText(renderer, 'accounts.refresh_quota');
+    let firstRefresh!: Promise<void>;
+    let repeatedRefresh!: Promise<void>;
+    await act(async () => {
+      firstRefresh = refreshButton.props.onClick();
+      repeatedRefresh = refreshButton.props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(quotaFetch).toHaveBeenCalledTimes(1);
+    quotaResult.resolve(makeCodexQuotaData());
+    await act(async () => {
+      await Promise.all([firstRefresh, repeatedRefresh]);
+    });
+
+    expect(quotaFetch).toHaveBeenCalledTimes(10);
+    expect(quotaFetch.mock.calls.map(([file]) => file.name).sort()).toEqual(visibleNames);
+  });
+
+  it('keeps the last successful quota visible while a manual refresh is pending or fails', async () => {
+    const file = makeCodexFile('codex-preserved.json', 'auth-preserved', 'preserved@example.com');
+    mocks.files = [file];
+    const storeKey = getQuotaCredentialStoreKey(file);
+    const previousQuota = {
+      status: 'success' as const,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly',
+          usedPercent: 25,
+          resetLabel: 'later',
+          resetAtMs: Date.now() + 60_000,
+          resetAccuracy: 'exact' as const,
+          limitWindowSeconds: 7 * 24 * 60 * 60,
+        },
+      ],
+      quotaInventoryObserved: true,
+      ...buildQuotaCredentialIdentity(file),
+      fetchedAtMs: 1,
+    };
+    mocks.quotaState.codexQuota = { [storeKey]: previousQuota };
+    const quotaResult = createDeferred<CodexQuotaData>();
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockImplementation(() => quotaResult.promise);
+    const renderer = await renderAccountsPage();
+
+    let refreshPromise!: Promise<void>;
+    await act(async () => {
+      refreshPromise = findAccountCardButtonByAriaLabel(
+        renderer,
+        'codex-preserved.json\u0000auth-preserved',
+        'accounts.refresh_quota'
+      ).props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
+    quotaResult.reject(new Error('provider unavailable'));
+    await act(async () => {
+      await refreshPromise;
+    });
+
+    expect(mocks.quotaState.setCodexQuota).toHaveBeenCalledTimes(1);
+    const updater = mocks.quotaState.setCodexQuota.mock.calls[0]?.[0] as (
+      current: Record<string, CodexQuotaState>
+    ) => Record<string, CodexQuotaState>;
+    const failedState = updater(mocks.quotaState.codexQuota as Record<string, CodexQuotaState>)[
+      storeKey
+    ];
+    expect(failedState.status).toBe('error');
+    expect(failedState.windows).toEqual(previousQuota.windows);
+  });
+
+  it('keeps the last successful Codex quota visible while a reset is pending or fails', async () => {
+    const file = makeCodexFile('codex-reset.json', 'auth-reset', 'reset@example.com');
+    mocks.files = [file];
+    const storeKey = getQuotaCredentialStoreKey(file);
+    const previousQuota = {
+      status: 'success' as const,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly',
+          usedPercent: 40,
+          resetLabel: 'later',
+          resetAtMs: Date.now() + 60_000,
+          resetAccuracy: 'exact' as const,
+          limitWindowSeconds: 7 * 24 * 60 * 60,
+        },
+      ],
+      quotaInventoryObserved: true,
+      rateLimitResetCreditsAvailableCount: 1,
+      ...buildQuotaCredentialIdentity(file),
+      fetchedAtMs: 1,
+    };
+    mocks.quotaState.codexQuota = { [storeKey]: previousQuota };
+    const resetResult = createDeferred<CodexQuotaData>();
+    vi.spyOn(CODEX_CONFIG, 'resetQuota').mockImplementation(() => resetResult.promise);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex-reset.json').props.onClick();
+    });
+    await act(async () => {
+      findDrawerMoreItem(renderer, 'reset-codex-quota').onClick();
+    });
+    const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as {
+      onConfirm: () => Promise<void>;
+    };
+
+    let resetPromise!: Promise<void>;
+    await act(async () => {
+      resetPromise = confirmation.onConfirm();
+      await Promise.resolve();
+    });
+
+    expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
+    resetResult.reject(new Error('reset unavailable'));
+    await act(async () => {
+      await resetPromise;
+    });
+
+    expect(mocks.quotaState.setCodexQuota).toHaveBeenCalledTimes(1);
+    const updater = mocks.quotaState.setCodexQuota.mock.calls[0]?.[0] as (
+      current: Record<string, CodexQuotaState>
+    ) => Record<string, CodexQuotaState>;
+    const failedState = updater(mocks.quotaState.codexQuota as Record<string, CodexQuotaState>)[
+      storeKey
+    ];
+    expect(failedState.status).toBe('error');
+    expect(failedState.windows).toEqual(previousQuota.windows);
   });
 
   it('keeps auth-file selection helpers in accounts selection mode', async () => {
@@ -3685,7 +4212,8 @@ describe('AccountsPage replacement flows', () => {
             source: 'healthy.json',
           },
         ],
-      }
+      },
+      expect.anything()
     );
     const accountHistoryRequest = mocks.getAccountHistory.mock.calls[0]?.[2];
     expect(accountHistoryRequest).not.toHaveProperty('catch_up');
@@ -3928,7 +4456,7 @@ describe('AccountsPage replacement flows', () => {
     expect(treeText(renderer)).toContain('usage_limit_reached');
   });
 
-  it('loads overview evidence once and refreshes window usage on each quota-tab entry', async () => {
+  it('loads quota history without automatically refreshing provider quota', async () => {
     mocks.files = [
       makeCodexFile('codex-a.json', 'auth-a', 'first@example.com'),
       makeCodexFile('codex-b.json', 'auth-b', 'second@example.com'),
@@ -4008,7 +4536,7 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
     expect(mocks.listAccountActionCandidates).toHaveBeenCalledTimes(1);
     expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(1);
-    expect(mocks.quotaState.setCodexQuota).toHaveBeenCalled();
+    expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
     expect(treeText(renderer)).toContain('accounts.detail_total_requests');
     expect(treeText(renderer)).toContain('accounts.detail_total_tokens');
     expect(treeText(renderer)).toContain('accounts.detail_total_cost');
@@ -4023,7 +4551,6 @@ describe('AccountsPage replacement flows', () => {
     expect(renderer.root.findAllByProps({ 'data-quota-card-mode': 'standard' })).toHaveLength(1);
     expect(treeText(renderer)).toContain('accounts.detail_quota_standard_title');
     expect(treeText(renderer)).toContain('accounts.detail_quota_evidence_title');
-    const quotaRefreshCommitCount = mocks.quotaState.setCodexQuota.mock.calls.length;
     const windowUsageRequest = mocks.getAccountWindowUsage.mock.calls[0]?.[2] as
       | AccountWindowUsageRequestForTest
       | undefined;
@@ -4040,17 +4567,17 @@ describe('AccountsPage replacement flows', () => {
       provider_window_id: 'five-hour',
       period: 'previous',
     });
+    const historyRequestCount = mocks.getAccountHistory.mock.calls.length;
 
     await act(async () => {
-      await renderer.root.findByType(AccountQuotaTab).props.onRefresh();
+      await renderer.root.findByType(AccountQuotaTab).props.onRefreshHistory();
     });
     await flushPromises();
 
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(historyRequestCount + 1);
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(2);
     expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(2);
-    expect(mocks.quotaState.setCodexQuota.mock.calls.length).toBeGreaterThan(
-      quotaRefreshCommitCount
-    );
-    const manualRefreshCommitCount = mocks.quotaState.setCodexQuota.mock.calls.length;
+    expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
 
     await act(async () => {
       findHostButtonByText(renderer, 'accounts.detail_tab_overview').props.onClick();
@@ -4061,10 +4588,85 @@ describe('AccountsPage replacement flows', () => {
     });
     await flushPromises();
 
-    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(3);
-    expect(mocks.quotaState.setCodexQuota.mock.calls.length).toBeGreaterThan(
-      manualRefreshCommitCount
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(2);
+    expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
+  });
+
+  it('does not refresh provider quota when opening a quota-tab deep link', async () => {
+    const file = makeCodexFile('codex-deep-link.json', 'auth-deep-link', 'deep-link@example.com');
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex-deep-link.json%00auth-deep-link&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const resetAtMs = Date.now() + 60 * 60 * 1000;
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      quotaInventoryObserved: true,
+      fetchedAtMs: Date.now(),
+      windows: [
+        {
+          id: 'five-hour',
+          label: 'Five hours',
+          usedPercent: 10,
+          resetAtMs,
+          resetLabel: new Date(resetAtMs).toISOString(),
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 5 * 60 * 60,
+        },
+      ],
+    });
+    const quotaFetch = vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(renderer.root.findByType(AccountQuotaTab)).toBeTruthy();
+    expect(quotaFetch).not.toHaveBeenCalled();
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads history for a deep-linked credential outside the visible page', async () => {
+    mocks.files = Array.from({ length: 11 }, (_, index) =>
+      makeCodexFile(
+        `codex-history-${String(index + 1).padStart(2, '0')}.json`,
+        `auth-history-${index + 1}`,
+        `history-${index + 1}@example.com`
+      )
     );
+    const target = mocks.files[10];
+    const targetKey = getAuthFileSelectionKey(target);
+    mocks.location = {
+      pathname: '/accounts',
+      search: `?account=${encodeURIComponent(targetKey)}&tab=quota`,
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const visibleKeys = renderer.root
+      .findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+      .map((node) => String(node.props['data-account-card']));
+    expect(visibleKeys).toHaveLength(10);
+    expect(visibleKeys).not.toContain(targetKey);
+    const request = mocks.getAccountHistory.mock.calls[0]?.[2] as AccountHistoryRequestForTest;
+    expect(request.accounts).toHaveLength(11);
+    expect(request.accounts).toContainEqual(expect.objectContaining({ row_key: targetKey }));
   });
 
   it('does not loop window usage loading when a rolling quota snapshot is merged', async () => {
@@ -4121,8 +4723,8 @@ describe('AccountsPage replacement flows', () => {
     await flushPromises();
 
     expect(renderer.root.findByProps({ 'data-account-quota-usage-summary': 'true' })).toBeTruthy();
-    expect(accountQuotaSnapshotApi.query).toHaveBeenCalledTimes(2);
-    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(2);
+    expect(accountQuotaSnapshotApi.query).toHaveBeenCalledTimes(1);
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(1);
     const lastWindowUsageRequest = mocks.getAccountWindowUsage.mock.calls[
       mocks.getAccountWindowUsage.mock.calls.length - 1
     ]?.[2] as AccountWindowUsageRequestForTest | undefined;
@@ -5235,6 +5837,57 @@ describe('AccountsPage replacement flows', () => {
 
     expect(treeText(renderer)).toContain('account_actions.reason_invalid_credentials');
     expect(treeText(renderer)).not.toContain('Credentials are invalid or expired');
+  });
+
+  it('reloads diagnostic analytics after an in-flight request is invalidated by closing the drawer', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const firstEvents = createDeferred<AnalyticsResponseForTest>();
+    let eventRequestCount = 0;
+    mocks.getAnalytics.mockImplementation(
+      async (_base: string, _key: string | undefined, request: unknown) => {
+        const analyticsRequest = request as AnalyticsRequestForTest;
+        if (!analyticsRequest.include?.events_page) return makeEmptyAnalyticsResponse();
+        eventRequestCount += 1;
+        if (eventRequestCount === 1) return firstEvents.promise;
+        return makeEventsResponse(
+          makeAnalyticsEvent({ request_id: 'req-reloaded', event_hash: 'event-reloaded' })
+        );
+      }
+    );
+
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer.root.findByType(Drawer).props.onClose();
+    });
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+    });
+    await flushPromises();
+
+    expect(eventRequestCount).toBe(2);
+    expect(treeText(renderer)).toContain('req-reloaded');
+
+    firstEvents.resolve(
+      makeEventsResponse(makeAnalyticsEvent({ request_id: 'req-stale', event_hash: 'event-stale' }))
+    );
+    await flushPromises();
+    expect(treeText(renderer)).toContain('req-reloaded');
+    expect(treeText(renderer)).not.toContain('req-stale');
   });
 
   it('loads additional detail events with the returned cursor', async () => {

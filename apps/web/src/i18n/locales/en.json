@@ -837,6 +837,7 @@
     "batch_delete_preview_more": "And {{count}} more files",
     "batch_hint": "Select credentials to enable, disable, adjust priority, or delete in batches.",
     "refresh_quota": "Refresh quota",
+    "refresh_history": "Refresh history",
     "enable": "Enable",
     "disable": "Disable",
     "no_refreshable_accounts": "No refreshable credentials selected",

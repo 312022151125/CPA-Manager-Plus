@@ -4,6 +4,7 @@ import {
   accountWindowUsageRequestKey,
   buildAccountWindowUsageByKey,
   buildAccountWindowUsageTargetEntries,
+  filterAccountWindowUsageByTargetRanges,
 } from './accountWindowUsageRows';
 import type { AccountQuotaWindowDefinition } from './accountQuotaWindowDefinitions';
 
@@ -82,6 +83,38 @@ describe('accountWindowUsageRows', () => {
       total_requests: 32,
       total_cost: 5.2,
     });
+  });
+
+  it('does not reuse usage from an older cycle with the same provider window id', () => {
+    const row = makeRow({});
+    const previousEntries = buildAccountWindowUsageTargetEntries(
+      [row],
+      new Map([[row.selectionKey, [{ key: '5h', fromMs: 1_000, toMs: 2_000 }]]])
+    );
+    const usageByKey = buildAccountWindowUsageByKey(previousEntries, [
+      {
+        row_key: row.selectionKey,
+        window_key: '5h',
+        from_ms: 1_000,
+        to_ms: 2_000,
+        matched: true,
+        total_requests: 32,
+        success_calls: 30,
+        failure_calls: 2,
+        total_tokens: 240_000,
+        total_cost: 5.2,
+        success_rate: 0.9375,
+        last_seen_ms: 1_900,
+        sync_status: 'ready',
+      },
+    ]);
+    const currentEntries = buildAccountWindowUsageTargetEntries(
+      [row],
+      new Map([[row.selectionKey, [{ key: '5h', fromMs: 2_000, toMs: 3_000 }]]])
+    );
+
+    expect(filterAccountWindowUsageByTargetRanges(previousEntries, usageByKey)).toHaveLength(1);
+    expect(filterAccountWindowUsageByTargetRanges(currentEntries, usageByKey)).toHaveLength(0);
   });
 
   it('uses unique window keys instead of provider order for legacy scoped responses', () => {

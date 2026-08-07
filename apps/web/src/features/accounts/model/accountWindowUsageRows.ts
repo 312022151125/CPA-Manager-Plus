@@ -236,3 +236,17 @@ export const buildAccountWindowUsageByKey = (
   }
   return result;
 };
+
+export const filterAccountWindowUsageByTargetRanges = (
+  entries: AccountWindowUsageTargetEntry[],
+  usageByKey: Map<string, MonitoringAccountWindowUsageItem>
+): Map<string, MonitoringAccountWindowUsageItem> => {
+  const result = new Map<string, MonitoringAccountWindowUsageItem>();
+  entries.forEach((entry) => {
+    const usage = usageByKey.get(entry.requestKey);
+    if (!usage) return;
+    if (usage.from_ms !== entry.target.from_ms || usage.to_ms !== entry.target.to_ms) return;
+    result.set(entry.requestKey, usage);
+  });
+  return result;
+};
