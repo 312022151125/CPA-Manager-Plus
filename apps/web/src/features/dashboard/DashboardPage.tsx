@@ -27,6 +27,7 @@ import type { AuthFileItem } from '@/types/authFile';
 import { VersionCard } from './components/VersionCard';
 import { UsageMetricsCard } from './components/UsageMetricsCard';
 import { CollectorStatusCard } from './components/CollectorStatusCard';
+import { DatabaseStatusCard } from './components/DatabaseStatusCard';
 import { HealthAlertsCard } from './components/HealthAlertsCard';
 import { TrafficOverviewCard } from './components/TrafficOverviewCard';
 import { useDashboardUsageSummary } from './hooks/useDashboardUsageSummary';
@@ -564,6 +565,11 @@ export function DashboardPage() {
             serviceBase={usageSummary.serviceBase}
             managementKey={managementKey}
             refreshSignal={cardRefreshSignal}
+            status={collectorStatus}
+            loading={collectorLoading}
+            error={collectorError}
+          />
+          <DatabaseStatusCard
             status={collectorStatus}
             loading={collectorLoading}
             error={collectorError}
