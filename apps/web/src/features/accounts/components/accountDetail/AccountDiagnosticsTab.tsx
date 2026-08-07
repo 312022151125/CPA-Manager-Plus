@@ -1,8 +1,21 @@
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
-import { IconRefreshCw } from '@/components/ui/icons';
+import {
+  IconChartLine,
+  IconCheck,
+  IconChevronRight,
+  IconChevronUp,
+  IconClock,
+  IconDatabaseZap,
+  IconExternalLink,
+  IconFileText,
+  IconRefreshCw,
+  IconShield,
+  IconTimer,
+  IconTriangleAlert,
+  IconTrendingUp,
+} from '@/components/ui/icons';
 import type { AccountDetailViewModel } from '@/features/accounts/model/accountDetailViewModel';
-import type { AccountRecommendationPriority } from '@/features/accounts/model/quotaRecommendations';
 import type { AccountRow } from '@/features/accounts/model/accountRows';
 import type { MonitoringAnalyticsEventRow } from '@/services/api';
 import {
@@ -34,7 +47,6 @@ interface AccountDiagnosticsTabProps {
   eventsUnavailable: boolean;
   nextBeforeMs: number | null;
   nextBeforeId: number | null;
-  getRecommendationPriorityClass: (priority: AccountRecommendationPriority) => string;
   onRefreshEvents: () => void;
   onLoadMoreEvents: (beforeMs: number | null, beforeId: number | null) => void;
 }
@@ -55,7 +67,6 @@ export function AccountDiagnosticsTab({
   eventsUnavailable,
   nextBeforeMs,
   nextBeforeId,
-  getRecommendationPriorityClass,
   onRefreshEvents,
   onLoadMoreEvents,
 }: AccountDiagnosticsTabProps) {
@@ -73,8 +84,7 @@ export function AccountDiagnosticsTab({
   const hasInspectionEvidence = detailView.strategy.inspectionFields.length > 0;
   const hasCodexEvidence = detailView.strategy.codexBadges.length > 0;
   const hasCandidateEvidence =
-    detailView.strategy.actionCandidates.length > 0 ||
-    Boolean(candidatesError);
+    detailView.strategy.actionCandidates.length > 0 || Boolean(candidatesError);
   const hasDiagnosticEvidence = hasInspectionEvidence || hasCodexEvidence || hasCandidateEvidence;
   const activityTotalCalls = activity.totalCalls ?? eventsTotalCount;
   const recentFailureMeta = activity.recentFailure
@@ -86,56 +96,72 @@ export function AccountDiagnosticsTab({
     : [];
 
   return (
-    <div className={styles.drawerDetailStack}>
+    <div className={styles.diagnosticDetailStack} data-diagnostic-layout="prototype">
       <section
-        className={`${styles.drawerSection} ${styles.diagnosticConclusionSection}`}
+        className={`${styles.diagnosticCard} ${styles.diagnosticConclusionCard}`}
+        data-diagnostic-card="conclusion"
         data-diagnostic-evidence-status={conclusion.evidenceStatus}
         aria-busy={inspectionLoading}
       >
-        <div className={styles.diagnosticConclusionHeader}>
-          <h3>{t('accounts.detail_diagnostic_conclusion')}</h3>
-          <div className={styles.diagnosticConclusionState}>
-            <span className={evidenceStatusClass}>{t(conclusion.evidenceStatusLabelKey)}</span>
-          </div>
+        <div className={styles.diagnosticCardHeader}>
+          <h3 className={styles.diagnosticSectionTitle}>
+            <IconShield size={24} />
+            <span>{t('accounts.detail_diagnostic_conclusion')}</span>
+          </h3>
+          <span className={`${styles.diagnosticEvidenceBadge} ${evidenceStatusClass}`}>
+            {t(conclusion.evidenceStatusLabelKey)}
+          </span>
         </div>
         <div className={styles.diagnosticConclusionMain}>
           <span
-            className={`${styles.badge} ${
-              conclusion.priority
-                ? getRecommendationPriorityClass(conclusion.priority)
-                : styles.badgeNeutral
-            }`}
+            className={styles.diagnosticConclusionMark}
+            data-diagnostic-priority={conclusion.priority ?? 'normal'}
+            aria-hidden="true"
           >
-            {t(conclusion.actionLabelKey)}
+            {conclusion.priority ? <IconTriangleAlert size={15} /> : <IconCheck size={15} />}
           </span>
-          <p>{t(conclusion.reasonKey)}</p>
+          <div className={styles.diagnosticConclusionCopy}>
+            <strong>{t(conclusion.actionLabelKey)}</strong>
+            <p>{t(conclusion.reasonKey)}</p>
+          </div>
         </div>
         <div className={styles.diagnosticConclusionMeta}>
           <span>
+            <IconFileText size={18} />
             <strong>{t('accounts.detail_diagnostic_source')}</strong>
-            {t(conclusion.sourceLabelKey)}
+            <span>{t(conclusion.sourceLabelKey)}</span>
           </span>
           {conclusion.observedAtMs !== null ? (
             <span>
+              <IconClock size={18} />
               <strong>{t('accounts.detail_observed_at')}</strong>
-              {formatTimestamp(conclusion.observedAtMs, i18n.language)}
+              <span>{formatTimestamp(conclusion.observedAtMs, i18n.language)}</span>
             </span>
           ) : null}
           {conclusion.evidenceStatus !== 'current' && conclusion.latestActivityAtMs !== null ? (
             <span>
+              <IconExternalLink size={18} />
               <strong>{t('accounts.detail_diagnostic_latest_activity')}</strong>
-              {formatTimestamp(conclusion.latestActivityAtMs, i18n.language)}
+              <span>{formatTimestamp(conclusion.latestActivityAtMs, i18n.language)}</span>
             </span>
           ) : null}
         </div>
       </section>
 
-      <section className={styles.drawerSection} aria-busy={eventsLoading}>
-        <div className={styles.sectionHeaderInline}>
-          <h3>{t('accounts.detail_activity_title')}</h3>
+      <section
+        className={`${styles.diagnosticCard} ${styles.diagnosticActivityCard}`}
+        data-diagnostic-card="activity"
+        aria-busy={eventsLoading}
+      >
+        <div className={styles.diagnosticCardHeader}>
+          <h3 className={styles.diagnosticSectionTitle}>
+            <IconTrendingUp size={24} />
+            <span>{t('accounts.detail_activity_title')}</span>
+          </h3>
           <Button
             variant="secondary"
             size="sm"
+            className={styles.diagnosticRefreshButton}
             onClick={onRefreshEvents}
             disabled={eventsUnavailable || eventsLoading || eventsRefreshing || eventsAppending}
             loading={eventsRefreshing}
@@ -145,30 +171,54 @@ export function AccountDiagnosticsTab({
           </Button>
         </div>
         {eventsUnavailable ? (
-          <p>{t('accounts.detail_events_unavailable')}</p>
+          <p className={styles.diagnosticEmptyState}>{t('accounts.detail_events_unavailable')}</p>
         ) : eventsError ? (
           <div className={styles.errorBox}>{eventsError}</div>
         ) : (
-          <div className={styles.detailEventsStack}>
-            <div className={styles.detailActivitySummary}>
-              <div data-diagnostic-activity-metric="requests">
-                <span>{t('accounts.detail_activity_requests')}</span>
-                <strong title={String(activityTotalCalls)}>
-                  {formatCompactNumber(activityTotalCalls)}
-                </strong>
-              </div>
-              <div data-diagnostic-activity-metric="failure-rate">
-                <span>{t('accounts.detail_activity_failure_rate')}</span>
-                <strong>{formatPercent(activity.failureRate, 1)}</strong>
-              </div>
-              <div data-diagnostic-activity-metric="p95-latency">
-                <span>{t('accounts.detail_activity_p95_latency')}</span>
-                <strong>{formatDurationMs(activity.p95LatencyMs)}</strong>
-              </div>
+          <div className={styles.diagnosticActivityBody}>
+            <div className={styles.diagnosticKpiGrid}>
+              <article
+                className={styles.diagnosticKpiCard}
+                data-diagnostic-activity-metric="requests"
+              >
+                <div>
+                  <span>{t('accounts.detail_activity_requests')}</span>
+                  <strong title={String(activityTotalCalls)}>
+                    {formatCompactNumber(activityTotalCalls)}
+                  </strong>
+                </div>
+                <span className={`${styles.diagnosticKpiIcon} ${styles.diagnosticKpiIconBlue}`}>
+                  <IconDatabaseZap size={25} />
+                </span>
+              </article>
+              <article
+                className={styles.diagnosticKpiCard}
+                data-diagnostic-activity-metric="failure-rate"
+              >
+                <div>
+                  <span>{t('accounts.detail_activity_failure_rate')}</span>
+                  <strong>{formatPercent(activity.failureRate, 1)}</strong>
+                </div>
+                <span className={`${styles.diagnosticKpiIcon} ${styles.diagnosticKpiIconPurple}`}>
+                  <IconChartLine size={25} />
+                </span>
+              </article>
+              <article
+                className={styles.diagnosticKpiCard}
+                data-diagnostic-activity-metric="p95-latency"
+              >
+                <div>
+                  <span>{t('accounts.detail_activity_p95_latency')}</span>
+                  <strong>{formatDurationMs(activity.p95LatencyMs)}</strong>
+                </div>
+                <span className={`${styles.diagnosticKpiIcon} ${styles.diagnosticKpiIconGreen}`}>
+                  <IconTimer size={25} />
+                </span>
+              </article>
             </div>
 
             {activity.recentFailure ? (
-              <div className={styles.detailEventFailureSummary}>
+              <div className={styles.diagnosticRecentFailure}>
                 <span>{t('accounts.detail_activity_latest_failure')}</span>
                 <strong>
                   {activity.recentFailure.reason || t('accounts.detail_event_failed_reason_empty')}
@@ -180,22 +230,27 @@ export function AccountDiagnosticsTab({
             ) : null}
 
             {events.length === 0 ? (
-              <div className={styles.detailEventsFooter}>
+              <div className={styles.diagnosticActivityFooter}>
                 <span>{t('accounts.detail_events_empty')}</span>
                 <a href={`#/monitoring?${monitoringParams.toString()}`}>
-                  {t('accounts.detail_event_footer_open_monitoring')}
+                  <span>{t('accounts.detail_event_footer_open_monitoring')}</span>
+                  <IconChevronRight size={17} />
                 </a>
               </div>
             ) : (
               <>
-                <div className={styles.detailEventsList}>
+                <div className={styles.diagnosticRequestList}>
                   {events.map((event) => {
                     const requestLabel = event.request_id || event.event_hash.slice(0, 10) || '-';
                     const modelLabel = event.resolved_model || event.model || '-';
                     const failureReason = getEventFailureReason(event);
                     return (
-                      <article key={event.event_hash} className={styles.detailEventItem}>
-                        <div className={styles.detailEventHeader}>
+                      <article
+                        key={event.event_hash}
+                        className={styles.diagnosticRequestRow}
+                        data-diagnostic-request={requestLabel}
+                      >
+                        <div className={styles.diagnosticRequestTop}>
                           <span
                             className={`${styles.eventStatus} ${
                               event.failed ? styles.eventStatusFailed : styles.eventStatusSuccess
@@ -204,37 +259,42 @@ export function AccountDiagnosticsTab({
                           >
                             {getEventStatusText(event, t)}
                           </span>
-                          <strong>
+                          <div className={styles.diagnosticRequestId}>
+                            <CopyableText
+                              value={requestLabel}
+                              copyValue={event.request_id || event.event_hash}
+                              className={styles.diagnosticCopyButton}
+                            />
+                          </div>
+                          <time className={styles.diagnosticRequestTime}>
                             {formatTimestamp(event.timestamp_ms, i18n.language, true)}
-                          </strong>
+                          </time>
+                          <span className={styles.diagnosticRequestModel} title={modelLabel}>
+                            {modelLabel}
+                          </span>
                         </div>
-                        <div className={styles.detailEventIdentity}>
-                          <CopyableText
-                            value={requestLabel}
-                            copyValue={event.request_id || event.event_hash}
-                          />
-                          <span title={modelLabel}>{modelLabel}</span>
-                        </div>
-                        {event.failed ? (
-                          <p className={styles.detailEventFailureReason}>
-                            {failureReason || t('accounts.detail_event_failed_reason_empty')}
-                          </p>
-                        ) : null}
-                        <div className={styles.detailEventMeta}>
+                        <div className={styles.diagnosticRequestMetrics}>
                           <span>
                             {t('accounts.value_input_tokens')}:{' '}
-                            {formatCompactNumber(event.input_tokens)}
+                            <b>{formatCompactNumber(event.input_tokens)}</b>
                           </span>
                           <span>
                             {t('accounts.value_output_tokens')}:{' '}
-                            {formatCompactNumber(event.output_tokens)}
+                            <b>{formatCompactNumber(event.output_tokens)}</b>
                           </span>
                           <span>
                             {t('accounts.detail_event_col_latency')}:{' '}
-                            {formatDurationMs(event.latency_ms)}
+                            <b>{formatDurationMs(event.latency_ms)}</b>
                           </span>
-                          <span>TTFT: {formatDurationMs(event.ttft_ms)}</span>
+                          <span>
+                            TTFT: <b>{formatDurationMs(event.ttft_ms)}</b>
+                          </span>
                         </div>
+                        {event.failed ? (
+                          <p className={styles.diagnosticRequestFailure}>
+                            {failureReason || t('accounts.detail_event_failed_reason_empty')}
+                          </p>
+                        ) : null}
                       </article>
                     );
                   })}
@@ -250,7 +310,7 @@ export function AccountDiagnosticsTab({
                     {t('accounts.detail_event_load_more')}
                   </Button>
                 ) : null}
-                <div className={styles.detailEventsFooter}>
+                <div className={styles.diagnosticActivityFooter}>
                   <span>
                     {t('accounts.detail_event_footer_count', {
                       shown: events.length,
@@ -258,7 +318,8 @@ export function AccountDiagnosticsTab({
                     })}
                   </span>
                   <a href={`#/monitoring?${monitoringParams.toString()}`}>
-                    {t('accounts.detail_event_footer_open_monitoring')}
+                    <span>{t('accounts.detail_event_footer_open_monitoring')}</span>
+                    <IconChevronRight size={17} />
                   </a>
                 </div>
               </>
@@ -269,19 +330,25 @@ export function AccountDiagnosticsTab({
 
       {hasDiagnosticEvidence ? (
         <details
-          className={`${styles.drawerSection} ${styles.diagnosticEvidenceDisclosure}`}
+          className={`${styles.diagnosticCard} ${styles.diagnosticEvidenceCard}`}
+          data-diagnostic-card="evidence"
           aria-busy={inspectionLoading || candidatesLoading}
         >
           <summary>
-            <span>{t('accounts.detail_diagnostic_evidence')}</span>
+            <span className={styles.diagnosticEvidenceSummaryTitle}>
+              <IconFileText size={24} />
+              <span>{t('accounts.detail_diagnostic_evidence')}</span>
+            </span>
             {candidatesError ? (
               <small>{t('accounts.detail_diagnostic_evidence_error')}</small>
             ) : null}
+            <IconChevronUp size={22} className={styles.diagnosticEvidenceChevron} />
           </summary>
           <div className={styles.diagnosticEvidenceBody}>
             {hasInspectionEvidence ? (
-              <section className={styles.diagnosticEvidenceGroup}>
-                <h4>{t('accounts.detail_diagnostic_inspection_evidence')}</h4>
+              <section
+                className={`${styles.diagnosticEvidenceGroup} ${styles.diagnosticInspectionEvidenceGroup}`}
+              >
                 <AccountDetailFieldList fields={detailView.strategy.inspectionFields} />
               </section>
             ) : null}

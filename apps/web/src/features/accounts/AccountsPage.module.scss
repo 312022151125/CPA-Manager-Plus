@@ -1470,41 +1470,73 @@
   top: -$spacing-md;
   z-index: 4;
   display: flex;
-  gap: 4px;
+  align-items: stretch;
+  gap: 12px;
   min-width: 0;
+  height: 43px;
+  min-height: 43px;
   overflow-x: auto;
   margin-inline: -$spacing-lg;
-  padding: 3px;
-  padding-inline: calc(#{$spacing-lg} + 4px) calc(#{$spacing-lg} + 3px);
+  padding: 0 calc(#{$spacing-lg} + 3px);
   border: 1px solid var(--accounts-border);
-  border-top: 0;
+  border-top-color: color-mix(in srgb, var(--accounts-border) 76%, transparent);
+  border-right: 0;
   border-left: 0;
   border-radius: 0;
-  background: var(--accounts-muted-surface);
+  background: var(--accounts-surface);
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 
   button {
     flex: 0 0 auto;
-    min-height: 30px;
-    padding: 0 10px;
-    border: 1px solid transparent;
-    border-radius: 8px;
+    position: relative;
+    align-self: stretch;
+    min-height: 0;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 0;
     background: transparent;
-    color: var(--text-secondary);
+    color: var(--accounts-muted);
     font-size: 12px;
-    font-weight: 800;
+    font-weight: 700;
     cursor: pointer;
+    white-space: nowrap;
 
     &:hover {
-      color: var(--text-primary);
-      background: var(--surface-subtle);
+      color: var(--accounts-primary);
+      background: transparent;
+    }
+  }
+
+  @include mobile {
+    gap: 3px;
+    padding-inline: 10px;
+
+    button {
+      padding-inline: 15px;
     }
   }
 }
 
 .drawerTabActive {
-  border-color: color-mix(in srgb, var(--primary-color) 24%, var(--border-color)) !important;
-  background: color-mix(in srgb, var(--primary-color) 9%, transparent) !important;
-  color: var(--primary-color) !important;
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--accounts-primary) !important;
+  font-weight: 700 !important;
+
+  &::after {
+    position: absolute;
+    right: 8px;
+    bottom: -1px;
+    left: 8px;
+    height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: var(--accounts-primary);
+    content: '';
+  }
 }
 
 .drawerDisabledNotice {
@@ -3328,162 +3360,6 @@
   }
 }
 
-.diagnosticConclusionSection {
-  display: grid;
-  gap: 10px;
-  border-color: color-mix(in srgb, var(--accounts-primary) 22%, var(--accounts-border));
-  background: color-mix(in srgb, var(--accounts-primary) 5%, var(--accounts-surface));
-}
-
-.diagnosticConclusionHeader,
-.diagnosticConclusionState,
-.diagnosticEvidenceGroupHeader {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.diagnosticConclusionHeader,
-.diagnosticEvidenceGroupHeader {
-  justify-content: space-between;
-}
-
-.diagnosticConclusionHeader h3 {
-  margin: 0;
-}
-
-.diagnosticConclusionState {
-  flex: 0 0 auto;
-}
-
-.diagnosticEvidenceStatusCurrent,
-.diagnosticEvidenceStatusOutdated,
-.diagnosticEvidenceStatusConflict {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 0 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.diagnosticEvidenceStatusCurrent {
-  background: color-mix(in srgb, var(--accounts-success) 12%, transparent);
-  color: var(--accounts-success);
-}
-
-.diagnosticEvidenceStatusOutdated {
-  background: color-mix(in srgb, var(--accounts-warning) 13%, transparent);
-  color: var(--accounts-warning);
-}
-
-.diagnosticEvidenceStatusConflict {
-  background: color-mix(in srgb, var(--accounts-danger) 12%, transparent);
-  color: var(--accounts-danger);
-}
-
-.diagnosticConclusionMain {
-  display: grid;
-  justify-items: start;
-  gap: 8px;
-
-  p {
-    color: var(--accounts-text);
-    line-height: 1.5;
-  }
-}
-
-.diagnosticConclusionMeta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  color: var(--accounts-muted);
-  font-size: 11px;
-
-  span {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 5px;
-    min-width: 0;
-  }
-
-  strong {
-    color: var(--accounts-text);
-    font-weight: 800;
-  }
-
-  @include mobile {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-
-.diagnosticEvidenceDisclosure {
-  padding: 0;
-  overflow: hidden;
-
-  > summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    min-height: 46px;
-    padding: 10px 14px;
-    cursor: pointer;
-    list-style: none;
-    color: var(--accounts-text);
-    font-size: 14px;
-    font-weight: 800;
-  }
-
-  > summary::-webkit-details-marker {
-    display: none;
-  }
-
-  > summary::after {
-    content: '›';
-    flex: 0 0 auto;
-    color: var(--accounts-muted);
-    font-size: 20px;
-    line-height: 1;
-    transform: rotate(0deg);
-    transition: transform 0.16s ease;
-  }
-
-  &[open] > summary::after {
-    transform: rotate(90deg);
-  }
-
-  > summary small {
-    margin-left: auto;
-    color: var(--accounts-danger);
-    font-size: 11px;
-    font-weight: 700;
-  }
-}
-
-.diagnosticEvidenceBody {
-  display: grid;
-  gap: 14px;
-  padding: 0 14px 14px;
-}
-
-.diagnosticEvidenceGroup {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-
-  h4 {
-    margin: 0;
-    color: var(--accounts-muted);
-    font-size: 11px;
-    font-weight: 800;
-  }
-}
-
 .detailBadgeList {
   display: flex;
   flex-wrap: wrap;
@@ -3830,218 +3706,6 @@
   gap: 8px;
   color: var(--text-secondary);
   font-size: 13px;
-}
-
-.detailEventsTableWrap {
-  max-width: 100%;
-  overflow-x: auto;
-  border: 1px solid var(--border-color);
-  border-radius: var(--app-radius-sm);
-}
-
-.detailEventsTable {
-  width: 100%;
-  min-width: 620px;
-  border-collapse: collapse;
-  table-layout: fixed;
-
-  th,
-  td {
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--border-color);
-    color: var(--text-primary);
-    font-size: 12px;
-    text-align: left;
-    vertical-align: middle;
-  }
-
-  th {
-    color: var(--text-secondary);
-    font-weight: 800;
-    background: color-mix(in srgb, var(--surface-subtle) 72%, transparent);
-  }
-
-  tr:last-child td {
-    border-bottom: 0;
-  }
-
-  td {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-}
-
-.detailEventsStack,
-.detailEventsList {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.detailEventsList {
-  overflow: visible;
-}
-
-.detailEventsFooter {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 4px 0;
-  color: var(--accounts-muted);
-  font-size: 12px;
-
-  a {
-    color: var(--accounts-primary, var(--color-primary));
-    text-decoration: none;
-  }
-
-  a:hover {
-    text-decoration: underline;
-  }
-}
-
-.detailActivitySummary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-
-  div {
-    min-width: 0;
-    padding: 10px;
-    border: 1px solid color-mix(in srgb, var(--accounts-border) 78%, transparent);
-    border-radius: 8px;
-    background: var(--accounts-surface);
-  }
-
-  span,
-  strong {
-    display: block;
-    min-width: 0;
-  }
-
-  span {
-    color: var(--accounts-muted);
-    font-size: 11px;
-    font-weight: 800;
-  }
-
-  strong {
-    margin-top: 4px;
-    color: var(--accounts-text);
-    font-size: 18px;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.15;
-    overflow-wrap: anywhere;
-  }
-
-  @include mobile {
-    gap: 6px;
-
-    div {
-      padding: 9px 8px;
-    }
-
-    strong {
-      font-size: 16px;
-    }
-  }
-}
-
-.detailEventFailureSummary,
-.detailEventItem {
-  min-width: 0;
-  border: 1px solid color-mix(in srgb, var(--accounts-border) 84%, transparent);
-  border-radius: 8px;
-  background: var(--accounts-surface);
-}
-
-.detailEventFailureSummary {
-  display: grid;
-  gap: 4px;
-  padding: 10px;
-
-  span {
-    color: var(--accounts-muted);
-    font-size: 11px;
-    font-weight: 800;
-  }
-
-  strong {
-    min-width: 0;
-    color: var(--accounts-danger);
-    font-size: 12px;
-    line-height: 1.45;
-    overflow-wrap: anywhere;
-  }
-
-  small {
-    color: var(--accounts-muted);
-    font-size: 11px;
-    line-height: 1.4;
-  }
-}
-
-.detailEventItem {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-}
-
-.detailEventHeader,
-.detailEventIdentity,
-.detailEventMeta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.detailEventHeader {
-  strong {
-    flex: 0 0 auto;
-    color: var(--accounts-muted);
-    font-size: 12px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-}
-
-.detailEventIdentity {
-  span {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--accounts-text);
-    font-size: 12px;
-    font-weight: 800;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  span + span {
-    flex: 0 1 auto;
-    max-width: 48%;
-    color: var(--accounts-muted);
-    font-weight: 700;
-  }
-}
-
-.detailEventFailureReason {
-  margin: 0;
-  color: var(--accounts-danger) !important;
-  font-size: 12px !important;
-  line-height: 1.45;
-}
-
-.detailEventMeta {
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  color: var(--accounts-muted);
-  font-size: 11px;
-  font-weight: 700;
 }
 
 .monoCell {
@@ -4967,23 +4631,6 @@
   }
 }
 
-.drawerTabs {
-  margin-inline: -$spacing-lg;
-  padding: 6px;
-  padding-inline: calc(#{$spacing-lg} + 3px) calc(#{$spacing-lg} + 3px);
-  overflow-x: auto;
-  border: 1px solid var(--accounts-border);
-  border-top: 0;
-  border-left: 0;
-  border-radius: 0;
-  background: var(--accounts-muted-surface);
-
-  button {
-    min-height: 30px;
-    border-radius: 8px;
-  }
-}
-
 .drawerSection {
   border-radius: 10px;
   background: color-mix(in srgb, var(--accounts-muted-surface) 36%, var(--accounts-surface));
@@ -5774,4 +5421,696 @@
   color: var(--danger-color);
   font-size: 12px;
   line-height: 1.5;
+}
+
+// The diagnostics detail follows the activity/diagnostics prototype while
+// keeping the shared drawer header, tabs, footer, and other detail tabs unchanged.
+.diagnosticDetailStack {
+  display: grid;
+  gap: 12px;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: clip;
+  color: var(--accounts-text);
+}
+
+.diagnosticCard {
+  min-width: 0;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: var(--accounts-surface);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--accounts-text) 4%, transparent);
+}
+
+.diagnosticConclusionCard {
+  display: grid;
+  gap: 12px;
+  padding: 15px;
+}
+
+.diagnosticActivityCard {
+  display: grid;
+  gap: 0;
+  padding: 15px;
+}
+
+.diagnosticEvidenceCard {
+  padding: 15px;
+}
+
+.diagnosticCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.diagnosticSectionTitle {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  margin: 0;
+  color: var(--accounts-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+
+  :global(svg) {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    color: var(--accounts-primary);
+  }
+}
+
+.diagnosticEvidenceBadge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.diagnosticEvidenceStatusCurrent {
+  background: color-mix(in srgb, var(--accounts-success) 12%, transparent);
+  color: var(--accounts-success);
+}
+
+.diagnosticEvidenceStatusOutdated {
+  background: color-mix(in srgb, var(--accounts-warning) 14%, transparent);
+  color: var(--accounts-warning);
+}
+
+.diagnosticEvidenceStatusConflict {
+  background: color-mix(in srgb, var(--accounts-danger) 12%, transparent);
+  color: var(--accounts-danger);
+}
+
+.diagnosticConclusionMain {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  margin-top: 0;
+}
+
+.diagnosticConclusionMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--accounts-success);
+  color: #fff;
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--accounts-success) 18%, transparent);
+
+  :global(svg) {
+    width: 13px;
+    height: 13px;
+  }
+
+  &[data-diagnostic-priority='medium'] {
+    background: var(--accounts-warning);
+    box-shadow: 0 4px 10px color-mix(in srgb, var(--accounts-warning) 18%, transparent);
+  }
+
+  &[data-diagnostic-priority='high'],
+  &[data-diagnostic-priority='critical'] {
+    background: var(--accounts-danger);
+    box-shadow: 0 4px 10px color-mix(in srgb, var(--accounts-danger) 18%, transparent);
+  }
+}
+
+.diagnosticConclusionCopy {
+  min-width: 0;
+
+  strong {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--accounts-text);
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.35;
+  }
+
+  p {
+    margin: 0;
+    color: var(--accounts-muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
+.diagnosticConclusionMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 0;
+  color: var(--accounts-muted);
+  font-size: 11px;
+
+  > span {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    gap: 6px;
+    padding: 0 10px;
+    border-right: 1px solid color-mix(in srgb, var(--accounts-border) 90%, transparent);
+
+    &:first-child {
+      padding-left: 0;
+    }
+
+    &:last-child {
+      border-right: 0;
+    }
+  }
+
+  :global(svg) {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    color: var(--accounts-muted);
+  }
+
+  strong {
+    color: var(--accounts-muted);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  > span > span {
+    color: var(--accounts-muted);
+    white-space: nowrap;
+  }
+}
+
+.diagnosticActivityCard .diagnosticCardHeader {
+  margin-bottom: 10px;
+}
+
+.diagnosticRefreshButton:global(.btn) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-height: 32px;
+  height: 32px;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--accounts-strong-border);
+  border-radius: 9px;
+  background: var(--accounts-surface);
+  color: var(--accounts-text);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--accounts-text) 3%, transparent);
+
+  &:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accounts-primary) 30%, var(--accounts-border));
+    background: color-mix(in srgb, var(--accounts-primary) 4%, var(--accounts-surface));
+  }
+
+  :global(svg) {
+    display: block;
+    width: 14px;
+    height: 14px;
+  }
+}
+
+.diagnosticEmptyState {
+  margin: 0;
+  padding: 14px 0 6px;
+  color: var(--accounts-muted);
+  font-size: 13px;
+}
+
+.diagnosticActivityBody {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.diagnosticKpiGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.diagnosticKpiCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  height: 64px;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 9px;
+  background: linear-gradient(
+    180deg,
+    var(--accounts-surface),
+    color-mix(in srgb, var(--accounts-muted-surface) 22%, var(--accounts-surface))
+  );
+
+  > div {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  > div > span,
+  > div > strong {
+    display: block;
+    min-width: 0;
+  }
+
+  > div > span {
+    margin-bottom: 4px;
+    overflow: visible;
+    color: var(--accounts-muted);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  > div > strong {
+    overflow: visible;
+    color: var(--accounts-text);
+    font-size: 17px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+}
+
+.diagnosticKpiIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+
+  :global(svg) {
+    display: block;
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.diagnosticKpiIconBlue {
+  background: color-mix(in srgb, var(--accounts-primary) 10%, transparent);
+  color: var(--accounts-primary);
+}
+
+.diagnosticKpiIconPurple {
+  background: color-mix(in srgb, var(--accounts-indigo) 10%, transparent);
+  color: var(--accounts-indigo);
+}
+
+.diagnosticKpiIconGreen {
+  background: color-mix(in srgb, var(--accounts-success) 10%, transparent);
+  color: var(--accounts-success);
+}
+
+.diagnosticRecentFailure {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accounts-danger) 22%, var(--accounts-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accounts-danger) 4%, var(--accounts-surface));
+
+  span {
+    color: var(--accounts-muted);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  strong {
+    color: var(--accounts-danger);
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  small {
+    color: var(--accounts-muted);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+}
+
+.diagnosticRequestList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.diagnosticRequestRow {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 9px;
+  background: var(--accounts-surface);
+  transition:
+    border-color 0.16s,
+    box-shadow 0.16s,
+    transform 0.16s;
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--accounts-primary) 28%, var(--accounts-border));
+    box-shadow: 0 3px 10px color-mix(in srgb, var(--accounts-text) 5%, transparent);
+    transform: translateY(-1px);
+  }
+}
+
+.diagnosticRequestTop {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: 10px;
+  min-width: 0;
+  min-height: 24px;
+}
+
+.diagnosticRequestId {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.diagnosticCopyButton {
+  max-width: 100%;
+  padding: 1px 0;
+  color: var(--accounts-text);
+  font-size: 12px !important;
+  font-weight: 700 !important;
+
+  &:hover {
+    background: transparent;
+    color: var(--accounts-primary);
+  }
+}
+
+.diagnosticRequestRow .eventStatus {
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.diagnosticRequestTime {
+  color: var(--accounts-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.diagnosticRequestModel {
+  max-width: 120px;
+  overflow: hidden;
+  color: var(--accounts-text);
+  font-size: 12px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnosticRequestMetrics {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 8px;
+  color: var(--accounts-muted);
+  font-size: 12px;
+  font-weight: 600;
+
+  b {
+    color: var(--accounts-text);
+    font-weight: 720;
+  }
+}
+
+.diagnosticRequestFailure {
+  margin: 6px 0 0;
+  color: var(--accounts-danger) !important;
+  font-size: 11px !important;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.diagnosticActivityFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 2px 0;
+  color: var(--accounts-muted);
+  font-size: 12px;
+
+  a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accounts-primary);
+    font-weight: 650;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  :global(svg) {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+  }
+}
+
+.diagnosticEvidenceCard > summary {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--accounts-text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.diagnosticEvidenceCard > summary::-webkit-details-marker {
+  display: none;
+}
+
+.diagnosticEvidenceCard > summary::after {
+  display: none;
+  content: none;
+}
+
+.diagnosticEvidenceSummaryTitle {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+
+  :global(svg) {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    color: var(--accounts-primary);
+  }
+}
+
+.diagnosticEvidenceCard > summary > small {
+  margin-left: auto;
+  color: var(--accounts-danger);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.diagnosticEvidenceChevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: 16px;
+  height: 16px;
+  color: var(--accounts-muted);
+  transition: transform 0.2s ease;
+}
+
+.diagnosticEvidenceCard:not([open]) .diagnosticEvidenceChevron {
+  transform: rotate(180deg);
+}
+
+.diagnosticEvidenceBody {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 0;
+}
+
+.diagnosticEvidenceGroup {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+
+  h4 {
+    margin: 0;
+    color: var(--accounts-muted);
+    font-size: 12px;
+    font-weight: 800;
+  }
+}
+
+.diagnosticInspectionEvidenceGroup dl {
+  display: grid;
+  grid-template-columns: minmax(112px, 160px) minmax(0, 1fr);
+  column-gap: 16px;
+  row-gap: 0;
+  max-width: 650px;
+  margin: 0;
+}
+
+.diagnosticInspectionEvidenceGroup dl > div {
+  display: contents;
+}
+
+.diagnosticInspectionEvidenceGroup dt,
+.diagnosticInspectionEvidenceGroup dd {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--accounts-border) 82%, transparent);
+  font-size: 12px;
+}
+
+.diagnosticInspectionEvidenceGroup dt {
+  color: var(--accounts-muted);
+}
+
+.diagnosticInspectionEvidenceGroup dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--accounts-text);
+  font-weight: 700;
+}
+
+.diagnosticInspectionEvidenceGroup dt:nth-last-of-type(1),
+.diagnosticInspectionEvidenceGroup dd:last-child {
+  border-bottom: 0;
+}
+
+@include mobile {
+  .diagnosticSectionTitle,
+  .diagnosticEvidenceCard > summary {
+    font-size: 14px;
+  }
+
+  .diagnosticCardHeader {
+    align-items: flex-start;
+  }
+
+  .diagnosticConclusionCard {
+    padding: 13px;
+  }
+
+  .diagnosticConclusionCopy {
+    strong {
+      font-size: 15px;
+    }
+
+    p {
+      font-size: 12px;
+    }
+  }
+
+  .diagnosticConclusionMeta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
+
+    > span,
+    > span:first-child {
+      padding: 0;
+      border-right: 0;
+    }
+  }
+
+  .diagnosticActivityCard {
+    padding: 13px;
+  }
+
+  .diagnosticActivityCard .diagnosticCardHeader {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .diagnosticRefreshButton:global(.btn) {
+    align-self: flex-start;
+  }
+
+  .diagnosticKpiGrid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .diagnosticKpiCard {
+    height: 64px;
+  }
+
+  .diagnosticRequestTop {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 8px;
+  }
+
+  .diagnosticRequestModel {
+    grid-column: 2 / 3;
+    max-width: none;
+    margin-top: 4px;
+  }
+
+  .diagnosticRequestTime {
+    font-size: 11px;
+  }
+
+  .diagnosticRequestMetrics {
+    gap: 8px 12px;
+  }
+
+  .diagnosticEvidenceCard {
+    padding: 13px;
+  }
+
+  .diagnosticInspectionEvidenceGroup dl {
+    grid-template-columns: 104px minmax(0, 1fr);
+    column-gap: 12px;
+  }
+
+  .diagnosticInspectionEvidenceGroup dt,
+  .diagnosticInspectionEvidenceGroup dd {
+    font-size: 12px;
+  }
+
+  .diagnosticActivityFooter {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
 }

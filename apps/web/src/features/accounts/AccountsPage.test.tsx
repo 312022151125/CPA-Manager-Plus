@@ -5959,6 +5959,28 @@ describe('AccountsPage replacement flows', () => {
     expect(treeText(renderer)).toContain('08/26 17:44:05');
   });
 
+  it('renders the diagnostics tab with the prototype layout marker and active tab state', async () => {
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_diagnostics').props.onClick();
+      await Promise.resolve();
+    });
+
+    const diagnosticShell = renderer.root.findByProps({ 'data-detail-tab': 'diagnostics' });
+    expect(diagnosticShell.findByProps({ 'data-diagnostic-layout': 'prototype' })).toBeDefined();
+    expect(diagnosticShell.findByProps({ 'data-diagnostic-card': 'conclusion' })).toBeDefined();
+    expect(diagnosticShell.findByProps({ 'data-diagnostic-card': 'activity' })).toBeDefined();
+
+    const selectedTabs = diagnosticShell
+      .findAll((node) => node.type === 'button' && node.props['aria-selected'] === true)
+      .filter((node) => node.props.role === 'tab');
+    expect(selectedTabs).toHaveLength(1);
+    expect(readText(selectedTabs[0])).toContain('accounts.detail_tab_diagnostics');
+  });
+
   it('keeps the scoped monitoring link visible when the event list is empty', async () => {
     mocks.panelFeatureAvailability = {
       checking: false,
@@ -6039,6 +6061,8 @@ describe('AccountsPage replacement flows', () => {
     });
     await flushPromises();
 
+    const diagnosticEvidence = renderer.root.findByProps({ 'data-diagnostic-card': 'evidence' });
+    expect(diagnosticEvidence.props.open).toBeUndefined();
     expect(treeText(renderer)).toContain('account_actions.reason_invalid_credentials');
     expect(treeText(renderer)).not.toContain('Credentials are invalid or expired');
   });

@@ -89,10 +89,7 @@ import {
   type AccountRowSort,
   type AccountStatusFilter,
 } from '@/features/accounts/model/accountRows';
-import {
-  buildAccountRecommendations,
-  type AccountRecommendationPriority,
-} from '@/features/accounts/model/quotaRecommendations';
+import { buildAccountRecommendations } from '@/features/accounts/model/quotaRecommendations';
 import {
   buildAccountListItem,
   buildRecommendationBySelectionKey,
@@ -286,13 +283,6 @@ const getRemainingBarClass = (row: AccountRow) => {
   if (row.quota.status === 'low') return styles.quotaBarWarn;
   if (row.quota.status === 'ok') return styles.quotaBarGood;
   return styles.quotaBarNeutral;
-};
-
-const getRecommendationPriorityClass = (priority: AccountRecommendationPriority) => {
-  if (priority === 'critical') return styles.badgeBad;
-  if (priority === 'high') return styles.badgeWarn;
-  if (priority === 'medium') return styles.badgeInfo;
-  return styles.badgeNeutral;
 };
 
 async function refreshQuotaWithConfig<TState, TData>({
@@ -4317,7 +4307,6 @@ export function AccountsPage() {
             eventsUnavailable={eventsUnavailable}
             nextBeforeMs={detailEventsNextBeforeMs}
             nextBeforeId={detailEventsNextBeforeId}
-            getRecommendationPriorityClass={getRecommendationPriorityClass}
             onRefreshEvents={() => void refreshDetailEvents(selectedRow)}
             onLoadMoreEvents={(beforeMs, beforeId) =>
               void loadDetailEvents(selectedRow, {
@@ -4473,7 +4462,7 @@ export function AccountsPage() {
           </div>
         }
       >
-        <div className={styles.drawerBodyShell}>
+        <div className={styles.drawerBodyShell} data-detail-tab={detailTab}>
           {selectedRow.disabled ? (
             <div className={styles.drawerDisabledNotice} role="status">
               <span>
