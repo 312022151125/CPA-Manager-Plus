@@ -15,6 +15,7 @@ import (
 	monitoringrepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usagemonitoring"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 const testDayMS = int64(24 * time.Hour / time.Millisecond)
@@ -48,6 +49,220 @@ func TestMigrationCreatesUsageMonitoringRollupSchema(t *testing.T) {
 		if version != monitoringrepo.SchemaVersion || status != "ready" {
 			t.Fatalf("state %s = version:%d status:%q", name, version, status)
 		}
+	}
+	var accountKeyColumns int
+	if err := sqlDB.QueryRow(`select count(*) from pragma_table_info('usage_monitoring_event_projection_v1') where name = 'account_key'`).Scan(&accountKeyColumns); err != nil {
+		t.Fatalf("inspect projection account key column: %v", err)
+	}
+	if accountKeyColumns != 1 {
+		t.Fatalf("projection account key columns = %d, want 1", accountKeyColumns)
+	}
+	var accountWindowIndexes int
+	if err := sqlDB.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_usage_monitoring_event_projection_account_window'`).Scan(&accountWindowIndexes); err != nil {
+		t.Fatalf("inspect projection account window index: %v", err)
+	}
+	if accountWindowIndexes != 1 {
+		t.Fatalf("projection account window indexes = %d, want 1", accountWindowIndexes)
+	}
+	for indexName, expression := range map[string]string{
+		"idx_usage_monitoring_account_daily_credential_window": "trim(auth_file_snapshot)",
+		"idx_usage_monitoring_account_daily_legacy_window":     "trim(source)",
+	} {
+		var count int
+		if err := sqlDB.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = ?`, indexName).Scan(&count); err != nil {
+			t.Fatalf("inspect account daily window index %s: %v", indexName, err)
+		}
+		if count != 1 {
+			t.Fatalf("account daily window index %s count = %d, want 1", indexName, count)
+		}
+		var definition string
+		if err := sqlDB.QueryRow(`select sql from sqlite_master where type = 'index' and name = ?`, indexName).Scan(&definition); err != nil {
+			t.Fatalf("read account daily window index %s: %v", indexName, err)
+		}
+		if !strings.Contains(definition, expression) || !strings.Contains(definition, "trim(auth_index)") {
+			t.Fatalf("account daily window index %s definition = %q", indexName, definition)
+		}
+	}
+}
+
+func TestAccountWindowProjectionMatchesRawAcrossCoverageTailAndIdentity(t *testing.T) {
+	sqlDB, db := newMonitoringRepositoryStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_800_060_000_000)
+	toMS := fromMS + 10_000
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-window": {
+			Prompt: 1,
+			ContextTiers: []store.ModelPriceContextTier{
+				{ThresholdTokens: 100, Prompt: 2, PromptConfigured: true},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+
+	first := monitoringRepositoryEvent("window-projected", fromMS, "gpt-window", "key-a", "shared@example.com", "auth-shared", "source-a", false, 150, 30, 10)
+	first.AuthFileSnapshot = "first.json"
+	otherCredential := monitoringRepositoryEvent("window-other-credential", fromMS+1_000, "gpt-window", "key-b", "shared@example.com", "auth-shared", "source-b", false, 9_000, 9_000, 10)
+	otherCredential.AuthFileSnapshot = "second.json"
+	toBoundary := monitoringRepositoryEvent("window-to-boundary", toMS, "gpt-window", "key-a", "shared@example.com", "auth-shared", "source-a", false, 8_000, 8_000, 10)
+	toBoundary.AuthFileSnapshot = "first.json"
+	if _, err := db.InsertEvents(ctx, []usage.Event{first, otherCredential, toBoundary}); err != nil {
+		t.Fatalf("insert projected events: %v", err)
+	}
+	catchUpMonitoringRepository(t, ctx, db)
+	expectedAccountKey, valid := usageidentity.AccountKey(usageidentity.Fields{
+		AuthFileSnapshot:     "first.json",
+		AuthIndex:            "auth-shared",
+		AuthProviderSnapshot: "codex",
+		AccountSnapshot:      "shared@example.com",
+	})
+	if !valid {
+		t.Fatal("invalid expected account key")
+	}
+	var projectedAccountKey string
+	if err := sqlDB.QueryRowContext(ctx, `select account_key
+		from usage_monitoring_event_projection_v1
+		where event_id = (select id from usage_events where event_hash = ?)`, first.EventHash).Scan(&projectedAccountKey); err != nil {
+		t.Fatalf("read projected account key: %v", err)
+	}
+	if projectedAccountKey != expectedAccountKey {
+		t.Fatalf("projected account key = %q, want %q", projectedAccountKey, expectedAccountKey)
+	}
+
+	windows := []store.AccountWindowUsageQuery{{
+		RequestIndex:          0,
+		FromMS:                fromMS,
+		ToMS:                  toMS,
+		AccountSnapshot:       "shared@example.com",
+		AuthFileSnapshot:      "first.json",
+		AuthProviderSnapshot:  "codex",
+		AuthProjectIDSnapshot: "project-a",
+		AuthIndex:             "auth-shared",
+		Source:                "first.json",
+	}}
+	assertMatchesRaw := func(phase string) []store.AccountWindowModelStat {
+		t.Helper()
+		raw, err := db.AccountWindowModelStats(ctx, windows)
+		if err != nil {
+			t.Fatalf("%s raw account window stats: %v", phase, err)
+		}
+		projected, _, available, err := db.UsageMonitoringAccountWindowStats(ctx, windows)
+		if err != nil {
+			t.Fatalf("%s projected account window stats: %v", phase, err)
+		}
+		if !available {
+			t.Fatalf("%s projected account window stats unavailable", phase)
+		}
+		if !reflect.DeepEqual(projected, raw) {
+			t.Fatalf("%s account window mismatch\nprojection=%#v\nraw=%#v", phase, projected, raw)
+		}
+		return projected
+	}
+
+	projected := assertMatchesRaw("complete coverage")
+	if len(projected) != 1 || projected[0].Calls != 1 || projected[0].InputTokens != 150 || projected[0].ContextThresholdTokens != 100 {
+		t.Fatalf("complete coverage stats = %#v", projected)
+	}
+
+	tail := monitoringRepositoryEvent("window-raw-tail", fromMS+2_000, "gpt-window", "key-a", "shared@example.com", "auth-shared", "source-a", true, 1_000_000, 40, 10)
+	tail.AuthFileSnapshot = "first.json"
+	if _, err := db.InsertEvents(ctx, []usage.Event{tail}); err != nil {
+		t.Fatalf("insert raw tail event: %v", err)
+	}
+	projected = assertMatchesRaw("partial coverage")
+	if len(projected) != 1 || projected[0].Calls != 2 || projected[0].SuccessCalls != 1 || projected[0].FailureCalls != 1 || projected[0].LongInputTokens != 1_000_000 {
+		t.Fatalf("partial coverage stats = %#v", projected)
+	}
+
+	if _, err := sqlDB.ExecContext(ctx, `update usage_monitoring_rollup_state set schema_version = 0 where rollup_name = ?`, monitoringrepo.ProjectionRollupName); err != nil {
+		t.Fatalf("invalidate projection schema: %v", err)
+	}
+	_, state, available, err := db.UsageMonitoringAccountWindowStats(ctx, windows)
+	if err != nil {
+		t.Fatalf("read unavailable projection: %v", err)
+	}
+	if available || state.SchemaVersion != 0 {
+		t.Fatalf("unavailable projection state = %#v available=%v", state, available)
+	}
+}
+
+func TestAccountWindowProjectionUsesDailyStatsWithEdgesAndRawTail(t *testing.T) {
+	sqlDB, db := newMonitoringRepositoryStore(t)
+	ctx := context.Background()
+	dayStartMS := int64(1_800_057_600_000)
+	fromMS := dayStartMS + int64(time.Hour/time.Millisecond)
+	toMS := dayStartMS + 3*testDayMS + int64(2*time.Hour/time.Millisecond)
+
+	events := []usage.Event{
+		monitoringRepositoryEvent("window-daily-start-edge", dayStartMS+2*int64(time.Hour/time.Millisecond), "gpt-window", "key-a", "daily@example.com", "auth-daily", "daily.json", false, 10, 1, 10),
+		monitoringRepositoryEvent("window-daily-full-a", dayStartMS+testDayMS+int64(time.Hour/time.Millisecond), "gpt-window", "key-a", "daily@example.com", "auth-daily", "daily.json", false, 20, 2, 10),
+		monitoringRepositoryEvent("window-daily-full-b", dayStartMS+2*testDayMS+int64(time.Hour/time.Millisecond), "gpt-window", "key-a", "daily@example.com", "auth-daily", "daily.json", true, 30, 3, 10),
+		monitoringRepositoryEvent("window-daily-end-edge", dayStartMS+3*testDayMS+int64(time.Hour/time.Millisecond), "gpt-window", "key-a", "daily@example.com", "auth-daily", "daily.json", false, 40, 4, 10),
+		monitoringRepositoryEvent("window-daily-other-credential", dayStartMS+testDayMS+2*int64(time.Hour/time.Millisecond), "gpt-window", "key-b", "daily@example.com", "auth-other", "other.json", false, 9_000, 9_000, 10),
+	}
+	for index := range events {
+		events[index].AuthFileSnapshot = events[index].Source
+		events[index].AuthProviderSnapshot = "codex"
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert daily account window events: %v", err)
+	}
+	catchUpMonitoringRepository(t, ctx, db)
+
+	if _, err := sqlDB.ExecContext(ctx, `update usage_monitoring_event_projection_v1
+		set normalized_total_input_tokens = 999999
+		where event_id in (
+			select id from usage_events where event_hash in ('window-daily-full-a', 'window-daily-full-b')
+		)`); err != nil {
+		t.Fatalf("corrupt covered full-day projection rows: %v", err)
+	}
+
+	tail := monitoringRepositoryEvent(
+		"window-daily-raw-tail",
+		dayStartMS+2*testDayMS+2*int64(time.Hour/time.Millisecond),
+		"gpt-window",
+		"key-a",
+		"daily@example.com",
+		"auth-daily",
+		"daily.json",
+		false,
+		50,
+		5,
+		10,
+	)
+	tail.AuthFileSnapshot = "daily.json"
+	tail.AuthProviderSnapshot = "codex"
+	if _, err := db.InsertEvents(ctx, []usage.Event{tail}); err != nil {
+		t.Fatalf("insert daily account window raw tail: %v", err)
+	}
+
+	windows := []store.AccountWindowUsageQuery{{
+		RequestIndex:         0,
+		FromMS:               fromMS,
+		ToMS:                 toMS,
+		AccountSnapshot:      "daily@example.com",
+		AuthFileSnapshot:     "daily.json",
+		AuthProviderSnapshot: "codex",
+		AuthIndex:            "auth-daily",
+		Source:               "daily.json",
+	}}
+	raw, err := db.AccountWindowModelStats(ctx, windows)
+	if err != nil {
+		t.Fatalf("read raw daily account window stats: %v", err)
+	}
+	projected, _, available, err := db.UsageMonitoringAccountWindowStats(ctx, windows)
+	if err != nil {
+		t.Fatalf("read projected daily account window stats: %v", err)
+	}
+	if !available {
+		t.Fatal("projected daily account window stats unavailable")
+	}
+	if !reflect.DeepEqual(projected, raw) {
+		t.Fatalf("daily account window mismatch\nprojection=%#v\nraw=%#v", projected, raw)
+	}
+	if len(projected) != 1 || projected[0].Calls != 5 || projected[0].SuccessCalls != 4 || projected[0].FailureCalls != 1 || projected[0].InputTokens != 150 {
+		t.Fatalf("daily account window stats = %#v", projected)
 	}
 }
 

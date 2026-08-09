@@ -2,12 +2,16 @@ import React from 'react';
 import type { TFunction } from 'i18next';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it } from 'vitest';
-import type { AuthFileItem, ClaudeQuotaState, CodexQuotaState, XaiQuotaState } from '@/types';
+import type { ClaudeQuotaState, CodexQuotaState, XaiQuotaState } from '@/types';
 import type { QuotaRenderHelpers } from './QuotaCard';
 import {
+  ANTIGRAVITY_CONFIG,
+  buildObservedCodexQuotaState,
+  buildQuotaFailureState,
   CLAUDE_CONFIG,
   CODEX_CONFIG,
   getCodexQuotaStoreKey,
+  KIMI_CONFIG,
   getSortedCodexResetCreditExpiries,
   resolveQuotaDisplayState,
   XAI_CONFIG,
@@ -38,6 +42,25 @@ describe('getCodexQuotaStoreKey', () => {
 
     expect(first).not.toBe(second);
   });
+
+  it('uses the same credential identity contract for every quota provider', () => {
+    const file = {
+      name: 'shared.json',
+      provider: 'claude',
+      authIndex: 'auth-1',
+    };
+    const configs = [CLAUDE_CONFIG, ANTIGRAVITY_CONFIG, CODEX_CONFIG, KIMI_CONFIG, XAI_CONFIG];
+
+    configs.forEach((config) => {
+      expect(config.getStoreKey?.(file)).toBe('shared.json::auth-1');
+      expect(config.buildLoadingState(file)).toMatchObject({
+        authFileKey: 'shared.json::auth-1',
+        authFileName: 'shared.json',
+        authIndex: 'auth-1',
+        authFileIdentityVerified: true,
+      });
+    });
+  });
 });
 
 type TestQuotaState = {
@@ -48,6 +71,54 @@ type TestQuotaState = {
   observedFromUsageHeaders?: boolean;
   windows?: unknown[];
 };
+
+type FailureTestState = {
+  status: 'success' | 'error';
+  fetchedAtMs?: number;
+  windows?: Array<{ id: string; usedPercent: number }>;
+  error?: string;
+  lastError?: string;
+  errorStatus?: number;
+  failedAtMs?: number;
+};
+
+describe('buildQuotaFailureState', () => {
+  it('lets providers preserve the last successful quota while recording refresh failure', () => {
+    const activeState: FailureTestState = {
+      status: 'success' as const,
+      fetchedAtMs: 1_000,
+      windows: [{ id: 'weekly', usedPercent: 25 }],
+    };
+    const result = buildQuotaFailureState<FailureTestState, unknown>(
+      {
+        buildErrorState: (message: string, status?: number) => ({
+          status: 'error' as const,
+          error: message,
+          errorStatus: status,
+        }),
+        buildFailureState: (message, status, _file, previous, failedAtMs) => ({
+          ...previous,
+          status: 'success' as const,
+          lastError: message,
+          errorStatus: status,
+          failedAtMs,
+        }),
+      },
+      'temporary failure',
+      503,
+      { name: 'codex.json', type: 'codex' },
+      activeState,
+      2_000
+    );
+
+    expect(result).toEqual({
+      ...activeState,
+      lastError: 'temporary failure',
+      errorStatus: 503,
+      failedAtMs: 2_000,
+    });
+  });
+});
 
 describe('getSortedCodexResetCreditExpiries', () => {
   it('filters expired or invalid reset credits and sorts by expiry time', () => {
@@ -252,6 +323,40 @@ describe('XAI_CONFIG.renderQuotaItems', () => {
 });
 
 describe('resolveQuotaDisplayState', () => {
+  it('uses observed headers when a Codex success response did not identify a quota inventory', () => {
+    const activeQuota: CodexQuotaState = {
+      status: 'success',
+      fetchedAtMs: 2_000,
+      quotaInventoryObserved: false,
+      planType: 'plus',
+      windows: [],
+    };
+    const observedQuota: CodexQuotaState = {
+      status: 'success',
+      observedAtMs: 1_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5-hour limit',
+          usedPercent: 25,
+          resetLabel: '07/01 12:00',
+        },
+      ],
+    };
+
+    const result = resolveQuotaDisplayState(activeQuota, observedQuota) as CodexQuotaState;
+
+    expect(result).toMatchObject({
+      status: 'success',
+      fetchedAtMs: 2_000,
+      observedAtMs: 1_000,
+      observedFromUsageHeaders: true,
+      planType: 'plus',
+      windows: [{ id: 'five-hour', usedPercent: 25 }],
+    });
+  });
+
   it('keeps a newer manual quota refresh over an older header snapshot', () => {
     const activeQuota: TestQuotaState = {
       status: 'success',
@@ -266,6 +371,120 @@ describe('resolveQuotaDisplayState', () => {
     };
 
     expect(resolveQuotaDisplayState(activeQuota, observedQuota)).toBe(activeQuota);
+  });
+
+  it('keeps a manual Codex inventory when its timestamp equals the Header snapshot', () => {
+    const activeQuota: CodexQuotaState = {
+      status: 'success',
+      fetchedAtMs: 2_000,
+      quotaInventoryObserved: true,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly limit',
+          usedPercent: 20,
+          resetLabel: '07/07 12:00',
+        },
+      ],
+    };
+    const observedQuota: CodexQuotaState = {
+      status: 'success',
+      observedAtMs: 2_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly limit',
+          usedPercent: 80,
+          resetLabel: '07/07 13:00',
+        },
+      ],
+    };
+
+    expect(resolveQuotaDisplayState(activeQuota, observedQuota)).toBe(activeQuota);
+  });
+
+  it('does not append older Header-only windows to a newer complete manual inventory', () => {
+    const activeQuota: CodexQuotaState = {
+      status: 'success',
+      fetchedAtMs: 2_000,
+      quotaInventoryObserved: true,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly limit',
+          usedPercent: 20,
+          resetLabel: '07/07 12:00',
+        },
+      ],
+    };
+    const observedQuota: CodexQuotaState = {
+      status: 'success',
+      observedAtMs: 1_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5-hour limit',
+          usedPercent: 80,
+          resetLabel: '07/01 13:00',
+        },
+      ],
+    };
+
+    const result = resolveQuotaDisplayState(activeQuota, observedQuota) as CodexQuotaState;
+
+    expect(result).toBe(activeQuota);
+    expect(result.windows.map((window) => window.id)).toEqual(['weekly']);
+  });
+
+  it('adds missing Header windows to a newer partial Codex inventory without retagging API windows', () => {
+    const activeQuota: CodexQuotaState = {
+      status: 'success',
+      fetchedAtMs: 2_000,
+      quotaInventoryObserved: false,
+      planType: 'plus',
+      windows: [
+        {
+          id: 'code-review-weekly',
+          label: 'Code review weekly',
+          usedPercent: 15,
+          resetLabel: '07/07 12:00',
+          limitWindowSeconds: 604_800,
+        },
+      ],
+    };
+    const observedQuota: CodexQuotaState = {
+      status: 'success',
+      observedAtMs: 1_000,
+      observedFromUsageHeaders: true,
+      planType: 'free',
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5-hour limit',
+          usedPercent: 40,
+          resetLabel: '07/01 12:00',
+          limitWindowSeconds: 18_000,
+        },
+      ],
+    };
+
+    const result = resolveQuotaDisplayState(activeQuota, observedQuota) as CodexQuotaState;
+
+    expect(result.planType).toBe('plus');
+    expect(result.windows).toMatchObject([
+      {
+        id: 'code-review-weekly',
+        observationSource: 'api_query',
+        observedAtMs: 2_000,
+      },
+      {
+        id: 'five-hour',
+        observationSource: 'response_header',
+        observedAtMs: 1_000,
+      },
+    ]);
   });
 
   it('merges a newer header snapshot into the manual quota refresh', () => {
@@ -394,6 +613,46 @@ describe('resolveQuotaDisplayState', () => {
       id: 'spark-five-hour-0',
       usedPercent: 30,
       resetLabel: '07/01 01:00',
+    });
+  });
+
+  it('does not retain an older reset timestamp behind a newer reset label', () => {
+    const activeQuota: CodexQuotaState = {
+      status: 'success',
+      fetchedAtMs: 1_000,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5-hour limit',
+          usedPercent: 10,
+          resetLabel: '2026-07-01T01:00:00Z',
+          resetAtMs: Date.parse('2026-07-01T01:00:00Z'),
+          resetAccuracy: 'exact',
+        },
+      ],
+    };
+    const observedQuota: CodexQuotaState = {
+      status: 'success',
+      observedAtMs: 2_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5-hour limit',
+          usedPercent: 80,
+          resetLabel: 'resets after the next request window',
+          resetAtMs: null,
+          resetAccuracy: 'unknown',
+        },
+      ],
+    };
+
+    const result = resolveQuotaDisplayState(activeQuota, observedQuota) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      resetLabel: 'resets after the next request window',
+      resetAtMs: null,
+      resetAccuracy: 'unknown',
     });
   });
 
@@ -527,167 +786,77 @@ describe('resolveQuotaDisplayState', () => {
   });
 });
 
-const makeCodexRenderHelpers = (): QuotaRenderHelpers => ({
-  styles: new Proxy(
-    {},
-    {
-      get: (_target, property) => String(property),
-    }
-  ) as QuotaRenderHelpers['styles'],
-  QuotaProgressBar: ({ percent }) =>
-    React.createElement('div', { className: 'progress', 'data-percent': percent }),
-});
+describe('Codex plan precedence', () => {
+  const t = ((key: string) => key) as TFunction;
 
-describe('CODEX_CONFIG subscription expiry', () => {
-  const identityT = ((key: string) => key) as TFunction;
-
-  it('renders a valid subscription expiry label and value with the plan row', () => {
-    const expiry = '2026-08-01T12:34:56.000Z';
+  it('uses the live quota plan for sorting instead of a stale token plan', () => {
+    const file = {
+      name: 'stale-plan.codex.json',
+      type: 'codex',
+      id_token: { plan_type: 'plus' },
+    };
     const quota: CodexQuotaState = {
       status: 'success',
+      planType: 'free',
       windows: [],
-      planType: 'pro',
-      subscriptionActiveUntil: expiry,
     };
-    let renderer!: ReactTestRenderer;
 
-    act(() => {
-      renderer = create(
-        React.createElement(
-          React.Fragment,
-          null,
-          CODEX_CONFIG.renderQuotaItems(quota, identityT, makeCodexRenderHelpers())
-        )
-      );
-    });
+    expect(CODEX_CONFIG.getPlanSortRank?.(file, quota)).toBe(10);
+    expect(CODEX_CONFIG.getSearchText?.(file, quota, t)).toContain('free');
+  });
 
-    const output = JSON.stringify(renderer.toJSON());
-    expect(output).toContain('codex_quota.subscription_expiry_label');
-    expect(output).toContain(
-      new Date(expiry).toLocaleString(undefined, {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      })
+  it('uses a newer observed header plan before the credential token plan', () => {
+    const state = buildObservedCodexQuotaState(
+      {
+        name: 'stale-plan.codex.json',
+        type: 'codex',
+        id_token: { plan_type: 'plus' },
+      },
+      {
+        event_hash: 'event-1',
+        timestamp_ms: 2_000,
+        header_quota_plan_type: 'free',
+        header_quota_used_percent: 25,
+      },
+      t
     );
+
+    expect(state?.planType).toBe('free');
   });
 
-  it('renders subscription expiry even when plan type is absent', () => {
-    const expiry = '2026-09-15T08:00:00.000Z';
-    const quota: CodexQuotaState = {
-      status: 'success',
-      windows: [],
-      subscriptionActiveUntil: expiry,
-    };
-    let renderer!: ReactTestRenderer;
+  it('drops an expired Header 5-hour window while retaining the active weekly window', () => {
+    const nowMs = 1_800_000_000_000;
+    const state = buildObservedCodexQuotaState(
+      { name: 'mixed-window.codex.json', type: 'codex' },
+      {
+        event_hash: 'mixed-window-event',
+        timestamp_ms: nowMs - 60_000,
+        response_metadata: {
+          quota: {
+            primary: {
+              used_percent: 100,
+              reset_at_ms: nowMs - 1,
+              window_minutes: 300,
+            },
+            secondary: {
+              used_percent: 40,
+              reset_at_ms: nowMs + 60_000,
+              window_minutes: 10_080,
+            },
+          },
+        },
+      },
+      t,
+      nowMs
+    );
 
-    act(() => {
-      renderer = create(
-        React.createElement(
-          React.Fragment,
-          null,
-          CODEX_CONFIG.renderQuotaItems(quota, identityT, makeCodexRenderHelpers())
-        )
-      );
-    });
-
-    const output = JSON.stringify(renderer.toJSON());
-    expect(output).toContain('codex_quota.subscription_expiry_label');
-    expect(output).not.toContain('codex_quota.plan_label');
-  });
-
-  it('omits subscription expiry for missing or malformed values', () => {
-    for (const subscriptionActiveUntil of [null, undefined, '', 'not-a-date'] as const) {
-      const quota: CodexQuotaState = {
-        status: 'success',
-        windows: [],
-        planType: 'pro',
-        subscriptionActiveUntil: subscriptionActiveUntil as string | null | undefined,
-      };
-      let renderer!: ReactTestRenderer;
-
-      act(() => {
-        renderer = create(
-          React.createElement(
-            React.Fragment,
-            null,
-            CODEX_CONFIG.renderQuotaItems(quota, identityT, makeCodexRenderHelpers())
-          )
-        );
-      });
-
-      const output = JSON.stringify(renderer.toJSON());
-      expect(output).not.toContain('codex_quota.subscription_expiry_label');
-    }
-  });
-
-  it('stores null subscription expiry when a successful payload is missing or malformed', () => {
-    const priorValid = CODEX_CONFIG.buildSuccessState({
-      planType: 'pro',
-      windows: [],
-      subscriptionActiveUntil: '2026-08-01T12:34:56.000Z',
-      rateLimitResetCreditsAvailableCount: null,
-      rateLimitResetCredits: [],
-      rateLimitResetCreditsError: null,
-    });
-    expect(priorValid.subscriptionActiveUntil).toBe('2026-08-01T12:34:56.000Z');
-
-    // Successful replacement path: loader assigns this state wholesale, clearing any prior expiry.
-    const malformed = CODEX_CONFIG.buildSuccessState({
-      planType: 'pro',
-      windows: [],
-      subscriptionActiveUntil: 'not-a-date',
-      rateLimitResetCreditsAvailableCount: null,
-      rateLimitResetCredits: [],
-      rateLimitResetCreditsError: null,
-    });
-    expect(malformed.subscriptionActiveUntil).toBeNull();
-
-    const missing = CODEX_CONFIG.buildSuccessState({
-      planType: 'pro',
-      windows: [],
-      subscriptionActiveUntil: null,
-      rateLimitResetCreditsAvailableCount: null,
-      rateLimitResetCredits: [],
-      rateLimitResetCreditsError: null,
-    });
-    expect(missing.subscriptionActiveUntil).toBeNull();
-  });
-
-  it('preserves raw subscription expiry only when the parser accepts it', () => {
-    const expiry = '2026-08-01T12:34:56.000Z';
-    const success = CODEX_CONFIG.buildSuccessState({
-      planType: 'plus',
-      windows: [],
-      subscriptionActiveUntil: expiry,
-      rateLimitResetCreditsAvailableCount: null,
-      rateLimitResetCredits: [],
-      rateLimitResetCreditsError: null,
-    });
-    expect(success.subscriptionActiveUntil).toBe(expiry);
-  });
-
-  it('exposes getPlanExpiryAtMs from CODEX_CONFIG only for finite timestamps', () => {
-    expect(CODEX_CONFIG.getPlanExpiryAtMs).toBeTypeOf('function');
-
-    const file = { name: 'codex.json', type: 'codex' } as AuthFileItem;
-    expect(
-      CODEX_CONFIG.getPlanExpiryAtMs?.(file, {
-        status: 'success',
-        windows: [],
-        subscriptionActiveUntil: '2026-08-01T12:34:56.000Z',
-      })
-    ).toBe(Date.parse('2026-08-01T12:34:56.000Z'));
-    expect(
-      CODEX_CONFIG.getPlanExpiryAtMs?.(file, {
-        status: 'success',
-        windows: [],
-        subscriptionActiveUntil: 'bad',
-      })
-    ).toBeNull();
-    expect(CODEX_CONFIG.getPlanExpiryAtMs?.(file, undefined)).toBeNull();
+    expect(state?.windows).toMatchObject([
+      {
+        id: 'weekly',
+        usedPercent: 40,
+        observationSource: 'response_header',
+        observedAtMs: nowMs - 60_000,
+      },
+    ]);
   });
 });

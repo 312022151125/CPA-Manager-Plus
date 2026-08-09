@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 const (
@@ -109,7 +111,7 @@ func UpsertEventIDs(ctx context.Context, tx *sql.Tx, eventIDs []int64, nowMS int
 
 func upsertEvents(ctx context.Context, tx *sql.Tx, whereClause string, whereArgs []any, nowMS int64) error {
 	query := fmt.Sprintf(`insert into %s (
-		event_id, timestamp_ms, search_text, provider, executor_type, model,
+		event_id, timestamp_ms, search_text, account_key, provider, executor_type, model,
 		resolved_model, auth_index, source, source_hash, api_key_hash,
 		account_snapshot, auth_label_snapshot, auth_file_snapshot,
 		auth_provider_snapshot, auth_project_id_snapshot, reasoning_effort,
@@ -122,6 +124,7 @@ func upsertEvents(ctx context.Context, tx *sql.Tx, whereClause string, whereArgs
 	select
 		id,
 		timestamp_ms,
+		%s,
 		%s,
 		coalesce(provider, ''),
 		coalesce(executor_type, ''),
@@ -159,6 +162,7 @@ func upsertEvents(ctx context.Context, tx *sql.Tx, whereClause string, whereArgs
 	on conflict(event_id) do update set
 		timestamp_ms = excluded.timestamp_ms,
 		search_text = excluded.search_text,
+		account_key = excluded.account_key,
 		provider = excluded.provider,
 		executor_type = excluded.executor_type,
 		model = excluded.model,
@@ -189,7 +193,7 @@ func upsertEvents(ctx context.Context, tx *sql.Tx, whereClause string, whereArgs
 		header_error_kind = excluded.header_error_kind,
 		header_error_code = excluded.header_error_code,
 		header_trace_id = excluded.header_trace_id,
-		updated_at_ms = excluded.updated_at_ms`, EventTable, SearchTextExpression(""), whereClause)
+		updated_at_ms = excluded.updated_at_ms`, EventTable, SearchTextExpression(""), usageidentity.SQLAccountKeyExpression(""), whereClause)
 	args := make([]any, 0, len(whereArgs)+1)
 	args = append(args, nowMS)
 	args = append(args, whereArgs...)
