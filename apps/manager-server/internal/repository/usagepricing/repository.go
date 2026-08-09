@@ -11,6 +11,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 const (
@@ -394,7 +395,7 @@ func StructureRevision(ctx context.Context, db RowQuerier) (string, error) {
 	if err := rows.Err(); err != nil {
 		return "", err
 	}
-	return model.ModelPriceStructureRevision(prices), nil
+	return usageidentity.PricingStructureRevision(model.ModelPriceStructureRevision(prices)), nil
 }
 
 func latestEventID(ctx context.Context, tx *sql.Tx) (int64, error) {
@@ -432,6 +433,7 @@ func batchBucketRange(ctx context.Context, tx *sql.Tx, afterID, throughID int64)
 }
 
 func bandedEventsCTE(whereClause string) string {
+	accountKeyExpression := usageidentity.SQLAccountKeyExpression("e")
 	return fmt.Sprintf(`with base_events as (
 		select
 			e.*,
@@ -443,13 +445,7 @@ func bandedEventsCTE(whereClause string) string {
 				max(coalesce(e.cache_creation_tokens, 0), 0),
 				0
 			) as compatible_cached_tokens_value,
-			case
-				when trim(coalesce(e.account_snapshot, '')) != '' then e.account_snapshot
-				when trim(coalesce(e.auth_label_snapshot, '')) != '' then e.auth_label_snapshot
-				when trim(coalesce(e.source, '')) != '' then e.source
-				when trim(coalesce(e.auth_index, '')) != '' then e.auth_index
-				else '-'
-			end as account_key_value
+			%s as account_key_value
 		from usage_events e
 		where %s
 	), priced_events as (
@@ -473,7 +469,7 @@ func bandedEventsCTE(whereClause string) string {
 					and priced_events.normalized_input_tokens_value > tier.threshold_tokens
 			), %d) as context_threshold_tokens_value
 		from priced_events
-	)`, whereClause, model.ModelPriceBaseContextThreshold)
+		)`, accountKeyExpression, whereClause, model.ModelPriceBaseContextThreshold)
 }
 
 func upsertHourlyBatch(ctx context.Context, tx *sql.Tx, revision string, afterID, throughID, nowMS int64) error {
@@ -588,11 +584,12 @@ func upsertAccountBatch(ctx context.Context, tx *sql.Tx, revision string, afterI
 		coalesce(sum(case when normalized_input_tokens_value > %d then cache_read_tokens else 0 end), 0),
 		coalesce(sum(case when normalized_input_tokens_value > %d then cache_creation_tokens else 0 end), 0),
 		coalesce(sum(total_tokens), 0),
-		min(timestamp_ms),
-		max(timestamp_ms),
-		?
-	from banded_events
-	group by account_key_value, billing_model_value, pricing_model_value,
+			min(timestamp_ms),
+			max(timestamp_ms),
+			?
+		from banded_events
+		where account_key_value <> ''
+		group by account_key_value, billing_model_value, pricing_model_value,
 		coalesce(service_tier, ''), context_threshold_tokens_value
 	on conflict(
 		structure_revision, account_key, billing_model, pricing_model,

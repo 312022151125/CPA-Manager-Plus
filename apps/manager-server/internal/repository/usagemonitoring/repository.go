@@ -28,6 +28,7 @@ type Repository interface {
 	LoadAggregate(ctx context.Context, filter AnalyticsFilter) (Aggregate, State, bool, error)
 	LoadModelStats(ctx context.Context, filter AnalyticsFilter) ([]ModelStat, State, bool, error)
 	LoadAccountStats(ctx context.Context, filter AnalyticsFilter) ([]AccountModelStat, State, bool, error)
+	LoadAccountWindowStats(ctx context.Context, windows []AccountWindowUsageQuery) ([]AccountWindowModelStat, State, bool, error)
 	LoadAPIKeyStats(ctx context.Context, filter AnalyticsFilter) ([]APIKeyModelStat, State, bool, error)
 	LoadFilterOptions(ctx context.Context, filter AnalyticsFilter) (FilterOptionValues, State, bool, error)
 	LoadFilterSelectors(ctx context.Context, filter AnalyticsFilter) (FilterSelectorValues, State, bool, error)
