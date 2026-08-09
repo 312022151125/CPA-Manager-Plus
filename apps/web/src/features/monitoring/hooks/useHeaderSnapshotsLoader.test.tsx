@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
@@ -38,6 +38,11 @@ describe('useHeaderSnapshotsLoader', () => {
   let load: (() => Promise<void>) | null = null;
   const observedItems: UsageHeaderSnapshot[][] = [];
   const observedGeneratedAtMs: number[] = [];
+  const layoutCommits: Array<{
+    serviceBase: string;
+    managementKey: string;
+    items: UsageHeaderSnapshot[];
+  }> = [];
 
   beforeAll(() => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
@@ -49,19 +54,38 @@ describe('useHeaderSnapshotsLoader', () => {
     load = null;
     observedItems.length = 0;
     observedGeneratedAtMs.length = 0;
+    layoutCommits.length = 0;
     getHeaderSnapshotsMock.mockReset();
   });
 
-  function Harness({ serviceBase }: { serviceBase: string }) {
+  function Harness({
+    serviceBase,
+    managementKey = 'management-key',
+  }: {
+    serviceBase: string;
+    managementKey?: string;
+  }) {
+    const currentItemsRef = useRef<UsageHeaderSnapshot[]>([]);
     const currentLoad = useHeaderSnapshotsLoader({
       serviceBase,
-      managementKey: 'management-key',
+      managementKey,
       onResponse: (result) => {
-        observedItems.push(result.items ?? []);
+        currentItemsRef.current = result.items ?? [];
+        observedItems.push(currentItemsRef.current);
         observedGeneratedAtMs.push(result.generated_at_ms);
       },
-      onReset: () => observedItems.push([]),
+      onReset: () => {
+        currentItemsRef.current = [];
+        observedItems.push([]);
+      },
     });
+    useLayoutEffect(() => {
+      layoutCommits.push({
+        serviceBase,
+        managementKey,
+        items: [...currentItemsRef.current],
+      });
+    }, [managementKey, serviceBase]);
     useEffect(() => {
       load = currentLoad;
       return () => {
@@ -70,6 +94,48 @@ describe('useHeaderSnapshotsLoader', () => {
     }, [currentLoad]);
     return null;
   }
+
+  it('invalidates snapshots before the first layout commit after the scope changes', async () => {
+    getHeaderSnapshotsMock
+      .mockResolvedValueOnce(response('manager-a'))
+      .mockResolvedValueOnce(response('manager-b'));
+
+    await act(async () => {
+      renderer = create(
+        <Harness serviceBase="http://manager-a.local" managementKey="management-key-a" />
+      );
+    });
+    await act(async () => {
+      await load!();
+    });
+
+    layoutCommits.length = 0;
+    await act(async () => {
+      renderer?.update(
+        <Harness serviceBase="http://manager-b.local" managementKey="management-key-a" />
+      );
+    });
+    expect(layoutCommits[0]).toEqual({
+      serviceBase: 'http://manager-b.local',
+      managementKey: 'management-key-a',
+      items: [],
+    });
+
+    await act(async () => {
+      await load!();
+    });
+    layoutCommits.length = 0;
+    await act(async () => {
+      renderer?.update(
+        <Harness serviceBase="http://manager-b.local" managementKey="management-key-b" />
+      );
+    });
+    expect(layoutCommits[0]).toEqual({
+      serviceBase: 'http://manager-b.local',
+      managementKey: 'management-key-b',
+      items: [],
+    });
+  });
 
   it('deduplicates the same request and ignores a stale response after the service changes', async () => {
     const first = deferred<UsageHeaderSnapshotsResponse>();

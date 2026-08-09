@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 import {
   monitoringAnalyticsApi,
   type UsageHeaderSnapshotsResponse,
@@ -32,7 +32,7 @@ export function useHeaderSnapshotsLoader({
   onResponseRef.current = onResponse;
   onResetRef.current = onReset;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     scopeVersionRef.current += 1;
     inFlightRef.current?.controller.abort();
     inFlightRef.current = null;
