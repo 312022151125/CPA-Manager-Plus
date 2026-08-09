@@ -2566,16 +2566,6 @@ describe('AccountsPage replacement flows', () => {
       await Promise.resolve();
     });
     await flushPromises();
-
-    await act(async () => {
-      findHostButtonByText(renderer, 'accounts.tab_accounts').props.onClick();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      findHostButtonByText(renderer, 'accounts.tab_health').props.onClick();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
     expect(mocks.getCodexInspectionRun).toHaveBeenCalledTimes(2);
 
     firstDetail.resolve({ run, results: [makeInspectionResult(1, 'old-connection@example.com')] });
@@ -2593,6 +2583,54 @@ describe('AccountsPage replacement flows', () => {
 
     expect(treeText(renderer)).toContain('new-connection@example.com reason');
     expect(treeText(renderer)).not.toContain('old-connection@example.com reason');
+  });
+
+  it('removes Manager-only operational filters after switching to CPA control mode', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: false,
+      serverCodexInspectionAvailable: false,
+    };
+    const renderer = await renderAccountsPage();
+    const findOperationalSelect = () => {
+      const select = renderer.root
+        .findAllByType(Select)
+        .find((node) => node.props.ariaLabel === 'accounts.operational_filter');
+      if (!select) throw new Error('Accounts operational filter not found');
+      return select;
+    };
+
+    expect(findOperationalSelect().props.options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: 'cooldown' }),
+        expect.objectContaining({ value: 'automation' }),
+      ])
+    );
+
+    act(() => {
+      findOperationalSelect().props.onChange('cooldown');
+    });
+    expect(findOperationalSelect().props.value).toBe('cooldown');
+
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: '',
+      requestMonitoringAvailable: false,
+      serverCodexInspectionAvailable: false,
+    };
+    act(() => {
+      renderer.update(<AccountsPage />);
+    });
+
+    const cpaModeSelect = findOperationalSelect();
+    expect(cpaModeSelect.props.value).toBe('all');
+    expect(cpaModeSelect.props.options).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: 'cooldown' }),
+        expect.objectContaining({ value: 'automation' }),
+      ])
+    );
   });
 
   it('uses unique table row keys for shared auth accounts', async () => {
@@ -5656,6 +5694,48 @@ describe('AccountsPage replacement flows', () => {
     expect(accountQuotaSnapshotApi.write).toHaveBeenCalled();
     expect(accountQuotaSnapshotApi.query).toHaveBeenCalled();
     expect(mocks.getAccountWindowUsage).toHaveBeenCalled();
+  });
+
+  it('loads Manager quota snapshots without issuing monitoring requests when collection is disabled', async () => {
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex.json%00auth-1&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: false,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      fetchedAtMs: 123_456,
+      quotaInventoryObserved: true,
+      windows: [],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    expect(accountQuotaSnapshotApi.write).toHaveBeenCalled();
+    expect(accountQuotaSnapshotApi.query).toHaveBeenCalled();
+    expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
+    expect(mocks.getAccountHistory).not.toHaveBeenCalled();
+
+    const quotaTab = renderer.root.findByType(AccountQuotaTab);
+    expect(quotaTab.props.historyAvailable).toBe(false);
+    expect(findHostButtonByText(renderer, 'accounts.refresh_history').props.disabled).toBe(true);
+
+    await act(async () => {
+      await quotaTab.props.onRefreshHistory();
+    });
+    expect(mocks.getAccountHistory).not.toHaveBeenCalled();
   });
 
   it('keeps quota display available when the Manager Server monitoring path is unavailable', async () => {

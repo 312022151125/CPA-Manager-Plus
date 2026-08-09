@@ -102,6 +102,7 @@ const MetricCell = ({ icon, tone, label, value, valueTitle }: MetricCellProps): 
 interface AccountQuotaTabProps {
   detailView: AccountDetailViewModel;
   windowUsageError: string;
+  historyAvailable: boolean;
   historyRefreshing: boolean;
   onRefreshHistory: () => void;
   onResetQuota: () => void;
@@ -111,6 +112,7 @@ interface AccountQuotaTabProps {
 export function AccountQuotaTab({
   detailView,
   windowUsageError,
+  historyAvailable,
   historyRefreshing,
   onRefreshHistory,
   onResetQuota,
@@ -157,8 +159,9 @@ export function AccountQuotaTab({
             variant="secondary"
             size="sm"
             onClick={onRefreshHistory}
-            disabled={historyRefreshing}
+            disabled={!historyAvailable || historyRefreshing}
             loading={historyRefreshing}
+            title={!historyAvailable ? t('accounts.history_unavailable') : undefined}
           >
             {!historyRefreshing ? <IconRefreshCw size={15} /> : null}
             {t('accounts.refresh_history')}

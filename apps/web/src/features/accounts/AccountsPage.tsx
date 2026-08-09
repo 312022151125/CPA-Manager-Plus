@@ -356,6 +356,12 @@ export function AccountsPage() {
     () => createCodexInspectionConnectionFingerprint(apiBase, managementKey),
     [apiBase, managementKey]
   );
+  const managerStorageAvailable =
+    !featureAvailability.checking &&
+    Boolean(featureAvailability.managerServiceBase) &&
+    Boolean(managementKey);
+  const requestHistoryAvailable =
+    managerStorageAvailable && featureAvailability.requestMonitoringAvailable;
 
   const {
     files,
@@ -466,6 +472,11 @@ export function AccountsPage() {
   const [operationalFilter, setOperationalFilter] = useState<AccountOperationalFilter>(
     () => initialWorkspaceUrlState.current.operationalFilter
   );
+  const effectiveOperationalFilter =
+    !managerStorageAvailable &&
+    (operationalFilter === 'cooldown' || operationalFilter === 'automation')
+      ? 'all'
+      : operationalFilter;
   const [search, setSearch] = useState(() => initialWorkspaceUrlState.current.search);
   const [accountSort, setAccountSort] = useState<AccountRowSort>(
     () => initialWorkspaceUrlState.current.accountSort
@@ -604,6 +615,17 @@ export function AccountsPage() {
     checking: featureAvailability.checking,
     requestMonitoringAvailable: featureAvailability.requestMonitoringAvailable,
   });
+
+  useLayoutEffect(() => {
+    if (
+      featureAvailability.checking ||
+      managerStorageAvailable ||
+      (operationalFilter !== 'cooldown' && operationalFilter !== 'automation')
+    ) {
+      return;
+    }
+    setOperationalFilter('all');
+  }, [featureAvailability.checking, managerStorageAvailable, operationalFilter]);
 
   const loadQuotaCooldowns = useCallback(async () => {
     const requestId = quotaCooldownRequestIdRef.current + 1;
@@ -840,7 +862,7 @@ export function AccountsPage() {
   useEffect(() => {
     if (activeView === 'accounts') return;
     void refreshActiveWorkspace();
-  }, [activeView, refreshActiveWorkspace]);
+  }, [activeView, connectionFingerprint, refreshActiveWorkspace]);
 
   useEffect(
     () => () => {
@@ -1169,8 +1191,8 @@ export function AccountsPage() {
   );
   const filteredRows = useMemo(() => {
     const operationalRows = baseFilteredRows.filter((row) => {
-      if (operationalFilter === 'all') return true;
-      if (operationalFilter === 'reauth') {
+      if (effectiveOperationalFilter === 'all') return true;
+      if (effectiveOperationalFilter === 'reauth') {
         const recommendation = recommendationBySelectionKey.get(row.selectionKey);
         const statusMessage = row.statusMessage.trim().toLowerCase();
         return (
@@ -1180,10 +1202,10 @@ export function AccountsPage() {
           ['unauthorized', 'unauthenticated', 'expired', 'token_expired'].includes(statusMessage)
         );
       }
-      if (operationalFilter === 'cooldown') {
+      if (effectiveOperationalFilter === 'cooldown') {
         return (quotaCooldownsByRowKey.get(row.selectionKey)?.length ?? 0) > 0;
       }
-      if (operationalFilter === 'automation') {
+      if (effectiveOperationalFilter === 'automation') {
         return (actionCandidatesByRowKey.get(row.selectionKey)?.length ?? 0) > 0;
       }
       return row.disabled && row.quota.status === 'ok' && !row.quota.error;
@@ -1193,7 +1215,7 @@ export function AccountsPage() {
     accountSort,
     actionCandidatesByRowKey,
     baseFilteredRows,
-    operationalFilter,
+    effectiveOperationalFilter,
     quotaCooldownsByRowKey,
     recommendationBySelectionKey,
   ]);
@@ -1443,12 +1465,14 @@ export function AccountsPage() {
   const needsCodexStatusEvidence =
     activeView === 'accounts' && isAccountCodexStatusFilter(statusFilter);
   const needsQuotaCooldowns =
+    managerStorageAvailable &&
     activeView === 'accounts' &&
-    (operationalFilter === 'cooldown' ||
+    (effectiveOperationalFilter === 'cooldown' ||
       (hasSelectedAccountDetail && (detailTab === 'overview' || detailTab === 'quota')));
   const needsActionCandidates =
+    managerStorageAvailable &&
     activeView === 'accounts' &&
-    (operationalFilter === 'automation' ||
+    (effectiveOperationalFilter === 'automation' ||
       (hasSelectedAccountDetail && (detailTab === 'overview' || detailTab === 'diagnostics')));
   const needsHeaderSnapshots =
     (needsCodexStatusEvidence ||
@@ -2101,13 +2125,7 @@ export function AccountsPage() {
     accountWindowUsageAbortRef.current?.abort();
     accountWindowUsageAbortRef.current = null;
 
-    if (
-      featureAvailability.checking ||
-      !featureAvailability.requestMonitoringAvailable ||
-      !featureAvailability.managerServiceBase ||
-      !managementKey ||
-      !selectedRow
-    ) {
+    if (featureAvailability.checking || !managerStorageAvailable || !selectedRow) {
       setAccountWindowUsageByKey(new Map());
       setAccountWindowUsageQueryContext(null);
       setAccountWindowUsageError('');
@@ -2226,6 +2244,13 @@ export function AccountsPage() {
           // block the existing usage query path.
         }
       }
+      if (!featureAvailability.requestMonitoringAvailable) {
+        if (!isCurrentRequest()) return;
+        setAccountWindowUsageByKey(new Map());
+        setAccountWindowUsageQueryContext(null);
+        setAccountWindowUsageError('');
+        return;
+      }
       if (entries.length === 0) {
         if (!isCurrentRequest()) return;
         setAccountWindowUsageByKey(new Map());
@@ -2270,6 +2295,7 @@ export function AccountsPage() {
     getQuotaSnapshotObservation,
     headerSnapshotGeneratedAtMs,
     managementKey,
+    managerStorageAvailable,
     quotaWindowDefinitionsByRowKey,
     selectedRow,
     t,
@@ -2677,6 +2703,7 @@ export function AccountsPage() {
 
   const refreshAccountHistory = useCallback(
     (row: AccountRow): Promise<void> => {
+      if (!requestHistoryAvailable) return Promise.resolve();
       const refreshKey = JSON.stringify({
         checking: featureAvailability.checking,
         connectionFingerprint,
@@ -2731,6 +2758,7 @@ export function AccountsPage() {
       loadAccountHistory,
       loadHeaderSnapshots,
       managementKey,
+      requestHistoryAvailable,
     ]
   );
 
@@ -2982,10 +3010,10 @@ export function AccountsPage() {
         : planFilter;
   const selectedQuotaFilterLabel =
     quotaBandFilter === 'all' ? t('accounts.quota_all') : t(`accounts.quota_${quotaBandFilter}`);
-  const selectedOperationalFilterLabel = t(`accounts.operational_${operationalFilter}`);
+  const selectedOperationalFilterLabel = t(`accounts.operational_${effectiveOperationalFilter}`);
   const activeMobileFilterCount = [
     statusFilter !== 'all',
-    operationalFilter !== 'all',
+    effectiveOperationalFilter !== 'all',
     planFilter !== 'all',
     quotaBandFilter !== 'all',
     accountSort.key !== 'default',
@@ -2995,7 +3023,7 @@ export function AccountsPage() {
       ? t('accounts.mobile_filters_default')
       : [
           statusFilter !== 'all' ? selectedStatusFilterLabel : null,
-          operationalFilter !== 'all' ? selectedOperationalFilterLabel : null,
+          effectiveOperationalFilter !== 'all' ? selectedOperationalFilterLabel : null,
           planFilter !== 'all' ? selectedPlanFilterLabel : null,
           quotaBandFilter !== 'all' ? selectedQuotaFilterLabel : null,
           accountSort.key !== 'default' ? selectedAccountSortLabel : null,
@@ -3260,12 +3288,16 @@ export function AccountsPage() {
       </div>
       <div className={styles.filterField}>
         <Select
-          value={operationalFilter}
+          value={effectiveOperationalFilter}
           options={[
             { value: 'all', label: t('accounts.operational_all') },
             { value: 'reauth', label: t('accounts.operational_reauth') },
-            { value: 'cooldown', label: t('accounts.operational_cooldown') },
-            { value: 'automation', label: t('accounts.operational_automation') },
+            ...(managerStorageAvailable
+              ? [
+                  { value: 'cooldown', label: t('accounts.operational_cooldown') },
+                  { value: 'automation', label: t('accounts.operational_automation') },
+                ]
+              : []),
             { value: 'recovered', label: t('accounts.operational_recovered') },
           ]}
           onChange={(value) => setOperationalFilter(value as AccountOperationalFilter)}
@@ -4244,6 +4276,7 @@ export function AccountsPage() {
           <AccountQuotaTab
             detailView={detailView}
             windowUsageError={accountWindowUsageError}
+            historyAvailable={requestHistoryAvailable}
             historyRefreshing={historyRefreshing}
             onRefreshHistory={() => void refreshAccountHistory(selectedRow)}
             onResetQuota={() => resetCodexQuotaForRow(selectedRow)}
