@@ -393,7 +393,12 @@ export function AccountsPage() {
   } = useAuthFilesData({ connectionFingerprint });
 
   const [oauthViewMode, setOauthViewMode] = useState<'diagram' | 'list'>('list');
-  const oauthState = useAuthFilesOauth({ viewMode: oauthViewMode, files });
+  const oauthState = useAuthFilesOauth({
+    viewMode: oauthViewMode,
+    files,
+    connectionKey: connectionFingerprint,
+    requestScope: { apiBase, managementKey },
+  });
   const {
     modelsLoading,
     modelsRefreshing,

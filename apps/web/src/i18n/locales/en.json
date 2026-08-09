@@ -2003,6 +2003,7 @@
     "save": "Save/Update",
     "save_success": "Model aliases updated",
     "save_failed": "Failed to update model aliases",
+    "rollback_failed": "The update was only partially applied, and rollback failed for {{providers}} on the previous CPA connection. Reconnect and verify the model alias rules.",
     "delete": "Delete Rules",
     "delete_title": "Delete Alias Rules",
     "delete_confirm": "Delete all global model-alias rules for {{provider}}? The provider itself will not be removed.",

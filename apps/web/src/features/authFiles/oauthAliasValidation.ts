@@ -155,9 +155,22 @@ export type OAuthAliasWritePlan = OAuthAliasRenamePlan & {
   previousMappings: OAuthModelAliasEntry[];
 };
 
+export class OAuthAliasRollbackError extends Error {
+  readonly originalError: unknown;
+  readonly failedChannels: string[];
+
+  constructor(originalError: unknown, failedChannels: string[]) {
+    super(`Failed to roll back OAuth model aliases for: ${failedChannels.join(', ')}`);
+    this.name = 'OAuthAliasRollbackError';
+    this.originalError = originalError;
+    this.failedChannels = failedChannels;
+  }
+}
+
 export const applyOAuthAliasWritePlans = async (
   plans: OAuthAliasWritePlan[],
-  persist: (channel: string, mappings: OAuthModelAliasEntry[]) => Promise<void>
+  persist: (channel: string, mappings: OAuthModelAliasEntry[]) => Promise<void>,
+  rollbackPersist: (channel: string, mappings: OAuthModelAliasEntry[]) => Promise<void> = persist
 ): Promise<void> => {
   const appliedPlans: OAuthAliasWritePlan[] = [];
   let activePlan: OAuthAliasWritePlan | null = null;
@@ -173,12 +186,16 @@ export const applyOAuthAliasWritePlans = async (
     // The failing request may have reached the server before its response was lost,
     // so restore that channel too. Rewriting the previous value is safe if it did not apply.
     const rollbackPlans = activePlan ? [...appliedPlans, activePlan] : appliedPlans;
+    const failedRollbackChannels: string[] = [];
     for (const plan of [...rollbackPlans].reverse()) {
       try {
-        await persist(plan.channel, plan.previousMappings);
+        await rollbackPersist(plan.channel, plan.previousMappings);
       } catch {
-        // Best-effort rollback. The caller reloads the server state and reports the original error.
+        failedRollbackChannels.push(plan.channel);
       }
+    }
+    if (failedRollbackChannels.length > 0) {
+      throw new OAuthAliasRollbackError(writeError, failedRollbackChannels);
     }
     throw writeError;
   }

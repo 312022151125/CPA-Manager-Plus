@@ -2003,6 +2003,7 @@
     "save": "保存/更新",
     "save_success": "模型别名已更新",
     "save_failed": "更新模型别名失败",
+    "rollback_failed": "更新只完成了一部分，且无法在之前的 CPA 连接上回滚 {{providers}}。请重新连接并核对模型别名规则。",
     "delete": "删除规则",
     "delete_title": "删除模型别名规则",
     "delete_confirm": "确定删除 {{provider}} 的全部全局模型别名规则吗？提供商本身不会被删除。",

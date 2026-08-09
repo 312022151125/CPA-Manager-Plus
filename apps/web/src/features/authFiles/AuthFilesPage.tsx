@@ -446,7 +446,12 @@ export function AuthFilesPage() {
     handleToggleFork,
     handleRenameAlias,
     handleDeleteAlias,
-  } = useAuthFilesOauth({ viewMode, files });
+  } = useAuthFilesOauth({
+    viewMode,
+    files,
+    connectionKey: connectionFingerprint,
+    requestScope: { apiBase, managementKey },
+  });
 
   const {
     modelsModalOpen,
