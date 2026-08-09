@@ -6,6 +6,7 @@ const { mocks } = vi.hoisted(() => ({
     getRaw: vi.fn(),
     postForm: vi.fn(),
     patch: vi.fn(),
+    put: vi.fn(),
     delete: vi.fn(),
   },
 }));
@@ -16,8 +17,14 @@ vi.mock('./client', () => ({
     getRaw: mocks.getRaw,
     postForm: mocks.postForm,
     patch: mocks.patch,
+    put: mocks.put,
     delete: mocks.delete,
   },
+  createScopedApiRequestConfig: (scope: { apiBase: string; managementKey: string }) => ({
+    baseURL: `${scope.apiBase.replace(/\/+$/, '')}/v0/management`,
+    headers: { Authorization: `Bearer ${scope.managementKey}` },
+    cpampScopedRequest: true,
+  }),
 }));
 
 import { applyAuthFileFieldsPatchToRecord, authFilesApi } from './authFiles';
@@ -28,6 +35,7 @@ beforeEach(() => {
   mocks.getRaw.mockReset();
   mocks.postForm.mockReset();
   mocks.patch.mockReset();
+  mocks.put.mockReset();
   mocks.delete.mockReset();
 });
 
@@ -102,6 +110,30 @@ describe('authFilesApi OAuth model alias normalization', () => {
         { name: 'claude-opus-4-1-20250805', alias: 'opus' },
       ],
     });
+  });
+
+  it('pins PATCH and DELETE fallback requests to the captured CPA connection', async () => {
+    const methodNotAllowed = Object.assign(new Error('method not allowed'), { status: 405 });
+    const requestScope = {
+      apiBase: 'http://old-cpa.local:8317',
+      managementKey: 'old-cpa-key',
+    };
+    const requestConfig = {
+      baseURL: 'http://old-cpa.local:8317/v0/management',
+      headers: { Authorization: 'Bearer old-cpa-key' },
+      cpampScopedRequest: true,
+    };
+    mocks.patch.mockRejectedValueOnce(methodNotAllowed);
+    mocks.delete.mockResolvedValue({ status: 'ok' });
+
+    await authFilesApi.deleteOauthModelAlias('codex', requestScope);
+
+    expect(mocks.patch).toHaveBeenCalledWith(
+      '/oauth-model-alias',
+      { channel: 'codex', aliases: [] },
+      requestConfig
+    );
+    expect(mocks.delete).toHaveBeenCalledWith('/oauth-model-alias?channel=codex', requestConfig);
   });
 });
 

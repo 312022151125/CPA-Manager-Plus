@@ -2,7 +2,7 @@
  * 认证文件与 OAuth 排除模型相关 API
  */
 
-import { apiClient } from './client';
+import { apiClient, createScopedApiRequestConfig, type ApiClientRequestScope } from './client';
 import type { AuthFilesResponse } from '@/types/authFile';
 import type { AuthFileItem, OAuthModelAliasEntry } from '@/types';
 import {
@@ -14,6 +14,7 @@ import { sha256RawTextHex } from '@/utils/apiKeyHash';
 import { parseTimestampMs } from '@/utils/timestamp';
 
 type StatusError = { status?: number };
+export type AuthFilesApiRequestScope = ApiClientRequestScope;
 type AuthFileStatusResponse = { status: string; disabled: boolean };
 export type AuthFileStatusMutationResult = AuthFileStatusResponse & {
   mutationScope: 'credential' | 'source-file';
@@ -1315,58 +1316,112 @@ export const authFilesApi = {
     saveAuthFileText(name, JSON.stringify(json)),
 
   // OAuth 排除模型
-  async getOauthExcludedModels(): Promise<Record<string, string[]>> {
-    const data = await apiClient.get('/oauth-excluded-models');
+  async getOauthExcludedModels(
+    requestScope?: AuthFilesApiRequestScope
+  ): Promise<Record<string, string[]>> {
+    const data = requestScope
+      ? await apiClient.get('/oauth-excluded-models', createScopedApiRequestConfig(requestScope))
+      : await apiClient.get('/oauth-excluded-models');
     return normalizeOauthExcludedModels(data);
   },
 
-  saveOauthExcludedModels: (provider: string, models: string[]) =>
-    apiClient.patch('/oauth-excluded-models', { provider, models }),
+  saveOauthExcludedModels: (
+    provider: string,
+    models: string[],
+    requestScope?: AuthFilesApiRequestScope
+  ) =>
+    requestScope
+      ? apiClient.patch(
+          '/oauth-excluded-models',
+          { provider, models },
+          createScopedApiRequestConfig(requestScope)
+        )
+      : apiClient.patch('/oauth-excluded-models', { provider, models }),
 
-  deleteOauthExcludedEntry: (provider: string) =>
-    apiClient.delete(`/oauth-excluded-models?provider=${encodeURIComponent(provider)}`),
+  deleteOauthExcludedEntry: (provider: string, requestScope?: AuthFilesApiRequestScope) =>
+    requestScope
+      ? apiClient.delete(
+          `/oauth-excluded-models?provider=${encodeURIComponent(provider)}`,
+          createScopedApiRequestConfig(requestScope)
+        )
+      : apiClient.delete(`/oauth-excluded-models?provider=${encodeURIComponent(provider)}`),
 
-  replaceOauthExcludedModels: (map: Record<string, string[]>) =>
-    apiClient.put('/oauth-excluded-models', normalizeOauthExcludedModels(map)),
+  replaceOauthExcludedModels: (
+    map: Record<string, string[]>,
+    requestScope?: AuthFilesApiRequestScope
+  ) =>
+    requestScope
+      ? apiClient.put(
+          '/oauth-excluded-models',
+          normalizeOauthExcludedModels(map),
+          createScopedApiRequestConfig(requestScope)
+        )
+      : apiClient.put('/oauth-excluded-models', normalizeOauthExcludedModels(map)),
 
   // OAuth 模型别名
-  async getOauthModelAlias(): Promise<Record<string, OAuthModelAliasEntry[]>> {
-    const data = await apiClient.get(OAUTH_MODEL_ALIAS_ENDPOINT);
+  async getOauthModelAlias(
+    requestScope?: AuthFilesApiRequestScope
+  ): Promise<Record<string, OAuthModelAliasEntry[]>> {
+    const data = requestScope
+      ? await apiClient.get(OAUTH_MODEL_ALIAS_ENDPOINT, createScopedApiRequestConfig(requestScope))
+      : await apiClient.get(OAUTH_MODEL_ALIAS_ENDPOINT);
     return normalizeOauthModelAlias(data);
   },
 
-  saveOauthModelAlias: async (channel: string, aliases: OAuthModelAliasEntry[]) => {
+  saveOauthModelAlias: async (
+    channel: string,
+    aliases: OAuthModelAliasEntry[],
+    requestScope?: AuthFilesApiRequestScope
+  ) => {
     const normalizedChannel = String(channel ?? '')
       .trim()
       .toLowerCase();
     const normalizedAliases =
       normalizeOauthModelAlias({ [normalizedChannel]: aliases })[normalizedChannel] ?? [];
-    await apiClient.patch(OAUTH_MODEL_ALIAS_ENDPOINT, {
+    const payload = {
       channel: normalizedChannel,
       aliases: normalizedAliases.map(({ displayName, forceMapping, ...entry }) => ({
         ...entry,
         ...(displayName ? { 'display-name': displayName } : {}),
         ...(forceMapping ? { 'force-mapping': true } : {}),
       })),
-    });
+    };
+    if (requestScope) {
+      await apiClient.patch(
+        OAUTH_MODEL_ALIAS_ENDPOINT,
+        payload,
+        createScopedApiRequestConfig(requestScope)
+      );
+      return;
+    }
+    await apiClient.patch(OAUTH_MODEL_ALIAS_ENDPOINT, payload);
   },
 
-  deleteOauthModelAlias: async (channel: string) => {
+  deleteOauthModelAlias: async (channel: string, requestScope?: AuthFilesApiRequestScope) => {
     const normalizedChannel = String(channel ?? '')
       .trim()
       .toLowerCase();
+    const requestConfig = requestScope ? createScopedApiRequestConfig(requestScope) : undefined;
+    const payload = {
+      channel: normalizedChannel,
+      aliases: [],
+    };
 
     try {
-      await apiClient.patch(OAUTH_MODEL_ALIAS_ENDPOINT, {
-        channel: normalizedChannel,
-        aliases: [],
-      });
+      if (requestConfig) {
+        await apiClient.patch(OAUTH_MODEL_ALIAS_ENDPOINT, payload, requestConfig);
+      } else {
+        await apiClient.patch(OAUTH_MODEL_ALIAS_ENDPOINT, payload);
+      }
     } catch (err: unknown) {
       const status = getStatusCode(err);
       if (status !== 405) throw err;
-      await apiClient.delete(
-        `${OAUTH_MODEL_ALIAS_ENDPOINT}?channel=${encodeURIComponent(normalizedChannel)}`
-      );
+      const endpoint = `${OAUTH_MODEL_ALIAS_ENDPOINT}?channel=${encodeURIComponent(normalizedChannel)}`;
+      if (requestConfig) {
+        await apiClient.delete(endpoint, requestConfig);
+      } else {
+        await apiClient.delete(endpoint);
+      }
     }
   },
 
