@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { loadCodexInspectionLastRun } from '@/features/monitoring/codexInspection';
 import {
   createServerCredentialInspectionSnapshot,
@@ -27,8 +27,15 @@ export function useCredentialInspectionSnapshot({
   managerServiceBase,
   managementKey,
 }: UseCredentialInspectionSnapshotOptions) {
-  const [snapshot, setSnapshot] = useState<CredentialInspectionSnapshot | null>(null);
-  const [loading, setLoading] = useState(false);
+  const scopeKey = useMemo(
+    () => [connectionFingerprint ?? '', managerServiceBase, managementKey].join('\u001f'),
+    [connectionFingerprint, managementKey, managerServiceBase]
+  );
+  const [snapshotState, setSnapshotState] = useState<{
+    scopeKey: string;
+    snapshot: CredentialInspectionSnapshot | null;
+  }>(() => ({ scopeKey, snapshot: null }));
+  const [loadingState, setLoadingState] = useState({ scopeKey, loading: false });
   const requestIdRef = useRef(0);
 
   const readLocalSnapshot = useCallback(() => {
@@ -38,9 +45,18 @@ export function useCredentialInspectionSnapshot({
     return localState ? createStoredLocalCredentialInspectionSnapshot(localState) : null;
   }, [connectionFingerprint]);
 
-  const applySnapshot = useCallback((next: CredentialInspectionSnapshot) => {
-    setSnapshot((current) => selectLatestCredentialInspectionSnapshot([current, next]));
-  }, []);
+  const applySnapshot = useCallback(
+    (next: CredentialInspectionSnapshot) => {
+      setSnapshotState((current) => {
+        if (current.scopeKey !== scopeKey) return current;
+        return {
+          scopeKey,
+          snapshot: selectLatestCredentialInspectionSnapshot([current.snapshot, next]),
+        };
+      });
+    },
+    [scopeKey]
+  );
 
   const refresh = useCallback(async () => {
     const requestId = requestIdRef.current + 1;
@@ -49,13 +65,13 @@ export function useCredentialInspectionSnapshot({
 
     if (checking || !serverAvailable || !managerServiceBase || !managementKey) {
       if (requestIdRef.current === requestId) {
-        setSnapshot(localSnapshot);
-        setLoading(false);
+        setSnapshotState({ scopeKey, snapshot: localSnapshot });
+        setLoadingState({ scopeKey, loading: false });
       }
       return;
     }
 
-    setLoading(true);
+    setLoadingState({ scopeKey, loading: true });
     try {
       const runsResponse = await usageServiceApi.listCodexInspectionRuns(
         managerServiceBase,
@@ -65,7 +81,7 @@ export function useCredentialInspectionSnapshot({
       if (requestIdRef.current !== requestId) return;
       const latestCompletedRun = runsResponse.items.find(isCompletedCredentialInspectionRun);
       if (!latestCompletedRun) {
-        setSnapshot(localSnapshot);
+        setSnapshotState({ scopeKey, snapshot: localSnapshot });
         return;
       }
       const detail = await usageServiceApi.getCodexInspectionRun(
@@ -74,24 +90,32 @@ export function useCredentialInspectionSnapshot({
         latestCompletedRun.id
       );
       if (requestIdRef.current !== requestId) return;
-      setSnapshot(
-        selectLatestCredentialInspectionSnapshot([
+      setSnapshotState({
+        scopeKey,
+        snapshot: selectLatestCredentialInspectionSnapshot([
           localSnapshot,
           createServerCredentialInspectionSnapshot(detail, runsResponse.items),
-        ])
-      );
+        ]),
+      });
     } catch {
-      if (requestIdRef.current === requestId) setSnapshot(localSnapshot);
+      if (requestIdRef.current === requestId) {
+        setSnapshotState({ scopeKey, snapshot: localSnapshot });
+      }
     } finally {
-      if (requestIdRef.current === requestId) setLoading(false);
+      if (requestIdRef.current === requestId) {
+        setLoadingState({ scopeKey, loading: false });
+      }
     }
-  }, [checking, managementKey, managerServiceBase, readLocalSnapshot, serverAvailable]);
+  }, [checking, managementKey, managerServiceBase, readLocalSnapshot, scopeKey, serverAvailable]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     requestIdRef.current += 1;
-    setSnapshot(readLocalSnapshot());
-    setLoading(false);
-  }, [managementKey, managerServiceBase, readLocalSnapshot]);
+    setSnapshotState({ scopeKey, snapshot: readLocalSnapshot() });
+    setLoadingState({ scopeKey, loading: false });
+  }, [readLocalSnapshot, scopeKey]);
+
+  const snapshot = snapshotState.scopeKey === scopeKey ? snapshotState.snapshot : null;
+  const loading = loadingState.scopeKey === scopeKey && loadingState.loading;
 
   return {
     snapshot,
