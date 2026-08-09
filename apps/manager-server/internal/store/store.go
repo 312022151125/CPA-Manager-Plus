@@ -515,6 +515,10 @@ func (s *Store) UsageMonitoringAccountStats(ctx context.Context, filter Analytic
 	return s.UsageMonitoring.LoadAccountStats(ctx, filter)
 }
 
+func (s *Store) UsageMonitoringAccountWindowStats(ctx context.Context, windows []AccountWindowUsageQuery) ([]AccountWindowModelStat, UsageMonitoringState, bool, error) {
+	return s.UsageMonitoring.LoadAccountWindowStats(ctx, windows)
+}
+
 func (s *Store) UsageMonitoringAPIKeyStats(ctx context.Context, filter AnalyticsFilter) ([]APIKeyModelStat, UsageMonitoringState, bool, error) {
 	return s.UsageMonitoring.LoadAPIKeyStats(ctx, filter)
 }

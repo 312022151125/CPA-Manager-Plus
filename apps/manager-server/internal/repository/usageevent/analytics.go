@@ -12,6 +12,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageprojection"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 var (
@@ -224,13 +225,17 @@ type AccountModelStat struct {
 }
 
 type AccountWindowUsageQuery struct {
-	RequestIndex      int
-	FromMS            int64
-	ToMS              int64
-	AccountSnapshot   string
-	AuthLabelSnapshot string
-	Source            string
-	AuthIndex         string
+	RequestIndex          int
+	FromMS                int64
+	ToMS                  int64
+	AccountKey            string
+	AccountSnapshot       string
+	AuthLabelSnapshot     string
+	AuthFileSnapshot      string
+	AuthProviderSnapshot  string
+	AuthProjectIDSnapshot string
+	Source                string
+	AuthIndex             string
 }
 
 type AccountWindowModelStat struct {
@@ -1572,23 +1577,20 @@ func (r *repository) AccountWindowModelStats(ctx context.Context, windows []Acco
 	}
 
 	values := make([]string, 0, len(windows))
-	args := make([]any, 0, len(windows)*7)
+	args := make([]any, 0, len(windows)*4)
 	for _, window := range windows {
-		values = append(values, "(?, ?, ?, ?, ?, ?, ?)")
+		values = append(values, "(?, ?, ?, ?)")
 		args = append(
 			args,
 			window.RequestIndex,
 			window.FromMS,
 			window.ToMS,
-			strings.TrimSpace(window.AccountSnapshot),
-			strings.TrimSpace(window.AuthLabelSnapshot),
-			strings.TrimSpace(window.Source),
-			strings.TrimSpace(window.AuthIndex),
+			accountWindowQueryKey(window),
 		)
 	}
 
 	rows, err := r.db.QueryContext(ctx, pricingBandedUsageEventsCTE+`, window_targets(
-	request_index, from_ms, to_ms, account_snapshot, auth_label_snapshot, source, auth_index
+	request_index, from_ms, to_ms, account_key
 ) as (
 	values `+strings.Join(values, ",")+`
 )
@@ -1615,20 +1617,10 @@ select
 	coalesce(sum(e.total_tokens), 0),
 	max(e.timestamp_ms)
 from window_targets w
-join banded_usage_events e
-	on e.timestamp_ms >= w.from_ms
-	and e.timestamp_ms < w.to_ms
-	and (
-		case
-			when w.account_snapshot <> '' then lower(coalesce(e.account_snapshot, '')) = lower(w.account_snapshot)
-			when w.auth_label_snapshot <> '' then lower(coalesce(e.auth_label_snapshot, '')) = lower(w.auth_label_snapshot)
-			when w.source <> '' then lower(coalesce(e.auth_file_snapshot, '')) = lower(w.source)
-				or lower(coalesce(e.source, '')) = lower(w.source)
-			when w.auth_index <> '' then lower(coalesce(e.auth_index, '')) = lower(w.auth_index)
-			else 0
-		end
-	)
-	and (w.auth_index = '' or lower(coalesce(e.auth_index, '')) = lower(w.auth_index))
+	join banded_usage_events e
+		on e.timestamp_ms >= w.from_ms
+		and e.timestamp_ms < w.to_ms
+		and `+usageidentity.SQLAccountKeyExpression("e")+` = w.account_key
 group by w.request_index, e.model, billing_model, e.pricing_model_value, e.context_threshold_tokens_value, coalesce(e.service_tier, '')
 order by w.request_index, max(e.timestamp_ms) desc`, args...)
 	if err != nil {
@@ -1667,6 +1659,22 @@ order by w.request_index, max(e.timestamp_ms) desc`, args...)
 		stats = append(stats, stat)
 	}
 	return stats, rows.Err()
+}
+
+func accountWindowQueryKey(window AccountWindowUsageQuery) string {
+	if key := strings.TrimSpace(window.AccountKey); key != "" {
+		return key
+	}
+	key, _ := usageidentity.AccountKey(usageidentity.Fields{
+		AuthFileSnapshot:      window.AuthFileSnapshot,
+		AuthIndex:             window.AuthIndex,
+		AuthProviderSnapshot:  window.AuthProviderSnapshot,
+		AuthProjectIDSnapshot: window.AuthProjectIDSnapshot,
+		AccountSnapshot:       window.AccountSnapshot,
+		AuthLabelSnapshot:     window.AuthLabelSnapshot,
+		Source:                window.Source,
+	})
+	return key
 }
 
 func (r *repository) CredentialModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]CredentialModelStat, error) {
