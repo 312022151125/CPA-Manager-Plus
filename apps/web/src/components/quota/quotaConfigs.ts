@@ -70,7 +70,7 @@ import styles from '@/features/quota/QuotaPage.module.scss';
 type QuotaUpdater<T> = T | ((prev: T) => T);
 
 type QuotaType = 'antigravity' | 'claude' | 'codex' | 'kimi' | 'xai';
-export type QuotaSortMode = 'default' | 'name-asc' | 'plan-desc' | 'plan-asc';
+export type QuotaSortMode = 'default' | 'name-asc' | 'plan-desc' | 'plan-asc' | 'expiry-asc' | 'expiry-desc';
 
 const QUOTA_PROGRESS_HIGH_THRESHOLD = 70;
 const QUOTA_PROGRESS_MEDIUM_THRESHOLD = 30;
@@ -115,6 +115,7 @@ export interface QuotaConfig<TState, TData> {
   gridClassName: string;
   getSearchText?: (file: AuthFileItem, quota: TState | undefined, t: TFunction) => unknown[];
   getPlanSortRank?: (file: AuthFileItem, quota: TState | undefined) => number | null;
+  getPlanExpiryAtMs?: (file: AuthFileItem, quota: TState | undefined) => number | null;
   buildObservedState?: (
     file: AuthFileItem,
     snapshot: UsageHeaderSnapshot | undefined,

@@ -935,7 +935,7 @@ export function GrokInspectionPage() {
       <CodexInspectionStatusPanel
         statusTone={statusTone}
         statusLabel={statusLabel}
-        lastFinishedLabel={lastFinishedLabel}
+        lastFinishedValue={lastFinishedLabel}
         pendingActionCount={pendingActionCount}
         summaryCards={summaryCards}
         progress={progress as never}

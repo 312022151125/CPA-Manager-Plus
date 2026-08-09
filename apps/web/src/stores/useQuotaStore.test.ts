@@ -262,7 +262,7 @@ describe('useQuotaStore persistence', () => {
 
     expect(useQuotaStore.getState().codexQuota.manual?.subscriptionActiveUntil).toBe(expiry);
 
-    const persisted = await readPersistedCodexQuota();
+    const persisted = await readPersistedQuotaState();
     expect(persisted.manual).toMatchObject({
       status: 'success',
       fetchedAtMs: 2_000,
