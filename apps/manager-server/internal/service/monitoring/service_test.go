@@ -2483,22 +2483,24 @@ func TestAccountWindowUsageReturnsWindowScopedTotalsAndComputedCost(t *testing.T
 	resp, err := New(db).AccountWindowUsage(ctx, AccountWindowUsageRequest{
 		Windows: []AccountWindowUsageTarget{
 			{
-				RowKey:          "codex.json\x00auth-1",
-				WindowKey:       "5h",
-				FromMS:          baseMS,
-				ToMS:            baseMS + 5_000,
-				AccountSnapshot: "quota@example.com",
-				AuthIndex:       "auth-1",
-				Source:          "codex.json",
+				RowKey:               "codex.json\x00auth-1",
+				WindowKey:            "5h",
+				FromMS:               baseMS,
+				ToMS:                 baseMS + 5_000,
+				AccountSnapshot:      "quota@example.com",
+				AuthProviderSnapshot: "codex",
+				AuthIndex:            "auth-1",
+				Source:               "codex.json",
 			},
 			{
-				RowKey:          "codex.json\x00auth-1",
-				WindowKey:       "7d",
-				FromMS:          baseMS - 10_000,
-				ToMS:            baseMS - 5_000,
-				AccountSnapshot: "quota@example.com",
-				AuthIndex:       "auth-1",
-				Source:          "codex.json",
+				RowKey:               "codex.json\x00auth-1",
+				WindowKey:            "7d",
+				FromMS:               baseMS - 10_000,
+				ToMS:                 baseMS - 5_000,
+				AccountSnapshot:      "quota@example.com",
+				AuthProviderSnapshot: "codex",
+				AuthIndex:            "auth-1",
+				Source:               "codex.json",
 			},
 		},
 	})
@@ -2529,6 +2531,81 @@ func TestAccountWindowUsageReturnsWindowScopedTotalsAndComputedCost(t *testing.T
 	}
 }
 
+func TestAccountWindowUsageRejectsWeakDisplayIdentity(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	_, err := New(db).AccountWindowUsage(context.Background(), AccountWindowUsageRequest{
+		Windows: []AccountWindowUsageTarget{{
+			RowKey:          "legacy-row",
+			WindowKey:       "current",
+			FromMS:          1,
+			ToMS:            2,
+			AccountSnapshot: "legacy@example.com",
+			AuthIndex:       "auth-legacy",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "credential identity") {
+		t.Fatalf("weak account window target error = %v", err)
+	}
+}
+
+func TestAccountWindowUsageSeparatesCredentialsSharingEmailAndAuthIndex(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_700_050_000_000)
+	first := monitoringEvent("window-shared-first", baseMS+1_000, "gpt-a", "auth-shared", "source-a", false, 10, 5, 0, 0, 15, nil)
+	first.AccountSnapshot = "shared@example.com"
+	first.AuthFileSnapshot = "first.json"
+	first.AuthProviderSnapshot = "codex"
+	first.AuthProjectIDSnapshot = "project-shared"
+	second := monitoringEvent("window-shared-second", baseMS+2_000, "gpt-a", "auth-shared", "source-b", false, 20, 10, 0, 0, 30, nil)
+	second.AccountSnapshot = "shared@example.com"
+	second.AuthFileSnapshot = "second.json"
+	second.AuthProviderSnapshot = "codex"
+	second.AuthProjectIDSnapshot = "project-shared"
+	if _, err := db.InsertEvents(ctx, []usage.Event{first, second}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).AccountWindowUsage(ctx, AccountWindowUsageRequest{Windows: []AccountWindowUsageTarget{
+		{
+			RowKey:                "first.json\x00auth-shared",
+			WindowKey:             "current",
+			FromMS:                baseMS,
+			ToMS:                  baseMS + 5_000,
+			AccountSnapshot:       "shared@example.com",
+			AuthFileSnapshot:      "first.json",
+			AuthProviderSnapshot:  "codex",
+			AuthProjectIDSnapshot: "project-shared",
+			AuthIndex:             "auth-shared",
+			Source:                "first.json",
+		},
+		{
+			RowKey:                "second.json\x00auth-shared",
+			WindowKey:             "current",
+			FromMS:                baseMS,
+			ToMS:                  baseMS + 5_000,
+			AccountSnapshot:       "shared@example.com",
+			AuthFileSnapshot:      "second.json",
+			AuthProviderSnapshot:  "codex",
+			AuthProjectIDSnapshot: "project-shared",
+			AuthIndex:             "auth-shared",
+			Source:                "second.json",
+		},
+	}})
+	if err != nil {
+		t.Fatalf("account window usage: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("items = %#v", resp.Items)
+	}
+	if !resp.Items[0].Matched || resp.Items[0].TotalRequests != 1 || resp.Items[0].TotalTokens != 15 {
+		t.Fatalf("first credential usage = %#v", resp.Items[0])
+	}
+	if !resp.Items[1].Matched || resp.Items[1].TotalRequests != 1 || resp.Items[1].TotalTokens != 30 {
+		t.Fatalf("second credential usage = %#v", resp.Items[1])
+	}
+}
+
 func TestAccountWindowUsageSeparatesPeriodsAndAppliesModelScopeAcrossOverlappingWindows(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()
@@ -2554,31 +2631,31 @@ func TestAccountWindowUsageSeparatesPeriodsAndAppliesModelScopeAcrossOverlapping
 			RequestKey: "five-hour-previous", RowKey: "row-1", ProviderWindowID: "five-hour",
 			Period: "previous", FromMS: resetMS - 5_000, ToMS: resetMS,
 			ModelScope: AccountWindowModelScope{Kind: "all"}, AccountSnapshot: "quota@example.com",
-			AuthIndex: "auth-1", Source: "antigravity.json",
+			AuthProviderSnapshot: "antigravity", AuthIndex: "auth-1", Source: "antigravity.json",
 		},
 		{
 			RequestKey: "five-hour-current", RowKey: "row-1", ProviderWindowID: "five-hour",
 			Period: "current", FromMS: resetMS, ToMS: resetMS + 5_000,
 			ModelScope:      AccountWindowModelScope{Kind: "family", Key: "claude_gpt"},
-			AccountSnapshot: "quota@example.com", AuthIndex: "auth-1", Source: "antigravity.json",
+			AccountSnapshot: "quota@example.com", AuthProviderSnapshot: "antigravity", AuthIndex: "auth-1", Source: "antigravity.json",
 		},
 		{
 			RequestKey: "weekly-current", RowKey: "row-1", ProviderWindowID: "weekly",
 			Period: "current", FromMS: resetMS - 10_000, ToMS: resetMS + 5_000,
 			ModelScope: AccountWindowModelScope{Kind: "all"}, AccountSnapshot: "quota@example.com",
-			AuthIndex: "auth-1", Source: "antigravity.json",
+			AuthProviderSnapshot: "antigravity", AuthIndex: "auth-1", Source: "antigravity.json",
 		},
 		{
 			RequestKey: "exact-billing-model", RowKey: "row-1", ProviderWindowID: "gemini-weekly",
 			Period: "current", FromMS: resetMS, ToMS: resetMS + 5_000,
 			ModelScope:      AccountWindowModelScope{Kind: "models", Models: []string{"gemini-2.5-pro"}},
-			AccountSnapshot: "quota@example.com", AuthIndex: "auth-1", Source: "antigravity.json",
+			AccountSnapshot: "quota@example.com", AuthProviderSnapshot: "antigravity", AuthIndex: "auth-1", Source: "antigravity.json",
 		},
 		{
 			RequestKey: "exact-unmatched", RowKey: "row-1", ProviderWindowID: "missing-weekly",
 			Period: "current", FromMS: resetMS, ToMS: resetMS + 5_000,
 			ModelScope:      AccountWindowModelScope{Kind: "models", Models: []string{"missing-model"}},
-			AccountSnapshot: "quota@example.com", AuthIndex: "auth-1", Source: "antigravity.json",
+			AccountSnapshot: "quota@example.com", AuthProviderSnapshot: "antigravity", AuthIndex: "auth-1", Source: "antigravity.json",
 		},
 	}})
 	if err != nil {
@@ -2655,13 +2732,14 @@ func TestAccountWindowUsagePricesContextLongContextAndServiceTierBands(t *testin
 	resp, err := New(db).AccountWindowUsage(ctx, AccountWindowUsageRequest{
 		Windows: []AccountWindowUsageTarget{
 			{
-				RowKey:          "codex.json\x00auth-1",
-				WindowKey:       "combined",
-				FromMS:          baseMS,
-				ToMS:            baseMS + 5_000,
-				AccountSnapshot: "quota-bands@example.com",
-				AuthIndex:       "auth-1",
-				Source:          "codex.json",
+				RowKey:               "codex.json\x00auth-1",
+				WindowKey:            "combined",
+				FromMS:               baseMS,
+				ToMS:                 baseMS + 5_000,
+				AccountSnapshot:      "quota-bands@example.com",
+				AuthProviderSnapshot: "codex",
+				AuthIndex:            "auth-1",
+				Source:               "codex.json",
 			},
 		},
 	})

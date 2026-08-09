@@ -284,18 +284,21 @@ type AccountWindowUsageRequest struct {
 }
 
 type AccountWindowUsageTarget struct {
-	RequestKey        string                  `json:"request_key,omitempty"`
-	RowKey            string                  `json:"row_key"`
-	WindowKey         string                  `json:"window_key,omitempty"`
-	ProviderWindowID  string                  `json:"provider_window_id,omitempty"`
-	Period            string                  `json:"period,omitempty"`
-	FromMS            int64                   `json:"from_ms"`
-	ToMS              int64                   `json:"to_ms"`
-	ModelScope        AccountWindowModelScope `json:"model_scope,omitempty"`
-	AccountSnapshot   string                  `json:"account_snapshot,omitempty"`
-	AuthLabelSnapshot string                  `json:"auth_label_snapshot,omitempty"`
-	AuthIndex         string                  `json:"auth_index,omitempty"`
-	Source            string                  `json:"source,omitempty"`
+	RequestKey            string                  `json:"request_key,omitempty"`
+	RowKey                string                  `json:"row_key"`
+	WindowKey             string                  `json:"window_key,omitempty"`
+	ProviderWindowID      string                  `json:"provider_window_id,omitempty"`
+	Period                string                  `json:"period,omitempty"`
+	FromMS                int64                   `json:"from_ms"`
+	ToMS                  int64                   `json:"to_ms"`
+	ModelScope            AccountWindowModelScope `json:"model_scope,omitempty"`
+	AccountSnapshot       string                  `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot     string                  `json:"auth_label_snapshot,omitempty"`
+	AuthFileSnapshot      string                  `json:"auth_file_snapshot,omitempty"`
+	AuthProviderSnapshot  string                  `json:"auth_provider_snapshot,omitempty"`
+	AuthProjectIDSnapshot string                  `json:"auth_project_id_snapshot,omitempty"`
+	AuthIndex             string                  `json:"auth_index,omitempty"`
+	Source                string                  `json:"source,omitempty"`
 }
 
 type AccountWindowModelScope struct {
@@ -1481,23 +1484,32 @@ func (s *Service) accountWindowUsage(ctx context.Context, req AccountWindowUsage
 		if window.FromMS <= 0 || window.ToMS <= 0 || window.FromMS >= window.ToMS {
 			return AccountWindowUsageResponse{}, errors.New("from_ms and to_ms are required and from_ms must be less than to_ms")
 		}
-		if !accountWindowUsageTargetValid(*window) {
-			return AccountWindowUsageResponse{}, errors.New("at least one account target field is required")
+		accountKey, valid := accountWindowUsageTargetKey(*window)
+		if !valid {
+			return AccountWindowUsageResponse{}, errors.New("account target credential identity is required")
 		}
 		queries = append(queries, store.AccountWindowUsageQuery{
-			RequestIndex:      index,
-			FromMS:            window.FromMS,
-			ToMS:              window.ToMS,
-			AccountSnapshot:   window.AccountSnapshot,
-			AuthLabelSnapshot: window.AuthLabelSnapshot,
-			Source:            window.Source,
-			AuthIndex:         window.AuthIndex,
+			RequestIndex:          index,
+			FromMS:                window.FromMS,
+			ToMS:                  window.ToMS,
+			AccountKey:            accountKey,
+			AccountSnapshot:       window.AccountSnapshot,
+			AuthLabelSnapshot:     window.AuthLabelSnapshot,
+			AuthFileSnapshot:      window.AuthFileSnapshot,
+			AuthProviderSnapshot:  window.AuthProviderSnapshot,
+			AuthProjectIDSnapshot: window.AuthProjectIDSnapshot,
+			Source:                window.Source,
+			AuthIndex:             window.AuthIndex,
 		})
 	}
 
-	stats, err := s.store.AccountWindowModelStats(ctx, queries)
-	if err != nil {
-		return AccountWindowUsageResponse{}, err
+	stats, available := s.monitoringReader.AccountWindowStats(ctx, queries)
+	if !available {
+		var err error
+		stats, err = s.store.AccountWindowModelStats(ctx, queries)
+		if err != nil {
+			return AccountWindowUsageResponse{}, err
+		}
 	}
 	prices, err := s.store.LoadModelPrices(ctx)
 	if err != nil {
@@ -3544,11 +3556,49 @@ func buildPricingAccountHistoryTotals(rows []store.UsagePricingAccountRow, price
 	return totals
 }
 
-func accountWindowUsageTargetValid(target AccountWindowUsageTarget) bool {
-	return strings.TrimSpace(target.AccountSnapshot) != "" ||
-		strings.TrimSpace(target.AuthLabelSnapshot) != "" ||
-		strings.TrimSpace(target.Source) != "" ||
-		strings.TrimSpace(target.AuthIndex) != ""
+func accountWindowUsageTargetKey(target AccountWindowUsageTarget) (string, bool) {
+	if !AccountWindowUsageTargetHasCredentialIdentity(target) {
+		return "", false
+	}
+	return usageidentity.AccountKey(usageidentity.Fields{
+		AuthFileSnapshot:      target.AuthFileSnapshot,
+		AuthIndex:             target.AuthIndex,
+		AuthProviderSnapshot:  target.AuthProviderSnapshot,
+		AuthProjectIDSnapshot: target.AuthProjectIDSnapshot,
+		AccountSnapshot:       target.AccountSnapshot,
+		AuthLabelSnapshot:     target.AuthLabelSnapshot,
+		Source:                target.Source,
+	})
+}
+
+func AccountWindowUsageTargetHasCredentialIdentity(target AccountWindowUsageTarget) bool {
+	authFile := strings.TrimSpace(target.AuthFileSnapshot)
+	account := strings.TrimSpace(target.AccountSnapshot)
+	label := strings.TrimSpace(target.AuthLabelSnapshot)
+	source := strings.TrimSpace(target.Source)
+	provider := strings.TrimSpace(target.AuthProviderSnapshot)
+	if effectiveAccountTargetFile(authFile, account, label, source) != "" {
+		return provider != ""
+	}
+	if provider == "" {
+		return false
+	}
+	return strings.TrimSpace(target.AuthIndex) != "" ||
+		strings.TrimSpace(target.AuthProjectIDSnapshot) != "" ||
+		account != "" || label != ""
+}
+
+func effectiveAccountTargetFile(authFile, account, label, source string) string {
+	if value := strings.TrimSpace(authFile); value != "" {
+		return value
+	}
+	account = strings.TrimSpace(account)
+	label = strings.TrimSpace(label)
+	source = strings.TrimSpace(source)
+	if source != "" && source != account && source != label {
+		return source
+	}
+	return ""
 }
 
 type accountWindowScopeResult struct {
