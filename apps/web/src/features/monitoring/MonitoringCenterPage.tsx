@@ -100,12 +100,13 @@ import {
 } from '@/features/monitoring/model/monitoringCenterPageModel';
 import { resolveMonitoringDimensionCounts } from '@/features/monitoring/model/monitoringAnalyticsModel';
 import { useUsageData } from '@/features/monitoring/hooks/useUsageData';
+import { useHeaderSnapshotsLoader } from '@/features/monitoring/hooks/useHeaderSnapshotsLoader';
 import {
   isUsageImportCancelledError,
   isUsageImportPausedError,
   type UsageImportProgress,
 } from '@/features/monitoring/services/usageImportSession';
-import { monitoringAnalyticsApi, type UsageHeaderSnapshot } from '@/services/api/usageService';
+import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import {
   readMonitoringCenterUiState,
   writeMonitoringCenterUiState,
@@ -304,8 +305,6 @@ export function MonitoringCenterPage() {
   const accountQuotaContextGenerationRef = useRef(0);
   const accountQuotaContextKeyRef = useRef(accountQuotaContextKey);
   const [accountQuotaRefreshQueue] = useState(() => createKeyedSerialTaskQueue());
-  const headerSnapshotRequestIdRef = useRef(0);
-  const headerSnapshotAbortRef = useRef<AbortController | null>(null);
   const usageImportInputRef = useRef<HTMLInputElement | null>(null);
   const usageImportAbortRef = useRef<AbortController | null>(null);
   const usageImportCancelPendingRef = useRef(false);
@@ -438,37 +437,18 @@ export function MonitoringCenterPage() {
     activeDataTab,
   });
 
-  const loadHeaderSnapshots = useCallback(async () => {
-    const requestId = headerSnapshotRequestIdRef.current + 1;
-    headerSnapshotRequestIdRef.current = requestId;
-    headerSnapshotAbortRef.current?.abort();
-    headerSnapshotAbortRef.current = null;
-    if (!requestMonitoringAvailability.serviceBase) {
-      setHeaderSnapshots([]);
-      setHeaderSnapshotGeneratedAtMs(0);
-      return;
-    }
-    const controller = new AbortController();
-    headerSnapshotAbortRef.current = controller;
-    try {
-      const response = await monitoringAnalyticsApi.getHeaderSnapshots(
-        requestMonitoringAvailability.serviceBase,
-        managementKey,
-        { days: 30, limit: 1000 },
-        controller.signal
-      );
-      if (requestId !== headerSnapshotRequestIdRef.current || controller.signal.aborted) return;
+  const loadHeaderSnapshots = useHeaderSnapshotsLoader({
+    serviceBase: requestMonitoringAvailability.serviceBase,
+    managementKey,
+    onResponse: (response) => {
       setHeaderSnapshots(response.items ?? []);
       setHeaderSnapshotGeneratedAtMs(response.generated_at_ms || Date.now());
-    } catch {
-      // Header snapshots are passive evidence. Preserve the latest valid state
-      // on transient errors and ignore cancellations from a context switch.
-    } finally {
-      if (headerSnapshotAbortRef.current === controller) {
-        headerSnapshotAbortRef.current = null;
-      }
-    }
-  }, [managementKey, requestMonitoringAvailability.serviceBase]);
+    },
+    onReset: () => {
+      setHeaderSnapshots((current) => (current.length === 0 ? current : []));
+      setHeaderSnapshotGeneratedAtMs(0);
+    },
+  });
 
   useLayoutEffect(() => {
     if (accountQuotaContextKeyRef.current === accountQuotaContextKey) return;
@@ -476,19 +456,13 @@ export function MonitoringCenterPage() {
     accountQuotaContextGenerationRef.current += 1;
     accountQuotaRequestIdsRef.current = {};
     accountQuotaStatesRef.current = {};
-    headerSnapshotRequestIdRef.current += 1;
-    headerSnapshotAbortRef.current?.abort();
-    headerSnapshotAbortRef.current = null;
     setAccountQuotaStates((current) => (Object.keys(current).length === 0 ? current : {}));
-    setHeaderSnapshots((current) => (current.length === 0 ? current : []));
-    setHeaderSnapshotGeneratedAtMs(0);
   }, [accountQuotaContextKey]);
 
   useEffect(
     () => () => {
       accountQuotaContextGenerationRef.current += 1;
       accountQuotaRequestIdsRef.current = {};
-      headerSnapshotAbortRef.current?.abort();
     },
     []
   );

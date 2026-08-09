@@ -143,8 +143,11 @@ describe('MonitoringCenterPage quota refresh wiring', () => {
     expect(monitoringCenterPageSource).not.toContain(
       'targets.map((target) => requestAccountQuota(target, t))'
     );
-    expect(monitoringCenterPageSource).toContain('headerSnapshotAbortRef.current?.abort()');
-    expect(monitoringCenterPageSource).toContain('controller.signal');
+    expect(monitoringCenterPageSource).toContain('useHeaderSnapshotsLoader({');
+    expect(monitoringCenterPageSource).toContain('onResponse: (response) =>');
+    expect(monitoringCenterPageSource).toContain(
+      'setHeaderSnapshotGeneratedAtMs(response.generated_at_ms || Date.now())'
+    );
   });
 });
 

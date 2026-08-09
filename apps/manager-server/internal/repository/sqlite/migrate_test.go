@@ -203,6 +203,71 @@ func TestMigrateCreatesAccountQuotaSnapshotSchema(t *testing.T) {
 	}
 }
 
+func TestMigrateRepairsUsageMonitoringWithoutDroppingQuotaOrUsageData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "combined-quota-monitoring-migration.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`insert into usage_events (
+			event_hash, timestamp_ms, timestamp, model, created_at_ms
+		) values ('preserved-usage-event', 1000, '1000', 'gpt-test', 1000)`,
+		`insert into account_quota_snapshots (
+			account_key, provider, provider_window_id, window_kind, window_mode,
+			model_scope_kind, source, observed_at_ms, boundary_accuracy, created_at_ms
+		) values (
+			'preserved-account', 'codex', 'weekly', 'weekly', 'fixed',
+			'all', 'inspection', 1000, 'exact', 1000
+		)`,
+		`drop table usage_monitoring_event_projection_v1`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("prepare combined migration fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close damaged sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen damaged sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := Migrate(db); err != nil {
+		t.Fatalf("repeat combined migration: %v", err)
+	}
+
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "account_quota_snapshots", 1)
+	var logicalWindowID sql.NullInt64
+	if err := db.QueryRow(`select logical_window_id from account_quota_snapshots
+		where account_key = 'preserved-account'`).Scan(&logicalWindowID); err != nil {
+		t.Fatalf("read preserved quota lifecycle: %v", err)
+	}
+	if !logicalWindowID.Valid {
+		t.Fatal("preserved quota snapshot was not backfilled into lifecycle")
+	}
+	var projectionTables int
+	if err := db.QueryRow(`select count(*) from sqlite_master
+		where type = 'table' and name = 'usage_monitoring_event_projection_v1'`).Scan(&projectionTables); err != nil {
+		t.Fatalf("read repaired usage monitoring projection: %v", err)
+	}
+	if projectionTables != 1 {
+		t.Fatalf("usage monitoring projection tables = %d, want 1", projectionTables)
+	}
+	var projectionStatus string
+	if err := db.QueryRow(`select status from usage_monitoring_rollup_state
+		where rollup_name = 'projection_v1'`).Scan(&projectionStatus); err != nil {
+		t.Fatalf("read repaired projection state: %v", err)
+	}
+	if projectionStatus != "pending" {
+		t.Fatalf("repaired projection status = %q, want pending", projectionStatus)
+	}
+}
+
 func TestMigrateBackfillsLegacyQuotaSnapshotsIntoLifecycle(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-account-quota-snapshots.sqlite")
 	db, err := sql.Open("sqlite", dataSourceName(path))
