@@ -370,6 +370,14 @@ func Migrate(db *sql.DB) error {
 		)`,
 		`create index if not exists idx_usage_monitoring_account_daily_bucket
 			on usage_monitoring_account_daily_rollups_v1(structure_revision, bucket_ms)`,
+		`create index if not exists idx_usage_monitoring_account_daily_credential_window
+			on usage_monitoring_account_daily_rollups_v1(
+				structure_revision, trim(auth_file_snapshot), trim(auth_index), bucket_ms
+			)`,
+		`create index if not exists idx_usage_monitoring_account_daily_legacy_window
+			on usage_monitoring_account_daily_rollups_v1(
+				structure_revision, trim(source), trim(auth_index), bucket_ms
+			)`,
 		`create table if not exists usage_monitoring_api_key_daily_rollups_v1 (
 			structure_revision text not null,
 			bucket_ms integer not null,
@@ -440,6 +448,7 @@ func Migrate(db *sql.DB) error {
 			event_id integer primary key,
 			timestamp_ms integer not null,
 			search_text text not null,
+			account_key text not null,
 			provider text not null,
 			executor_type text not null,
 			model text not null,
@@ -910,6 +919,9 @@ func Migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if err := ensureUsageMonitoringProjectionAccountKey(db); err != nil {
+		return err
+	}
 	if err := ensureUsageMonitoringSearchIndex(db); err != nil {
 		return err
 	}
@@ -1118,6 +1130,72 @@ func resetUsageMonitoringRollupState(tx *sql.Tx, snapshot usageMonitoringMigrati
 		finished_at_ms = null, last_error = null
 		where rollup_name = ?`, status, snapshot.latestEventID, rollupName); err != nil {
 		return fmt.Errorf("reset usage monitoring rollup state %s: %w", rollupName, err)
+	}
+	return nil
+}
+
+func ensureUsageMonitoringProjectionAccountKey(db *sql.DB) error {
+	rows, err := db.Query(`pragma table_info(` + usageprojection.EventTable + `)`)
+	if err != nil {
+		return fmt.Errorf("inspect usage monitoring projection columns: %w", err)
+	}
+	hasAccountKey := false
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan usage monitoring projection columns: %w", err)
+		}
+		if name == "account_key" {
+			hasAccountKey = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close usage monitoring projection column inspection: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("inspect usage monitoring projection columns: %w", err)
+	}
+
+	if !hasAccountKey {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin usage monitoring account key migration: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.Exec(`alter table ` + usageprojection.EventTable + ` add column account_key text not null default ''`); err != nil {
+			return fmt.Errorf("add usage monitoring projection account key: %w", err)
+		}
+		if _, err := tx.Exec(`delete from ` + usageprojection.EventTable); err != nil {
+			return fmt.Errorf("clear usage monitoring projection for account key rebuild: %w", err)
+		}
+		var latestEventID int64
+		if err := tx.QueryRow(`select coalesce(max(id), 0) from usage_events`).Scan(&latestEventID); err != nil {
+			return fmt.Errorf("read latest event for projection account key rebuild: %w", err)
+		}
+		status := "pending"
+		if latestEventID == 0 {
+			status = "ready"
+		}
+		if _, err := tx.Exec(`update usage_monitoring_rollup_state set
+			status = ?, backfill_last_event_id = 0, coverage_event_id = 0,
+			target_event_id = ?, processed_events = 0,
+			last_run_started_at_ms = null, updated_at_ms = 0,
+			finished_at_ms = null, last_error = null
+			where rollup_name = ?`, status, latestEventID, usageMonitoringProjectionRollupName); err != nil {
+			return fmt.Errorf("reset usage monitoring projection for account key rebuild: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit usage monitoring account key migration: %w", err)
+		}
+	}
+
+	if _, err := db.Exec(`create index if not exists idx_usage_monitoring_event_projection_account_window
+		on ` + usageprojection.EventTable + `(account_key, timestamp_ms, event_id)`); err != nil {
+		return fmt.Errorf("create usage monitoring account window index: %w", err)
 	}
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	quotasnapshotrepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/quotasnapshot"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageprojection"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
@@ -265,6 +266,86 @@ func TestMigrateRepairsUsageMonitoringWithoutDroppingQuotaOrUsageData(t *testing
 	}
 	if projectionStatus != "pending" {
 		t.Fatalf("repaired projection status = %q, want pending", projectionStatus)
+	}
+}
+
+func TestMigrateRebuildsProjectionForAccountKeyIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-monitoring-projection.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `insert into usage_events (
+		event_hash, timestamp_ms, timestamp, provider, model, auth_index,
+		auth_file_snapshot, account_snapshot, input_tokens, total_tokens,
+		created_at_ms
+	) values ('legacy-projection-event', 1000, '1000', 'codex', 'gpt-test',
+		'auth-1', 'credential.json', 'legacy@example.com', 10, 10, 1000)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("insert legacy usage event: %v", err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("begin projection fixture: %v", err)
+	}
+	if err := usageprojection.UpsertEventRange(ctx, tx, 0, 1, 1000); err != nil {
+		_ = tx.Rollback()
+		_ = db.Close()
+		t.Fatalf("seed projection fixture: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `update usage_monitoring_rollup_state set
+		status = 'ready', backfill_last_event_id = 1, coverage_event_id = 1,
+		target_event_id = 1, processed_events = 1
+		where rollup_name = 'projection_v1'`); err != nil {
+		_ = tx.Rollback()
+		_ = db.Close()
+		t.Fatalf("seed projection state: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = db.Close()
+		t.Fatalf("commit projection fixture: %v", err)
+	}
+	for _, statement := range []string{
+		`drop index idx_usage_monitoring_event_projection_account_window`,
+		`alter table usage_monitoring_event_projection_v1 drop column account_key`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("prepare legacy projection schema: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy projection sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen legacy projection sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "usage_monitoring_event_projection_v1", 0)
+	columns := migrationTableColumns(t, db, "usage_monitoring_event_projection_v1")
+	if !columns["account_key"] {
+		t.Fatalf("projection columns = %#v, missing account_key", columns)
+	}
+	var accountWindowIndexes int
+	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_usage_monitoring_event_projection_account_window'`).Scan(&accountWindowIndexes); err != nil {
+		t.Fatalf("inspect account window index: %v", err)
+	}
+	if accountWindowIndexes != 1 {
+		t.Fatalf("account window indexes = %d, want 1", accountWindowIndexes)
+	}
+	var status string
+	var coverageEventID, targetEventID int64
+	if err := db.QueryRow(`select status, coverage_event_id, target_event_id
+		from usage_monitoring_rollup_state where rollup_name = 'projection_v1'`).Scan(&status, &coverageEventID, &targetEventID); err != nil {
+		t.Fatalf("read rebuilt projection state: %v", err)
+	}
+	if status != "pending" || coverageEventID != 0 || targetEventID != 1 {
+		t.Fatalf("rebuilt projection state = status:%q coverage:%d target:%d", status, coverageEventID, targetEventID)
 	}
 }
 
