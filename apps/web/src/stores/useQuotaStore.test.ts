@@ -54,10 +54,6 @@ const readPersistedQuotaScope = async () => {
   return persisted?.state?.cacheScope ?? '';
 };
 
-const readPersistedCodexQuota = async () => {
-  const state = await readPersistedQuotaState();
-  return state.codexQuota ?? {};
-};
 
 describe('useQuotaStore persistence', () => {
   let storage: StorageLike;
