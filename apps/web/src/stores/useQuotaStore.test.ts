@@ -54,6 +54,11 @@ const readPersistedQuotaScope = async () => {
   return persisted?.state?.cacheScope ?? '';
 };
 
+const readPersistedCodexQuota = async () => {
+  const state = await readPersistedQuotaState();
+  return state.codexQuota ?? {};
+};
+
 describe('useQuotaStore persistence', () => {
   let storage: StorageLike;
 
@@ -263,12 +268,12 @@ describe('useQuotaStore persistence', () => {
     expect(useQuotaStore.getState().codexQuota.manual?.subscriptionActiveUntil).toBe(expiry);
 
     const persisted = await readPersistedQuotaState();
-    expect(persisted.manual).toMatchObject({
+    expect(persisted.codexQuota?.manual).toMatchObject({
       status: 'success',
       fetchedAtMs: 2_000,
       planType: 'pro',
     });
-    expect(persisted.manual).not.toHaveProperty('subscriptionActiveUntil');
+    expect(persisted.codexQuota?.manual).not.toHaveProperty('subscriptionActiveUntil');
   });
 
   it('strips legacy subscription expiry during rehydration', async () => {
