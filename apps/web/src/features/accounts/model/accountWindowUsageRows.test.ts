@@ -12,6 +12,7 @@ const makeRow = (overrides: Partial<AccountRow>): AccountRow =>
   ({
     selectionKey: 'codex.json\x00auth-1',
     fileName: 'codex.json',
+    provider: 'codex',
     authIndex: 'auth-1',
     raw: {
       account: 'codex@example.com',
@@ -22,7 +23,7 @@ const makeRow = (overrides: Partial<AccountRow>): AccountRow =>
 
 describe('accountWindowUsageRows', () => {
   it('builds window-scoped targets from account rows and valid window ranges', () => {
-    const row = makeRow({});
+    const row = makeRow({ provider: 'codex', projectId: 'project-1' });
     const entries = buildAccountWindowUsageTargetEntries(
       [row],
       new Map([
@@ -48,10 +49,39 @@ describe('accountWindowUsageRows', () => {
         to_ms: 2000,
         account_snapshot: 'codex@example.com',
         auth_label_snapshot: 'Codex Seat',
+        auth_file_snapshot: 'codex.json',
+        auth_provider_snapshot: 'codex',
+        auth_project_id_snapshot: 'project-1',
         auth_index: 'auth-1',
         source: 'codex.json',
       },
     });
+  });
+
+  it('skips weak legacy identities without dropping valid rows from the batch', () => {
+    const weakRow = makeRow({
+      selectionKey: 'weak-row',
+      fileName: 'providerless.json',
+      authIndex: 'auth-weak',
+      provider: 'unknown',
+      projectId: '',
+      raw: {
+        name: 'providerless.json',
+        account: 'providerless@example.com',
+        authIndex: 'auth-weak',
+      },
+    });
+    const strongRow = makeRow({ selectionKey: 'strong-row', provider: 'codex' });
+    const windows = new Map([
+      [weakRow.selectionKey, [{ key: '5h', fromMs: 1000, toMs: 2000 }]],
+      [strongRow.selectionKey, [{ key: '5h', fromMs: 1000, toMs: 2000 }]],
+    ]);
+
+    const entries = buildAccountWindowUsageTargetEntries([weakRow, strongRow], windows);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].rowKey).toBe(strongRow.selectionKey);
+    expect(entries[0].target.auth_file_snapshot).toBe('codex.json');
   });
 
   it('indexes response items by row and quota window', () => {

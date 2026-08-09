@@ -105,8 +105,8 @@ describe('accountHistoryRows', () => {
     expect(entry?.target.auth_provider_snapshot).toBe('xai');
   });
 
-  it('does not send the presentation-only unknown provider as identity evidence', () => {
-    const [entry] = buildAccountHistoryTargetEntries([
+  it('skips file identities when the provider cannot be resolved', () => {
+    const entries = buildAccountHistoryTargetEntries([
       makeRow({
         provider: 'unknown',
         authIndex: '',
@@ -117,7 +117,7 @@ describe('accountHistoryRows', () => {
       }),
     ]);
 
-    expect(entry?.target.auth_provider_snapshot).toBeUndefined();
+    expect(entries).toEqual([]);
   });
 
   it('maps out-of-order account-history responses only by server row keys', () => {

@@ -18,6 +18,16 @@ const readString = (value: unknown): string => {
 
 const readRowKey = (value: unknown): string => (typeof value === 'string' ? value : '');
 
+const hasRequiredFileProvider = (target: MonitoringAccountHistoryTarget): boolean => {
+  const authFile = target.auth_file_snapshot?.trim() ?? '';
+  const account = target.account_snapshot?.trim() ?? '';
+  const label = target.auth_label_snapshot?.trim() ?? '';
+  const source = target.source?.trim() ?? '';
+  const effectiveFile =
+    authFile || (source && source !== account && source !== label ? source : '');
+  return !effectiveFile || Boolean(target.auth_provider_snapshot?.trim());
+};
+
 export const buildAccountHistoryTargetEntries = (rows: AccountRow[]): AccountHistoryTargetEntry[] =>
   rows
     .map((row) => {
@@ -47,12 +57,15 @@ export const buildAccountHistoryTargetEntries = (rows: AccountRow[]): AccountHis
     })
     .filter(
       (entry) =>
-        entry.target.auth_file_snapshot ||
-        entry.target.auth_index ||
-        entry.target.auth_project_id_snapshot ||
-        entry.target.account_snapshot ||
-        entry.target.auth_label_snapshot ||
-        entry.target.source
+        hasRequiredFileProvider(entry.target) &&
+        Boolean(
+          entry.target.auth_file_snapshot ||
+          entry.target.auth_index ||
+          entry.target.auth_project_id_snapshot ||
+          entry.target.account_snapshot ||
+          entry.target.auth_label_snapshot ||
+          entry.target.source
+        )
     );
 
 export const buildAccountHistoryByRowKey = (

@@ -882,6 +882,9 @@ export interface MonitoringAccountWindowUsageTarget {
   model_scope?: MonitoringAccountWindowModelScope;
   account_snapshot?: string;
   auth_label_snapshot?: string;
+  auth_file_snapshot?: string;
+  auth_provider_snapshot?: string;
+  auth_project_id_snapshot?: string;
   auth_index?: string;
   source?: string;
 }

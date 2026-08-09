@@ -57,6 +57,30 @@ const hasQueryableModelScope = (definition: AccountQuotaWindowDefinition): boole
   return Boolean(scope.key) || (scope.models?.length ?? 0) > 0;
 };
 
+type AccountWindowCredentialTarget = Pick<
+  MonitoringAccountWindowUsageTarget,
+  | 'account_snapshot'
+  | 'auth_label_snapshot'
+  | 'auth_file_snapshot'
+  | 'auth_provider_snapshot'
+  | 'auth_project_id_snapshot'
+  | 'auth_index'
+  | 'source'
+>;
+
+const hasCredentialIdentity = (target: AccountWindowCredentialTarget): boolean => {
+  const authFile = target.auth_file_snapshot?.trim() ?? '';
+  const account = target.account_snapshot?.trim() ?? '';
+  const label = target.auth_label_snapshot?.trim() ?? '';
+  const source = target.source?.trim() ?? '';
+  const provider = target.auth_provider_snapshot?.trim() ?? '';
+  if (authFile || (source && source !== account && source !== label)) return Boolean(provider);
+  if (!provider) return false;
+  return Boolean(
+    target.auth_index?.trim() || target.auth_project_id_snapshot?.trim() || account || label
+  );
+};
+
 export const buildAccountWindowUsageTargetEntries = (
   rows: AccountRow[],
   windowsByRowKey: Map<string, Array<AccountWindowUsageWindow | AccountQuotaWindowDefinition>>,
@@ -69,7 +93,7 @@ export const buildAccountWindowUsageTargetEntries = (
 
   rows.forEach((row) => {
     const accountTarget = targetByRowKey.get(row.selectionKey);
-    if (!accountTarget) return;
+    if (!accountTarget || !hasCredentialIdentity(accountTarget)) return;
     const windows = windowsByRowKey.get(row.selectionKey) ?? [];
     windows.forEach((window) => {
       if (isQuotaWindowDefinition(window) && !hasQueryableModelScope(window)) return;
@@ -118,6 +142,9 @@ export const buildAccountWindowUsageTargetEntries = (
             model_scope: modelScope,
             account_snapshot: accountTarget.account_snapshot,
             auth_label_snapshot: accountTarget.auth_label_snapshot,
+            auth_file_snapshot: accountTarget.auth_file_snapshot,
+            auth_provider_snapshot: accountTarget.auth_provider_snapshot,
+            auth_project_id_snapshot: accountTarget.auth_project_id_snapshot,
             auth_index: accountTarget.auth_index,
             source: accountTarget.source,
           },
