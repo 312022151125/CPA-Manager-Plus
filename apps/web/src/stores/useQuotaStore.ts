@@ -97,7 +97,7 @@ const filterPersistableCodexQuota = (
   );
 };
 
-const stripSubscriptionExpiry = <T extends { subscriptionActiveUntil?: string }>(
+const stripSubscriptionExpiry = <T extends { subscriptionActiveUntil?: string | number | null }>(
   quota: Record<string, T>
 ): Record<string, Omit<T, 'subscriptionActiveUntil'>> => {
   return Object.fromEntries(
