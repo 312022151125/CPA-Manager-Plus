@@ -1283,6 +1283,11 @@ export const CODEX_CONFIG: QuotaConfig<CodexQuotaState, CodexQuotaData> = {
   gridClassName: styles.codexGrid,
   getSearchText: getCodexSearchText,
   getPlanSortRank: getCodexPlanSortRank,
+  getPlanExpiryAtMs: (_file, quota) => {
+    if (!quota?.subscriptionActiveUntil) return null;
+    const timestamp = new Date(quota.subscriptionActiveUntil).getTime();
+    return isNaN(timestamp) ? null : timestamp;
+  },
   buildObservedState: buildObservedCodexQuotaState,
   resetQuota: resetCodexQuota,
   canResetQuota: (_file, quota) =>

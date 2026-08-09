@@ -1243,6 +1243,26 @@ export function AuthFilesPage() {
 
         return compareAuthFileName(a, b);
       });
+    } else if (sortMode === 'expiry-asc' || sortMode === 'expiry-desc') {
+      copy.sort((a, b) => {
+        const leftQuota = getDisplayCodexQuota(a);
+        const rightQuota = getDisplayCodexQuota(b);
+        const leftExpiry = leftQuota?.subscriptionActiveUntil;
+        const rightExpiry = rightQuota?.subscriptionActiveUntil;
+        const leftHasExpiry = Boolean(leftExpiry);
+        const rightHasExpiry = Boolean(rightExpiry);
+
+        if (leftHasExpiry || rightHasExpiry) {
+          if (!leftHasExpiry) return 1;
+          if (!rightHasExpiry) return -1;
+          const leftTime = new Date(leftExpiry!).getTime();
+          const rightTime = new Date(rightExpiry!).getTime();
+          const timeDiff = sortMode === 'expiry-desc' ? rightTime - leftTime : leftTime - rightTime;
+          if (timeDiff !== 0) return timeDiff;
+        }
+
+        return compareAuthFileName(a, b);
+      });
     }
     return copy;
   }, [filtered, getDisplayCodexQuota, headerSnapshotLookup, sortMode]);
