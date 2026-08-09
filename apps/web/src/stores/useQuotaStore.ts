@@ -97,6 +97,17 @@ const filterPersistableCodexQuota = (
   );
 };
 
+const stripSubscriptionExpiry = <T extends { subscriptionActiveUntil?: string }>(
+  quota: Record<string, T>
+): Record<string, Omit<T, 'subscriptionActiveUntil'>> => {
+  return Object.fromEntries(
+    Object.entries(quota).map(([key, value]) => {
+      const { subscriptionActiveUntil, ...rest } = value;
+      return [key, rest];
+    })
+  );
+};
+
 export const useQuotaStore = create<QuotaStoreState>()(
   persist(
     (set) => ({
@@ -152,12 +163,13 @@ export const useQuotaStore = create<QuotaStoreState>()(
         cacheScope: state.cacheScope,
         antigravityQuota: filterPersistableQuotaStates(state.antigravityQuota),
         claudeQuota: filterPersistableQuotaStates(state.claudeQuota),
-        codexQuota: filterPersistableCodexQuota(state.codexQuota),
+        codexQuota: stripSubscriptionExpiry(filterPersistableCodexQuota(state.codexQuota)),
         kimiQuota: filterPersistableQuotaStates(state.kimiQuota),
         xaiQuota: filterPersistableQuotaStates(state.xaiQuota),
       }),
       merge: (persistedState, currentState) => {
         const persisted = persistedState as Partial<QuotaStoreState> | undefined;
+        
         return {
           ...currentState,
           cacheScope: typeof persisted?.cacheScope === 'string' ? persisted.cacheScope : '',

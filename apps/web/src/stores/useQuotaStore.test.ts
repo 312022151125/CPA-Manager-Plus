@@ -255,6 +255,8 @@ describe('useQuotaStore persistence', () => {
       manual: {
         status: 'success',
         windows: [],
+        authFileKey: 'manual',
+        authFileIdentityVerified: true,
         fetchedAtMs: 2_000,
         planType: 'pro',
         subscriptionActiveUntil: expiry,
@@ -283,6 +285,8 @@ describe('useQuotaStore persistence', () => {
           manual: {
             status: 'success',
             windows: [],
+            authFileKey: 'manual',
+            authFileIdentityVerified: true,
             fetchedAtMs: 2_000,
             planType: 'pro',
             subscriptionActiveUntil: '2026-08-01T12:34:56.000Z',
@@ -290,6 +294,8 @@ describe('useQuotaStore persistence', () => {
           observed: {
             status: 'success',
             windows: [],
+            authFileKey: 'observed',
+            authFileIdentityVerified: true,
             observedFromUsageHeaders: true,
             observedAtMs: 1_000,
             subscriptionActiveUntil: '2026-09-01T00:00:00.000Z',
@@ -307,8 +313,8 @@ describe('useQuotaStore persistence', () => {
       status: 'success',
       fetchedAtMs: 2_000,
       planType: 'pro',
+      subscriptionActiveUntil: '2026-08-01T12:34:56.000Z',
     });
-    expect(live.manual).not.toHaveProperty('subscriptionActiveUntil');
     expect(useQuotaStore.getState().cacheScope).toBe('legacy-scope');
   });
 
