@@ -81,6 +81,61 @@ func TestHandleAccountWindowUsageRejectsUnknownTargetFields(t *testing.T) {
 	}
 }
 
+func TestValidateAccountWindowUsageRequiresCredentialIdentity(t *testing.T) {
+	base := monitoringsvc.AccountWindowUsageTarget{
+		RowKey:           "row-1",
+		ProviderWindowID: "weekly",
+		FromMS:           1,
+		ToMS:             2,
+	}
+	weak := base
+	weak.AccountSnapshot = "legacy@example.com"
+	weak.AuthIndex = "auth-legacy"
+	if err := validateAccountWindowUsageRequest(monitoringsvc.AccountWindowUsageRequest{Windows: []monitoringsvc.AccountWindowUsageTarget{weak}}); err == nil || !strings.Contains(err.Error(), "credential identity") {
+		t.Fatalf("weak identity error = %v", err)
+	}
+
+	for name, mutate := range map[string]func(*monitoringsvc.AccountWindowUsageTarget){
+		"auth file": func(target *monitoringsvc.AccountWindowUsageTarget) {
+			target.AuthFileSnapshot = "credential.json"
+			target.AuthProviderSnapshot = "codex"
+		},
+		"legacy file source": func(target *monitoringsvc.AccountWindowUsageTarget) {
+			target.Source = "credential.json"
+			target.AuthProviderSnapshot = "codex"
+		},
+		"provider auth index": func(target *monitoringsvc.AccountWindowUsageTarget) {
+			target.AuthProviderSnapshot = "codex"
+			target.AuthIndex = "auth-1"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			target := base
+			mutate(&target)
+			if err := validateAccountWindowUsageRequest(monitoringsvc.AccountWindowUsageRequest{Windows: []monitoringsvc.AccountWindowUsageTarget{target}}); err != nil {
+				t.Fatalf("valid credential identity rejected: %v", err)
+			}
+		})
+	}
+
+	for name, mutate := range map[string]func(*monitoringsvc.AccountWindowUsageTarget){
+		"auth file without provider": func(target *monitoringsvc.AccountWindowUsageTarget) {
+			target.AuthFileSnapshot = "credential.json"
+		},
+		"legacy file source without provider": func(target *monitoringsvc.AccountWindowUsageTarget) {
+			target.Source = "credential.json"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			target := base
+			mutate(&target)
+			if err := validateAccountWindowUsageRequest(monitoringsvc.AccountWindowUsageRequest{Windows: []monitoringsvc.AccountWindowUsageTarget{target}}); err == nil || !strings.Contains(err.Error(), "auth_provider_snapshot") {
+				t.Fatalf("providerless file identity error = %v", err)
+			}
+		})
+	}
+}
+
 func TestHandleAccountHistoryValidatesRowKeysAndTargets(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -101,6 +156,16 @@ func TestHandleAccountHistoryValidatesRowKeysAndTargets(t *testing.T) {
 			name:        "missing target",
 			body:        `{"accounts":[{"row_key":"row-1"}]}`,
 			wantMessage: "at least one account target field is required",
+		},
+		{
+			name:        "file target missing provider",
+			body:        `{"accounts":[{"row_key":"row-1","auth_file_snapshot":"credential.json","auth_index":"auth-1"}]}`,
+			wantMessage: "auth_provider_snapshot is required for file account targets",
+		},
+		{
+			name:        "legacy file source missing provider",
+			body:        `{"accounts":[{"row_key":"row-1","source":"credential.json","auth_index":"auth-1"}]}`,
+			wantMessage: "auth_provider_snapshot is required for file account targets",
 		},
 	}
 

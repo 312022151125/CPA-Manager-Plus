@@ -1297,6 +1297,11 @@ func (s *Service) accountHistory(ctx context.Context, req AccountHistoryRequest)
 	if len(req.Accounts) > maxAccountHistoryTargets {
 		return AccountHistoryResponse{}, fmt.Errorf("accounts must be less than or equal to %d", maxAccountHistoryTargets)
 	}
+	for _, account := range req.Accounts {
+		if !AccountHistoryTargetHasRequiredProvider(account) {
+			return AccountHistoryResponse{}, errors.New("auth_provider_snapshot is required for file account targets")
+		}
+	}
 	generatedAtMS := time.Now().UnixMilli()
 	processed := 0
 	if req.CatchUp {
@@ -1483,6 +1488,9 @@ func (s *Service) accountWindowUsage(ctx context.Context, req AccountWindowUsage
 		}
 		if window.FromMS <= 0 || window.ToMS <= 0 || window.FromMS >= window.ToMS {
 			return AccountWindowUsageResponse{}, errors.New("from_ms and to_ms are required and from_ms must be less than to_ms")
+		}
+		if !AccountWindowUsageTargetHasRequiredProvider(*window) {
+			return AccountWindowUsageResponse{}, errors.New("auth_provider_snapshot is required for file account targets")
 		}
 		accountKey, valid := accountWindowUsageTargetKey(*window)
 		if !valid {
@@ -3430,6 +3438,9 @@ type accountHistoryTotal struct {
 }
 
 func accountHistoryTargetKey(target AccountHistoryTarget) (string, bool) {
+	if !AccountHistoryTargetHasRequiredProvider(target) {
+		return "", false
+	}
 	if key, valid := usageidentity.AccountKey(usageidentity.Fields{
 		AuthFileSnapshot:      target.AuthFileSnapshot,
 		AuthIndex:             target.AuthIndex,
@@ -3571,6 +3582,26 @@ func accountWindowUsageTargetKey(target AccountWindowUsageTarget) (string, bool)
 	})
 }
 
+func AccountHistoryTargetHasRequiredProvider(target AccountHistoryTarget) bool {
+	return accountTargetHasRequiredProvider(
+		target.AuthFileSnapshot,
+		target.AuthProviderSnapshot,
+		target.AccountSnapshot,
+		target.AuthLabelSnapshot,
+		target.Source,
+	)
+}
+
+func AccountWindowUsageTargetHasRequiredProvider(target AccountWindowUsageTarget) bool {
+	return accountTargetHasRequiredProvider(
+		target.AuthFileSnapshot,
+		target.AuthProviderSnapshot,
+		target.AccountSnapshot,
+		target.AuthLabelSnapshot,
+		target.Source,
+	)
+}
+
 func AccountWindowUsageTargetHasCredentialIdentity(target AccountWindowUsageTarget) bool {
 	authFile := strings.TrimSpace(target.AuthFileSnapshot)
 	account := strings.TrimSpace(target.AccountSnapshot)
@@ -3578,7 +3609,7 @@ func AccountWindowUsageTargetHasCredentialIdentity(target AccountWindowUsageTarg
 	source := strings.TrimSpace(target.Source)
 	provider := strings.TrimSpace(target.AuthProviderSnapshot)
 	if effectiveAccountTargetFile(authFile, account, label, source) != "" {
-		return provider != ""
+		return AccountWindowUsageTargetHasRequiredProvider(target)
 	}
 	if provider == "" {
 		return false
@@ -3586,6 +3617,11 @@ func AccountWindowUsageTargetHasCredentialIdentity(target AccountWindowUsageTarg
 	return strings.TrimSpace(target.AuthIndex) != "" ||
 		strings.TrimSpace(target.AuthProjectIDSnapshot) != "" ||
 		account != "" || label != ""
+}
+
+func accountTargetHasRequiredProvider(authFile, provider, account, label, source string) bool {
+	return effectiveAccountTargetFile(authFile, account, label, source) == "" ||
+		strings.TrimSpace(provider) != ""
 }
 
 func effectiveAccountTargetFile(authFile, account, label, source string) string {

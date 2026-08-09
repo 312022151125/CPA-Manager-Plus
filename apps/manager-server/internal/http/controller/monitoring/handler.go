@@ -172,6 +172,9 @@ func validateAccountHistoryRequest(req monitoringsvc.AccountHistoryRequest) erro
 			strings.TrimSpace(account.Source) == "" {
 			return errors.New("at least one account target field is required")
 		}
+		if !monitoringsvc.AccountHistoryTargetHasRequiredProvider(account) {
+			return errors.New("auth_provider_snapshot is required for file account targets")
+		}
 	}
 	return nil
 }
@@ -193,11 +196,11 @@ func validateAccountWindowUsageRequest(req monitoringsvc.AccountWindowUsageReque
 		if window.FromMS <= 0 || window.ToMS <= 0 || window.FromMS >= window.ToMS {
 			return errors.New("from_ms and to_ms are required and from_ms must be less than to_ms")
 		}
-		if strings.TrimSpace(window.AccountSnapshot) == "" &&
-			strings.TrimSpace(window.AuthLabelSnapshot) == "" &&
-			strings.TrimSpace(window.Source) == "" &&
-			strings.TrimSpace(window.AuthIndex) == "" {
-			return errors.New("at least one account target field is required")
+		if !monitoringsvc.AccountWindowUsageTargetHasRequiredProvider(window) {
+			return errors.New("auth_provider_snapshot is required for file account targets")
+		}
+		if !monitoringsvc.AccountWindowUsageTargetHasCredentialIdentity(window) {
+			return errors.New("account target credential identity is required")
 		}
 	}
 	return nil

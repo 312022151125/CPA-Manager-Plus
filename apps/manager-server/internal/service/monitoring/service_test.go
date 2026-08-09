@@ -2359,6 +2359,20 @@ func TestAccountHistoryEmptyTargetDoesNotMatchAnonymousBucket(t *testing.T) {
 	}
 }
 
+func TestAccountHistoryRejectsFileTargetWithoutProvider(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	_, err := New(db).AccountHistory(context.Background(), AccountHistoryRequest{
+		Accounts: []AccountHistoryTarget{{
+			RowKey:           "providerless-file",
+			AuthFileSnapshot: "credential.json",
+			AuthIndex:        "auth-1",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "auth_provider_snapshot") {
+		t.Fatalf("providerless account history target error = %v", err)
+	}
+}
+
 func TestAccountHistoryIncludesLatestCredentialRequestWithoutExposingRawFailureData(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()
@@ -2401,10 +2415,11 @@ func TestAccountHistoryIncludesLatestCredentialRequestWithoutExposingRawFailureD
 
 	resp, err := New(db).AccountHistory(ctx, AccountHistoryRequest{
 		Accounts: []AccountHistoryTarget{{
-			RowKey:           "row-credential-a",
-			AccountSnapshot:  "alice@example.com",
-			AuthFileSnapshot: "credential-a.json",
-			AuthIndex:        "auth-1",
+			RowKey:               "row-credential-a",
+			AccountSnapshot:      "alice@example.com",
+			AuthFileSnapshot:     "credential-a.json",
+			AuthProviderSnapshot: "codex",
+			AuthIndex:            "auth-1",
 		}},
 	})
 	if err != nil {
@@ -2545,6 +2560,23 @@ func TestAccountWindowUsageRejectsWeakDisplayIdentity(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "credential identity") {
 		t.Fatalf("weak account window target error = %v", err)
+	}
+}
+
+func TestAccountWindowUsageRejectsFileIdentityWithoutProvider(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	_, err := New(db).AccountWindowUsage(context.Background(), AccountWindowUsageRequest{
+		Windows: []AccountWindowUsageTarget{{
+			RowKey:           "providerless-file",
+			WindowKey:        "current",
+			FromMS:           1,
+			ToMS:             2,
+			AuthFileSnapshot: "credential.json",
+			AuthIndex:        "auth-1",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "auth_provider_snapshot") {
+		t.Fatalf("providerless account window target error = %v", err)
 	}
 }
 
