@@ -957,9 +957,20 @@ export const mergeObservedAccountQuotaState = (
   targets: MonitoringAccountQuotaTarget[],
   observedEntries: AccountQuotaEntry[]
 ): AccountQuotaState | undefined => {
-  if (!state || state.status === 'loading' || observedEntries.length === 0) return state;
+  if (state?.status === 'loading' || observedEntries.length === 0) return state;
 
   const targetKey = targets.map((target) => target.key).join('|');
+  if (!state) {
+    const targetKeys = new Set(targets.map((target) => target.key));
+    const entries = observedEntries.filter((entry) => targetKeys.has(entry.key));
+    if (entries.length === 0) return state;
+    return {
+      status: 'success',
+      targetKey,
+      entries,
+      error: '',
+    };
+  }
   if (state.targetKey !== targetKey) return state;
 
   const observedByKey = new Map(observedEntries.map((entry) => [entry.key, entry]));
