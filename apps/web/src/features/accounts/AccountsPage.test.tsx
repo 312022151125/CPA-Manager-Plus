@@ -33,6 +33,7 @@ import { AccountModelsTab } from './components/accountDetail/AccountModelsTab';
 import { AccountQuotaTab } from './components/accountDetail/AccountQuotaTab';
 import { QuotaWindowCard } from './components/QuotaWindowCard';
 import { formatQuotaResetTimestamp } from './model/accountsPagePresentation';
+import { useUsageHeaderSnapshotStore } from '@/stores/useUsageHeaderSnapshotStore';
 import { AccountsPage } from './AccountsPage';
 
 type AnalyticsRequestForTest = {
@@ -699,6 +700,17 @@ vi.mock('@/services/api', () => ({
   },
 }));
 
+vi.mock('@/services/api/usageService', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/api/usageService')>();
+  return {
+    ...actual,
+    monitoringAnalyticsApi: {
+      ...actual.monitoringAnalyticsApi,
+      getHeaderSnapshots: mocks.getHeaderSnapshots,
+    },
+  };
+});
+
 vi.mock('@/stores', () => ({
   captureQuotaCacheGeneration: () => 0,
   commitIfQuotaCacheCurrent: (_generation: number, commit: () => void) => {
@@ -818,12 +830,15 @@ const findInputByAriaLabel = (renderer: ReactTestRenderer, label: string) => {
   return input;
 };
 
+const mountedAccountsRenderers = new Set<ReactTestRenderer>();
+
 const renderAccountsPage = async () => {
   let renderer: ReactTestRenderer | null = null;
   await act(async () => {
     renderer = create(<AccountsPage />);
     await Promise.resolve();
   });
+  mountedAccountsRenderers.add(renderer!);
   return renderer!;
 };
 
@@ -907,8 +922,21 @@ const flushPromises = async () => {
 };
 
 describe('AccountsPage replacement flows', () => {
-  afterEach(() => {
+  afterEach(async () => {
+    const restoreWindow = typeof window === 'undefined';
+    if (restoreWindow) {
+      vi.stubGlobal('window', {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      });
+    }
+    await act(async () => {
+      mountedAccountsRenderers.forEach((renderer) => renderer.unmount());
+    });
+    mountedAccountsRenderers.clear();
+    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   beforeEach(() => {
@@ -917,6 +945,13 @@ describe('AccountsPage replacement flows', () => {
       window.location.hash = '';
     }
     mocks.files = [makeCodexFile('codex.json', 'auth-1', 'codex@example.com')];
+    useUsageHeaderSnapshotStore.setState({
+      scopeKey: '',
+      items: [],
+      generatedAtMs: 0,
+      loadedAtMs: 0,
+      contentRevision: '',
+    });
     mocks.selectedFiles = new Set<string>();
     mocks.selectionCount = 0;
     mocks.batchFieldsUpdating = false;
@@ -1164,14 +1199,16 @@ describe('AccountsPage replacement flows', () => {
   });
 
   it('restarts the initial credential load when StrictMode replays effects', async () => {
+    let renderer: ReactTestRenderer | null = null;
     await act(async () => {
-      create(
+      renderer = create(
         <StrictMode>
           <AccountsPage />
         </StrictMode>
       );
       await Promise.resolve();
     });
+    mountedAccountsRenderers.add(renderer!);
 
     expect(mocks.loadFiles).toHaveBeenCalledTimes(2);
   });
@@ -1898,7 +1935,61 @@ describe('AccountsPage replacement flows', () => {
     }
   });
 
-  it('keeps the initial credential list load free of unrelated background requests', async () => {
+  it('loads passive Header quota evidence with the initial credential list', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: true,
+    };
+    const observedAtMs = Date.now();
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: observedAtMs,
+      from_ms: observedAtMs - 1_000,
+      to_ms: observedAtMs,
+      items: [
+        {
+          event_hash: 'initial-header-quota',
+          timestamp_ms: observedAtMs,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_quota_used_percent: 80,
+          header_quota_recover_at_ms: observedAtMs + 5 * 60 * 60 * 1000,
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(mocks.loadFiles).toHaveBeenCalledTimes(1);
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(1);
+    expect(mocks.getActiveQuotaCooldowns).not.toHaveBeenCalled();
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
+    expect(mocks.listAccountActionCandidates).not.toHaveBeenCalled();
+    expect(mocks.listCodexInspectionRuns).not.toHaveBeenCalled();
+    expect(mocks.getCodexInspectionRun).not.toHaveBeenCalled();
+    expect(mocks.loadExcluded).not.toHaveBeenCalled();
+    expect(mocks.loadModelAlias).not.toHaveBeenCalled();
+    expect(mocks.getAnalytics).not.toHaveBeenCalled();
+    expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
+    expect(getAccountListItemTexts(renderer)[0]).toContain('20%');
+    expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
+  });
+
+  it('polls passive Header evidence only while the accounts view is visible', async () => {
+    vi.useFakeTimers();
+    let visibilityState: DocumentVisibilityState = 'visible';
+    const documentEvents = new EventTarget();
+    vi.stubGlobal('document', {
+      get visibilityState() {
+        return visibilityState;
+      },
+      addEventListener: documentEvents.addEventListener.bind(documentEvents),
+      removeEventListener: documentEvents.removeEventListener.bind(documentEvents),
+    });
     mocks.panelFeatureAvailability = {
       checking: false,
       managerServiceBase: 'http://manager.local:18317',
@@ -1908,21 +1999,31 @@ describe('AccountsPage replacement flows', () => {
 
     await renderAccountsPage();
     await flushPromises();
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
 
-    expect(mocks.loadFiles).toHaveBeenCalledTimes(1);
-    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(1);
-    expect(mocks.getActiveQuotaCooldowns).not.toHaveBeenCalled();
-    expect(mocks.getHeaderSnapshots).not.toHaveBeenCalled();
-    expect(mocks.listAccountActionCandidates).not.toHaveBeenCalled();
-    expect(mocks.listCodexInspectionRuns).not.toHaveBeenCalled();
-    expect(mocks.getCodexInspectionRun).not.toHaveBeenCalled();
-    expect(mocks.loadExcluded).not.toHaveBeenCalled();
-    expect(mocks.loadModelAlias).not.toHaveBeenCalled();
-    expect(mocks.getAnalytics).not.toHaveBeenCalled();
-    expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(2);
+
+    visibilityState = 'hidden';
+    await act(async () => {
+      documentEvents.dispatchEvent(new Event('visibilitychange'));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(2);
+
+    visibilityState = 'visible';
+    await act(async () => {
+      documentEvents.dispatchEvent(new Event('visibilitychange'));
+      await Promise.resolve();
+    });
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(3);
   });
 
-  it('loads precise Codex status evidence on demand and filters by quota window', async () => {
+  it('reuses initial Codex Header evidence when filtering by quota window', async () => {
     mocks.files = [
       makeCodexFile('weekly.json', 'weekly-auth', 'weekly@example.com'),
       makeCodexFile('available.json', 'available-auth', 'available@example.com'),
@@ -1984,7 +2085,7 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
     await flushPromises();
 
-    expect(mocks.getHeaderSnapshots).not.toHaveBeenCalled();
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
     expect(mocks.listCodexInspectionRuns).not.toHaveBeenCalled();
 
     const statusSelect = renderer.root
@@ -4480,7 +4581,8 @@ describe('AccountsPage replacement flows', () => {
     });
 
     const renderer = await renderAccountsPage();
-    expect(mocks.getHeaderSnapshots).not.toHaveBeenCalled();
+    await flushPromises();
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       findDetailButtonByName(renderer, 'codex-diagnostic.json').props.onClick();
@@ -4568,7 +4670,7 @@ describe('AccountsPage replacement flows', () => {
     await flushPromises();
 
     expect(mocks.getActiveQuotaCooldowns).not.toHaveBeenCalled();
-    expect(mocks.getHeaderSnapshots).not.toHaveBeenCalled();
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
     expect(mocks.listAccountActionCandidates).not.toHaveBeenCalled();
     expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
 
@@ -4726,6 +4828,9 @@ describe('AccountsPage replacement flows', () => {
       ],
     });
     const quotaFetch = vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
+    mocks.getHeaderSnapshots
+      .mockResolvedValueOnce({ generated_at_ms: 100, from_ms: 0, to_ms: 100, items: [] })
+      .mockResolvedValueOnce({ generated_at_ms: 200, from_ms: 0, to_ms: 200, items: [] });
 
     const renderer = await renderAccountsPage();
     await flushPromises();
@@ -4734,6 +4839,16 @@ describe('AccountsPage replacement flows', () => {
     expect(quotaFetch).not.toHaveBeenCalled();
     expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
     expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await findButtonByText(renderer, 'common.refresh').props.onClick();
+    });
+    await flushPromises();
+
+    expect(mocks.loadFiles).toHaveBeenCalledTimes(2);
+    expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(2);
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(1);
+    expect(quotaFetch).not.toHaveBeenCalled();
   });
 
   it('loads history for a deep-linked credential outside the visible page', async () => {

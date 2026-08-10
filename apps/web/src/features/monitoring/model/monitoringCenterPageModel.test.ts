@@ -815,6 +815,42 @@ describe('monitoringCenterPageModel account quota', () => {
     expect(merged?.entries[0].failedAtMs).toBeUndefined();
   });
 
+  it('creates a successful account quota state from header evidence alone', () => {
+    const target = createTarget({
+      provider: 'codex',
+      key: 'codex::2::codex.json',
+      authIndex: '2',
+      fileName: 'codex.json',
+    });
+    const observedEntry = {
+      key: target.key,
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'plus',
+      metaLabels: ['Codex Quota', 'Observed from latest usage response headers'],
+      observedAtMs: 2_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 55,
+          resetLabel: '07/01 02:00',
+          usageLabel: '13.5d / 30d used',
+        },
+      ],
+    };
+
+    expect(mergeObservedAccountQuotaState(undefined, [target], [observedEntry])).toEqual({
+      status: 'success',
+      targetKey: target.key,
+      entries: [observedEntry],
+      error: '',
+    });
+  });
+
   it('does not merge later header entries when the account quota target set changed', () => {
     const target = createTarget({
       provider: 'codex',

@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   monitoringAnalyticsApi,
   type UsageHeaderSnapshot,
   type UsageHeaderSnapshotsResponse,
 } from '@/services/api/usageService';
 import { useHeaderSnapshotsLoader } from './useHeaderSnapshotsLoader';
+import { useUsageHeaderSnapshotStore } from '@/stores/useUsageHeaderSnapshotStore';
 
 vi.mock('@/services/api/usageService', () => ({
   monitoringAnalyticsApi: {
@@ -46,6 +47,16 @@ describe('useHeaderSnapshotsLoader', () => {
 
   beforeAll(() => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  });
+
+  beforeEach(() => {
+    useUsageHeaderSnapshotStore.setState({
+      scopeKey: '',
+      items: [],
+      generatedAtMs: 0,
+      loadedAtMs: 0,
+      contentRevision: '',
+    });
   });
 
   afterEach(() => {
@@ -218,6 +229,30 @@ describe('useHeaderSnapshotsLoader', () => {
 
     expect(getHeaderSnapshotsMock).toHaveBeenCalledTimes(2);
     expect(observedItems).toEqual([[{ event_hash: 'recovered', timestamp_ms: 2 }]]);
+  });
+
+  it('keeps the latest snapshot cached when a consumer remounts in the same scope', async () => {
+    getHeaderSnapshotsMock.mockResolvedValueOnce(response('cached'));
+
+    await act(async () => {
+      renderer = create(<Harness serviceBase="http://manager.local" />);
+    });
+    await act(async () => {
+      await load!();
+    });
+    await act(async () => {
+      renderer?.unmount();
+      renderer = null;
+    });
+
+    await act(async () => {
+      renderer = create(<Harness serviceBase="http://manager.local" />);
+    });
+
+    expect(useUsageHeaderSnapshotStore.getState().items).toMatchObject([
+      { event_hash: 'cached', timestamp_ms: 2 },
+    ]);
+    expect(getHeaderSnapshotsMock).toHaveBeenCalledTimes(1);
   });
 
   it('ignores a response that resolves after the consumer unmounts', async () => {
