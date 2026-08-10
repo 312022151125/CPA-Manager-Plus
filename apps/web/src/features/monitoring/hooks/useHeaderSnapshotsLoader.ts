@@ -3,12 +3,16 @@ import {
   monitoringAnalyticsApi,
   type UsageHeaderSnapshotsResponse,
 } from '@/services/api/usageService';
+import {
+  buildUsageHeaderSnapshotScopeKey,
+  useUsageHeaderSnapshotStore,
+} from '@/stores/useUsageHeaderSnapshotStore';
 
 interface UseHeaderSnapshotsLoaderOptions {
   serviceBase: string;
   managementKey: string;
-  onResponse: (response: UsageHeaderSnapshotsResponse) => void;
-  onReset: () => void;
+  onResponse?: (response: UsageHeaderSnapshotsResponse) => void;
+  onReset?: () => void;
 }
 
 interface HeaderSnapshotsRequest {
@@ -24,35 +28,37 @@ export function useHeaderSnapshotsLoader({
   onResponse,
   onReset,
 }: UseHeaderSnapshotsLoaderOptions) {
+  const scopeKey = buildUsageHeaderSnapshotScopeKey(serviceBase, managementKey);
   const inFlightRef = useRef<HeaderSnapshotsRequest | null>(null);
-  const onResponseRef = useRef(onResponse);
-  const onResetRef = useRef(onReset);
+  const onResponseRef = useRef(onResponse ?? null);
+  const onResetRef = useRef(onReset ?? null);
   const scopeVersionRef = useRef(0);
   const initializedScopeRef = useRef(false);
-  onResponseRef.current = onResponse;
-  onResetRef.current = onReset;
+  onResponseRef.current = onResponse ?? null;
+  onResetRef.current = onReset ?? null;
 
   useLayoutEffect(() => {
     scopeVersionRef.current += 1;
     inFlightRef.current?.controller.abort();
     inFlightRef.current = null;
-    if (initializedScopeRef.current) {
-      onResetRef.current();
-    } else {
-      initializedScopeRef.current = true;
+    const scopeChanged = useUsageHeaderSnapshotStore.getState().activateScope(scopeKey);
+    if (scopeChanged && initializedScopeRef.current) {
+      onResetRef.current?.();
     }
+    initializedScopeRef.current = true;
     return () => {
       scopeVersionRef.current += 1;
       inFlightRef.current?.controller.abort();
       inFlightRef.current = null;
     };
-  }, [managementKey, serviceBase]);
+  }, [scopeKey]);
 
   return useCallback(async () => {
     if (!serviceBase) {
       inFlightRef.current?.controller.abort();
       inFlightRef.current = null;
-      onResetRef.current();
+      useUsageHeaderSnapshotStore.getState().activateScope('');
+      onResetRef.current?.();
       return;
     }
     const currentRequest = inFlightRef.current;
@@ -85,7 +91,10 @@ export function useHeaderSnapshotsLoader({
           scopeVersionRef.current === scopeVersion &&
           !controller.signal.aborted
         ) {
-          onResponseRef.current(response);
+          const committed = useUsageHeaderSnapshotStore
+            .getState()
+            .commitResponse(scopeKey, response);
+          if (committed) onResponseRef.current?.(response);
         }
       } catch {
         // Preserve the last successful snapshot when a refresh fails.
@@ -97,5 +106,5 @@ export function useHeaderSnapshotsLoader({
     })();
     inFlightRef.current = inFlight;
     await inFlight.promise;
-  }, [managementKey, serviceBase]);
+  }, [managementKey, scopeKey, serviceBase]);
 }

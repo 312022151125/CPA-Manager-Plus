@@ -733,7 +733,7 @@ const buildRealtimeTokenUsageDetails = (row: MonitoringEventRow, t: TFunction) =
     { label: t('monitoring.realtime_usage_output_label'), value: formatCompactNumber(row.outputTokens) },
     {
       label: t('monitoring.realtime_usage_reasoning_label'),
-      value: formatCompactNumber(row.reasoningTokens),
+      value: String(row.reasoningTokens),
     },
     { label: t('monitoring.realtime_usage_cached_label'), value: formatCompactNumber(row.cachedTokens) },
     {

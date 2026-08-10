@@ -144,10 +144,9 @@ describe('MonitoringCenterPage quota refresh wiring', () => {
       'targets.map((target) => requestAccountQuota(target, t))'
     );
     expect(monitoringCenterPageSource).toContain('useHeaderSnapshotsLoader({');
-    expect(monitoringCenterPageSource).toContain('onResponse: (response) =>');
-    expect(monitoringCenterPageSource).toContain(
-      'setHeaderSnapshotGeneratedAtMs(response.generated_at_ms || Date.now())'
-    );
+    expect(monitoringCenterPageSource).toContain('const accounts = new Set([');
+    expect(monitoringCenterPageSource).toContain('...accountQuotaTargetsByAccount.keys()');
+    expect(monitoringCenterPageSource).not.toContain('onResponse: (response) =>');
   });
 });
 

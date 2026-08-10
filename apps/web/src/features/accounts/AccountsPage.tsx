@@ -50,6 +50,7 @@ import {
 } from '@/components/quota';
 import { buildQuotaFailureState, getScopedQuotaState } from '@/components/quota/quotaConfigs';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
+import { useInterval } from '@/hooks/useInterval';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { getAuthFileIcon } from '@/features/authFiles/constants';
@@ -59,6 +60,7 @@ import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModel
 import { useAuthFileConfigurationEditor } from '@/features/authFiles/hooks/useAuthFileConfigurationEditor';
 import { useCredentialInspectionSnapshot } from '@/features/accounts/hooks/useCredentialInspectionSnapshot';
 import { useAccountsWorkspaceRefresh } from '@/features/accounts/hooks/useAccountsWorkspaceRefresh';
+import { useHeaderSnapshotsLoader } from '@/features/monitoring/hooks/useHeaderSnapshotsLoader';
 import { PaginationControls } from '@/features/monitoring/components/MonitoringShared';
 import { CredentialHealthInspectionWorkspace } from '@/features/monitoring/components/CredentialHealthInspectionWorkspace';
 import { AuthJsonPasteModal } from '@/features/authFiles/components/AuthJsonPasteModal';
@@ -220,6 +222,7 @@ import {
   useQuotaStore,
   useThemeStore,
 } from '@/stores';
+import { useUsageHeaderSnapshotStore } from '@/stores/useUsageHeaderSnapshotStore';
 import { copyToClipboard } from '@/utils/clipboard';
 import {
   buildUsageHeaderSnapshotLookup,
@@ -247,6 +250,7 @@ type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
 
 const MAX_CONCURRENT_QUOTA_REFRESHES_PER_PROVIDER = 1;
 const MAX_CONCURRENT_QUOTA_REFRESH_PROVIDERS = 3;
+const PASSIVE_HEADER_SNAPSHOT_REFRESH_MS = 60_000;
 
 const readAccountsSearchFromHash = (hash: string): string => {
   const queryIndex = hash.indexOf('?');
@@ -438,6 +442,10 @@ export function AccountsPage() {
   const [activeView, setActiveView] = useState<AccountsView>(
     () => initialWorkspaceUrlState.current.view
   );
+  const [documentVisible, setDocumentVisible] = useState(
+    () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
+  );
+  const previousDocumentVisibleRef = useRef(documentVisible);
   const [healthMode, setHealthMode] = useState<CredentialHealthInspectionMode>(
     () => initialWorkspaceUrlState.current.healthMode
   );
@@ -567,9 +575,11 @@ export function AccountsPage() {
       managementKey,
     ]
   );
-  const [headerSnapshots, setHeaderSnapshots] = useState<UsageHeaderSnapshot[]>([]);
-  const [headerSnapshotGeneratedAtMs, setHeaderSnapshotGeneratedAtMs] = useState(0);
+  const headerSnapshots = useUsageHeaderSnapshotStore((state) => state.items);
+  const headerSnapshotGeneratedAtMs = useUsageHeaderSnapshotStore((state) => state.generatedAtMs);
   const [headerSnapshotLoadedKey, setHeaderSnapshotLoadedKey] = useState('');
+  const headerSnapshotLoadKeyRef = useRef(headerSnapshotLoadKey);
+  headerSnapshotLoadKeyRef.current = headerSnapshotLoadKey;
   const [accountDisplayMode, setAccountDisplayMode] = useState<QuotaAccountDisplayMode>(
     () => initialWorkspaceUrlState.current.accountDisplayMode
   );
@@ -577,8 +587,6 @@ export function AccountsPage() {
   const detailEventsRequestIdRef = useRef(0);
   const detailEventsAutoLoadKeyRef = useRef<string | null>(null);
   const quotaCooldownRequestIdRef = useRef(0);
-  const headerSnapshotReqIdRef = useRef(0);
-  const headerSnapshotAbortRef = useRef<AbortController | null>(null);
   const accountHistoryAutoAbortRef = useRef<AbortController | null>(null);
   const accountHistoryTargetAbortRef = useRef<AbortController | null>(null);
   const accountHistoryRequestVersionsRef = useRef<Map<string, number>>(new Map());
@@ -666,64 +674,23 @@ export function AccountsPage() {
     }
   }, [featureAvailability.managerServiceBase, managementKey]);
 
+  const loadSharedHeaderSnapshots = useHeaderSnapshotsLoader({
+    serviceBase:
+      !featureAvailability.checking && featureAvailability.requestMonitoringAvailable
+        ? featureAvailability.managerServiceBase
+        : '',
+    managementKey,
+  });
   const loadHeaderSnapshots = useCallback(async () => {
-    if (featureAvailability.checking) {
-      headerSnapshotReqIdRef.current += 1;
-      headerSnapshotAbortRef.current?.abort();
-      headerSnapshotAbortRef.current = null;
-      return;
-    }
-    if (
-      !featureAvailability.requestMonitoringAvailable ||
-      !featureAvailability.managerServiceBase
-    ) {
-      headerSnapshotReqIdRef.current += 1;
-      headerSnapshotAbortRef.current?.abort();
-      headerSnapshotAbortRef.current = null;
-      setHeaderSnapshots((current) => (current.length === 0 ? current : []));
-      setHeaderSnapshotGeneratedAtMs(0);
-      setHeaderSnapshotLoadedKey(headerSnapshotLoadKey);
-      return;
-    }
-
-    const id = ++headerSnapshotReqIdRef.current;
-    headerSnapshotAbortRef.current?.abort();
-    const controller = new AbortController();
-    headerSnapshotAbortRef.current = controller;
+    if (featureAvailability.checking) return;
     try {
-      const response = await monitoringAnalyticsApi.getHeaderSnapshots(
-        featureAvailability.managerServiceBase,
-        managementKey,
-        {
-          days: 30,
-          limit: 1000,
-        },
-        controller.signal
-      );
-      if (id !== headerSnapshotReqIdRef.current) return;
-      setHeaderSnapshots(response.items ?? []);
-      setHeaderSnapshotGeneratedAtMs(
-        Number.isFinite(response.generated_at_ms) && response.generated_at_ms > 0
-          ? response.generated_at_ms
-          : Date.now()
-      );
-    } catch {
-      // Header snapshots are passive diagnostics; transient failures should not block accounts.
+      await loadSharedHeaderSnapshots();
     } finally {
-      if (id === headerSnapshotReqIdRef.current) {
-        if (headerSnapshotAbortRef.current === controller) {
-          headerSnapshotAbortRef.current = null;
-        }
+      if (headerSnapshotLoadKeyRef.current === headerSnapshotLoadKey) {
         setHeaderSnapshotLoadedKey(headerSnapshotLoadKey);
       }
     }
-  }, [
-    featureAvailability.checking,
-    featureAvailability.managerServiceBase,
-    featureAvailability.requestMonitoringAvailable,
-    headerSnapshotLoadKey,
-    managementKey,
-  ]);
+  }, [featureAvailability.checking, headerSnapshotLoadKey, loadSharedHeaderSnapshots]);
 
   const loadAccountActionCandidates = useCallback(async () => {
     const requestId = accountActionCandidatesReqIdRef.current + 1;
@@ -781,9 +748,6 @@ export function AccountsPage() {
       requestMonitoringAvailable: featureAvailability.requestMonitoringAvailable,
     };
     quotaCooldownRequestIdRef.current += 1;
-    headerSnapshotReqIdRef.current += 1;
-    headerSnapshotAbortRef.current?.abort();
-    headerSnapshotAbortRef.current = null;
     accountHistoryAutoAbortRef.current?.abort();
     accountHistoryAutoAbortRef.current = null;
     accountHistoryTargetAbortRef.current?.abort();
@@ -805,8 +769,6 @@ export function AccountsPage() {
     detailEventsAutoLoadKeyRef.current = null;
     setQuotaCooldowns(new Map());
     setAccountActionCandidates([]);
-    setHeaderSnapshots((current) => (current.length === 0 ? current : []));
-    setHeaderSnapshotGeneratedAtMs(0);
     setHeaderSnapshotLoadedKey('');
     setAccountHistoryByRowKey((current) => (current.size === 0 ? current : new Map()));
     setAccountHistoryLoading(false);
@@ -839,7 +801,6 @@ export function AccountsPage() {
 
   useEffect(
     () => () => {
-      headerSnapshotAbortRef.current?.abort();
       accountHistoryAutoAbortRef.current?.abort();
       accountHistoryTargetAbortRef.current?.abort();
       accountWindowUsageAbortRef.current?.abort();
@@ -852,8 +813,11 @@ export function AccountsPage() {
   const refreshOauthWorkspace = useCallback(async () => {
     await Promise.all([loadOauthExcluded(), loadOauthModelAlias()]);
   }, [loadOauthExcluded, loadOauthModelAlias]);
+  const refreshAccountsWorkspace = useCallback(async () => {
+    await Promise.all([loadFiles(), loadHeaderSnapshots()]);
+  }, [loadFiles, loadHeaderSnapshots]);
   const refreshActiveWorkspace = useAccountsWorkspaceRefresh(activeView, {
-    refreshAccounts: loadFiles,
+    refreshAccounts: refreshAccountsWorkspace,
     refreshHealth: loadInspectionSummary,
     refreshOauth: refreshOauthWorkspace,
   });
@@ -868,6 +832,48 @@ export function AccountsPage() {
     if (activeView === 'accounts') return;
     void refreshActiveWorkspace();
   }, [activeView, connectionFingerprint, refreshActiveWorkspace]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const updateVisibility = () => setDocumentVisible(document.visibilityState !== 'hidden');
+    document.addEventListener('visibilitychange', updateVisibility);
+    return () => document.removeEventListener('visibilitychange', updateVisibility);
+  }, []);
+
+  useEffect(() => {
+    const regainedVisibility = documentVisible && !previousDocumentVisibleRef.current;
+    previousDocumentVisibleRef.current = documentVisible;
+    if (
+      !regainedVisibility ||
+      activeView !== 'accounts' ||
+      featureAvailability.checking ||
+      !featureAvailability.requestMonitoringAvailable ||
+      !featureAvailability.managerServiceBase
+    ) {
+      return;
+    }
+    void loadHeaderSnapshots();
+  }, [
+    activeView,
+    documentVisible,
+    featureAvailability.checking,
+    featureAvailability.managerServiceBase,
+    featureAvailability.requestMonitoringAvailable,
+    loadHeaderSnapshots,
+  ]);
+
+  useInterval(
+    () => {
+      void loadHeaderSnapshots();
+    },
+    activeView === 'accounts' &&
+      documentVisible &&
+      !featureAvailability.checking &&
+      featureAvailability.requestMonitoringAvailable &&
+      Boolean(featureAvailability.managerServiceBase)
+      ? PASSIVE_HEADER_SNAPSHOT_REFRESH_MS
+      : null
+  );
 
   useEffect(
     () => () => {
@@ -1465,7 +1471,6 @@ export function AccountsPage() {
     },
     [confirmConfigurationDiscard, handleDelete, selectedRowKey]
   );
-  const selectedRowProvider = selectedRow?.provider ?? '';
   const hasSelectedAccountDetail = activeView === 'accounts' && Boolean(selectedRowKey);
   const needsCodexStatusEvidence =
     activeView === 'accounts' && isAccountCodexStatusFilter(statusFilter);
@@ -1479,12 +1484,13 @@ export function AccountsPage() {
     activeView === 'accounts' &&
     (effectiveOperationalFilter === 'automation' ||
       (hasSelectedAccountDetail && (detailTab === 'overview' || detailTab === 'diagnostics')));
+  const canLoadHeaderSnapshots =
+    activeView === 'accounts' &&
+    !featureAvailability.checking &&
+    featureAvailability.requestMonitoringAvailable &&
+    Boolean(featureAvailability.managerServiceBase);
   const needsHeaderSnapshots =
-    (needsCodexStatusEvidence ||
-      (hasSelectedAccountDetail &&
-        (detailTab === 'overview' || detailTab === 'quota') &&
-        selectedRowProvider === CODEX_CONFIG.type)) &&
-    headerSnapshotLoadedKey !== headerSnapshotLoadKey;
+    canLoadHeaderSnapshots && headerSnapshotLoadedKey !== headerSnapshotLoadKey;
 
   useEffect(() => {
     if (!needsQuotaCooldowns) return;
@@ -1669,6 +1675,11 @@ export function AccountsPage() {
       filterAccountWindowUsageByTargetRanges(accountWindowUsageTargets, accountWindowUsageByKey),
     [accountWindowUsageByKey, accountWindowUsageTargets]
   );
+  const selectedHeaderSnapshotRevision = useMemo(() => {
+    if (selectedRow?.provider !== CODEX_CONFIG.type) return '';
+    const snapshot = getFreshCodexHeaderSnapshot(selectedRow.raw);
+    return snapshot ? `${snapshot.event_hash}\u0000${snapshot.timestamp_ms}` : '';
+  }, [getFreshCodexHeaderSnapshot, selectedRow]);
   const accountWindowUsageAutoLoadKey = useMemo(
     () =>
       JSON.stringify({
@@ -1677,7 +1688,7 @@ export function AccountsPage() {
         managementKey,
         requestMonitoringAvailable: featureAvailability.requestMonitoringAvailable,
         selectedRowKey: selectedRow?.selectionKey ?? selectedRowKey,
-        headerSnapshotGeneratedAtMs,
+        selectedHeaderSnapshotRevision,
         historyRevision: accountHistoryRefreshRevision,
       }),
     [
@@ -1685,9 +1696,9 @@ export function AccountsPage() {
       featureAvailability.checking,
       featureAvailability.managerServiceBase,
       featureAvailability.requestMonitoringAvailable,
-      headerSnapshotGeneratedAtMs,
       managementKey,
       selectedRow,
+      selectedHeaderSnapshotRevision,
       selectedRowKey,
     ]
   );
@@ -2779,6 +2790,7 @@ export function AccountsPage() {
       return;
     }
     if (
+      canLoadHeaderSnapshots &&
       selectedRow?.provider === CODEX_CONFIG.type &&
       headerSnapshotLoadedKey !== headerSnapshotLoadKey
     ) {
@@ -2790,6 +2802,7 @@ export function AccountsPage() {
   }, [
     accountWindowUsageAutoLoadKey,
     activeView,
+    canLoadHeaderSnapshots,
     detailTab,
     headerSnapshotLoadKey,
     headerSnapshotLoadedKey,
@@ -3830,7 +3843,7 @@ export function AccountsPage() {
       title={t('accounts.empty_title')}
       description={t('accounts.empty_desc')}
       action={
-        <Button variant="secondary" onClick={() => void loadFiles()}>
+        <Button variant="secondary" onClick={() => void refreshAccountsWorkspace()}>
           {t('common.refresh')}
         </Button>
       }
