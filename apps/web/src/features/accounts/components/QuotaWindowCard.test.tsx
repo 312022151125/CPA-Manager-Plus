@@ -111,6 +111,7 @@ describe('QuotaWindowCard', () => {
     expect(forecastText).toContain('accounts.detail_forecast_requests');
     expect(forecastText).toContain('accounts.detail_forecast_tokens');
     expect(forecastText).toContain('accounts.detail_forecast_cost');
+    expect(forecastText).toContain('$200.000');
     expect(forecastText).toContain('accounts.detail_forecast_basis_quota');
     expect(forecastText).not.toContain('accounts.detail_success_rate');
     expect(
@@ -121,6 +122,7 @@ describe('QuotaWindowCard', () => {
     const previous = renderer.root.findByProps({ 'data-quota-usage-period': 'previous' });
     const previousText = readText(previous);
     expect(previousText).toContain('accounts.detail_success_rate');
+    expect(previousText).toContain('$100.000');
     expect(previousText).not.toContain('accounts.detail_used');
   });
 
