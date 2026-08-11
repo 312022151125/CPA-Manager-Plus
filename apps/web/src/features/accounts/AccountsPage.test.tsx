@@ -284,6 +284,7 @@ const { mocks } = vi.hoisted(() => {
   return {
     mocks: {
       files: [codexFile] as AuthFileItem[],
+      authFilesLoading: false,
       selectedFiles: new Set<string>(),
       selectionCount: 0,
       batchFieldsUpdating: false,
@@ -469,7 +470,7 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
     files: mocks.files,
     selectedFiles: mocks.selectedFiles,
     selectionCount: mocks.selectionCount,
-    loading: false,
+    loading: mocks.authFilesLoading,
     error: '',
     uploading: false,
     authJsonPasteSaving: false,
@@ -945,6 +946,7 @@ describe('AccountsPage replacement flows', () => {
       window.location.hash = '';
     }
     mocks.files = [makeCodexFile('codex.json', 'auth-1', 'codex@example.com')];
+    mocks.authFilesLoading = false;
     useUsageHeaderSnapshotStore.setState({
       scopeKey: '',
       items: [],
@@ -4849,6 +4851,78 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(2);
     expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(1);
     expect(quotaFetch).not.toHaveBeenCalled();
+  });
+
+  it('loads quota lifecycle after a deep-linked credential resolves asynchronously', async () => {
+    const target = {
+      name: 'xai-delayed.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-delayed-01',
+      account: 'delayed@example.com',
+      disabled: true,
+    } as AuthFileItem;
+    const rowKey = getAuthFileSelectionKey(target);
+    mocks.files = [
+      makeCodexFile('placeholder.json', 'placeholder-auth', 'placeholder@example.com'),
+    ];
+    mocks.authFilesLoading = true;
+    mocks.location = {
+      pathname: '/accounts',
+      search: `?account=${encodeURIComponent(rowKey)}&tab=quota`,
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    vi.mocked(accountQuotaSnapshotApi.query).mockResolvedValue({
+      generated_at_ms: 1,
+      items: [
+        {
+          row_key: rowKey,
+          account_key: rowKey,
+          provider: 'xai',
+          windows: [
+            {
+              provider_window_id: 'included-free-rolling-24h',
+              window_kind: 'rolling_24h',
+              window_mode: 'rolling',
+              model_scope_kind: 'models',
+              model_scope_key: 'grok-4.5-build-free',
+              model_ids: ['grok-4.5-build-free'],
+              source: 'response_body',
+              observed_at_ms: 1,
+              boundary_accuracy: 'estimated',
+              duration_seconds: 24 * 60 * 60,
+              used_percent: 100,
+              remaining_percent: 0,
+              stale: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(accountQuotaSnapshotApi.query).not.toHaveBeenCalled();
+    expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
+
+    await act(async () => {
+      mocks.files = [target];
+      mocks.authFilesLoading = false;
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(renderer.root.findByType(AccountQuotaTab)).toBeTruthy();
+    expect(accountQuotaSnapshotApi.query).toHaveBeenCalledTimes(1);
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(1);
   });
 
   it('reloads lifecycle and window usage after detail quota refresh without loading history', async () => {

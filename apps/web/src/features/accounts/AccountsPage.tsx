@@ -2788,12 +2788,12 @@ export function AccountsPage() {
   );
 
   useEffect(() => {
-    if (activeView !== 'accounts' || detailTab !== 'quota' || !selectedRowKey) {
+    if (activeView !== 'accounts' || detailTab !== 'quota' || !selectedRowKey || !selectedRow) {
       const hadInFlightRequest = accountWindowUsageAbortRef.current !== null;
       accountWindowUsageReqIdRef.current += 1;
       accountWindowUsageAbortRef.current?.abort();
       accountWindowUsageAbortRef.current = null;
-      if (hadInFlightRequest) {
+      if (hadInFlightRequest || !selectedRow) {
         accountWindowUsageAutoLoadKeyRef.current = null;
       }
       return;
