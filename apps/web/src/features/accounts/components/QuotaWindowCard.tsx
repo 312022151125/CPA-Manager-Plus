@@ -31,6 +31,7 @@ import type {
   AccountDetailWindowUsageSummary,
 } from '@/features/accounts/model/accountDetailViewModel';
 import { formatQuotaResetDisplay } from '@/features/accounts/model/accountsPagePresentation';
+import { formatUsd } from '@/utils/usage';
 import styles from './QuotaWindowCard.module.scss';
 
 export type QuotaWindowCardMode = 'standard' | 'model' | 'other';
@@ -64,7 +65,7 @@ const formatCompactNumber = (value: number | null | undefined): string => {
 
 const formatMoney = (value: number | null | undefined): string => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
-  return `$${value.toFixed(2)}`;
+  return formatUsd(value);
 };
 
 const formatRange = (
