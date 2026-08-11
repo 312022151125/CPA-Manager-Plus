@@ -192,6 +192,12 @@ export interface UsageDetail {
   authSnapshotAtMs?: number;
   auth_type?: string;
   authType?: string;
+  client_ip?: string;
+  clientIp?: string;
+  x_forwarded_for?: string;
+  xForwardedFor?: string;
+  user_agent?: string;
+  userAgent?: string;
   reasoning_effort?: string;
   reasoningEffort?: string;
   service_tier?: string;
