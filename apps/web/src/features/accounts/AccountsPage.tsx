@@ -464,6 +464,7 @@ export function AccountsPage() {
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [historyRefreshing, setHistoryRefreshing] = useState(false);
   const [accountHistoryRefreshRevision, setAccountHistoryRefreshRevision] = useState(0);
+  const [accountQuotaRefreshRevision, setAccountQuotaRefreshRevision] = useState(0);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(
     () => initialWorkspaceUrlState.current.account
@@ -1690,9 +1691,11 @@ export function AccountsPage() {
         selectedRowKey: selectedRow?.selectionKey ?? selectedRowKey,
         selectedHeaderSnapshotRevision,
         historyRevision: accountHistoryRefreshRevision,
+        quotaRevision: accountQuotaRefreshRevision,
       }),
     [
       accountHistoryRefreshRevision,
+      accountQuotaRefreshRevision,
       featureAvailability.checking,
       featureAvailability.managerServiceBase,
       featureAvailability.requestMonitoringAvailable,
@@ -2713,7 +2716,12 @@ export function AccountsPage() {
   );
 
   const refreshAccountQuota = useCallback(
-    (row: AccountRow) => refreshQuotaRows([row]),
+    async (row: AccountRow): Promise<void> => {
+      await refreshQuotaRows([row]);
+      if (selectedRowKeyRef.current === row.selectionKey) {
+        setAccountQuotaRefreshRevision((current) => current + 1);
+      }
+    },
     [refreshQuotaRows]
   );
 

@@ -102,6 +102,26 @@ const formatCurrentWindowRange = (
   return formatRange(usage?.fromMs, usage?.toMs, locale);
 };
 
+const formatPreviousWindowRange = (
+  window: AccountDetailQuotaWindow,
+  usage: AccountDetailWindowUsageSummary | null | undefined,
+  locale: string
+): string => {
+  const scheduledStartMs = window.previousCycle?.scheduledStartMs;
+  const scheduledEndMs = window.previousCycle?.scheduledEndMs;
+  if (
+    (window.windowMode === 'fixed' || window.windowMode === 'calendar') &&
+    typeof scheduledStartMs === 'number' &&
+    Number.isFinite(scheduledStartMs) &&
+    typeof scheduledEndMs === 'number' &&
+    Number.isFinite(scheduledEndMs) &&
+    scheduledStartMs < scheduledEndMs
+  ) {
+    return formatRange(scheduledStartMs, scheduledEndMs, locale);
+  }
+  return formatRange(usage?.fromMs, usage?.toMs, locale);
+};
+
 const formatObservedAt = (value: number, locale: string): string =>
   new Intl.DateTimeFormat(locale, {
     month: '2-digit',
@@ -622,7 +642,7 @@ export const QuotaWindowCard = ({
                   ? t('accounts.detail_previous_equal_range', { defaultValue: '前一等长区间' })
                   : t('accounts.detail_previous_usage', { defaultValue: '上个窗口用量' })
               }
-              subtitle={formatRange(previousUsage?.fromMs, previousUsage?.toMs, resolvedLocale)}
+              subtitle={formatPreviousWindowRange(q, previousUsage, resolvedLocale)}
               period="previous"
               usage={previousUsage}
               labels={usageLabels}
@@ -677,7 +697,7 @@ export const QuotaWindowCard = ({
               ? t('accounts.detail_previous_equal_range', { defaultValue: '前一等长区间' })
               : t('accounts.detail_previous_usage', { defaultValue: '上个窗口用量' })
           }
-          subtitle={formatRange(previousUsage?.fromMs, previousUsage?.toMs, resolvedLocale)}
+          subtitle={formatPreviousWindowRange(q, previousUsage, resolvedLocale)}
           period="previous"
           usage={previousUsage}
           labels={usageLabels}

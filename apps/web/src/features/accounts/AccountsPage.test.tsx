@@ -4851,6 +4851,63 @@ describe('AccountsPage replacement flows', () => {
     expect(quotaFetch).not.toHaveBeenCalled();
   });
 
+  it('reloads lifecycle and window usage after detail quota refresh without loading history', async () => {
+    const file = makeCodexFile('codex-refresh.json', 'auth-refresh', 'refresh@example.com');
+    mocks.files = [file];
+    mocks.location = {
+      pathname: '/accounts',
+      search: '?account=codex-refresh.json%00auth-refresh&tab=quota',
+    };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const resetAtMs = Date.now() + 5 * 60 * 60 * 1000;
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      quotaInventoryObserved: true,
+      fetchedAtMs: Date.now(),
+      windows: [
+        {
+          id: 'five-hour',
+          label: 'Five hours',
+          usedPercent: 10,
+          resetAtMs,
+          resetLabel: new Date(resetAtMs).toISOString(),
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 5 * 60 * 60,
+        },
+      ],
+    });
+    const quotaFetch = vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+    expect(accountQuotaSnapshotApi.query).toHaveBeenCalledTimes(1);
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(1);
+    mocks.getAccountHistory.mockClear();
+
+    await act(async () => {
+      const detailRefreshButton = renderer.root
+        .findByType(Drawer)
+        .findAllByType(Button)
+        .find((node) => readText(node.props.children).includes('accounts.refresh_quota'));
+      if (!detailRefreshButton) throw new Error('Detail quota refresh button not found');
+      detailRefreshButton.props.onClick();
+      await Promise.resolve();
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(quotaFetch).toHaveBeenCalledTimes(1);
+    expect(accountQuotaSnapshotApi.query).toHaveBeenCalledTimes(2);
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(2);
+    expect(mocks.getAccountHistory).not.toHaveBeenCalled();
+  });
+
   it('loads history for a deep-linked credential outside the visible page', async () => {
     mocks.files = Array.from({ length: 11 }, (_, index) =>
       makeCodexFile(
