@@ -2119,6 +2119,7 @@ export function AccountsPage() {
     setHistoryRefreshing(false);
     usageValuesRequestIdRef.current += 1;
     usageValuesAutoLoadKeyRef.current = null;
+    accountWindowUsageAutoLoadKeyRef.current = null;
     setAccountWindowUsageQueryContext(null);
     detailEventsRequestIdRef.current += 1;
     detailEventsAutoLoadKeyRef.current = null;
