@@ -4944,7 +4944,7 @@ describe('AccountsPage replacement flows', () => {
     expect(request.accounts).toContainEqual(expect.objectContaining({ row_key: targetKey }));
   });
 
-  it('keeps rolling window usage visible across snapshot rerenders and history refreshes', async () => {
+  it('keeps rolling window usage visible across refreshes and detail drawer reopen', async () => {
     let currentTimeMs = 2_000_000_000_000;
     vi.spyOn(Date, 'now').mockImplementation(() => {
       currentTimeMs += 1_000;
@@ -5000,8 +5000,9 @@ describe('AccountsPage replacement flows', () => {
     let usageRequestCount = 0;
     mocks.getAccountWindowUsage.mockImplementation(async (_base, _managementKey, request) => {
       usageRequestCount += 1;
-      const totalRequests = usageRequestCount === 1 ? 4 : 5;
-      const totalTokens = usageRequestCount === 1 ? 9_939 : 12_460;
+      const totalRequests = usageRequestCount === 1 ? 4 : usageRequestCount === 2 ? 5 : 6;
+      const totalTokens =
+        usageRequestCount === 1 ? 9_939 : usageRequestCount === 2 ? 12_460 : 14_981;
       const windows = request.windows as Array<{
         request_key: string;
         row_key: string;
@@ -5083,6 +5084,45 @@ describe('AccountsPage replacement flows', () => {
       toMs: refreshedCurrentTarget?.to_ms,
       totalRequests: 5,
       totalTokens: 12_460,
+    });
+
+    await act(async () => {
+      renderer.root.findByType(Drawer).props.onClose();
+    });
+    await flushPromises();
+
+    expect(renderer.root.findAllByType(AccountQuotaTab)).toHaveLength(0);
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'xai-ops.json').props.onClick();
+    });
+    await flushPromises();
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(mocks.getAccountWindowUsage).toHaveBeenCalledTimes(3);
+    const reopenedWindowUsageRequest = mocks.getAccountWindowUsage.mock.calls[2]?.[2] as
+      | AccountWindowUsageRequestForTest
+      | undefined;
+    const reopenedCurrentTarget = (
+      reopenedWindowUsageRequest?.windows as Array<{
+        period: string;
+        from_ms: number;
+        to_ms: number;
+      }>
+    ).find((window) => window.period === 'current');
+    expect(reopenedCurrentTarget?.from_ms).toBeGreaterThan(refreshedCurrentTarget?.from_ms ?? 0);
+    expect(reopenedCurrentTarget?.to_ms).toBeGreaterThan(refreshedCurrentTarget?.to_ms ?? 0);
+    expect(
+      renderer.root.findByType(AccountQuotaTab).props.detailView.quota.windows[0].currentUsage
+    ).toMatchObject({
+      fromMs: reopenedCurrentTarget?.from_ms,
+      toMs: reopenedCurrentTarget?.to_ms,
+      totalRequests: 6,
+      totalTokens: 14_981,
     });
   });
 
