@@ -50,7 +50,9 @@ export interface AccountQuotaSummary {
   error?: string;
   errorStatus?: number;
   observedAtMs?: number;
+  observedQuotaAtMs?: number;
   fetchedAtMs?: number;
+  failedAtMs?: number;
   observedTraceId?: string;
   observedErrorKind?: string;
   observedErrorCode?: string;
@@ -120,6 +122,7 @@ type AccountQuotaObservationFields = Partial<
     AccountQuotaSummary,
     | 'source'
     | 'observedAtMs'
+    | 'observedQuotaAtMs'
     | 'fetchedAtMs'
     | 'observedTraceId'
     | 'observedErrorKind'
@@ -501,13 +504,14 @@ const quotaFromUsedWindows = (
 
 const quotaFromXaiBilling = (
   billing: XaiBillingSummary | null | undefined,
-  planType: string | null
+  planType: string | null,
+  options: AccountQuotaObservationFields = {}
 ): AccountQuotaSummary => {
   if (!billing) {
-    return quotaFromRemainingWindows([{ remainingPercent: null }], planType);
+    return quotaFromRemainingWindows([{ remainingPercent: null }], planType, options);
   }
   if (billing.officialApiHealth) {
-    return quotaFromRemainingWindows([{ remainingPercent: null }], planType);
+    return quotaFromRemainingWindows([{ remainingPercent: null }], planType, options);
   }
 
   const resetLabel = billing.billingPeriodEnd ?? '-';
@@ -570,7 +574,8 @@ const quotaFromXaiBilling = (
           ...billingResetFields,
         },
       ],
-      planType
+      planType,
+      options
     );
   }
 
@@ -595,7 +600,8 @@ const quotaFromXaiBilling = (
             ...billingResetFields,
           },
         ],
-        planType
+        planType,
+        options
       );
     }
 
@@ -603,7 +609,8 @@ const quotaFromXaiBilling = (
     if (monthlyRemainingPercent !== null && monthlyRemainingPercent <= 0) {
       return quotaFromRemainingWindows(
         [{ remainingPercent: null, ...billingResetFields }],
-        planType
+        planType,
+        options
       );
     }
   }
@@ -626,7 +633,8 @@ const quotaFromXaiBilling = (
         ...billingResetFields,
       },
     ],
-    planType
+    planType,
+    options
   );
 };
 
@@ -635,6 +643,7 @@ const quotaObservationFields = (quota: CodexQuotaState): AccountQuotaObservation
     source: quota.observedFromUsageHeaders ? 'observed-header' : 'cache',
     fetchedAtMs: quota.fetchedAtMs,
     observedAtMs: quota.observedAtMs,
+    observedQuotaAtMs: quota.observedFromUsageHeaders ? quota.observedAtMs : undefined,
     observedTraceId: quota.observedTraceId,
     observedErrorKind: quota.observedErrorKind,
     observedErrorCode: quota.observedErrorCode,
@@ -660,6 +669,7 @@ const quotaObservationFieldsFromSnapshot = (
   return {
     source: 'observed-header',
     observedAtMs: snapshot?.timestamp_ms,
+    observedQuotaAtMs: observedQuota ? snapshot?.timestamp_ms : undefined,
     observedTraceId: getHeaderSnapshotTraceId(snapshot) || undefined,
     observedErrorKind: getHeaderSnapshotErrorKind(snapshot) || undefined,
     observedErrorCode: getHeaderSnapshotErrorCode(snapshot) || undefined,
@@ -682,6 +692,9 @@ const mergeQuotaObservationFields = (
   if (!hasObservedQuotaFields(fields)) return summary;
   const merged: AccountQuotaSummary = { ...summary };
   if (fields.observedAtMs !== undefined) merged.observedAtMs = fields.observedAtMs;
+  if (fields.observedQuotaAtMs !== undefined) {
+    merged.observedQuotaAtMs = fields.observedQuotaAtMs;
+  }
   if (fields.fetchedAtMs !== undefined) merged.fetchedAtMs = fields.fetchedAtMs;
   if (fields.observedTraceId !== undefined) merged.observedTraceId = fields.observedTraceId;
   if (fields.observedErrorKind !== undefined) {
@@ -724,7 +737,8 @@ const mergeQuotaObservationFields = (
 const quotaFromError = (
   error: string | undefined,
   planType: string | null,
-  errorStatus?: number
+  errorStatus?: number,
+  failedAtMs?: number
 ): AccountQuotaSummary => ({
   status: 'error',
   remainingPercent: null,
@@ -736,6 +750,7 @@ const quotaFromError = (
   source: 'cache',
   error,
   errorStatus,
+  failedAtMs,
 });
 
 const emptyQuota = (planType: string | null): AccountQuotaSummary => ({
@@ -806,12 +821,18 @@ export const resolveAccountQuota = (
             error: quota.error,
             errorStatus: quota.errorStatus,
             fetchedAtMs: quota.fetchedAtMs,
+            failedAtMs: quota.failedAtMs,
           },
           headerObservationFields
         );
       }
       return mergeQuotaObservationFields(
-        quotaFromError(quota.error, quota.planType ?? observedPlanType, quota.errorStatus),
+        quotaFromError(
+          quota.error,
+          quota.planType ?? observedPlanType,
+          quota.errorStatus,
+          quota.failedAtMs
+        ),
         headerObservationFields
       );
     }
@@ -830,8 +851,15 @@ export const resolveAccountQuota = (
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(quota.planType ?? filePlanType);
     if (quota.status === 'error')
-      return quotaFromError(quota.error, quota.planType ?? filePlanType, quota.errorStatus);
-    return quotaFromUsedWindows(quota.windows, quota.planType ?? filePlanType);
+      return quotaFromError(
+        quota.error,
+        quota.planType ?? filePlanType,
+        quota.errorStatus,
+        quota.failedAtMs
+      );
+    return quotaFromUsedWindows(quota.windows, quota.planType ?? filePlanType, {
+      fetchedAtMs: quota.fetchedAtMs,
+    });
   }
 
   if (provider === 'antigravity') {
@@ -843,7 +871,9 @@ export const resolveAccountQuota = (
       readString(quota.subscription?.tierId);
     const planType = filePlanType ?? (subscriptionPlan ? subscriptionPlan.toLowerCase() : null);
     if (quota.status === 'loading') return loadingQuota(planType);
-    if (quota.status === 'error') return quotaFromError(quota.error, planType, quota.errorStatus);
+    if (quota.status === 'error') {
+      return quotaFromError(quota.error, planType, quota.errorStatus, quota.failedAtMs);
+    }
     const availability = summarizeGroupedQuotaAvailability(
       quota.groups.flatMap((group) =>
         group.buckets.map((bucket) => {
@@ -862,7 +892,12 @@ export const resolveAccountQuota = (
         })
       )
     );
-    if (!availability) return emptyQuota(planType);
+    if (!availability) {
+      return {
+        ...emptyQuota(planType),
+        fetchedAtMs: quota.fetchedAtMs,
+      };
+    }
     return {
       status: getQuotaStatusFromRemaining(availability.remainingPercent),
       remainingPercent: availability.remainingPercent,
@@ -873,6 +908,7 @@ export const resolveAccountQuota = (
       groupedAvailabilityState: availability.state,
       planType,
       source: 'cache',
+      fetchedAtMs: quota.fetchedAtMs,
     };
   }
 
@@ -881,7 +917,7 @@ export const resolveAccountQuota = (
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(filePlanType);
     if (quota.status === 'error')
-      return quotaFromError(quota.error, filePlanType, quota.errorStatus);
+      return quotaFromError(quota.error, filePlanType, quota.errorStatus, quota.failedAtMs);
     return quotaFromRemainingWindows(
       quota.rows.map((row) => ({
         remainingPercent:
@@ -890,7 +926,8 @@ export const resolveAccountQuota = (
         resetAtMs: row.resetAtMs,
         resetAccuracy: row.resetAccuracy,
       })),
-      filePlanType
+      filePlanType,
+      { fetchedAtMs: quota.fetchedAtMs }
     );
   }
 
@@ -899,8 +936,10 @@ export const resolveAccountQuota = (
     if (!quota) return emptyQuota(filePlanType);
     if (quota.status === 'loading') return loadingQuota(filePlanType);
     if (quota.status === 'error')
-      return quotaFromError(quota.error, filePlanType, quota.errorStatus);
-    return quotaFromXaiBilling(quota.billing, filePlanType);
+      return quotaFromError(quota.error, filePlanType, quota.errorStatus, quota.failedAtMs);
+    return quotaFromXaiBilling(quota.billing, filePlanType, {
+      fetchedAtMs: quota.fetchedAtMs,
+    });
   }
 
   return emptyQuota(filePlanType);
