@@ -1776,6 +1776,9 @@ export interface MonitoringAnalyticsEventRow {
   endpoint: string;
   method: string;
   path: string;
+  client_ip?: string;
+  x_forwarded_for?: string;
+  user_agent?: string;
   auth_index: string;
   source: string;
   source_hash: string;

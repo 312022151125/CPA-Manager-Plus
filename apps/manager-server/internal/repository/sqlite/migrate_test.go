@@ -170,6 +170,7 @@ func TestMigrateCreatesAccountQuotaSnapshotSchema(t *testing.T) {
 		"idx_quota_snapshots_latest",
 		"idx_quota_snapshots_observation",
 		"idx_quota_snapshots_window_cycle",
+		"idx_quota_snapshots_cycle_evidence",
 	} {
 		if !indexes[name] {
 			t.Fatalf("account quota snapshot indexes = %#v, missing %s", indexes, name)
@@ -1374,7 +1375,11 @@ func TestEnsureUsageEventSnapshotColumnsOnlyMigratesSchema(t *testing.T) {
 		t.Fatalf("migrate usage event schema: %v", err)
 	}
 	columns := migrationTableColumns(t, db, "usage_events")
-	if !columns["cache_input_mode"] || !columns["normalized_total_input_tokens"] {
+	if !columns["cache_input_mode"] ||
+		!columns["normalized_total_input_tokens"] ||
+		!columns["client_ip"] ||
+		!columns["x_forwarded_for"] ||
+		!columns["user_agent"] {
 		t.Fatalf("usage event schema columns = %#v", columns)
 	}
 	assertTableCount(t, db, "usage_account_model_rollups", 1)

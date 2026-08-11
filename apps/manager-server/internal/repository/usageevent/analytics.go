@@ -398,6 +398,9 @@ type EventPageItem struct {
 	Endpoint               string
 	Method                 string
 	Path                   string
+	ClientIP               string
+	XForwardedFor          string
+	UserAgent              string
 	AuthIndex              string
 	Source                 string
 	SourceHash             string
@@ -2443,6 +2446,9 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(endpoint, ''),
 	coalesce(method, ''),
 	coalesce(path, ''),
+	coalesce(client_ip, ''),
+	coalesce(x_forwarded_for, ''),
+	coalesce(user_agent, ''),
 	coalesce(auth_index, ''),
 	coalesce(source, ''),
 	coalesce(source_hash, ''),
@@ -2498,6 +2504,9 @@ limit ?`, args...)
 			&item.Endpoint,
 			&item.Method,
 			&item.Path,
+			&item.ClientIP,
+			&item.XForwardedFor,
+			&item.UserAgent,
 			&item.AuthIndex,
 			&item.Source,
 			&item.SourceHash,

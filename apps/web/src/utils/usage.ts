@@ -192,6 +192,12 @@ export interface UsageDetail {
   authSnapshotAtMs?: number;
   auth_type?: string;
   authType?: string;
+  client_ip?: string;
+  clientIp?: string;
+  x_forwarded_for?: string;
+  xForwardedFor?: string;
+  user_agent?: string;
+  userAgent?: string;
   reasoning_effort?: string;
   reasoningEffort?: string;
   service_tier?: string;
@@ -1490,12 +1496,12 @@ export function formatCompactNumber(value: number): string {
 
 export function formatUsd(value: number): string {
   const num = Number(value);
-  if (!Number.isFinite(num)) return '$0.00';
+  if (!Number.isFinite(num)) return '$0.000';
 
-  const fixed = num.toFixed(2);
+  const fixed = num.toFixed(3);
   const parts = Number(fixed).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
   });
   return `$${parts}`;
 }
