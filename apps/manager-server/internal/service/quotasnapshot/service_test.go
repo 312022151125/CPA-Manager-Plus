@@ -3026,6 +3026,51 @@ func TestQuotaLifecycleScheduledPreviousCycleRemainsForecastEligible(t *testing.
 	}
 }
 
+func TestQuotaLifecycleAcceptsZeroUseAPIBoundaryAtScheduledRollover(t *testing.T) {
+	const durationSeconds = int64(7 * 24 * 60 * 60)
+	rolloverAtMS := quotaLifecycleBaseMS + durationSeconds*1000
+	service := newQuotaSnapshotTestService(t, rolloverAtMS+quotaLifecycleDayMS)
+	first := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, durationSeconds, 80)
+	writeQuotaLifecycleObservation(t, service, "complete", rolloverAtMS-quotaLifecycleHourMS, []WindowInput{first})
+
+	second := quotaLifecycleFixedWindow("weekly", "weekly", rolloverAtMS, durationSeconds, 0)
+	if _, err := service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{
+		quotaLifecycleWriteEntryWithObservation(
+			"complete", "api_query", "api-scheduled-rollover", "codex:quota-windows",
+			rolloverAtMS+1_000, []WindowInput{second},
+		),
+	}}); err != nil {
+		t.Fatalf("write zero-use API scheduled rollover: %v", err)
+	}
+
+	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
+	if window.CurrentCycle == nil || window.CurrentCycle.ActualStartMS != rolloverAtMS ||
+		window.CurrentCycle.State != "active" || window.PreviousCycle == nil ||
+		window.PreviousCycle.ActualEndMS == nil || *window.PreviousCycle.ActualEndMS != rolloverAtMS ||
+		window.PreviousCycle.EndReason != "scheduled" {
+		t.Fatalf("zero-use API scheduled rollover lifecycle = %#v", window)
+	}
+}
+
+func TestQuotaLifecycleRejectsUnreliableScheduledRolloverBoundary(t *testing.T) {
+	const durationSeconds = int64(7 * 24 * 60 * 60)
+	rolloverAtMS := quotaLifecycleBaseMS + durationSeconds*1000
+	service := newQuotaSnapshotTestService(t, rolloverAtMS+quotaLifecycleDayMS)
+	first := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, durationSeconds, 80)
+	writeQuotaLifecycleObservation(t, service, "complete", rolloverAtMS-quotaLifecycleHourMS, []WindowInput{first})
+
+	unreliable := quotaLifecycleFixedWindow("weekly", "weekly", rolloverAtMS, durationSeconds, 10)
+	unreliable.BoundaryAccuracy = "estimated"
+	writeQuotaLifecycleObservation(t, service, "complete", rolloverAtMS+1_000, []WindowInput{unreliable})
+
+	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
+	if window.CurrentCycle == nil || window.CurrentCycle.ActualStartMS != quotaLifecycleBaseMS ||
+		window.CurrentCycle.ScheduledEndMS == nil || *window.CurrentCycle.ScheduledEndMS != rolloverAtMS ||
+		window.PreviousCycle != nil {
+		t.Fatalf("unreliable scheduled rollover changed lifecycle = %#v", window)
+	}
+}
+
 func quotaLifecycleFixedWindow(id, kind string, startMS, durationSeconds int64, usedPercent float64) WindowInput {
 	endMS := startMS + durationSeconds*1000
 	return WindowInput{
