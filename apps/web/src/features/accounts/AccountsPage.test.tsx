@@ -33,6 +33,10 @@ import { AccountModelsTab } from './components/accountDetail/AccountModelsTab';
 import { AccountQuotaTab } from './components/accountDetail/AccountQuotaTab';
 import { QuotaWindowCard } from './components/QuotaWindowCard';
 import { formatQuotaResetTimestamp } from './model/accountsPagePresentation';
+import {
+  completeAccountOAuthReauthSession,
+  readAccountOAuthReauthSessionId,
+} from './model/accountReauthSession';
 import { useUsageHeaderSnapshotStore } from '@/stores/useUsageHeaderSnapshotStore';
 import { AccountsPage } from './AccountsPage';
 
@@ -943,6 +947,7 @@ describe('AccountsPage replacement flows', () => {
   beforeEach(() => {
     if (typeof window !== 'undefined') {
       window.localStorage.clear();
+      window.sessionStorage?.clear();
       window.location.hash = '';
     }
     mocks.files = [makeCodexFile('codex.json', 'auth-1', 'codex@example.com')];
@@ -1108,6 +1113,36 @@ describe('AccountsPage replacement flows', () => {
     });
 
     expect(mocks.loadFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it('reloads account history when only the CPA connection fingerprint changes', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(1);
+
+    mocks.apiBase = 'http://cpa-b.local:8317';
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(2);
   });
 
   it('clears quota snapshot state and ignores a late query from the previous connection', async () => {
@@ -1981,6 +2016,93 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
   });
 
+  it('filters xAI quota limits using only unexpired provider usage evidence', async () => {
+    const generatedAtMs = 3_000;
+    const activeFile = {
+      name: 'xai-active.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-active',
+      account: 'active@example.com',
+      disabled: false,
+    } as AuthFileItem;
+    const expiredFile = {
+      name: 'xai-expired.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-expired',
+      account: 'expired@example.com',
+      disabled: false,
+    } as AuthFileItem;
+    mocks.files = [activeFile, expiredFile];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: generatedAtMs,
+      from_ms: 1_000,
+      to_ms: generatedAtMs,
+      items: [
+        {
+          event_hash: 'xai-active-provider-usage',
+          timestamp_ms: 2_000,
+          auth_file_snapshot: activeFile.name,
+          auth_index: 'xai-active',
+          account_snapshot: 'active@example.com',
+          auth_provider_snapshot: 'xai',
+          response_metadata: {
+            provider_usage: {
+              provider: 'xai',
+              state: 'exhausted',
+              actual: 100,
+              limit: 100,
+              remaining: 0,
+              recover_at_ms: generatedAtMs + 1_000,
+            },
+          },
+        },
+        {
+          event_hash: 'xai-expired-provider-usage',
+          timestamp_ms: 1_500,
+          auth_file_snapshot: expiredFile.name,
+          auth_index: 'xai-expired',
+          account_snapshot: 'expired@example.com',
+          auth_provider_snapshot: 'xai',
+          response_metadata: {
+            provider_usage: {
+              provider: 'xai',
+              state: 'exhausted',
+              actual: 100,
+              limit: 100,
+              remaining: 0,
+              recover_at_ms: generatedAtMs - 1,
+            },
+          },
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const statusSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.status_filter');
+    if (!statusSelect) throw new Error('Accounts status filter not found');
+    await act(async () => {
+      statusSelect.props.onChange('quota_limited');
+      await Promise.resolve();
+    });
+
+    const visibleRows = getAccountListItemTexts(renderer);
+    expect(visibleRows).toHaveLength(1);
+    expect(visibleRows[0]).toContain(activeFile.name);
+    expect(visibleRows[0]).not.toContain(expiredFile.name);
+  });
+
   it('polls passive Header evidence only while the accounts view is visible', async () => {
     vi.useFakeTimers();
     let visibilityState: DocumentVisibilityState = 'visible';
@@ -2002,11 +2124,13 @@ describe('AccountsPage replacement flows', () => {
     await renderAccountsPage();
     await flushPromises();
     expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(1);
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(2);
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(2);
 
     visibilityState = 'hidden';
     await act(async () => {
@@ -2016,6 +2140,7 @@ describe('AccountsPage replacement flows', () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(2);
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(2);
 
     visibilityState = 'visible';
     await act(async () => {
@@ -2023,6 +2148,699 @@ describe('AccountsPage replacement flows', () => {
       await Promise.resolve();
     });
     expect(mocks.getHeaderSnapshots).toHaveBeenCalledTimes(3);
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not restart an in-flight full history load on passive refresh', async () => {
+    vi.useFakeTimers();
+    mocks.files = Array.from({ length: 401 }, (_, index) =>
+      makeCodexFile(
+        `credential-${String(index + 1).padStart(3, '0')}.json`,
+        `auth-${index + 1}`,
+        `account-${index + 1}@example.com`
+      )
+    );
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const firstBatches = [
+      createDeferred<AccountHistoryResponseForTest>(),
+      createDeferred<AccountHistoryResponseForTest>(),
+    ];
+    let requestIndex = 0;
+    mocks.getAccountHistory.mockImplementation(() => {
+      const currentIndex = requestIndex;
+      requestIndex += 1;
+      return currentIndex < firstBatches.length
+        ? firstBatches[currentIndex].promise
+        : Promise.resolve(makeAccountHistoryResponse([]));
+    });
+
+    await renderAccountsPage();
+    await flushPromises();
+
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(2);
+    const initialSignals = mocks.getAccountHistory.mock.calls.map((call) => call[3] as AbortSignal);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(2);
+    expect(initialSignals.every((signal) => signal.aborted === false)).toBe(true);
+
+    await act(async () => {
+      firstBatches.forEach((batch) => batch.resolve(makeAccountHistoryResponse([])));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushPromises();
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(3);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await flushPromises();
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(6);
+  });
+
+  it('keeps successful history batches when another batch fails', async () => {
+    mocks.files = Array.from({ length: 201 }, (_, index) =>
+      makeCodexFile(
+        `credential-${String(index + 1).padStart(3, '0')}.json`,
+        `auth-${index + 1}`,
+        `account-${index + 1}@example.com`
+      )
+    );
+    const problemFile = mocks.files[200];
+    const problemRowKey = getAuthFileSelectionKey(problemFile);
+    mocks.location = { pathname: '/accounts', search: '?status=problem' };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory.mockImplementation(
+      async (_base, _managementKey, request: AccountHistoryRequestForTest) => {
+        const targets = request.accounts as Array<{ row_key?: string }>;
+        if (!targets.some((target) => target.row_key === problemRowKey)) {
+          throw new Error('first batch unavailable');
+        }
+        return makeAccountHistoryResponse([
+          {
+            row_key: problemRowKey,
+            account_key: 'problem-account',
+            matched: true,
+            total_requests: 1,
+            success_calls: 0,
+            failure_calls: 1,
+            total_tokens: 0,
+            total_cost: 0,
+            success_rate: 0,
+            first_seen_ms: 2_000,
+            last_seen_ms: 2_000,
+            latest_request: {
+              timestamp_ms: 2_000,
+              failed: true,
+              fail_status_code: 401,
+            },
+            recent_requests: [
+              {
+                timestamp_ms: 2_000,
+                failed: true,
+                fail_status_code: 401,
+              },
+            ],
+            sync_status: 'ready',
+          },
+        ]);
+      }
+    );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(2);
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': problemRowKey,
+      })
+    ).toHaveLength(1);
+    expect(getAccountListItemTexts(renderer).join('\n')).toContain('accounts.health_reauth');
+  });
+
+  it('retains mixed quota Header evidence without leaving stale reauth filters', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 2_000,
+      from_ms: 0,
+      to_ms: 2_000,
+      items: [
+        {
+          event_hash: 'mixed-auth-quota-header',
+          timestamp_ms: 1_000,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_error_kind: 'auth',
+          header_error_code: 'invalid_api_key',
+          header_trace_id: 'trace-mixed-auth-quota',
+          header_quota_used_percent: 100,
+          response_metadata: {
+            quota: {
+              rate_limit_reached_type: 'secondary',
+              recover_at_ms: 9_000,
+            },
+            errors: {
+              kind: 'auth',
+              code: 'invalid_token',
+            },
+          },
+        },
+      ],
+    });
+    mocks.getAccountHistory.mockResolvedValue(
+      makeAccountHistoryResponse([
+        {
+          row_key: 'codex.json\u0000auth-1',
+          account_key: 'codex@example.com',
+          matched: true,
+          total_requests: 1,
+          success_calls: 1,
+          failure_calls: 0,
+          total_tokens: 10,
+          total_cost: 0.01,
+          success_rate: 1,
+          first_seen_ms: 2_000,
+          last_seen_ms: 2_000,
+          latest_request: { timestamp_ms: 2_000, failed: false },
+          recent_requests: [{ timestamp_ms: 2_000, failed: false }],
+          sync_status: 'ready',
+        },
+      ])
+    );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(getAccountListItemTexts(renderer).join('\n')).toContain('accounts.health_limited');
+
+    const searchInput = findInputByAriaLabel(renderer, 'accounts.search_label');
+    await act(async () => {
+      searchInput.props.onChange({ target: { value: 'invalid_api_key' } });
+    });
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+    ).toHaveLength(0);
+
+    await act(async () => {
+      searchInput.props.onChange({ target: { value: 'trace-mixed-auth-quota' } });
+    });
+    expect(
+      renderer.root.findAllByProps({ 'data-account-card': 'codex.json\u0000auth-1' })
+    ).toHaveLength(1);
+
+    await act(async () => {
+      searchInput.props.onChange({ target: { value: '' } });
+    });
+
+    const operationalSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.operational_filter');
+    if (!operationalSelect) throw new Error('Accounts operational filter not found');
+    await act(async () => {
+      operationalSelect.props.onChange('reauth');
+      await Promise.resolve();
+    });
+
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+    ).toHaveLength(0);
+  });
+
+  it('clears an older quota-refresh 401 after a newer successful request', async () => {
+    const file = mocks.files[0];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'error',
+      windows: [],
+      fetchedAtMs: 1_000,
+      failedAtMs: 1_000,
+      error: 'HTTP 401 unauthorized',
+      errorStatus: 401,
+    });
+    mocks.getAccountHistory.mockResolvedValue(
+      makeAccountHistoryResponse([
+        {
+          row_key: 'codex.json\u0000auth-1',
+          account_key: 'codex@example.com',
+          matched: true,
+          total_requests: 1,
+          success_calls: 1,
+          failure_calls: 0,
+          total_tokens: 10,
+          total_cost: 0.01,
+          success_rate: 1,
+          first_seen_ms: 2_000,
+          last_seen_ms: 2_000,
+          latest_request: { timestamp_ms: 2_000, failed: false },
+          recent_requests: [{ timestamp_ms: 2_000, failed: false }],
+          sync_status: 'ready',
+        },
+      ])
+    );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const accountCard = renderer.root.findByProps({
+      'data-account-card': 'codex.json\u0000auth-1',
+    });
+    expect(readText(accountCard)).toContain('accounts.health_available');
+    expect(readText(accountCard)).not.toContain('accounts.health_reauth');
+    expect(readText(accountCard)).not.toContain('HTTP 401 unauthorized');
+
+    const operationalSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.operational_filter');
+    if (!operationalSelect) throw new Error('Accounts operational filter not found');
+    await act(async () => {
+      operationalSelect.props.onChange('reauth');
+      await Promise.resolve();
+    });
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+    ).toHaveLength(0);
+  });
+
+  it('does not classify a disabled account with current authentication failure as recovered', async () => {
+    const authenticationFailure = {
+      ...makeCodexFile('auth-failure.json', 'auth-failure', 'auth-failure@example.com'),
+      disabled: true,
+      status_code: 401,
+      status_message: 'unauthorized',
+      updated_at_ms: 2_000,
+    } as AuthFileItem;
+    const recovered = {
+      ...makeCodexFile('recovered.json', 'recovered', 'recovered@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [authenticationFailure, recovered];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory.mockResolvedValue(
+      makeAccountHistoryResponse([
+        {
+          row_key: getAuthFileSelectionKey(recovered),
+          account_key: 'recovered@example.com',
+          matched: true,
+          total_requests: 1,
+          success_calls: 1,
+          failure_calls: 0,
+          total_tokens: 10,
+          total_cost: 0.01,
+          success_rate: 1,
+          first_seen_ms: 3_000,
+          last_seen_ms: 3_000,
+          latest_request: { timestamp_ms: 3_000, failed: false },
+          recent_requests: [{ timestamp_ms: 3_000, failed: false }],
+          sync_status: 'ready',
+        },
+      ])
+    );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    const operationalSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.operational_filter');
+    if (!operationalSelect) throw new Error('Accounts operational filter not found');
+
+    await act(async () => {
+      operationalSelect.props.onChange('recovered');
+      await Promise.resolve();
+    });
+
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(authenticationFailure),
+      })
+    ).toHaveLength(0);
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': getAuthFileSelectionKey(recovered),
+      })
+    ).toHaveLength(1);
+  });
+
+  it('keeps a superseded raw 401 out of both reauth filters', async () => {
+    const credentialUpdatedAtMs = 1_700_000_000_000;
+    const successfulRequestAtMs = credentialUpdatedAtMs + 1_000;
+    mocks.files = [
+      {
+        ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+        status_code: 401,
+        status_message: 'unauthorized',
+        updated_at_ms: credentialUpdatedAtMs,
+      } as AuthFileItem,
+    ];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory.mockResolvedValue(
+      makeAccountHistoryResponse([
+        {
+          row_key: 'codex.json\u0000auth-1',
+          account_key: 'codex@example.com',
+          matched: true,
+          total_requests: 1,
+          success_calls: 1,
+          failure_calls: 0,
+          total_tokens: 10,
+          total_cost: 0.01,
+          success_rate: 1,
+          first_seen_ms: successfulRequestAtMs,
+          last_seen_ms: successfulRequestAtMs,
+          latest_request: { timestamp_ms: successfulRequestAtMs, failed: false },
+          recent_requests: [{ timestamp_ms: successfulRequestAtMs, failed: false }],
+          sync_status: 'ready',
+        },
+      ])
+    );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const accountCard = renderer.root.findByProps({
+      'data-account-card': 'codex.json\u0000auth-1',
+    });
+    expect(readText(accountCard)).toContain('accounts.health_available');
+    expect(readText(accountCard)).not.toContain('accounts.health_reauth');
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+      await Promise.resolve();
+    });
+    await flushPromises();
+    expect(
+      renderer.root.findAllByProps({ 'data-overview-recent-status-message': 'true' })
+    ).toHaveLength(0);
+
+    const statusSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.status_filter');
+    const operationalSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.operational_filter');
+    if (!statusSelect || !operationalSelect) throw new Error('Accounts reauth filters not found');
+
+    await act(async () => {
+      statusSelect.props.onChange('reauth');
+      await Promise.resolve();
+    });
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+    ).toHaveLength(0);
+
+    await act(async () => {
+      statusSelect.props.onChange('all');
+      operationalSelect.props.onChange('reauth');
+      await Promise.resolve();
+    });
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+    ).toHaveLength(0);
+  });
+
+  it('keeps quota Header evidence when a newer request clears a same-batch quota-refresh 401', async () => {
+    const file = mocks.files[0];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'error',
+      windows: [],
+      fetchedAtMs: 1_000,
+      failedAtMs: 1_000,
+      error: 'HTTP 401 unauthorized',
+      errorStatus: 401,
+    });
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 2_000,
+      from_ms: 0,
+      to_ms: 2_000,
+      items: [
+        {
+          event_hash: 'quota-refresh-401-header',
+          timestamp_ms: 1_000,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_error_kind: 'auth',
+          header_error_code: 'invalid_api_key',
+          header_quota_used_percent: 100,
+          header_quota_recover_at_ms: 9_000,
+        },
+      ],
+    });
+    mocks.getAccountHistory.mockResolvedValue(
+      makeAccountHistoryResponse([
+        {
+          row_key: 'codex.json\u0000auth-1',
+          account_key: 'codex@example.com',
+          matched: true,
+          total_requests: 1,
+          success_calls: 1,
+          failure_calls: 0,
+          total_tokens: 10,
+          total_cost: 0.01,
+          success_rate: 1,
+          first_seen_ms: 2_000,
+          last_seen_ms: 2_000,
+          latest_request: { timestamp_ms: 2_000, failed: false },
+          recent_requests: [{ timestamp_ms: 2_000, failed: false }],
+          sync_status: 'ready',
+        },
+      ])
+    );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const accountCard = renderer.root.findByProps({
+      'data-account-card': 'codex.json\u0000auth-1',
+    });
+    expect(readText(accountCard)).toContain('accounts.health_limited');
+    expect(readText(accountCard)).not.toContain('accounts.health_reauth');
+
+    const searchInput = findInputByAriaLabel(renderer, 'accounts.search_label');
+    await act(async () => {
+      searchInput.props.onChange({ target: { value: 'invalid_api_key' } });
+    });
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+    ).toHaveLength(0);
+  });
+
+  it('lets newer healthy Header quota replace an older quota-refresh 401', async () => {
+    const file = mocks.files[0];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'error',
+      windows: [],
+      fetchedAtMs: 1_000,
+      failedAtMs: 1_000,
+      error: 'HTTP 401 unauthorized',
+      errorStatus: 401,
+    });
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 2_000,
+      from_ms: 0,
+      to_ms: 2_000,
+      items: [
+        {
+          event_hash: 'newer-healthy-quota-header',
+          timestamp_ms: 2_000,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_quota_used_percent: 20,
+          header_quota_plan_type: 'plus',
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const accountCard = renderer.root.findByProps({
+      'data-account-card': 'codex.json\u0000auth-1',
+    });
+    expect(readText(accountCard)).toContain('accounts.health_available');
+    expect(readText(accountCard)).not.toContain('accounts.health_reauth');
+
+    const operationalSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.operational_filter');
+    if (!operationalSelect) throw new Error('Accounts operational filter not found');
+    await act(async () => {
+      operationalSelect.props.onChange('reauth');
+      await Promise.resolve();
+    });
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+    ).toHaveLength(0);
+  });
+
+  it('does not let an older Header diagnostic override a newer complete quota refresh', async () => {
+    const file = mocks.files[0];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      quotaInventoryObserved: true,
+      fetchedAtMs: 2_000,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly',
+          usedPercent: 20,
+          resetLabel: 'Mon',
+        },
+      ],
+    });
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 2_000,
+      from_ms: 0,
+      to_ms: 2_000,
+      items: [
+        {
+          event_hash: 'older-stale-diagnostic',
+          timestamp_ms: 1_000,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_error_kind: 'auth',
+          header_error_code: 'invalid_api_key',
+          header_trace_id: 'trace-older-diagnostic',
+          header_quota_used_percent: 100,
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const accountCard = renderer.root.findByProps({
+      'data-account-card': 'codex.json\u0000auth-1',
+    });
+    expect(readText(accountCard)).toContain('accounts.health_available');
+    expect(readText(accountCard)).not.toContain('accounts.health_reauth');
+    expect(readText(accountCard)).not.toContain('accounts.health_limited');
+
+    const searchInput = findInputByAriaLabel(renderer, 'accounts.search_label');
+    for (const value of ['invalid_api_key', 'trace-older-diagnostic']) {
+      await act(async () => {
+        searchInput.props.onChange({ target: { value } });
+      });
+      expect(
+        renderer.root.findAll(
+          (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+        )
+      ).toHaveLength(0);
+    }
+  });
+
+  it('keeps same-time Header quota but removes auth diagnostics after a partial Provider refresh', async () => {
+    const file = mocks.files[0];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      quotaInventoryObserved: false,
+      fetchedAtMs: 2_000,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly',
+          usedPercent: 20,
+          resetLabel: 'Mon',
+        },
+      ],
+    });
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 2_000,
+      from_ms: 0,
+      to_ms: 2_000,
+      items: [
+        {
+          event_hash: 'same-time-partial-header',
+          timestamp_ms: 2_000,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_error_kind: 'auth',
+          header_error_code: 'invalid_api_key',
+          header_quota_used_percent: 100,
+          header_quota_recover_at_ms: 9_000,
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const accountCard = renderer.root.findByProps({
+      'data-account-card': 'codex.json\u0000auth-1',
+    });
+    expect(readText(accountCard)).toContain('accounts.health_limited');
+    expect(readText(accountCard)).not.toContain('accounts.health_reauth');
+
+    const searchInput = findInputByAriaLabel(renderer, 'accounts.search_label');
+    await act(async () => {
+      searchInput.props.onChange({ target: { value: 'invalid_api_key' } });
+    });
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+    ).toHaveLength(0);
   });
 
   it('reuses initial Codex Header evidence when filtering by quota window', async () => {
@@ -2112,6 +2930,141 @@ describe('AccountsPage replacement flows', () => {
         'data-account-card': getAuthFileSelectionKey(mocks.files[1]),
       })
     ).toHaveLength(0);
+  });
+
+  it('loads request evidence for every account before applying the problem filter', async () => {
+    mocks.files = Array.from({ length: 201 }, (_, index) =>
+      makeCodexFile(
+        `credential-${String(index + 1).padStart(3, '0')}.json`,
+        `auth-${index + 1}`,
+        `account-${index + 1}@example.com`
+      )
+    );
+    const problemFile = mocks.files[200];
+    const problemRowKey = getAuthFileSelectionKey(problemFile);
+    mocks.location = { pathname: '/accounts', search: '?status=problem' };
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory.mockImplementation(
+      async (_base, _managementKey, request: AccountHistoryRequestForTest) => {
+        const targets = request.accounts as Array<{ row_key?: string }>;
+        return makeAccountHistoryResponse(
+          targets.some((target) => target.row_key === problemRowKey)
+            ? [
+                {
+                  row_key: problemRowKey,
+                  account_key: 'problem-account',
+                  matched: true,
+                  total_requests: 1,
+                  success_calls: 0,
+                  failure_calls: 1,
+                  total_tokens: 0,
+                  total_cost: 0,
+                  success_rate: 0,
+                  first_seen_ms: 2_000,
+                  last_seen_ms: 2_000,
+                  latest_request: {
+                    timestamp_ms: 2_000,
+                    failed: true,
+                    fail_status_code: 401,
+                  },
+                  recent_requests: [
+                    {
+                      timestamp_ms: 2_000,
+                      failed: true,
+                      fail_status_code: 401,
+                    },
+                  ],
+                  sync_status: 'ready',
+                },
+              ]
+            : []
+        );
+      }
+    );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const historyRequests = mocks.getAccountHistory.mock.calls.map(
+      (call) => call[2] as AccountHistoryRequestForTest
+    );
+    expect(historyRequests).toHaveLength(2);
+    expect(historyRequests.every((request) => request.accounts.length <= 200)).toBe(true);
+    expect(historyRequests.flatMap((request) => request.accounts)).toHaveLength(201);
+    expect(
+      renderer.root.findAllByProps({
+        'data-account-card': problemRowKey,
+      })
+    ).toHaveLength(1);
+    expect(getAccountListItemTexts(renderer).join('\n')).toContain('accounts.health_reauth');
+  });
+
+  it('limits full account-history loading to two concurrent batches', async () => {
+    mocks.files = Array.from({ length: 601 }, (_, index) =>
+      makeCodexFile(
+        `credential-${String(index + 1).padStart(3, '0')}.json`,
+        `auth-${index + 1}`,
+        `account-${index + 1}@example.com`
+      )
+    );
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    const batchResponses = Array.from({ length: 4 }, () =>
+      createDeferred<AccountHistoryResponseForTest>()
+    );
+    let nextBatchIndex = 0;
+    let activeRequests = 0;
+    let peakActiveRequests = 0;
+    mocks.getAccountHistory.mockImplementation(() => {
+      const batchIndex = nextBatchIndex;
+      nextBatchIndex += 1;
+      activeRequests += 1;
+      peakActiveRequests = Math.max(peakActiveRequests, activeRequests);
+      return batchResponses[batchIndex].promise.finally(() => {
+        activeRequests -= 1;
+      });
+    });
+
+    await renderAccountsPage();
+    await flushPromises();
+
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(2);
+    expect(peakActiveRequests).toBe(2);
+
+    await act(async () => {
+      batchResponses[0].resolve(makeAccountHistoryResponse([]));
+      batchResponses[1].resolve(makeAccountHistoryResponse([]));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(4);
+    expect(peakActiveRequests).toBe(2);
+
+    await act(async () => {
+      batchResponses[2].resolve(makeAccountHistoryResponse([]));
+      batchResponses[3].resolve(makeAccountHistoryResponse([]));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    const requests = mocks.getAccountHistory.mock.calls.map(
+      (call) => call[2] as AccountHistoryRequestForTest
+    );
+    expect(requests.map((request) => request.accounts.length)).toEqual([200, 200, 200, 1]);
+    expect(activeRequests).toBe(0);
+    expect(peakActiveRequests).toBe(2);
   });
 
   it('offers and applies the unknown plan filter', async () => {
@@ -2425,7 +3378,7 @@ describe('AccountsPage replacement flows', () => {
     );
   });
 
-  it('marks the last local inspection as conflicting when a newer request succeeds', async () => {
+  it('uses a newer successful request instead of a stale local inspection conclusion', async () => {
     mocks.location = { pathname: '/accounts', search: '' };
     mocks.panelFeatureAvailability = {
       checking: false,
@@ -2448,6 +3401,26 @@ describe('AccountsPage replacement flows', () => {
           },
         };
       }
+    );
+    mocks.getAccountHistory.mockResolvedValue(
+      makeAccountHistoryResponse([
+        {
+          row_key: 'codex.json\u0000auth-1',
+          account_key: 'codex@example.com',
+          matched: true,
+          total_requests: 1,
+          success_calls: 1,
+          failure_calls: 0,
+          total_tokens: 10,
+          total_cost: 0.01,
+          success_rate: 1,
+          first_seen_ms: 9_000,
+          last_seen_ms: 9_000,
+          latest_request: { timestamp_ms: 9_000, failed: false },
+          recent_requests: [{ timestamp_ms: 9_000, failed: false }],
+          sync_status: 'ready',
+        },
+      ])
     );
     mocks.localInspection = {
       savedAt: 300,
@@ -2504,6 +3477,12 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
     await flushPromises();
 
+    const accountCard = renderer.root.findByProps({
+      'data-account-card': 'codex.json\u0000auth-1',
+    });
+    expect(readText(accountCard)).toContain('accounts.health_available');
+    expect(readText(accountCard)).not.toContain('accounts.health_reauth');
+
     await act(async () => {
       findDetailButtonByName(renderer, 'codex.json').props.onClick();
     });
@@ -2514,12 +3493,299 @@ describe('AccountsPage replacement flows', () => {
     });
 
     expect(
-      renderer.root.findByProps({ 'data-diagnostic-evidence-status': 'conflict' })
+      renderer.root.findByProps({ 'data-diagnostic-evidence-status': 'current' })
     ).toBeDefined();
-    expect(treeText(renderer)).toContain('accounts.detail_diagnostic_reinspect');
+    expect(treeText(renderer)).toContain('accounts.recommend_normal');
+    expect(treeText(renderer)).toContain('accounts.latest_request_time_title');
+    expect(treeText(renderer)).not.toContain('accounts.detail_diagnostic_reinspect');
     expect(treeText(renderer)).toContain('expired token');
     expect(treeText(renderer)).toContain('accounts.action_reauth');
     expect(treeText(renderer)).toContain('accounts.inspection_source_local');
+  });
+
+  it('does not resurrect an already executed reauth inspection in account status', async () => {
+    mocks.localInspection = {
+      savedAt: 300,
+      logs: [],
+      logsCollapsed: true,
+      actionFilter: 'all',
+      connectionFingerprint: 'http://manager.local:18317:manager-key',
+      result: {
+        settings: {},
+        files: mocks.files,
+        startedAt: 100,
+        finishedAt: 200,
+        summary: {
+          totalFiles: 1,
+          probeSetCount: 1,
+          sampledCount: 1,
+          disabledCount: 0,
+          enabledCount: 0,
+          deleteCount: 0,
+          disableCount: 0,
+          enableCount: 0,
+          reauthCount: 1,
+          keepCount: 0,
+          usedPercentThreshold: 100,
+          sampled: false,
+          plannedActionPreview: [],
+        },
+        results: [
+          {
+            key: 'codex.json\u0000auth-1',
+            fileName: 'codex.json',
+            displayAccount: 'codex@example.com',
+            authIndex: 'auth-1',
+            accountId: null,
+            provider: 'codex',
+            disabled: false,
+            autoRecoverOwned: false,
+            status: 'error',
+            state: 'error',
+            raw: mocks.files[0],
+            action: 'reauth',
+            actionReason: 'expired token',
+            statusCode: 401,
+            usedPercent: null,
+            isQuota: false,
+            autoRecoverEligible: false,
+            error: 'expired token',
+            actionHandled: true,
+          },
+        ],
+      },
+    };
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const accountCard = renderer.root.findByProps({
+      'data-account-card': 'codex.json\u0000auth-1',
+    });
+    expect(readText(accountCard)).not.toContain('accounts.health_reauth');
+
+    const operationalSelect = renderer.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'accounts.operational_filter');
+    if (!operationalSelect) throw new Error('Accounts operational filter not found');
+    await act(async () => {
+      operationalSelect.props.onChange('reauth');
+      await Promise.resolve();
+    });
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === 'article' && typeof node.props['data-account-card'] === 'string'
+      )
+    ).toHaveLength(0);
+  });
+
+  it('keeps an OAuth-completed inspection suppressed after Accounts remounts', async () => {
+    const windowEvents = new EventTarget();
+    const localStorageValues = new Map<string, string>();
+    const sessionStorageValues = new Map<string, string>();
+    const createStorage = (values: Map<string, string>) => ({
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+      clear: () => values.clear(),
+    });
+    vi.stubGlobal('window', {
+      location: { hash: '' },
+      history: { state: null },
+      localStorage: createStorage(localStorageValues),
+      sessionStorage: createStorage(sessionStorageValues),
+      addEventListener: windowEvents.addEventListener.bind(windowEvents),
+      removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+    });
+
+    const xaiFile = {
+      name: 'xai.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-auth-1',
+      account: 'xai@example.com',
+      priority: 0,
+      disabled: false,
+    } as AuthFileItem;
+    mocks.files = [xaiFile];
+    mocks.localInspection = {
+      savedAt: 300,
+      logs: [],
+      logsCollapsed: true,
+      actionFilter: 'all',
+      connectionFingerprint: 'http://cpa-a.local:8317:manager-key',
+      result: {
+        settings: {},
+        files: [xaiFile],
+        startedAt: 100,
+        finishedAt: 200,
+        summary: {
+          totalFiles: 1,
+          probeSetCount: 1,
+          sampledCount: 1,
+          disabledCount: 0,
+          enabledCount: 0,
+          deleteCount: 0,
+          disableCount: 0,
+          enableCount: 0,
+          reauthCount: 1,
+          keepCount: 0,
+          usedPercentThreshold: 100,
+          sampled: false,
+          plannedActionPreview: [],
+        },
+        results: [
+          {
+            key: 'xai.json\u0000xai-auth-1',
+            fileName: 'xai.json',
+            displayAccount: 'xai@example.com',
+            authIndex: null,
+            accountId: null,
+            provider: 'xai',
+            disabled: false,
+            autoRecoverOwned: false,
+            status: 'error',
+            state: 'error',
+            raw: xaiFile,
+            action: 'reauth',
+            actionReason: 'expired token',
+            statusCode: 401,
+            usedPercent: null,
+            isQuota: false,
+            autoRecoverEligible: false,
+            error: 'expired token',
+            actionHandled: false,
+          },
+        ],
+      },
+    };
+
+    const firstRenderer = await renderAccountsPage();
+    await flushPromises();
+    const selectionKey = 'xai.json\u0000xai-auth-1';
+    expect(readText(findAccountCardByKey(firstRenderer, selectionKey))).toContain(
+      'accounts.health_reauth'
+    );
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        firstRenderer,
+        selectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+      await Promise.resolve();
+    });
+
+    const navigateCalls = mocks.navigate.mock.calls;
+    const oauthPath = navigateCalls[navigateCalls.length - 1]?.[0];
+    expect(oauthPath).toEqual(
+      expect.stringMatching(/^\/oauth\?accountReauth=.+#oauth-provider-xai$/)
+    );
+    const sessionId =
+      typeof oauthPath === 'string'
+        ? readAccountOAuthReauthSessionId(new URL(oauthPath, 'http://localhost').search)
+        : null;
+    expect(sessionId).not.toBeNull();
+    expect(
+      completeAccountOAuthReauthSession({
+        connectionFingerprint: 'http://cpa-a.local:8317:manager-key',
+        oauthProvider: 'xai',
+        sessionId,
+        completedAtMs: 400,
+      })
+    ).toBe(true);
+
+    await act(async () => {
+      firstRenderer.unmount();
+    });
+    mountedAccountsRenderers.delete(firstRenderer);
+
+    const secondRenderer = await renderAccountsPage();
+    await flushPromises();
+    const remountedCardText = readText(findAccountCardByKey(secondRenderer, selectionKey));
+    expect(remountedCardText).not.toContain('accounts.health_reauth');
+    expect(remountedCardText).not.toContain('expired token');
+  });
+
+  it('uses a newer healthy inspection to retire an older authentication Header', async () => {
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 300,
+      from_ms: 0,
+      to_ms: 300,
+      items: [
+        {
+          event_hash: 'older-auth-header',
+          timestamp_ms: 100,
+          auth_file_snapshot: 'codex.json',
+          auth_index: 'auth-1',
+          account_snapshot: 'codex@example.com',
+          auth_provider_snapshot: 'codex',
+          header_error_kind: 'auth',
+          header_error_code: 'invalid_api_key',
+        },
+      ],
+    });
+    mocks.localInspection = {
+      savedAt: 300,
+      logs: [],
+      logsCollapsed: true,
+      actionFilter: 'all',
+      connectionFingerprint: 'http://manager.local:18317:manager-key',
+      result: {
+        settings: {},
+        files: mocks.files,
+        startedAt: 150,
+        finishedAt: 200,
+        summary: {
+          totalFiles: 1,
+          probeSetCount: 1,
+          sampledCount: 1,
+          disabledCount: 0,
+          enabledCount: 0,
+          deleteCount: 0,
+          disableCount: 0,
+          enableCount: 0,
+          reauthCount: 0,
+          keepCount: 1,
+          usedPercentThreshold: 100,
+          sampled: false,
+          plannedActionPreview: [],
+        },
+        results: [
+          {
+            key: 'codex.json\u0000auth-1',
+            fileName: 'codex.json',
+            displayAccount: 'codex@example.com',
+            authIndex: 'auth-1',
+            accountId: null,
+            provider: 'codex',
+            disabled: false,
+            autoRecoverOwned: false,
+            status: 'ok',
+            state: 'ok',
+            raw: mocks.files[0],
+            action: 'keep',
+            actionReason: 'healthy',
+            statusCode: 200,
+            usedPercent: 20,
+            isQuota: false,
+            autoRecoverEligible: false,
+            error: '',
+            errorKind: 'inference_healthy',
+            actionHandled: false,
+          },
+        ],
+      },
+    };
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const accountCard = renderer.root.findByProps({
+      'data-account-card': 'codex.json\u0000auth-1',
+    });
+    expect(readText(accountCard)).toContain('accounts.health_available');
+    expect(readText(accountCard)).not.toContain('accounts.health_reauth');
   });
 
   it('translates inspection reason keys before rendering them', async () => {
@@ -3954,6 +5220,172 @@ describe('AccountsPage replacement flows', () => {
       '111'
     );
     expect(readText(findAccountCardByKey(renderer, 'generic-b.json\u0000auth-b'))).toContain('222');
+  });
+
+  it('ignores a targeted history result after the account is removed and recreated', async () => {
+    const file = {
+      ...makeCodexFile('generic-recreated.json', 'auth-recreated', 'recreated@example.com'),
+      type: 'generic',
+      provider: 'generic',
+    } as AuthFileItem;
+    const stableFile = {
+      ...makeCodexFile('generic-stable.json', 'auth-stable', 'stable@example.com'),
+      type: 'generic',
+      provider: 'generic',
+    } as AuthFileItem;
+    const rowKey = 'generic-recreated.json\u0000auth-recreated';
+    mocks.files = [file, stableFile];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory.mockResolvedValue(makeAccountHistoryResponse([]));
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    await act(async () => {
+      findDetailButtonByName(renderer, file.name).props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    const staleHistory = createDeferred<AccountHistoryResponseForTest>();
+    const currentHistory = createDeferred<AccountHistoryResponseForTest>();
+    mocks.getAccountHistory.mockClear();
+    mocks.getAccountHistory
+      .mockImplementationOnce(() => staleHistory.promise)
+      .mockResolvedValueOnce(makeAccountHistoryResponse([]))
+      .mockImplementationOnce(() => currentHistory.promise);
+
+    await act(async () => {
+      void renderer.root.findByType(AccountQuotaTab).props.onRefreshHistory();
+      await Promise.resolve();
+    });
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(1);
+
+    mocks.files = [stableFile];
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    mocks.files = [{ ...file }, stableFile];
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(3);
+
+    staleHistory.resolve(
+      makeAccountHistoryResponse([
+        {
+          row_key: rowKey,
+          account_key: 'stale-recreated-account',
+          matched: true,
+          total_requests: 777,
+          success_calls: 0,
+          failure_calls: 777,
+          total_tokens: 7_777,
+          total_cost: 7.77,
+          success_rate: 0,
+          first_seen_ms: 1,
+          last_seen_ms: 2,
+          sync_status: 'ready',
+          latest_request: {
+            timestamp_ms: 2,
+            failed: true,
+            fail_status_code: 401,
+            fail_summary: 'stale unauthorized',
+          },
+        },
+      ])
+    );
+    await flushPromises();
+
+    const recreatedCardText = readText(findAccountCardByKey(renderer, rowKey));
+    expect(recreatedCardText).not.toContain('777');
+    expect(recreatedCardText).not.toContain('accounts.health_reauth');
+    expect(recreatedCardText).not.toContain('stale unauthorized');
+
+    currentHistory.resolve(makeAccountHistoryResponse([]));
+    await flushPromises();
+  });
+
+  it('ignores a targeted history failure after the account is removed and recreated', async () => {
+    const file = {
+      ...makeCodexFile('generic-recreated.json', 'auth-recreated', 'recreated@example.com'),
+      type: 'generic',
+      provider: 'generic',
+    } as AuthFileItem;
+    const stableFile = {
+      ...makeCodexFile('generic-stable.json', 'auth-stable', 'stable@example.com'),
+      type: 'generic',
+      provider: 'generic',
+    } as AuthFileItem;
+    const rowKey = 'generic-recreated.json\u0000auth-recreated';
+    mocks.files = [file, stableFile];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory.mockResolvedValue(makeAccountHistoryResponse([]));
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    await act(async () => {
+      findDetailButtonByName(renderer, file.name).props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    const staleHistory = createDeferred<AccountHistoryResponseForTest>();
+    const currentHistory = createDeferred<AccountHistoryResponseForTest>();
+    mocks.getAccountHistory.mockClear();
+    mocks.getAccountHistory
+      .mockImplementationOnce(() => staleHistory.promise)
+      .mockResolvedValueOnce(makeAccountHistoryResponse([]))
+      .mockImplementationOnce(() => currentHistory.promise);
+
+    await act(async () => {
+      void renderer.root.findByType(AccountQuotaTab).props.onRefreshHistory();
+      await Promise.resolve();
+    });
+
+    mocks.files = [stableFile];
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    mocks.files = [{ ...file }, stableFile];
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+    expect(mocks.getAccountHistory).toHaveBeenCalledTimes(3);
+
+    staleHistory.reject(new Error('stale history offline'));
+    await flushPromises();
+
+    const recreatedCardText = readText(findAccountCardByKey(renderer, rowKey));
+    expect(recreatedCardText).not.toContain('accounts.history_unavailable');
+    expect(recreatedCardText).not.toContain('accounts.history_recent_fallback');
+    expect(recreatedCardText).not.toContain('stale history offline');
+
+    currentHistory.resolve(makeAccountHistoryResponse([]));
+    await flushPromises();
   });
 
   it('does not let an older page history failure mark a newer targeted result unavailable', async () => {
