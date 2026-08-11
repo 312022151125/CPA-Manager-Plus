@@ -861,6 +861,21 @@ func reconcileCycle(
 		}
 		return active.ID, 0, false, nil
 	}
+	if activeErr == nil && isReliableLifecycleBoundary(*snapshot) && active.ScheduledEndMS != nil &&
+		*snapshot.CycleStartMS >= *active.ScheduledEndMS {
+		actualEndMS := *active.ScheduledEndMS
+		if actualEndMS < active.ActualStartMS {
+			actualEndMS = active.ActualStartMS
+		}
+		if _, err := tx.ExecContext(ctx, `update account_quota_cycles set
+			state = 'closed', actual_end_ms = ?, end_reason = 'scheduled',
+			last_observation_id = ?, updated_at_ms = ? where id = ?`,
+			actualEndMS, observationID, snapshot.CreatedAtMS, active.ID); err != nil {
+			return 0, 0, false, err
+		}
+		id, err := restoreOrInsertCycle(ctx, tx, activationID, observationID, snapshot)
+		return id, active.ID, false, err
+	}
 	if isProvisionalZeroAPIBoundary(*snapshot) {
 		// A zero-use Codex API response whose calculated start follows the query
 		// time is not proof that a provider cycle has started. Keep the evidence,
@@ -875,20 +890,6 @@ func reconcileCycle(
 		return id, 0, false, restoreErr
 	}
 	cycleMatches := cycleMatchesSnapshot(active, *snapshot)
-	if active.ScheduledEndMS != nil && *snapshot.CycleStartMS >= *active.ScheduledEndMS {
-		actualEndMS := *active.ScheduledEndMS
-		if actualEndMS < active.ActualStartMS {
-			actualEndMS = active.ActualStartMS
-		}
-		if _, err := tx.ExecContext(ctx, `update account_quota_cycles set
-			state = 'closed', actual_end_ms = ?, end_reason = 'scheduled',
-			last_observation_id = ?, updated_at_ms = ? where id = ?`,
-			actualEndMS, observationID, snapshot.CreatedAtMS, active.ID); err != nil {
-			return 0, 0, false, err
-		}
-		id, err := restoreOrInsertCycle(ctx, tx, activationID, observationID, snapshot)
-		return id, active.ID, false, err
-	}
 	if isConfirmedLifecycleBoundary(*snapshot) {
 		counterReset, err := quotaCounterResetDetected(ctx, tx, active, *snapshot)
 		if err != nil {
@@ -965,8 +966,11 @@ func reconcileCycle(
 }
 
 func isConfirmedLifecycleBoundary(snapshot model.AccountQuotaSnapshot) bool {
-	return !isProvisionalZeroAPIBoundary(snapshot) &&
-		(snapshot.Source == "response_header" || snapshot.Source == "api_query" || snapshot.Source == "inspection") &&
+	return isReliableLifecycleBoundary(snapshot) && !isProvisionalZeroAPIBoundary(snapshot)
+}
+
+func isReliableLifecycleBoundary(snapshot model.AccountQuotaSnapshot) bool {
+	return (snapshot.Source == "response_header" || snapshot.Source == "api_query" || snapshot.Source == "inspection") &&
 		(snapshot.WindowMode == "fixed" || snapshot.WindowMode == "calendar") &&
 		(snapshot.BoundaryAccuracy == "exact" || snapshot.BoundaryAccuracy == "derived") &&
 		snapshot.CycleStartMS != nil && snapshot.CycleEndMS != nil && snapshot.DurationSeconds != nil
@@ -1800,7 +1804,7 @@ func normalizeCycleView(
 }
 
 func cycleHasOnlyProvisionalZeroAPIBoundaries(ctx context.Context, db *sql.DB, cycleID int64) (bool, error) {
-	var hasSnapshots, hasNonProvisional int
+	var hasSnapshots, hasNonProvisional, hasScheduledPredecessor int
 	err := db.QueryRowContext(ctx, `select
 		exists(select 1 from account_quota_snapshots where cycle_id = ? limit 1),
 		exists(select 1 from account_quota_snapshots where cycle_id = ? and coalesce((
@@ -1809,15 +1813,26 @@ func cycleHasOnlyProvisionalZeroAPIBoundaries(ctx context.Context, db *sql.DB, c
 			and cycle_start_ms is not null and cycle_end_ms is not null
 			and duration_seconds is not null
 			and abs(cycle_start_ms - observed_at_ms) <= ?
-		), 0) = 0 limit 1)`,
+		), 0) = 0 limit 1),
+		exists(select 1
+			from account_quota_cycles current
+			join account_quota_cycles previous
+				on previous.activation_id = current.activation_id
+				and previous.actual_start_ms < current.actual_start_ms
+			where current.id = ? and previous.end_reason = 'scheduled'
+				and previous.actual_end_ms is not null
+				and abs(previous.actual_end_ms - current.actual_start_ms) <= ?
+			limit 1)`,
 		cycleID,
 		cycleID,
 		quotaProvisionalStartJitterMS,
-	).Scan(&hasSnapshots, &hasNonProvisional)
+		cycleID,
+		quotaBoundaryJitterMS,
+	).Scan(&hasSnapshots, &hasNonProvisional, &hasScheduledPredecessor)
 	if err != nil {
 		return false, err
 	}
-	return hasSnapshots != 0 && hasNonProvisional == 0, nil
+	return hasSnapshots != 0 && hasNonProvisional == 0 && hasScheduledPredecessor == 0, nil
 }
 
 func loadQuotaCycleEvidence(ctx context.Context, db *sql.DB, cycleID int64) (quotaCycleEvidence, error) {
