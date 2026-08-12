@@ -85,7 +85,7 @@ CPA / CLIProxyAPI 可以在 `:8317` 直接托管官方 Management Center，也�
 - 在浏览器本地或 Manager Server 定时巡检 Codex 和 xAI 账号。
 - 在 Provider 可提供信息时展示配额窗口、reset 证据、凭证状态、工作区状态和健康信号。
 - 对明确额度耗尽执行受控冷却，并将认证故障汇总到账号处理队列，支持复核与恢复。
-- 打开 [账号巡检演示](https://seakee.github.io/CPA-Manager-Plus/#/demo/codex-inspection) 和 [认证文件演示](https://seakee.github.io/CPA-Manager-Plus/#/demo/auth-files)。
+- 打开统一的 [凭证管理演示](https://seakee.github.io/CPA-Manager-Plus/#/demo/accounts)。
 
 ### 生产运维
 

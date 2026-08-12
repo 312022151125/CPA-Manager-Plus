@@ -271,7 +271,7 @@ When `USAGE_QUOTA_COOLDOWN_ENABLED`, `USAGE_ACCOUNT_ACTIONS_ENABLED`, or `USAGE_
 | `PUT /usage-service/config`                                      | Save CPAMP config and restart collector if needed.                                                           |
 | `GET /usage-service/account-processing-policy`                   | Read quota cooldown, account action queue, and auto-disable policy.                                          |
 | `PATCH /usage-service/account-processing-policy`                 | Update account processing policy. Fields locked by environment variables cannot be modified through the API. |
-| `GET /usage-service/quota-cooldowns`                             | Read active quota cooldowns so the auth files page can show recovery hints.                                  |
+| `GET /usage-service/quota-cooldowns`                             | Read active quota cooldowns so Credential Management can show recovery hints.                                |
 | `POST /setup`                                                    | First setup.                                                                                                 |
 | `GET /v0/management/usage`                                       | Compatible usage data.                                                                                       |
 | `GET /v0/management/usage/export`                                | Export JSONL usage events.                                                                                   |
