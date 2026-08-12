@@ -13,7 +13,6 @@ import type {
   AccountDetailViewModel,
 } from '@/features/accounts/model/accountDetailViewModel';
 import authFileStyles from '@/features/authFiles/AuthFilesPage.module.scss';
-import { isHealthyAuthFileStatusMessage } from '@/features/authFiles/constants';
 import type { AccountListHealthStatusKey } from '@/features/accounts/model/accountListPresentation';
 import {
   formatCompactNumber,
@@ -106,9 +105,7 @@ export function AccountOverviewTab({ detailView, getHealthStatusClass }: Account
   const { decision, capacity, credential, recentStatus, activity, attention } = detailView.overview;
   const recentStatusData = statusBarDataFromRecentRequests(recentStatus.recentRequests);
   const hasRecentRequests = recentStatusData.totalSuccess + recentStatusData.totalFailure > 0;
-  const hasStatusMessage =
-    Boolean(recentStatus.statusMessage) &&
-    !isHealthyAuthFileStatusMessage(recentStatus.statusMessage);
+  const hasStatusMessage = Boolean(recentStatus.statusMessage);
   const activityScopeLabel =
     activity.scope === 'monitoring_7d'
       ? t('accounts.detail_overview_activity_scope_7d', { days: activity.scopeDays ?? 7 })

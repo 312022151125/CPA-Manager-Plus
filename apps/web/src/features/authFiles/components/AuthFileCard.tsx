@@ -55,6 +55,7 @@ export type AuthFileCardProps = {
   statusBarCache: Map<string, AuthFileStatusBarData>;
   codexStatusBadges?: AuthFileCodexStatusBadge[];
   codexNeedsReauth?: boolean;
+  hasRawStatusWarning?: boolean;
   codexDisplayQuota?: CodexQuotaState;
   antigravitySubscription?: AntigravitySubscriptionState;
   onRefreshAntigravitySubscription?: (file: AuthFileItem) => void;
@@ -94,6 +95,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
     statusBarCache,
     codexStatusBadges = [],
     codexNeedsReauth = false,
+    hasRawStatusWarning: derivedRawStatusWarning,
     codexDisplayQuota,
     antigravitySubscription,
     onRefreshAntigravitySubscription,
@@ -176,7 +178,8 @@ export function AuthFileCard(props: AuthFileCardProps) {
     statusBarDataFromRecentRequests(recentBuckets);
   const rawStatusMessage = getAuthFileStatusMessage(file);
   const hasStatusWarning =
-    Boolean(rawStatusMessage) && !isHealthyAuthFileStatusMessage(rawStatusMessage);
+    derivedRawStatusWarning ??
+    (Boolean(rawStatusMessage) && !isHealthyAuthFileStatusMessage(rawStatusMessage));
 
   const priorityValue = parsePriorityValue(file.priority ?? file['priority']);
   const projectIdValue = getProjectIdValue(file);

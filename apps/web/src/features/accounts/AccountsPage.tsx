@@ -79,8 +79,10 @@ import {
   ACCOUNT_CODEX_STATUS_FILTERS,
   buildAccountMetrics,
   buildAccountRows,
+  filterSuppressedAccountInspectionResults,
   findAccountRowForInspectionTarget,
   filterAccountRows,
+  getHandledAccountInspectionResultKeys,
   getPlanOptions,
   getProviderOptions,
   isAccountCodexStatusFilter,
@@ -99,9 +101,12 @@ import {
 } from '@/features/accounts/model/accountListPresentation';
 import {
   buildAccountHistoryByRowKey,
+  buildAccountHistoryTargetBatches,
   buildAccountHistoryTargetEntries,
+  retainAccountHistoryRowKeys,
   type AccountHistoryTargetEntry,
 } from '@/features/accounts/model/accountHistoryRows';
+import { mapWithConcurrency } from '@/features/accounts/model/asyncPool';
 import {
   buildAccountWindowUsageByKey,
   buildAccountWindowUsageTargetEntries,
@@ -150,12 +155,15 @@ import {
 } from '@/features/accounts/model/accountsPagePresentation';
 import {
   getAuthFileCodexInspectionKeyForIdentity,
+  getAuthFileCodexInspectionKeyForFile,
   getAuthFileCodexStatus,
   getAuthFilePatchTarget,
   getAuthFileSelectionKey,
   getAuthFileScopedCodexQuota,
   getFreshAuthFileCodexStatusSources,
   hasPartialSharedAuthFileSelection,
+  sanitizeSupersededAuthQuotaState,
+  sanitizeSupersededAuthHeaderSnapshot,
 } from '@/features/authFiles/model/authFilesPageModel';
 import {
   buildUsageValueRowFromMonitoringSummary,
@@ -168,8 +176,22 @@ import {
   partitionOAuthRulePreviewRows,
 } from '@/features/accounts/model/oauthRulePreview';
 import { resolveAccountReauthAction } from '@/features/accounts/model/accountReauth';
+import {
+  beginAccountOAuthReauthSession,
+  buildAccountOAuthReauthPath,
+  readCompletedAccountReauthResultKeys,
+  recordCompletedAccountReauthSession,
+} from '@/features/accounts/model/accountReauthSession';
 import { beginAccountQuotaRequest } from '@/features/accounts/model/accountQuotaRequestGate';
 import { buildAccountOperationalItemsByRowKey } from '@/features/accounts/model/accountOperationalScope';
+import {
+  getAccountRequestCredentialEvidence,
+  isAccountInspectionStatusEvidenceCurrent,
+  isAccountRequestCredentialEvidenceCurrent,
+  resolveAccountAuthenticationProblemEvidence,
+  resolveAccountRequestHealthEvidence,
+  type AccountRequestEvidenceInput,
+} from '@/features/accounts/model/accountHealthEvidence';
 import {
   DEFAULT_ACCOUNTS_WORKSPACE_UI_STATE,
   readAccountsWorkspaceUiState,
@@ -250,6 +272,7 @@ type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
 
 const MAX_CONCURRENT_QUOTA_REFRESHES_PER_PROVIDER = 1;
 const MAX_CONCURRENT_QUOTA_REFRESH_PROVIDERS = 3;
+const MAX_CONCURRENT_ACCOUNT_HISTORY_REQUESTS = 2;
 const PASSIVE_HEADER_SNAPSHOT_REFRESH_MS = 60_000;
 
 const readAccountsSearchFromHash = (hash: string): string => {
@@ -464,7 +487,11 @@ export function AccountsPage() {
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [historyRefreshing, setHistoryRefreshing] = useState(false);
   const [accountHistoryRefreshRevision, setAccountHistoryRefreshRevision] = useState(0);
+  const [accountHistoryAutoRefreshRevision, setAccountHistoryAutoRefreshRevision] = useState(0);
   const [accountQuotaRefreshRevision, setAccountQuotaRefreshRevision] = useState(0);
+  const [suppressedInspectionResultKeys, setSuppressedInspectionResultKeys] = useState<Set<string>>(
+    () => readCompletedAccountReauthResultKeys(connectionFingerprint)
+  );
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(
     () => initialWorkspaceUrlState.current.account
@@ -590,9 +617,10 @@ export function AccountsPage() {
   const quotaCooldownRequestIdRef = useRef(0);
   const accountHistoryAutoAbortRef = useRef<AbortController | null>(null);
   const accountHistoryTargetAbortRef = useRef<AbortController | null>(null);
-  const accountHistoryRequestVersionsRef = useRef<Map<string, number>>(new Map());
+  const accountHistoryRequestVersionsRef = useRef<Map<string, symbol>>(new Map());
   const accountHistoryPendingRequestsRef = useRef<Set<symbol>>(new Set());
   const accountHistoryAutoLoadKeyRef = useRef<string | null>(null);
+  const accountHistoryAutoRequestContextKeyRef = useRef<string | null>(null);
   const accountWindowUsageReqIdRef = useRef(0);
   const accountWindowUsageAbortRef = useRef<AbortController | null>(null);
   const accountWindowUsageAutoLoadKeyRef = useRef<string | null>(null);
@@ -758,6 +786,7 @@ export function AccountsPage() {
     accountHistoryRequestVersionsRef.current.clear();
     accountHistoryPendingRequestsRef.current.clear();
     accountHistoryAutoLoadKeyRef.current = null;
+    accountHistoryAutoRequestContextKeyRef.current = null;
     accountActionCandidatesReqIdRef.current += 1;
     accountWindowUsageReqIdRef.current += 1;
     accountWindowUsageAbortRef.current?.abort();
@@ -792,6 +821,7 @@ export function AccountsPage() {
     setDetailEventsRefreshing(false);
     setDetailEventsAppending(false);
     setDetailEventsError('');
+    setSuppressedInspectionResultKeys(readCompletedAccountReauthResultKeys(connectionFingerprint));
   }, [
     connectionFingerprint,
     featureAvailability.checking,
@@ -816,6 +846,7 @@ export function AccountsPage() {
   }, [loadOauthExcluded, loadOauthModelAlias]);
   const refreshAccountsWorkspace = useCallback(async () => {
     await Promise.all([loadFiles(), loadHeaderSnapshots()]);
+    setAccountHistoryAutoRefreshRevision((current) => current + 1);
   }, [loadFiles, loadHeaderSnapshots]);
   const refreshActiveWorkspace = useAccountsWorkspaceRefresh(activeView, {
     refreshAccounts: refreshAccountsWorkspace,
@@ -854,6 +885,7 @@ export function AccountsPage() {
       return;
     }
     void loadHeaderSnapshots();
+    setAccountHistoryAutoRefreshRevision((current) => current + 1);
   }, [
     activeView,
     documentVisible,
@@ -866,6 +898,7 @@ export function AccountsPage() {
   useInterval(
     () => {
       void loadHeaderSnapshots();
+      setAccountHistoryAutoRefreshRevision((current) => current + 1);
     },
     activeView === 'accounts' &&
       documentVisible &&
@@ -915,9 +948,38 @@ export function AccountsPage() {
   );
 
   const handleCodexReauthSuccess = useCallback(async () => {
+    const target = codexReauthTarget;
+    if (target?.fileName) {
+      const targetIdentityKey = getAuthFileCodexInspectionKeyForIdentity({
+        fileName: target.fileName,
+        runtimeId: target.runtimeId,
+        provider: target.provider,
+        authIndex: target.authIndex ?? null,
+        accountId: target.accountId,
+        accountSnapshot: target.accountSnapshot,
+      });
+      const handledResultKeys = getHandledAccountInspectionResultKeys(
+        inspectionResults,
+        targetIdentityKey,
+        target.fileName,
+        files
+      );
+      if (handledResultKeys.length > 0) {
+        recordCompletedAccountReauthSession({
+          connectionFingerprint,
+          oauthProvider: 'codex',
+          resultKeys: handledResultKeys,
+        });
+        setSuppressedInspectionResultKeys((current) => {
+          const next = new Set(current);
+          handledResultKeys.forEach((key) => next.add(key));
+          return next;
+        });
+      }
+    }
     await loadFiles();
     setCodexReauthTarget(null);
-  }, [loadFiles]);
+  }, [codexReauthTarget, connectionFingerprint, files, inspectionResults, loadFiles]);
 
   const handleReauthAccount = useCallback(
     (file: AuthFileItem) => {
@@ -927,7 +989,21 @@ export function AccountsPage() {
         return;
       }
       if (action.kind === 'navigate') {
-        navigate(action.path);
+        const targetIdentityKey = getAuthFileCodexInspectionKeyForFile(file);
+        const handledResultKeys = getHandledAccountInspectionResultKeys(
+          inspectionResults,
+          targetIdentityKey,
+          file.name,
+          files
+        );
+        const sessionId = beginAccountOAuthReauthSession({
+          connectionFingerprint,
+          oauthProvider: action.oauthProvider,
+          resultKeys: handledResultKeys,
+        });
+        navigate(
+          sessionId ? buildAccountOAuthReauthPath(action.oauthProvider, sessionId) : action.path
+        );
         return;
       }
       showNotification(
@@ -938,9 +1014,19 @@ export function AccountsPage() {
         'info'
       );
     },
-    [navigate, showNotification, t]
+    [connectionFingerprint, files, inspectionResults, navigate, showNotification, t]
   );
 
+  const requestEvidenceBySelectionKey = useMemo(() => {
+    const evidenceMap = new Map<string, AccountRequestEvidenceInput>();
+    accountHistoryByRowKey.forEach((history, selectionKey) => {
+      evidenceMap.set(selectionKey, {
+        latestRequest: history.latest_request ?? null,
+        recentRequests: history.recent_requests ?? [],
+      });
+    });
+    return evidenceMap;
+  }, [accountHistoryByRowKey]);
   const headerSnapshotLookup = useMemo(
     () => buildUsageHeaderSnapshotLookup(headerSnapshots),
     [headerSnapshots]
@@ -968,22 +1054,66 @@ export function AccountsPage() {
     },
     [headerSnapshotGeneratedAtMs, headerSnapshotLookup]
   );
+  const getLatestPositiveRequestAtMs = useCallback(
+    (file: AuthFileItem): number | null => {
+      const requestEvidence = resolveAccountRequestHealthEvidence(
+        requestEvidenceBySelectionKey.get(getAuthFileSelectionKey(file))
+      );
+      const requestCredentialEvidence = getAccountRequestCredentialEvidence(requestEvidence);
+      return requestCredentialEvidence?.direction === 'positive'
+        ? requestCredentialEvidence.request.timestamp_ms
+        : null;
+    },
+    [requestEvidenceBySelectionKey]
+  );
+  const getEffectiveCodexHeaderSnapshot = useCallback(
+    (file: AuthFileItem): UsageHeaderSnapshot | undefined =>
+      sanitizeSupersededAuthHeaderSnapshot(
+        getFreshCodexHeaderSnapshot(file),
+        getLatestPositiveRequestAtMs(file)
+      ),
+    [getFreshCodexHeaderSnapshot, getLatestPositiveRequestAtMs]
+  );
+  const getEffectiveActiveCodexQuota = useCallback(
+    (file: AuthFileItem): CodexQuotaState | undefined =>
+      sanitizeSupersededAuthQuotaState(
+        getActiveCodexQuota(file),
+        getLatestPositiveRequestAtMs(file)
+      ),
+    [getActiveCodexQuota, getLatestPositiveRequestAtMs]
+  );
+  const getDisplayCodexHeaderSnapshot = useCallback(
+    (file: AuthFileItem): UsageHeaderSnapshot | undefined => {
+      const activeQuota = getActiveCodexQuota(file);
+      return getFreshAuthFileCodexStatusSources(
+        file,
+        activeQuota,
+        undefined,
+        getEffectiveCodexHeaderSnapshot(file),
+        getLatestPositiveRequestAtMs(file),
+        headerSnapshotGeneratedAtMs
+      ).headerSnapshot;
+    },
+    [
+      getActiveCodexQuota,
+      getEffectiveCodexHeaderSnapshot,
+      getLatestPositiveRequestAtMs,
+      headerSnapshotGeneratedAtMs,
+    ]
+  );
   const getDisplayCodexQuota = useCallback(
     (file: AuthFileItem): CodexQuotaState | undefined => {
       if (normalizeAccountProvider(file) !== CODEX_CONFIG.type) return undefined;
-      const activeQuota = getActiveCodexQuota(file);
+      const activeQuota = getEffectiveActiveCodexQuota(file);
       const observedQuota = buildObservedCodexQuotaState(
         file,
-        getFreshCodexHeaderSnapshot(file),
+        getDisplayCodexHeaderSnapshot(file),
         t,
         headerSnapshotGeneratedAtMs
       );
-      if (activeQuota?.status === 'error' && activeQuota.errorStatus === 401) {
-        return activeQuota;
-      }
       return resolveQuotaDisplayState(activeQuota, observedQuota);
     },
-    [getActiveCodexQuota, getFreshCodexHeaderSnapshot, headerSnapshotGeneratedAtMs, t]
+    [getEffectiveActiveCodexQuota, getDisplayCodexHeaderSnapshot, headerSnapshotGeneratedAtMs, t]
   );
   const getQuotaSnapshotObservation = useCallback(
     (row: AccountRow): AccountQuotaSnapshotObservationInput | undefined => {
@@ -1065,9 +1195,9 @@ export function AccountsPage() {
   const getCodexHeaderQuotaSnapshotObservation = useCallback(
     (row: AccountRow): AccountQuotaSnapshotObservationInput | undefined => {
       if (row.provider !== CODEX_CONFIG.type) return undefined;
-      const activeQuota = getActiveCodexQuota(row.raw);
+      const activeQuota = getEffectiveActiveCodexQuota(row.raw);
       if (activeQuota?.status === 'error' && activeQuota.errorStatus === 401) return undefined;
-      const headerSnapshot = getFreshCodexHeaderSnapshot(row.raw);
+      const headerSnapshot = getDisplayCodexHeaderSnapshot(row.raw);
       if (
         !headerSnapshot ||
         !hasUsageHeaderQuotaSignal(headerSnapshot) ||
@@ -1093,14 +1223,14 @@ export function AccountsPage() {
         inventory_mode: 'partial',
       };
     },
-    [getActiveCodexQuota, getFreshCodexHeaderSnapshot]
+    [getDisplayCodexHeaderSnapshot, getEffectiveActiveCodexQuota]
   );
   const accountQuotaOverrides = useMemo(() => {
     const codexQuotaBySelectionKey = new Map<string, CodexQuotaState>();
     const codexHeaderSnapshotBySelectionKey = new Map<string, UsageHeaderSnapshot>();
     files.forEach((file) => {
       const selectionKey = getAuthFileSelectionKey(file);
-      const headerSnapshot = getFreshCodexHeaderSnapshot(file);
+      const headerSnapshot = getDisplayCodexHeaderSnapshot(file);
       if (headerSnapshot) {
         codexHeaderSnapshotBySelectionKey.set(selectionKey, headerSnapshot);
       }
@@ -1110,24 +1240,40 @@ export function AccountsPage() {
       }
     });
     return { codexQuotaBySelectionKey, codexHeaderSnapshotBySelectionKey };
-  }, [files, getDisplayCodexQuota, getFreshCodexHeaderSnapshot]);
+  }, [files, getDisplayCodexHeaderSnapshot, getDisplayCodexQuota]);
 
+  const effectiveInspectionResults = useMemo(
+    () =>
+      filterSuppressedAccountInspectionResults(inspectionResults, suppressedInspectionResultKeys),
+    [inspectionResults, suppressedInspectionResultKeys]
+  );
   const rows = useMemo(
-    () => buildAccountRows(files, baseQuotaStores, inspectionResults, accountQuotaOverrides),
-    [accountQuotaOverrides, baseQuotaStores, files, inspectionResults]
+    () =>
+      buildAccountRows(files, baseQuotaStores, effectiveInspectionResults, accountQuotaOverrides),
+    [accountQuotaOverrides, baseQuotaStores, effectiveInspectionResults, files]
   );
   const codexStatusBySelectionKey = useMemo(() => {
     const statusMap = new Map<string, ReturnType<typeof getAuthFileCodexStatus>>();
     rows.forEach((row) => {
       if (row.provider !== CODEX_CONFIG.type && row.provider !== XAI_CONFIG.type) return;
-      const activeQuota =
+      const rawActiveQuota =
         row.provider === CODEX_CONFIG.type ? getActiveCodexQuota(row.raw) : undefined;
-      const freshHeaderSnapshot = getFreshCodexHeaderSnapshot(row.raw);
+      const activeQuota =
+        row.provider === CODEX_CONFIG.type ? getEffectiveActiveCodexQuota(row.raw) : undefined;
+      const effectiveHeaderSnapshot = getDisplayCodexHeaderSnapshot(row.raw);
+      const newerSuccessfulRequestAtMs = getLatestPositiveRequestAtMs(row.raw);
+      const requestHealthEvidence = resolveAccountRequestHealthEvidence(
+        requestEvidenceBySelectionKey.get(row.selectionKey)
+      );
       const sources = getFreshAuthFileCodexStatusSources(
         row.raw,
-        activeQuota,
-        toAuthFileCodexInspectionSnapshot(row),
-        freshHeaderSnapshot
+        rawActiveQuota,
+        isAccountInspectionStatusEvidenceCurrent(row, requestHealthEvidence)
+          ? toAuthFileCodexInspectionSnapshot(row)
+          : undefined,
+        effectiveHeaderSnapshot,
+        newerSuccessfulRequestAtMs,
+        headerSnapshotGeneratedAtMs
       );
       const statusQuota =
         row.provider === CODEX_CONFIG.type
@@ -1143,11 +1289,26 @@ export function AccountsPage() {
           : undefined;
       statusMap.set(
         row.selectionKey,
-        getAuthFileCodexStatus(row.raw, statusQuota, sources.inspection, sources.headerSnapshot)
+        getAuthFileCodexStatus(
+          row.raw,
+          statusQuota,
+          sources.inspection,
+          sources.headerSnapshot,
+          headerSnapshotGeneratedAtMs
+        )
       );
     });
     return statusMap;
-  }, [getActiveCodexQuota, getFreshCodexHeaderSnapshot, headerSnapshotGeneratedAtMs, rows, t]);
+  }, [
+    getEffectiveActiveCodexQuota,
+    getActiveCodexQuota,
+    getDisplayCodexHeaderSnapshot,
+    getLatestPositiveRequestAtMs,
+    headerSnapshotGeneratedAtMs,
+    requestEvidenceBySelectionKey,
+    rows,
+    t,
+  ]);
   const actionCandidatesByRowKey = useMemo(
     () =>
       buildAccountOperationalItemsByRowKey(
@@ -1171,12 +1332,16 @@ export function AccountsPage() {
       buildAccountMetrics(rows, {
         pendingActionsByRowKey: actionCandidatesByRowKey,
         quotaCooldownsByRowKey,
+        requestEvidenceBySelectionKey,
       }),
-    [actionCandidatesByRowKey, quotaCooldownsByRowKey, rows]
+    [actionCandidatesByRowKey, quotaCooldownsByRowKey, requestEvidenceBySelectionKey, rows]
   );
   const providerOptions = useMemo(() => getProviderOptions(rows), [rows]);
   const planOptions = useMemo(() => getPlanOptions(rows), [rows]);
-  const recommendations = useMemo(() => buildAccountRecommendations(rows), [rows]);
+  const recommendations = useMemo(
+    () => buildAccountRecommendations(rows, requestEvidenceBySelectionKey),
+    [requestEvidenceBySelectionKey, rows]
+  );
   const recommendationBySelectionKey = useMemo(
     () => buildRecommendationBySelectionKey(recommendations),
     [recommendations]
@@ -1190,12 +1355,14 @@ export function AccountsPage() {
         quotaBand: quotaBandFilter,
         search,
         codexStatusBySelectionKey,
+        requestEvidenceBySelectionKey,
       }),
     [
       codexStatusBySelectionKey,
       planFilter,
       providerFilter,
       quotaBandFilter,
+      requestEvidenceBySelectionKey,
       rows,
       search,
       statusFilter,
@@ -1206,12 +1373,24 @@ export function AccountsPage() {
       if (effectiveOperationalFilter === 'all') return true;
       if (effectiveOperationalFilter === 'reauth') {
         const recommendation = recommendationBySelectionKey.get(row.selectionKey);
-        const statusMessage = row.statusMessage.trim().toLowerCase();
+        const codexStatus = codexStatusBySelectionKey.get(row.selectionKey);
+        const requestEvidence = resolveAccountRequestHealthEvidence(
+          requestEvidenceBySelectionKey.get(row.selectionKey)
+        );
+        const requestCredentialEvidence = isAccountRequestCredentialEvidenceCurrent(
+          row,
+          requestEvidence
+        )
+          ? getAccountRequestCredentialEvidence(requestEvidence)
+          : null;
+        const authenticationProblem = resolveAccountAuthenticationProblemEvidence(
+          row,
+          requestEvidence
+        );
         return (
           recommendation?.action === 'reauth' ||
-          row.inspection?.action === 'reauth' ||
-          row.inspection?.statusCode === 401 ||
-          ['unauthorized', 'unauthenticated', 'expired', 'token_expired'].includes(statusMessage)
+          authenticationProblem !== null ||
+          (codexStatus?.needsReauth === true && requestCredentialEvidence?.direction !== 'positive')
         );
       }
       if (effectiveOperationalFilter === 'cooldown') {
@@ -1220,16 +1399,21 @@ export function AccountsPage() {
       if (effectiveOperationalFilter === 'automation') {
         return (actionCandidatesByRowKey.get(row.selectionKey)?.length ?? 0) > 0;
       }
-      return row.disabled && row.quota.status === 'ok' && !row.quota.error;
+      return (
+        recommendationBySelectionKey.get(row.selectionKey)?.reasonKey ===
+        'accounts.recommend_reason_recovered'
+      );
     });
-    return sortAccountRows(operationalRows, accountSort);
+    return sortAccountRows(operationalRows, accountSort, requestEvidenceBySelectionKey);
   }, [
     accountSort,
     actionCandidatesByRowKey,
     baseFilteredRows,
+    codexStatusBySelectionKey,
     effectiveOperationalFilter,
     quotaCooldownsByRowKey,
     recommendationBySelectionKey,
+    requestEvidenceBySelectionKey,
   ]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
@@ -1271,17 +1455,12 @@ export function AccountsPage() {
     () => rows.find((row) => row.selectionKey === selectedRowKey) ?? null,
     [rows, selectedRowKey]
   );
-  const accountHistoryTargets = useMemo(() => {
-    const targetRows = [...pageRows];
-    if (selectedRow && !targetRows.some((row) => row.selectionKey === selectedRow.selectionKey)) {
-      targetRows.push(selectedRow);
-    }
-    return buildAccountHistoryTargetEntries(targetRows);
-  }, [pageRows, selectedRow]);
-  const accountHistoryAutoLoadKey = useMemo(
+  const accountHistoryTargets = useMemo(() => buildAccountHistoryTargetEntries(rows), [rows]);
+  const accountHistoryAutoContextKey = useMemo(
     () =>
       JSON.stringify({
         checking: featureAvailability.checking,
+        connectionFingerprint,
         managerServiceBase: featureAvailability.managerServiceBase,
         managementKey,
         requestMonitoringAvailable: featureAvailability.requestMonitoringAvailable,
@@ -1289,12 +1468,14 @@ export function AccountsPage() {
       }),
     [
       accountHistoryTargets,
+      connectionFingerprint,
       featureAvailability.checking,
       featureAvailability.managerServiceBase,
       featureAvailability.requestMonitoringAvailable,
       managementKey,
     ]
   );
+  const accountHistoryAutoLoadKey = `${accountHistoryAutoContextKey}\u0000${accountHistoryAutoRefreshRevision}`;
   const usageValuesAutoLoadKey = useMemo(
     () =>
       JSON.stringify({
@@ -1678,9 +1859,9 @@ export function AccountsPage() {
   );
   const selectedHeaderSnapshotRevision = useMemo(() => {
     if (selectedRow?.provider !== CODEX_CONFIG.type) return '';
-    const snapshot = getFreshCodexHeaderSnapshot(selectedRow.raw);
+    const snapshot = getEffectiveCodexHeaderSnapshot(selectedRow.raw);
     return snapshot ? `${snapshot.event_hash}\u0000${snapshot.timestamp_ms}` : '';
-  }, [getFreshCodexHeaderSnapshot, selectedRow]);
+  }, [getEffectiveCodexHeaderSnapshot, selectedRow]);
   const accountWindowUsageAutoLoadKey = useMemo(
     () =>
       JSON.stringify({
@@ -2190,7 +2371,7 @@ export function AccountsPage() {
         if (headerObservation) {
           const headerQuota = buildObservedCodexQuotaState(
             selectedRow.raw,
-            getFreshCodexHeaderSnapshot(selectedRow.raw),
+            getEffectiveCodexHeaderSnapshot(selectedRow.raw),
             t,
             headerSnapshotGeneratedAtMs
           );
@@ -2311,7 +2492,7 @@ export function AccountsPage() {
     featureAvailability.requestMonitoringAvailable,
     getActiveCodexQuota,
     getCodexHeaderQuotaSnapshotObservation,
-    getFreshCodexHeaderSnapshot,
+    getEffectiveCodexHeaderSnapshot,
     getQuotaSnapshotObservation,
     headerSnapshotGeneratedAtMs,
     managementKey,
@@ -2393,13 +2574,35 @@ export function AccountsPage() {
       const entries = targetEntries ?? accountHistoryTargets;
       const mergeResult = targetEntries !== undefined;
       const controllerRef = mergeResult ? accountHistoryTargetAbortRef : accountHistoryAutoAbortRef;
+      const managerServiceBase = featureAvailability.managerServiceBase;
+      if (!mergeResult) {
+        const activeRowKeys = new Set(entries.map((entry) => entry.rowKey));
+        accountHistoryRequestVersionsRef.current = retainAccountHistoryRowKeys(
+          accountHistoryRequestVersionsRef.current,
+          activeRowKeys
+        );
+        setAccountHistoryByRowKey((current) => retainAccountHistoryRowKeys(current, activeRowKeys));
+        setAccountHistoryErrorsByRowKey((current) =>
+          retainAccountHistoryRowKeys(current, activeRowKeys)
+        );
+      }
+      if (
+        !mergeResult &&
+        controllerRef.current &&
+        accountHistoryAutoRequestContextKeyRef.current === accountHistoryAutoContextKey
+      ) {
+        return;
+      }
       controllerRef.current?.abort();
       controllerRef.current = null;
+      if (!mergeResult) {
+        accountHistoryAutoRequestContextKeyRef.current = null;
+      }
 
       if (
         featureAvailability.checking ||
         !featureAvailability.requestMonitoringAvailable ||
-        !featureAvailability.managerServiceBase ||
+        !managerServiceBase ||
         !managementKey ||
         entries.length === 0
       ) {
@@ -2418,11 +2621,14 @@ export function AccountsPage() {
 
       const controller = new AbortController();
       controllerRef.current = controller;
+      if (!mergeResult) {
+        accountHistoryAutoRequestContextKeyRef.current = accountHistoryAutoContextKey;
+      }
       const requestToken = Symbol('account-history-request');
       accountHistoryPendingRequestsRef.current.add(requestToken);
-      const requestVersions = new Map<string, number>();
+      const requestVersions = new Map<string, symbol>();
       entries.forEach((entry) => {
-        const version = (accountHistoryRequestVersionsRef.current.get(entry.rowKey) ?? 0) + 1;
+        const version = Symbol(entry.rowKey);
         accountHistoryRequestVersionsRef.current.set(entry.rowKey, version);
         requestVersions.set(entry.rowKey, version);
       });
@@ -2433,20 +2639,43 @@ export function AccountsPage() {
         return next.size === current.size ? current : next;
       });
       try {
-        const response = await monitoringAnalyticsApi.getAccountHistory(
-          featureAvailability.managerServiceBase,
-          managementKey,
-          {
-            accounts: entries.map((entry) => entry.target),
-          },
-          controller.signal
+        const batches = buildAccountHistoryTargetBatches(entries);
+        const batchResults = await mapWithConcurrency(
+          batches,
+          MAX_CONCURRENT_ACCOUNT_HISTORY_REQUESTS,
+          async (batch) => {
+            try {
+              const response = await monitoringAnalyticsApi.getAccountHistory(
+                managerServiceBase,
+                managementKey,
+                {
+                  accounts: batch.map((entry) => entry.target),
+                },
+                controller.signal
+              );
+              return { batch, response, error: '' };
+            } catch (err: unknown) {
+              if (controller.signal.aborted) throw err;
+              return {
+                batch,
+                response: null,
+                error: err instanceof Error ? err.message : t('notification.load_failed'),
+              };
+            }
+          }
         );
         if (controller.signal.aborted) return;
-        const nextHistory = buildAccountHistoryByRowKey(
-          entries,
-          response.items,
-          response.generated_at_ms
-        );
+        const nextHistory = new Map<string, MonitoringAccountHistoryItem>();
+        const failedRows = new Map<string, string>();
+        batchResults.forEach(({ batch, response, error }) => {
+          if (!response) {
+            batch.forEach((entry) => failedRows.set(entry.rowKey, error));
+            return;
+          }
+          buildAccountHistoryByRowKey(batch, response.items, response.generated_at_ms).forEach(
+            (item, rowKey) => nextHistory.set(rowKey, item)
+          );
+        });
         setAccountHistoryByRowKey((current) => {
           const merged = mergeResult
             ? new Map(current)
@@ -2460,14 +2689,39 @@ export function AccountsPage() {
               }
               return;
             }
+            if (failedRows.has(entry.rowKey)) {
+              if (!mergeResult) {
+                const currentItem = current.get(entry.rowKey);
+                if (currentItem) merged.set(entry.rowKey, currentItem);
+              }
+              return;
+            }
             merged.delete(entry.rowKey);
             const nextItem = nextHistory.get(entry.rowKey);
             if (nextItem) merged.set(entry.rowKey, nextItem);
           });
           return merged;
         });
+        setAccountHistoryErrorsByRowKey((current) => {
+          const next = new Map(current);
+          entries.forEach((entry) => {
+            const requestVersion = requestVersions.get(entry.rowKey);
+            if (accountHistoryRequestVersionsRef.current.get(entry.rowKey) !== requestVersion) {
+              return;
+            }
+            const error = failedRows.get(entry.rowKey);
+            if (error) {
+              next.set(entry.rowKey, error);
+            } else {
+              next.delete(entry.rowKey);
+            }
+          });
+          return next;
+        });
       } catch (err: unknown) {
-        if (controller.signal.aborted) return;
+        const requestWasAborted = controller.signal.aborted;
+        if (!requestWasAborted) controller.abort();
+        if (requestWasAborted) return;
         const message = err instanceof Error ? err.message : t('notification.load_failed');
         setAccountHistoryErrorsByRowKey((current) => {
           const next = new Map(current);
@@ -2482,12 +2736,16 @@ export function AccountsPage() {
       } finally {
         if (controllerRef.current === controller) {
           controllerRef.current = null;
+          if (!mergeResult) {
+            accountHistoryAutoRequestContextKeyRef.current = null;
+          }
         }
         accountHistoryPendingRequestsRef.current.delete(requestToken);
         setAccountHistoryLoading(accountHistoryPendingRequestsRef.current.size > 0);
       }
     },
     [
+      accountHistoryAutoContextKey,
       accountHistoryTargets,
       featureAvailability.checking,
       featureAvailability.managerServiceBase,
@@ -2502,6 +2760,7 @@ export function AccountsPage() {
       accountHistoryAutoLoadKeyRef.current = null;
       accountHistoryAutoAbortRef.current?.abort();
       accountHistoryAutoAbortRef.current = null;
+      accountHistoryAutoRequestContextKeyRef.current = null;
       return;
     }
     if (accountHistoryAutoLoadKeyRef.current === accountHistoryAutoLoadKey) return;
@@ -3874,6 +4133,7 @@ export function AccountsPage() {
           </div>
           {rowsToRender.map((row) => {
             const recommendation = recommendationBySelectionKey.get(row.selectionKey) ?? null;
+            const accountHistory = accountHistoryByRowKey.get(row.selectionKey) ?? null;
             const quotaWindows =
               quotaDisplayWindowsByRowKey.get(row.selectionKey) ?? buildQuotaDisplayWindows(row);
             const quotaCooldown = quotaCooldownsByRowKey.get(row.selectionKey)?.[0] ?? null;
@@ -3883,6 +4143,7 @@ export function AccountsPage() {
               quotaCooldown,
               codexStatus,
               quotaWindows,
+              requestEvidence: requestEvidenceBySelectionKey.get(row.selectionKey),
             });
             const antigravityQuotaMatrix = buildAntigravityQuotaMatrix(row, quotaWindows);
             const displayQuotaWindows = antigravityQuotaMatrix ? [] : quotaWindows.slice(0, 2);
@@ -3911,7 +4172,6 @@ export function AccountsPage() {
                 item.health.cooldown?.recoverAtMs
               )
             );
-            const accountHistory = accountHistoryByRowKey.get(row.selectionKey) ?? null;
             const accountHistoryError = accountHistoryErrorsByRowKey.get(row.selectionKey) ?? '';
             const accountHistoryMatched = accountHistory?.matched === true;
             const accountHistoryTitle = getAccountHistoryTitle(
