@@ -35,8 +35,6 @@ import {
   getAuthFileIcon,
   getTypeColor,
   getTypeLabel,
-  hasAuthFileStatusMessage,
-  isHealthyAuthFile,
   isRuntimeOnlyAuthFile,
   normalizeProviderKey,
   parsePriorityValue,
@@ -87,10 +85,12 @@ import {
   compareAuthFilePriority,
   easePower2In,
   easePower3Out,
+  filterSuppressedAuthFileInspectionSnapshots,
   getAuthFileCodexInspectionKey,
   getAuthFileCodexInspectionKeyForFile,
   getAuthFileCodexInspectionKeyForIdentity,
   getAuthFileCodexStatus,
+  getHandledAuthFileInspectionSnapshotKeys,
   getAuthFilePatchTarget,
   getAuthFilePlanSortRank,
   getAuthFileScopedCodexQuota,
@@ -98,6 +98,7 @@ import {
   getAuthFileSelectionKey,
   getAuthFileNameFromSelectionKey,
   getFreshAuthFileCodexStatusSources,
+  hasAuthFileStatusProblem,
   hasPartialSharedAuthFileSelection,
   normalizeAuthFilesCodexPlanFilter,
   normalizeAuthFilesCodexStatusFilter,
@@ -157,6 +158,8 @@ type CodexInspectionSnapshotSource = {
   usedPercent?: number | string | null;
   isQuota?: boolean | null;
   errorKind?: string | null;
+  runId?: number | string | null;
+  id?: number | string | null;
 };
 
 const readCodexInspectionRunAtMs = (run: {
@@ -189,18 +192,9 @@ const toAuthFileCodexInspectionSnapshots = (
     isQuota: item.isQuota ?? null,
     errorKind: item.errorKind ?? null,
     inspectionAtMs: inspectionAtMs ?? null,
+    runId: item.runId ?? null,
+    resultId: item.id ?? null,
   }));
-
-const isStaleCodexReauthSnapshot = (item: AuthFileCodexInspectionSnapshot): boolean => {
-  const action = typeof item.action === 'string' ? item.action.trim().toLowerCase() : '';
-  const statusCode =
-    typeof item.statusCode === 'number'
-      ? item.statusCode
-      : typeof item.statusCode === 'string'
-        ? Number(item.statusCode)
-        : null;
-  return action === 'reauth' || statusCode === 401;
-};
 
 type QuotaCooldownState = {
   contextKey: string;
@@ -265,6 +259,8 @@ export function AuthFilesPage() {
   const [lastCodexInspectionResults, setLastCodexInspectionResults] = useState<
     AuthFileCodexInspectionSnapshot[]
   >([]);
+  const suppressedCodexInspectionSnapshotKeysRef = useRef<Set<string>>(new Set());
+  const codexInspectionSnapshotRequestIdRef = useRef(0);
   const [quotaCooldownState, setQuotaCooldownState] = useState<QuotaCooldownState>(() => ({
     contextKey: getQuotaCooldownContextKey(managerServiceBase, managementKey),
     items: new Map(),
@@ -597,7 +593,15 @@ export function AuthFilesPage() {
     setPageSizeInput(String(pageSize));
   }, [pageSize]);
 
+  useEffect(() => {
+    codexInspectionSnapshotRequestIdRef.current += 1;
+    suppressedCodexInspectionSnapshotKeysRef.current.clear();
+    setLastCodexInspectionResults([]);
+  }, [connectionFingerprint, managementKey, managerServiceBase]);
+
   const loadCodexInspectionSnapshots = useCallback(async () => {
+    const requestId = codexInspectionSnapshotRequestIdRef.current + 1;
+    codexInspectionSnapshotRequestIdRef.current = requestId;
     const lastRun = connectionFingerprint
       ? loadCodexInspectionLastRun(connectionFingerprint)
       : null;
@@ -614,6 +618,7 @@ export function AuthFilesPage() {
           managementKey,
           1
         );
+        if (codexInspectionSnapshotRequestIdRef.current !== requestId) return;
         const latestRun = runs.items[0];
         if (latestRun) {
           const detail = await usageServiceApi.getCodexInspectionRun(
@@ -621,10 +626,14 @@ export function AuthFilesPage() {
             managementKey,
             latestRun.id
           );
+          if (codexInspectionSnapshotRequestIdRef.current !== requestId) return;
           setLastCodexInspectionResults(
-            toAuthFileCodexInspectionSnapshots(
-              detail.results,
-              readCodexInspectionRunAtMs(detail.run)
+            filterSuppressedAuthFileInspectionSnapshots(
+              toAuthFileCodexInspectionSnapshots(
+                detail.results,
+                readCodexInspectionRunAtMs(detail.run)
+              ),
+              suppressedCodexInspectionSnapshotKeysRef.current
             )
           );
           return;
@@ -634,13 +643,17 @@ export function AuthFilesPage() {
       }
     }
 
+    if (codexInspectionSnapshotRequestIdRef.current !== requestId) return;
     setLastCodexInspectionResults(
-      lastRun
-        ? toAuthFileCodexInspectionSnapshots(
-            lastRun.result.results,
-            lastRun.result.finishedAt || lastRun.result.startedAt || null
-          )
-        : []
+      filterSuppressedAuthFileInspectionSnapshots(
+        lastRun
+          ? toAuthFileCodexInspectionSnapshots(
+              lastRun.result.results,
+              lastRun.result.finishedAt || lastRun.result.startedAt || null
+            )
+          : [],
+        suppressedCodexInspectionSnapshotKeysRef.current
+      )
     );
   }, [
     connectionFingerprint,
@@ -995,7 +1008,9 @@ export function AuthFilesPage() {
           file,
           getActiveCodexQuota(file),
           codexInspectionByAuthFile.get(statusKey),
-          freshHeaderSnapshot
+          freshHeaderSnapshot,
+          undefined,
+          headerSnapshotGeneratedAtMs
         )
       );
     });
@@ -1035,12 +1050,13 @@ export function AuthFilesPage() {
           file,
           getDisplayCodexQuota(file),
           sources?.inspection,
-          sources?.headerSnapshot
+          sources?.headerSnapshot,
+          headerSnapshotGeneratedAtMs
         )
       );
     });
     return statusMap;
-  }, [codexStatusSourcesByAuthFileKey, files, getDisplayCodexQuota]);
+  }, [codexStatusSourcesByAuthFileKey, files, getDisplayCodexQuota, headerSnapshotGeneratedAtMs]);
 
   const filesMatchingStatusFilters = useMemo(
     () =>
@@ -1052,18 +1068,14 @@ export function AuthFilesPage() {
         const accountActions = getAccountActionsForFile(file);
         const quotaCooldown = getQuotaCooldownForFile(file);
         const hasAutomationProblem = accountActions.length > 0 || Boolean(quotaCooldown);
+        const hasStatusProblem = hasAuthFileStatusProblem(codexStatus);
         if (
           healthyOnly &&
-          (!isHealthyAuthFile(file) || hasAutomationProblem || Boolean(codexStatus?.badges.length))
+          (file.disabled === true || hasAutomationProblem || hasStatusProblem)
         ) {
           return false;
         }
-        if (
-          problemOnly &&
-          !hasAuthFileStatusMessage(file) &&
-          !codexStatus?.badges.length &&
-          !hasAutomationProblem
-        ) {
+        if (problemOnly && !hasStatusProblem && !hasAutomationProblem) {
           return false;
         }
         if (codexStatus && !authFileMatchesCodexStatusFilter(codexStatus, codexStatusFilter)) {
@@ -1204,9 +1216,18 @@ export function AuthFilesPage() {
       if (getQuotaCooldownForFile(file)) return false;
       const candidates = getAccountActionsForFile(file);
       if (candidates.length > 0) return canBulkDeleteAccountActions(candidates);
-      return hasAuthFileStatusMessage(file);
+      return (
+        codexStatusByAuthFileKey.get(getAuthFileCodexInspectionKeyForFile(file))
+          ?.hasRawStatusWarning ?? false
+      );
     });
-  }, [filtered, getAccountActionsForFile, getQuotaCooldownForFile, problemOnly]);
+  }, [
+    codexStatusByAuthFileKey,
+    filtered,
+    getAccountActionsForFile,
+    getQuotaCooldownForFile,
+    problemOnly,
+  ]);
 
   const sorted = useMemo(() => {
     const copy = [...filtered];
@@ -1391,25 +1412,35 @@ export function AuthFilesPage() {
 
   const handleCodexReauthSuccess = useCallback(async () => {
     const target = codexReauthTarget;
+    if (target?.fileName) {
+      const targetKey = getAuthFileCodexInspectionKeyForIdentity({
+        fileName: target.fileName,
+        runtimeId: target.runtimeId,
+        provider: target.provider,
+        authIndex: target.authIndex ?? null,
+        accountId: target.accountId,
+        accountSnapshot: target.accountSnapshot,
+      });
+      const handledSnapshotKeys = getHandledAuthFileInspectionSnapshotKeys(
+        lastCodexInspectionResults,
+        targetKey
+      );
+      if (handledSnapshotKeys.length > 0) {
+        handledSnapshotKeys.forEach((key) =>
+          suppressedCodexInspectionSnapshotKeysRef.current.add(key)
+        );
+        setLastCodexInspectionResults((current) =>
+          filterSuppressedAuthFileInspectionSnapshots(
+            current,
+            suppressedCodexInspectionSnapshotKeysRef.current
+          )
+        );
+      }
+    }
+
     await loadFiles();
     await loadCodexInspectionSnapshots();
-    if (!target?.fileName) return;
-
-    const targetKey = getAuthFileCodexInspectionKeyForIdentity({
-      fileName: target.fileName,
-      runtimeId: target.runtimeId,
-      provider: target.provider,
-      authIndex: target.authIndex ?? null,
-      accountId: target.accountId,
-      accountSnapshot: target.accountSnapshot,
-    });
-    setLastCodexInspectionResults((current) =>
-      current.filter((item) => {
-        const itemKey = getAuthFileCodexInspectionKeyForIdentity(item);
-        return itemKey !== targetKey || !isStaleCodexReauthSnapshot(item);
-      })
-    );
-  }, [codexReauthTarget, loadCodexInspectionSnapshots, loadFiles]);
+  }, [codexReauthTarget, lastCodexInspectionResults, loadCodexInspectionSnapshots, loadFiles]);
 
   const openExcludedEditor = useCallback(
     (provider?: string) => {
@@ -1847,6 +1878,7 @@ export function AuthFilesPage() {
                       statusBarCache={statusBarCache}
                       codexStatusBadges={codexStatus?.badges ?? []}
                       codexNeedsReauth={codexStatus?.needsReauth ?? false}
+                      hasRawStatusWarning={codexStatus?.hasRawStatusWarning ?? false}
                       codexDisplayQuota={getDisplayCodexQuota(file)}
                       antigravitySubscription={antigravitySubscriptions[file.name]}
                       onRefreshAntigravitySubscription={refreshSubscription}

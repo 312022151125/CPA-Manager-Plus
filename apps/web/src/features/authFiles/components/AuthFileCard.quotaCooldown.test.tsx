@@ -188,3 +188,37 @@ describe('AuthFileCard quota cooldown presentation', () => {
     );
   });
 });
+
+describe('AuthFileCard raw status presentation', () => {
+  it('hides a historical raw warning when the derived diagnosis has cleared it', () => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <AuthFileCard
+          file={{
+            ...file,
+            disabled: false,
+            status_code: 499,
+            status_message: 'context canceled',
+          }}
+          compact
+          selected={false}
+          resolvedTheme="dark"
+          disableControls={false}
+          deleting={null}
+          statusUpdating={{}}
+          statusBarCache={new Map()}
+          hasRawStatusWarning={false}
+          onShowModels={vi.fn()}
+          onDownload={vi.fn()}
+          onOpenPrefixProxyEditor={vi.fn()}
+          onDelete={vi.fn()}
+          onToggleStatus={vi.fn()}
+          onToggleSelect={vi.fn()}
+        />
+      );
+    });
+
+    expect(renderer.root.findAll((node) => node.props.title === 'context canceled')).toHaveLength(0);
+  });
+});

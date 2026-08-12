@@ -271,6 +271,7 @@ vi.mock('@/features/authFiles/components/AuthFileCard', () => ({
       reasonCode?: string;
       autoDisabledAtMs?: number;
     } | null;
+    hasRawStatusWarning?: boolean;
     codexDisplayQuota?: {
       status?: string;
       planType?: string | null;
@@ -297,6 +298,7 @@ vi.mock('@/features/authFiles/components/AuthFileCard', () => ({
         data-account-action={props.accountActionCandidate?.actionType ?? ''}
         data-account-reason={props.accountActionCandidate?.reasonCode ?? ''}
         data-account-auto-disabled-at={String(props.accountActionCandidate?.autoDisabledAtMs ?? '')}
+        data-raw-status-warning={String(props.hasRawStatusWarning ?? false)}
         data-codex-quota-status={props.codexDisplayQuota?.status ?? ''}
         data-codex-quota-plan={props.codexDisplayQuota?.planType ?? ''}
         data-codex-quota-observed={String(
@@ -1446,6 +1448,93 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
 
     expect(renderer!.root.findAllByProps({ 'data-auth-card': 'xai-reauth.json' })).toHaveLength(1);
     expect(renderer!.root.findAllByProps({ 'data-auth-card': 'xai-healthy.json' })).toHaveLength(0);
+  });
+
+  it('uses derived status evidence for problem, healthy, and safe-delete filtering', async () => {
+    mocks.list.mockReturnValue([
+      {
+        name: 'codex-cancelled.json',
+        type: 'codex',
+        status_code: 499,
+        status_message: 'context canceled',
+      },
+      {
+        name: 'codex-transient.json',
+        type: 'codex',
+        status_code: 503,
+        status_message: 'upstream unavailable',
+      },
+      {
+        name: 'codex-auth.json',
+        type: 'codex',
+        status_code: 503,
+        status_message: 'authentication_error: invalid token',
+      },
+    ]);
+    mocks.getActiveQuotaCooldowns.mockResolvedValue([]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'codex-cancelled.json' }).props[
+          'data-raw-status-warning'
+        ]
+      ).toBe('false');
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'codex-transient.json' }).props[
+          'data-raw-status-warning'
+        ]
+      ).toBe('false');
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'codex-auth.json' }).props[
+          'data-raw-status-warning'
+        ]
+      ).toBe('true');
+    });
+
+    const problemToggle = renderer!.root.findByProps({
+      'data-toggle': 'auth_files.problem_filter_only',
+    });
+    await act(async () => {
+      problemToggle.props.onClick();
+    });
+
+    expect(renderer!.root.findAllByProps({ 'data-auth-card': 'codex-auth.json' })).toHaveLength(1);
+    expect(
+      renderer!.root.findAllByProps({ 'data-auth-card': 'codex-cancelled.json' })
+    ).toHaveLength(0);
+    expect(
+      renderer!.root.findAllByProps({ 'data-auth-card': 'codex-transient.json' })
+    ).toHaveLength(0);
+
+    const deleteLabel = renderer!.root
+      .findAllByType('span')
+      .find((node) => node.children.includes('auth_files.delete_problem_button'));
+    await act(async () => {
+      deleteLabel?.parent?.props.onClick();
+    });
+    expect(mocks.handleDeleteAll.mock.calls[0]?.[0].filteredFiles).toEqual([
+      expect.objectContaining({ name: 'codex-auth.json' }),
+    ]);
+
+    await act(async () => {
+      problemToggle.props.onClick();
+      renderer!.root
+        .findByProps({ 'data-toggle': 'auth_files.healthy_filter_only' })
+        .props.onClick();
+    });
+
+    expect(
+      renderer!.root.findAllByProps({ 'data-auth-card': 'codex-cancelled.json' })
+    ).toHaveLength(1);
+    expect(
+      renderer!.root.findAllByProps({ 'data-auth-card': 'codex-transient.json' })
+    ).toHaveLength(1);
+    expect(renderer!.root.findAllByProps({ 'data-auth-card': 'codex-auth.json' })).toHaveLength(0);
   });
 
   it('distinguishes auto-disabled review from regional review without disabling the latter', async () => {
