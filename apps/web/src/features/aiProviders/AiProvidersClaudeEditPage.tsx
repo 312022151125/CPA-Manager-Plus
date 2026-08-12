@@ -15,6 +15,8 @@ import { useNotificationStore } from '@/stores';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { buildHeaderObject } from '@/utils/headers';
 import { buildClaudeMessagesEndpoint, parseTextList } from '@/components/providers/utils';
+import { CredentialWeightInput } from '@/components/providers';
+import { getCredentialWeightError } from '@/utils/credentialWeight';
 import type { ClaudeEditOutletContext } from './AiProvidersClaudeEditLayout';
 import styles from './AiProvidersPage.module.scss';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
@@ -90,7 +92,13 @@ export function AiProvidersClaudeEditPage() {
   }, [form.cloak]);
 
   const canSave =
-    !disableControls && !loading && !saving && !invalidIndexParam && !invalidIndex && !isTesting;
+    !disableControls &&
+    !loading &&
+    !saving &&
+    !invalidIndexParam &&
+    !invalidIndex &&
+    !isTesting &&
+    !getCredentialWeightError(form.weight);
 
   const modelSelectOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -330,6 +338,11 @@ export function AiProvidersClaudeEditPage() {
                   priority: parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined,
                 }));
               }}
+              disabled={saving || disableControls || isTesting}
+            />
+            <CredentialWeightInput
+              value={form.weight}
+              onChange={(weight) => setForm((prev) => ({ ...prev, weight }))}
               disabled={saving || disableControls || isTesting}
             />
             <Input

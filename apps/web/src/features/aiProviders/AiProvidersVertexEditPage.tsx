@@ -16,7 +16,12 @@ import type { ProviderKeyConfig } from '@/types';
 import { excludedModelsToText, parseExcludedModels } from '@/components/providers/utils';
 import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/utils/headers';
 import { areKeyValueEntriesEqual, areModelEntriesEqual, areStringArraysEqual } from '@/utils/compare';
-import type { VertexFormState } from '@/components/providers';
+import { CredentialWeightInput, type VertexFormState } from '@/components/providers';
+import {
+  getCredentialWeightComparisonValue,
+  getCredentialWeightError,
+  normalizeCredentialWeight,
+} from '@/utils/credentialWeight';
 import { parseProviderIndexParam } from '@/features/aiProviders/model/routeParams';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
 
@@ -24,6 +29,7 @@ type LocationState = { fromAiProviders?: boolean } | null;
 
 const buildEmptyForm = (): VertexFormState => ({
   apiKey: '',
+  weight: undefined,
   prefix: '',
   baseUrl: '',
   proxyUrl: '',
@@ -46,6 +52,7 @@ const normalizeModelEntries = (entries: Array<{ name: string; alias: string }>) 
 type VertexFormBaseline = {
   apiKey: string;
   priority: number | null;
+  weight: number | null;
   prefix: string;
   baseUrl: string;
   proxyUrl: string;
@@ -58,6 +65,7 @@ const buildVertexBaseline = (form: VertexFormState): VertexFormBaseline => ({
   apiKey: String(form.apiKey ?? '').trim(),
   priority:
     form.priority !== undefined && Number.isFinite(form.priority) ? Math.trunc(form.priority) : null,
+  weight: normalizeCredentialWeight(form.weight) ?? null,
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
   proxyUrl: String(form.proxyUrl ?? '').trim(),
@@ -174,7 +182,13 @@ export function AiProvidersVertexEditPage() {
     setBaseline(buildVertexBaseline(nextForm));
   }, [initialData, loading]);
 
-  const canSave = !disableControls && !saving && !loading && !invalidIndexParam && !invalidIndex;
+  const canSave =
+    !disableControls &&
+    !saving &&
+    !loading &&
+    !invalidIndexParam &&
+    !invalidIndex &&
+    !getCredentialWeightError(form.weight);
 
   const normalizedHeaders = useMemo(() => normalizeHeaderEntries(form.headers), [form.headers]);
   const normalizedModels = useMemo(
@@ -190,6 +204,7 @@ export function AiProvidersVertexEditPage() {
       ? Math.trunc(form.priority)
       : null;
   }, [form.priority]);
+  const comparableWeight = getCredentialWeightComparisonValue(form.weight);
   const isHeadersDirty = useMemo(
     () => !areKeyValueEntriesEqual(baseline.headers, normalizedHeaders),
     [baseline.headers, normalizedHeaders]
@@ -205,6 +220,7 @@ export function AiProvidersVertexEditPage() {
   const isDirty =
     baseline.apiKey !== form.apiKey.trim() ||
     baseline.priority !== normalizedPriority ||
+    baseline.weight !== comparableWeight ||
     baseline.prefix !== String(form.prefix ?? '').trim() ||
     baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
     baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
@@ -241,6 +257,7 @@ export function AiProvidersVertexEditPage() {
           form.priority !== undefined && Number.isFinite(form.priority)
             ? Math.trunc(form.priority)
             : undefined,
+        weight: normalizeCredentialWeight(form.weight),
         prefix: form.prefix?.trim() || undefined,
         baseUrl,
         proxyUrl: form.proxyUrl?.trim() || undefined,
@@ -348,6 +365,11 @@ export function AiProvidersVertexEditPage() {
               value={form.prefix ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, prefix: e.target.value }))}
               hint={t('ai_providers.prefix_hint')}
+              disabled={disableControls || saving}
+            />
+            <CredentialWeightInput
+              value={form.weight}
+              onChange={(weight) => setForm((prev) => ({ ...prev, weight }))}
               disabled={disableControls || saving}
             />
             <Input

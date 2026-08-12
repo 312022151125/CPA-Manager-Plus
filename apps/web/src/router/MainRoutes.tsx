@@ -35,28 +35,11 @@ import { useAuthStore, useConfigStore } from '@/stores';
 
 type FeatureKey = 'requestMonitoring' | 'modelPrices';
 
-function LegacyAccountsRedirect({
-  view,
-  healthMode,
-  editor,
-}: {
-  view?: 'accounts' | 'health' | 'oauth';
-  healthMode?: 'local' | 'server';
-  editor?: 'excluded' | 'alias';
-}) {
+function LegacyAccountsRedirect({ healthMode }: { healthMode: 'local' | 'server' }) {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
-  if (view === 'accounts') params.delete('view');
-  else if (view) params.set('view', view);
-  if (view === 'health') params.set('healthMode', healthMode ?? 'local');
-  if (editor) {
-    params.set('editor', editor);
-    const provider = params.get('provider');
-    if (provider) {
-      params.set('editorProvider', provider);
-      params.delete('provider');
-    }
-  }
+  params.set('view', 'health');
+  params.set('healthMode', healthMode);
   const search = params.toString();
   return <Navigate to={{ pathname: '/accounts', search: search ? `?${search}` : '' }} replace />;
 }
@@ -163,17 +146,7 @@ const mainRoutes: RouteObject[] = [
   { path: '/ai-providers', element: <AiProvidersPage /> },
   { path: '/ai-providers/*', element: <AiProvidersPage /> },
   { path: '/accounts', element: <AccountsPage /> },
-  { path: '/auth-files', element: <LegacyAccountsRedirect /> },
-  {
-    path: '/auth-files/oauth-excluded',
-    element: <LegacyAccountsRedirect view="oauth" editor="excluded" />,
-  },
-  {
-    path: '/auth-files/oauth-model-alias',
-    element: <LegacyAccountsRedirect view="oauth" editor="alias" />,
-  },
   { path: '/oauth', element: <OAuthPage /> },
-  { path: '/quota', element: <LegacyAccountsRedirect view="accounts" /> },
   {
     path: '/usage-analytics',
     element: (
@@ -184,11 +157,11 @@ const mainRoutes: RouteObject[] = [
   },
   {
     path: '/codex-inspection',
-    element: <LegacyAccountsRedirect view="health" healthMode="local" />,
+    element: <LegacyAccountsRedirect healthMode="local" />,
   },
   {
     path: '/codex-inspection/server',
-    element: <LegacyAccountsRedirect view="health" healthMode="server" />,
+    element: <LegacyAccountsRedirect healthMode="server" />,
   },
   {
     path: '/model-prices',
@@ -224,11 +197,11 @@ const mainRoutes: RouteObject[] = [
   },
   {
     path: '/monitoring/codex-inspection',
-    element: <LegacyAccountsRedirect view="health" healthMode="local" />,
+    element: <LegacyAccountsRedirect healthMode="local" />,
   },
   {
     path: '/monitoring/codex-inspection/server',
-    element: <LegacyAccountsRedirect view="health" healthMode="server" />,
+    element: <LegacyAccountsRedirect healthMode="server" />,
   },
   {
     path: '/plugins',

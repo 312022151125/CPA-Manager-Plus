@@ -22,6 +22,91 @@ beforeEach(() => {
 });
 
 describe('providersApi auth-index preservation', () => {
+  it('normalizes credential weights without collapsing explicit zero into omission', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'codex-api-key': [
+        { 'api-key': 'absent', 'base-url': 'https://example.com/absent' },
+        { 'api-key': 'zero', 'base-url': 'https://example.com/zero', weight: 0 },
+        { 'api-key': 'excluded', 'base-url': 'https://example.com/excluded', weight: -2 },
+        { 'api-key': 'positive', 'base-url': 'https://example.com/positive', weight: 5 },
+        { 'api-key': 'fraction', 'base-url': 'https://example.com/fraction', weight: 1.5 },
+        { 'api-key': 'too-large', 'base-url': 'https://example.com/large', weight: 1_000_001 },
+      ],
+    });
+
+    await expect(providersApi.getCodexConfigs()).resolves.toEqual([
+      expect.not.objectContaining({ weight: expect.anything() }),
+      expect.objectContaining({ apiKey: 'zero', weight: 0 }),
+      expect.objectContaining({ apiKey: 'excluded', weight: -2 }),
+      expect.objectContaining({ apiKey: 'positive', weight: 5 }),
+      expect.not.objectContaining({ weight: expect.anything() }),
+      expect.not.objectContaining({ weight: expect.anything() }),
+    ]);
+  });
+
+  it('serializes provider and OpenAI key weights while allowing an existing weight to be cleared', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'codex-api-key': [
+        { 'api-key': 'clear', 'base-url': 'https://example.com/clear', weight: 9 },
+        { 'api-key': 'zero', 'base-url': 'https://example.com/zero' },
+        { 'api-key': 'positive', 'base-url': 'https://example.com/positive' },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveCodexConfigs([
+      { apiKey: 'clear', baseUrl: 'https://example.com/clear' },
+      { apiKey: 'zero', baseUrl: 'https://example.com/zero', weight: 0 },
+      { apiKey: 'excluded', baseUrl: 'https://example.com/excluded', weight: -2 },
+      { apiKey: 'positive', baseUrl: 'https://example.com/positive', weight: 7 },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/codex-api-key', [
+      { 'api-key': 'clear', 'base-url': 'https://example.com/clear' },
+      { 'api-key': 'zero', 'base-url': 'https://example.com/zero', weight: 0 },
+      { 'api-key': 'excluded', 'base-url': 'https://example.com/excluded', weight: -2 },
+      { 'api-key': 'positive', 'base-url': 'https://example.com/positive', weight: 7 },
+    ]);
+
+    mocks.get.mockResolvedValueOnce({
+      'openai-compatibility': [
+        {
+          name: 'weighted',
+          'base-url': 'https://openai.example/v1',
+          'api-key-entries': [
+            { 'api-key': 'clear', weight: 4 },
+            { 'api-key': 'zero' },
+            { 'api-key': 'positive' },
+          ],
+        },
+      ],
+    });
+
+    await providersApi.saveOpenAIProviders([
+      {
+        name: 'weighted',
+        baseUrl: 'https://openai.example/v1',
+        apiKeyEntries: [
+          { apiKey: 'clear' },
+          { apiKey: 'zero', weight: 0 },
+          { apiKey: 'positive', weight: 3 },
+        ],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/openai-compatibility', [
+      {
+        name: 'weighted',
+        'base-url': 'https://openai.example/v1',
+        'api-key-entries': [
+          { 'api-key': 'clear' },
+          { 'api-key': 'zero', weight: 0 },
+          { 'api-key': 'positive', weight: 3 },
+        ],
+      },
+    ]);
+  });
+
   it('loads and creates xAI API key configs through the native management section', async () => {
     mocks.get.mockResolvedValueOnce({
       'xai-api-key': [

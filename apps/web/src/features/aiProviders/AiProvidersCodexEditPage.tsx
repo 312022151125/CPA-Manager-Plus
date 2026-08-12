@@ -33,7 +33,12 @@ import {
   excludedModelsToText,
   parseExcludedModels,
 } from '@/components/providers/utils';
-import type { ProviderFormState } from '@/components/providers';
+import { CredentialWeightInput, type ProviderFormState } from '@/components/providers';
+import {
+  getCredentialWeightComparisonValue,
+  getCredentialWeightError,
+  normalizeCredentialWeight,
+} from '@/utils/credentialWeight';
 import type { ModelInfo } from '@/utils/models';
 import { parseProviderIndexParam } from '@/features/aiProviders/model/routeParams';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
@@ -47,6 +52,7 @@ const CODEX_TEST_TIMEOUT_MS = 20_000;
 const buildEmptyForm = (): ProviderFormState => ({
   apiKey: '',
   priority: undefined,
+  weight: undefined,
   prefix: '',
   baseUrl: '',
   websockets: false,
@@ -80,6 +86,7 @@ type CodexFormBaseline = {
   apiKey: string;
   authIndex: string;
   priority: number | null;
+  weight: number | null;
   prefix: string;
   baseUrl: string;
   websockets: boolean;
@@ -97,6 +104,7 @@ const buildCodexBaseline = (form: ProviderFormState): CodexFormBaseline => ({
     form.priority !== undefined && Number.isFinite(form.priority)
       ? Math.trunc(form.priority)
       : null,
+  weight: normalizeCredentialWeight(form.weight) ?? null,
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
   websockets: Boolean(form.websockets),
@@ -256,6 +264,7 @@ export function AiProvidersCodexEditPage() {
       ? Math.trunc(form.priority)
       : null;
   }, [form.priority]);
+  const comparableWeight = getCredentialWeightComparisonValue(form.weight);
   const isHeadersDirty = useMemo(
     () => !areKeyValueEntriesEqual(baseline.headers, normalizedHeaders),
     [baseline.headers, normalizedHeaders]
@@ -272,6 +281,7 @@ export function AiProvidersCodexEditPage() {
     baseline.apiKey !== form.apiKey.trim() ||
     baseline.authIndex !== (normalizeAuthIndex(form.authIndex) ?? '') ||
     baseline.priority !== normalizedPriority ||
+    baseline.weight !== comparableWeight ||
     baseline.prefix !== String(form.prefix ?? '').trim() ||
     baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
     baseline.websockets !== Boolean(form.websockets) ||
@@ -296,7 +306,13 @@ export function AiProvidersCodexEditPage() {
   });
 
   const canSave =
-    !disableControls && !saving && !loading && !invalidIndexParam && !invalidIndex && !isTesting;
+    !disableControls &&
+    !saving &&
+    !loading &&
+    !invalidIndexParam &&
+    !invalidIndex &&
+    !isTesting &&
+    !getCredentialWeightError(form.weight);
 
   const discoveredModelsFiltered = useMemo(() => {
     const filter = modelDiscoverySearch.trim().toLowerCase();
@@ -623,6 +639,7 @@ export function AiProvidersCodexEditPage() {
       const payload: ProviderKeyConfig = {
         apiKey: form.apiKey.trim(),
         priority: form.priority !== undefined ? Math.trunc(form.priority) : undefined,
+        weight: normalizeCredentialWeight(form.weight),
         prefix: form.prefix?.trim() || undefined,
         baseUrl,
         websockets: Boolean(form.websockets),
@@ -746,6 +763,11 @@ export function AiProvidersCodexEditPage() {
                   priority: parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined,
                 }));
               }}
+              disabled={disableControls || saving}
+            />
+            <CredentialWeightInput
+              value={form.weight}
+              onChange={(weight) => setForm((prev) => ({ ...prev, weight }))}
               disabled={disableControls || saving}
             />
             <Input

@@ -72,14 +72,17 @@ describe('useHeaderSnapshotsLoader', () => {
   function Harness({
     serviceBase,
     managementKey = 'management-key',
+    requestGenerationRef,
   }: {
     serviceBase: string;
     managementKey?: string;
+    requestGenerationRef?: { current: number };
   }) {
     const currentItemsRef = useRef<UsageHeaderSnapshot[]>([]);
     const currentLoad = useHeaderSnapshotsLoader({
       serviceBase,
       managementKey,
+      requestGenerationRef,
       onResponse: (result) => {
         currentItemsRef.current = result.items ?? [];
         observedItems.push(currentItemsRef.current);
@@ -189,6 +192,45 @@ describe('useHeaderSnapshotsLoader', () => {
     });
     expect(observedItems).toEqual([[], [{ event_hash: 'current', timestamp_ms: 2 }]]);
     expect(observedGeneratedAtMs).toEqual([3]);
+  });
+
+  it('restarts the request and ignores the old response after credential evidence changes', async () => {
+    const first = deferred<UsageHeaderSnapshotsResponse>();
+    const second = deferred<UsageHeaderSnapshotsResponse>();
+    const requestGenerationRef = { current: 0 };
+    getHeaderSnapshotsMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    await act(async () => {
+      renderer = create(
+        <Harness serviceBase="http://manager.local" requestGenerationRef={requestGenerationRef} />
+      );
+    });
+
+    let firstLoad!: Promise<void>;
+    act(() => {
+      firstLoad = load!();
+    });
+    const firstSignal = getHeaderSnapshotsMock.mock.calls[0]?.[3];
+    requestGenerationRef.current += 1;
+    let secondLoad!: Promise<void>;
+    act(() => {
+      secondLoad = load!();
+    });
+
+    expect(firstSignal?.aborted).toBe(true);
+    expect(getHeaderSnapshotsMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      first.resolve(response('stale'));
+      await firstLoad;
+    });
+    expect(observedItems).toEqual([]);
+
+    await act(async () => {
+      second.resolve(response('current'));
+      await secondLoad;
+    });
+    expect(observedItems).toEqual([[{ event_hash: 'current', timestamp_ms: 2 }]]);
   });
 
   it('clears snapshots from the previous service when the replacement request fails', async () => {
