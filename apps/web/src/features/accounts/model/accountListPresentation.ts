@@ -1,5 +1,5 @@
 import type { QuotaCooldownInfo } from '@/services/api';
-import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/authFilesPageModel';
+import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/credentialStatus';
 import type { AccountRow } from './accountRows';
 import {
   summarizeGroupedQuotaAvailability,

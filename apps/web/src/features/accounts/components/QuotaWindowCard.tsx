@@ -6,7 +6,6 @@
  */
 import { useTranslation } from 'react-i18next';
 import type { JSX } from 'react';
-import { QuotaProgressBar } from '@/components/quota/QuotaCard';
 import {
   IconCalendar,
   IconCircleHelp,
@@ -32,6 +31,7 @@ import type {
 } from '@/features/accounts/model/accountDetailViewModel';
 import { formatQuotaResetDisplay } from '@/features/accounts/model/accountsPagePresentation';
 import { formatUsd } from '@/utils/usage';
+import { QuotaProgressBar } from './QuotaProgressBar';
 import styles from './QuotaWindowCard.module.scss';
 
 export type QuotaWindowCardMode = 'standard' | 'model' | 'other';

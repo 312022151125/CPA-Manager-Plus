@@ -283,6 +283,8 @@ export interface CodexInspectionQuotaWindow {
   labelParams?: Record<string, string | number>;
   usedPercent?: number | null;
   resetLabel?: string;
+  resetAtMs?: number | null;
+  resetAccuracy?: 'exact' | 'derived' | 'estimated' | 'unknown';
   limitWindowSeconds?: number | null;
 }
 
@@ -312,6 +314,7 @@ export interface CodexInspectionResult {
   error?: string;
   planType?: string | null;
   quotaWindows?: CodexInspectionQuotaWindow[];
+  quotaInventoryObserved?: boolean;
   errorKind?: string;
   errorDetail?: string;
   createdAtMs: number;
@@ -2311,7 +2314,7 @@ const getDemoCodexInspectionActionsResponse = (
         action,
         status: 'needs_review',
         success: true,
-        error: '该建议动作需要到认证文件管理中人工处理',
+        error: '该建议动作需要到凭证管理中人工处理',
       };
     }
     const fileName = result.fileName.trim();
@@ -2378,7 +2381,7 @@ const getDemoCodexInspectionActionsResponse = (
         action,
         status: 'needs_review',
         success: true,
-        error: '同一认证文件下存在多个不同建议动作，文件级处理已阻止，请到认证文件管理中手动处理',
+        error: '同一认证文件下存在多个不同建议动作，文件级处理已阻止，请到凭证管理中手动处理',
       };
     }
     if (seenGroupKeys.has(group.key)) {

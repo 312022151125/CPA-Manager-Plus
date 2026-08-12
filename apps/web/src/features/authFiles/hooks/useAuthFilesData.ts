@@ -10,8 +10,12 @@ import {
   type SetStateAction,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { authFilesApi, type AuthFileFieldsPatch } from '@/services/api';
-import { apiClient } from '@/services/api/client';
+import {
+  authFilesApi,
+  type AuthFileFieldsPatch,
+  type AuthFilesApiRequestScope,
+} from '@/services/api';
+import { apiClient, createScopedApiRequestConfig } from '@/services/api/client';
 import { useNotificationStore } from '@/stores';
 import type { AuthFileItem } from '@/types';
 import { formatFileSize } from '@/utils/format';
@@ -37,7 +41,7 @@ import {
   getAuthFileSelectionKey,
   getWholeAuthFileDeleteCandidates,
   type AuthFilePatchTarget,
-} from '@/features/authFiles/model/authFilesPageModel';
+} from '@/features/authFiles/model/credentialStatus';
 import {
   clearCodexInspectionDisableOwnership,
   clearCodexInspectionDisableOwnershipForFile,
@@ -80,6 +84,20 @@ export type AuthFilesBatchDeleteOptions = {
   confirmText?: string;
 };
 
+export type AuthFilesCredentialMutation =
+  | {
+      kind: 'source-files-changed';
+      fileNames: string[];
+    }
+  | {
+      kind: 'credential-refreshed';
+      selectionKeys: string[];
+    }
+  | {
+      kind: 'status-changed';
+      selectionKeys: string[];
+    };
+
 export type UseAuthFilesDataResult = {
   files: AuthFileItem[];
   selectedFiles: Set<string>;
@@ -95,7 +113,7 @@ export type UseAuthFilesDataResult = {
   batchStatusUpdating: boolean;
   batchFieldsUpdating: boolean;
   fileInputRef: RefObject<HTMLInputElement | null>;
-  loadFiles: (options?: { throwOnError?: boolean }) => Promise<void>;
+  loadFiles: (options?: { throwOnError?: boolean }) => Promise<AuthFileItem[] | undefined>;
   handleUploadClick: () => void;
   handleFileChange: (event: ChangeEvent<HTMLInputElement>) => Promise<void>;
   savePastedAuthJson: (
@@ -140,6 +158,7 @@ type AuthFilePatchTargetGroup = {
 const CREDENTIAL_REFRESH_POLL_INTERVAL_MS = 1_000;
 const CREDENTIAL_REFRESH_POLL_ATTEMPTS = 15;
 const CREDENTIAL_REFRESH_CLOCK_SKEW_MS = 5 * 60_000;
+const CREDENTIAL_REFRESH_TIMESTAMP_RESOLUTION_MS = 1_000;
 
 const getAuthFileSourceMemberKey = (file: AuthFileItem): string =>
   JSON.stringify([
@@ -271,9 +290,10 @@ const resolveVerifiedAuthFileDeleteSelector = (
 const verifyPluginSourceDeleteFallback = async (
   snapshot: AuthFileDeleteSnapshot,
   selector: string,
-  targetChangedError: string
+  targetChangedError: string,
+  requestScope?: AuthFilesApiRequestScope
 ): Promise<void> => {
-  const response = await authFilesApi.list();
+  const response = requestScope ? await authFilesApi.list(requestScope) : await authFilesApi.list();
   const freshFiles = Array.isArray(response.files) ? response.files : [];
   const freshMembers = getAuthFileSourceMembers(freshFiles, snapshot.name);
   const freshSelector = resolveVerifiedAuthFileDeleteSelector(freshFiles, snapshot);
@@ -290,12 +310,15 @@ const verifyPluginSourceDeleteFallback = async (
 const deleteVerifiedAuthFileSnapshots = async (
   snapshots: AuthFileDeleteSnapshot[],
   targetChangedError: string,
-  unconfirmedError: string
+  unconfirmedError: string,
+  requestScope?: AuthFilesApiRequestScope
 ): Promise<AuthFileDeleteExecutionResult> => {
   const result: AuthFileDeleteExecutionResult = { deleted: 0, files: [], failed: [] };
   for (const snapshot of snapshots) {
     try {
-      const response = await authFilesApi.list();
+      const response = requestScope
+        ? await authFilesApi.list(requestScope)
+        : await authFilesApi.list();
       const freshFiles = Array.isArray(response.files) ? response.files : [];
       const selector = resolveVerifiedAuthFileDeleteSelector(freshFiles, snapshot);
       if (!selector) {
@@ -307,13 +330,40 @@ const deleteVerifiedAuthFileSnapshots = async (
       );
       const deletion =
         selector === snapshot.name
-          ? await authFilesApi.deleteFileByName(selector, snapshot.name, undefined, identityTargets)
-          : await authFilesApi.deleteFileByName(
-              selector,
-              snapshot.name,
-              () => verifyPluginSourceDeleteFallback(snapshot, selector, targetChangedError),
-              identityTargets
-            );
+          ? requestScope
+            ? await authFilesApi.deleteFileByName(
+                selector,
+                snapshot.name,
+                undefined,
+                identityTargets,
+                requestScope
+              )
+            : await authFilesApi.deleteFileByName(
+                selector,
+                snapshot.name,
+                undefined,
+                identityTargets
+              )
+          : requestScope
+            ? await authFilesApi.deleteFileByName(
+                selector,
+                snapshot.name,
+                () =>
+                  verifyPluginSourceDeleteFallback(
+                    snapshot,
+                    selector,
+                    targetChangedError,
+                    requestScope
+                  ),
+                identityTargets,
+                requestScope
+              )
+            : await authFilesApi.deleteFileByName(
+                selector,
+                snapshot.name,
+                () => verifyPluginSourceDeleteFallback(snapshot, selector, targetChangedError),
+                identityTargets
+              );
       result.deleted += deletion.deleted;
       result.files.push(...deletion.files);
       result.failed.push(...deletion.failed);
@@ -392,6 +442,25 @@ const waitForCredentialRefreshPoll = () =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, CREDENTIAL_REFRESH_POLL_INTERVAL_MS);
   });
+
+const waitForCredentialRefreshTimestampTick = async (
+  baselineTimestamp: number
+): Promise<number> => {
+  const requestedAtMs = Date.now();
+  if (
+    !Number.isFinite(baselineTimestamp) ||
+    Math.floor(baselineTimestamp / CREDENTIAL_REFRESH_TIMESTAMP_RESOLUTION_MS) !==
+      Math.floor(requestedAtMs / CREDENTIAL_REFRESH_TIMESTAMP_RESOLUTION_MS)
+  ) {
+    return requestedAtMs;
+  }
+
+  const delayMs = CREDENTIAL_REFRESH_TIMESTAMP_RESOLUTION_MS + 1;
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+  return Date.now();
+};
 
 const normalizePatchTargetAuthIndex = (
   value: AuthFilePatchTarget['authIndex']
@@ -479,7 +548,8 @@ const verifyPluginSourceStatusFallback = async (
   snapshotFiles: AuthFileItem[],
   target: AuthFilePatchTarget,
   targetChangedError: string,
-  allowSharedSourceMutation: boolean
+  allowSharedSourceMutation: boolean,
+  requestScope?: AuthFilesApiRequestScope
 ): Promise<AuthFilePatchTarget[]> => {
   const physicalName = String(target.name ?? '').trim();
   const runtimeId = String(target.runtimeId ?? '').trim();
@@ -488,7 +558,7 @@ const verifyPluginSourceStatusFallback = async (
   }
 
   const expectedMembers = getAuthFileSourceMembers(snapshotFiles, physicalName);
-  const response = await authFilesApi.list();
+  const response = requestScope ? await authFilesApi.list(requestScope) : await authFilesApi.list();
   const freshFiles = Array.isArray(response.files) ? response.files : [];
   const freshMembers = getAuthFileSourceMembers(freshFiles, physicalName);
   const resolution = resolveAuthFileStatusMutationTarget(freshFiles, target);
@@ -515,7 +585,8 @@ const setAuthFileStatusWithVerifiedPluginFallback = (
   target: AuthFilePatchTarget,
   disabled: boolean,
   targetChangedError: string,
-  allowSharedSourceMutation = false
+  allowSharedSourceMutation = false,
+  requestScope?: AuthFilesApiRequestScope
 ) => {
   const requestTarget = getStatusRequestTarget(target);
   const physicalName = String(requestTarget.name ?? '').trim();
@@ -524,18 +595,46 @@ const setAuthFileStatusWithVerifiedPluginFallback = (
     const sourceIdentities = getAuthFileSourceMembers(snapshotFiles, physicalName).map(
       getAuthFilePatchTarget
     );
-    return authFilesApi.setVerifiedSourceFileStatus(requestTarget, disabled, sourceIdentities);
+    return requestScope
+      ? authFilesApi.setVerifiedSourceFileStatus(
+          requestTarget,
+          disabled,
+          sourceIdentities,
+          requestScope
+        )
+      : authFilesApi.setVerifiedSourceFileStatus(requestTarget, disabled, sourceIdentities);
   }
   return runtimeId && runtimeId !== physicalName
-    ? authFilesApi.setStatusWithPluginSourceFallback(requestTarget, disabled, () =>
-        verifyPluginSourceStatusFallback(
-          snapshotFiles,
-          target,
-          targetChangedError,
-          allowSharedSourceMutation
+    ? requestScope
+      ? authFilesApi.setStatusWithPluginSourceFallback(
+          requestTarget,
+          disabled,
+          () =>
+            verifyPluginSourceStatusFallback(
+              snapshotFiles,
+              target,
+              targetChangedError,
+              allowSharedSourceMutation,
+              requestScope
+            ),
+          requestScope
         )
-      )
-    : authFilesApi.setStatusWithPluginSourceFallback(requestTarget, disabled);
+      : authFilesApi.setStatusWithPluginSourceFallback(requestTarget, disabled, () =>
+          verifyPluginSourceStatusFallback(
+            snapshotFiles,
+            target,
+            targetChangedError,
+            allowSharedSourceMutation
+          )
+        )
+    : requestScope
+      ? authFilesApi.setStatusWithPluginSourceFallback(
+          requestTarget,
+          disabled,
+          undefined,
+          requestScope
+        )
+      : authFilesApi.setStatusWithPluginSourceFallback(requestTarget, disabled);
 };
 
 const groupBatchPatchTargets = (targets: AuthFilePatchTarget[]): AuthFilePatchTargetGroup[] => {
@@ -646,12 +745,16 @@ export const prepareAuthFilesForUpload = async (files: File[]): Promise<Prepared
 
 type UseAuthFilesDataOptions = {
   connectionFingerprint?: string | null;
+  requestScope?: AuthFilesApiRequestScope;
+  onCredentialMutation?: (mutation: AuthFilesCredentialMutation) => void;
 };
 
 export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuthFilesDataResult {
   const { t } = useTranslation();
   const { showNotification, showConfirmation } = useNotificationStore();
   const connectionFingerprint = options.connectionFingerprint?.trim() ?? '';
+  const requestScope = options.requestScope;
+  const onCredentialMutation = options.onCredentialMutation;
 
   const [files, setFiles] = useState<AuthFileItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -670,6 +773,10 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const connectionFingerprintRef = useRef(connectionFingerprint);
   const authFilesOperationGenerationRef = useRef(0);
+  const uploadOperationRef = useRef<symbol | null>(null);
+  const authJsonPasteOperationRef = useRef<symbol | null>(null);
+  const deleteOperationRef = useRef<symbol | null>(null);
+  const deleteAllOperationRef = useRef<symbol | null>(null);
   const loadFilesRequestRef = useRef(0);
   const filesRevisionRef = useRef(0);
   const batchStatusPendingRef = useRef<number | null>(null);
@@ -690,10 +797,19 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     batchStatusPendingRef.current = null;
     statusMutationPendingRef.current.clear();
     batchFieldsPendingRef.current = null;
+    uploadOperationRef.current = null;
+    authJsonPasteOperationRef.current = null;
+    authJsonPasteSavingRef.current = false;
+    deleteOperationRef.current = null;
+    deleteAllOperationRef.current = null;
     commitFiles([]);
     setSelectedFiles(new Set());
     setLoading(true);
     setError('');
+    setUploading(false);
+    setAuthJsonPasteSaving(false);
+    setDeleting(null);
+    setDeletingAll(false);
     setStatusUpdating({});
     setBatchStatusUpdating(false);
     setBatchFieldsUpdating(false);
@@ -725,6 +841,25 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       );
     },
     [connectionFingerprint]
+  );
+  const notifySourceFilesChanged = useCallback(
+    (fileNames: string[]) => {
+      const normalizedNames = Array.from(
+        new Set(fileNames.map((name) => name.trim()).filter(Boolean))
+      );
+      if (normalizedNames.length > 0) {
+        onCredentialMutation?.({ kind: 'source-files-changed', fileNames: normalizedNames });
+      }
+    },
+    [onCredentialMutation]
+  );
+  const notifyCredentialSelectionChanged = useCallback(
+    (kind: 'credential-refreshed' | 'status-changed', selectionKeys: string[]) => {
+      const normalizedKeys = Array.from(new Set(selectionKeys.filter((key) => key.length > 0)));
+      if (normalizedKeys.length > 0)
+        onCredentialMutation?.({ kind, selectionKeys: normalizedKeys });
+    },
+    [onCredentialMutation]
   );
   const toggleSelect = useCallback((key: string) => {
     setSelectedFiles((prev) => {
@@ -780,6 +915,7 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
 
       const deletedSet = new Set(deletedNames);
       deletedNames.forEach(clearInspectionOwnershipForFile);
+      notifySourceFilesChanged(deletedNames);
       commitFiles((prev) => prev.filter((file) => !deletedSet.has(file.name)));
       setSelectedFiles((prev) => {
         if (prev.size === 0) return prev;
@@ -796,7 +932,7 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         return changed ? next : prev;
       });
     },
-    [clearInspectionOwnershipForFile, commitFiles]
+    [clearInspectionOwnershipForFile, commitFiles, notifySourceFilesChanged]
   );
 
   useEffect(() => {
@@ -817,7 +953,7 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
   }, [files, selectedFiles.size]);
 
   const loadFiles = useCallback(
-    async (options?: { throwOnError?: boolean }) => {
+    async (options?: { throwOnError?: boolean }): Promise<AuthFileItem[] | undefined> => {
       const requestConnectionFingerprint = connectionFingerprint;
       const generation = authFilesOperationGenerationRef.current;
       const requestID = ++loadFilesRequestRef.current;
@@ -828,11 +964,21 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       setLoading(true);
       setError('');
       try {
-        const data = await authFilesApi.list();
-        if (!isCurrentRequest()) return;
-        commitFiles(data?.files || []);
+        const data = requestScope
+          ? await authFilesApi.list(requestScope)
+          : await authFilesApi.list();
+        if (!isCurrentRequest()) {
+          if (options?.throwOnError) throw new Error(t('notification.refresh_failed'));
+          return;
+        }
+        const nextFiles = Array.isArray(data?.files) ? data.files : [];
+        commitFiles(nextFiles);
+        return nextFiles;
       } catch (err: unknown) {
-        if (!isCurrentRequest()) return;
+        if (!isCurrentRequest()) {
+          if (options?.throwOnError) throw err;
+          return;
+        }
         const errorMessage = err instanceof Error ? err.message : t('notification.refresh_failed');
         setError(errorMessage);
         if (options?.throwOnError) {
@@ -842,7 +988,7 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         if (isCurrentRequest()) setLoading(false);
       }
     },
-    [commitFiles, connectionFingerprint, t]
+    [commitFiles, connectionFingerprint, requestScope, t]
   );
 
   const handleUploadClick = useCallback(() => {
@@ -858,6 +1004,10 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       const validFiles: File[] = [];
       const invalidFiles: string[] = [];
       const oversizedFiles: string[] = [];
+      const operationGeneration = authFilesOperationGenerationRef.current;
+      const operationToken = Symbol('auth-file-upload');
+      const isCurrentOperation = () =>
+        authFilesOperationGenerationRef.current === operationGeneration;
 
       filesToUpload.forEach((file) => {
         if (!file.name.endsWith('.json')) {
@@ -886,19 +1036,25 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         return;
       }
 
+      uploadOperationRef.current = operationToken;
       setUploading(true);
       try {
         const prepared = await prepareAuthFilesForUpload(validFiles);
+        if (!isCurrentOperation()) return;
         const result =
           prepared.files.length > 0
-            ? await authFilesApi.uploadFiles(prepared.files)
+            ? requestScope
+              ? await authFilesApi.uploadFiles(prepared.files, requestScope)
+              : await authFilesApi.uploadFiles(prepared.files)
             : { status: 'error', uploaded: 0, files: [], failed: [] };
+        if (!isCurrentOperation()) return;
         const successCount = result.uploaded;
         const failures = [...prepared.failures, ...result.failed];
         const hasFailureStatus = hasAuthFileUploadFailureStatus(result.status);
 
         if (successCount > 0) {
           result.files.forEach(clearInspectionOwnershipForFile);
+          notifySourceFilesChanged(result.files);
           if (!hasFailureStatus || failures.length > 0) {
             const suffix =
               prepared.files.length > 1 ? ` (${successCount}/${prepared.files.length})` : '';
@@ -908,6 +1064,7 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
             );
           }
           await loadFiles();
+          if (!isCurrentOperation()) return;
         }
 
         if (failures.length > 0 || hasFailureStatus) {
@@ -920,14 +1077,25 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           );
         }
       } catch (err: unknown) {
+        if (!isCurrentOperation()) return;
         const errorMessage = err instanceof Error ? err.message : 'Unknown error';
         showNotification(`${t('notification.upload_failed')}: ${errorMessage}`, 'error');
       } finally {
-        setUploading(false);
+        if (uploadOperationRef.current === operationToken) {
+          uploadOperationRef.current = null;
+          setUploading(false);
+        }
         event.target.value = '';
       }
     },
-    [clearInspectionOwnershipForFile, loadFiles, showNotification, t]
+    [
+      clearInspectionOwnershipForFile,
+      loadFiles,
+      notifySourceFilesChanged,
+      requestScope,
+      showNotification,
+      t,
+    ]
   );
 
   const savePastedAuthJson = useCallback(
@@ -935,6 +1103,12 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       if (authJsonPasteSavingRef.current) {
         throw new Error(t('auth_files.paste_error_save_in_progress'));
       }
+      const operationGeneration = authFilesOperationGenerationRef.current;
+      const operationToken = Symbol('auth-json-paste');
+      const isCurrentOperation = () =>
+        authFilesOperationGenerationRef.current === operationGeneration &&
+        authJsonPasteOperationRef.current === operationToken;
+      authJsonPasteOperationRef.current = operationToken;
       authJsonPasteSavingRef.current = true;
       setAuthJsonPasteSaving(true);
       try {
@@ -942,8 +1116,18 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         const savedFileNames = payloads.map((payload) => payload.fileName);
         if (payloads.length === 1) {
           try {
-            await authFilesApi.saveJsonObject(payloads[0].fileName, payloads[0].authJson);
+            if (requestScope) {
+              await authFilesApi.saveJsonObject(
+                payloads[0].fileName,
+                payloads[0].authJson,
+                requestScope
+              );
+            } else {
+              await authFilesApi.saveJsonObject(payloads[0].fileName, payloads[0].authJson);
+            }
+            if (!isCurrentOperation()) return savedFileNames;
             clearInspectionOwnershipForFile(payloads[0].fileName);
+            notifySourceFilesChanged([payloads[0].fileName]);
           } catch {
             throw new Error(t('notification.save_failed'));
           }
@@ -951,11 +1135,15 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           const uploadFiles = createUniqueConvertedAuthFiles(payloads, []);
           let result;
           try {
-            result = await authFilesApi.uploadFiles(uploadFiles);
+            result = requestScope
+              ? await authFilesApi.uploadFiles(uploadFiles, requestScope)
+              : await authFilesApi.uploadFiles(uploadFiles);
           } catch {
             throw new Error(t('notification.save_failed'));
           }
+          if (!isCurrentOperation()) return savedFileNames;
           result.files.forEach(clearInspectionOwnershipForFile);
+          notifySourceFilesChanged(result.files);
           if (
             hasAuthFileUploadFailureStatus(result.status) ||
             result.failed.length > 0 ||
@@ -970,7 +1158,9 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
             if (result.uploaded > 0) {
               try {
                 await loadFiles({ throwOnError: true });
+                if (!isCurrentOperation()) return savedFileNames;
               } catch (reloadError) {
+                if (!isCurrentOperation()) return savedFileNames;
                 const reloadMessage =
                   reloadError instanceof Error
                     ? reloadError.message
@@ -1008,7 +1198,9 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         };
         try {
           await loadFiles({ throwOnError: true });
+          if (!isCurrentOperation()) return savedFileNames;
         } catch (reloadError) {
+          if (!isCurrentOperation()) return savedFileNames;
           const reloadMessage =
             reloadError instanceof Error ? reloadError.message : t('notification.refresh_failed');
           showPasteSuccess();
@@ -1018,17 +1210,31 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         showPasteSuccess();
         return savedFileNames;
       } catch (err) {
+        if (!isCurrentOperation()) return [];
         throw new Error(err instanceof Error ? err.message : t('notification.save_failed'));
       } finally {
-        authJsonPasteSavingRef.current = false;
-        setAuthJsonPasteSaving(false);
+        if (authJsonPasteOperationRef.current === operationToken) {
+          authJsonPasteOperationRef.current = null;
+          authJsonPasteSavingRef.current = false;
+          setAuthJsonPasteSaving(false);
+        }
       }
     },
-    [clearInspectionOwnershipForFile, loadFiles, showNotification, t]
+    [
+      clearInspectionOwnershipForFile,
+      loadFiles,
+      notifySourceFilesChanged,
+      requestScope,
+      showNotification,
+      t,
+    ]
   );
 
   const handleDelete = useCallback(
     (item: AuthFileItem) => {
+      const confirmationConnectionFingerprint = connectionFingerprint;
+      const confirmationRequestScope = requestScope;
+      const confirmationGeneration = authFilesOperationGenerationRef.current;
       const name = readAuthFileStatusPhysicalName(item);
       if (!name) {
         showNotification(t('notification.delete_failed'), 'error');
@@ -1061,13 +1267,23 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           confirmText: t('auth_files.delete_second_action'),
         },
         onConfirm: async () => {
+          if (
+            authFilesOperationGenerationRef.current !== confirmationGeneration ||
+            connectionFingerprintRef.current !== confirmationConnectionFingerprint
+          )
+            return;
+          const operationGeneration = authFilesOperationGenerationRef.current;
+          const operationToken = Symbol('auth-file-delete');
+          deleteOperationRef.current = operationToken;
           setDeleting(name);
           try {
             const result = await deleteVerifiedAuthFileSnapshots(
               [deleteSnapshot],
               t('auth_files.delete_target_changed'),
-              t('notification.delete_failed')
+              t('notification.delete_failed'),
+              confirmationRequestScope
             );
+            if (authFilesOperationGenerationRef.current !== operationGeneration) return;
             if (result.deleted <= 0 || result.files.length === 0) {
               const failure = result.failed.find((item) => item.name === name) ?? result.failed[0];
               const message = failure?.error
@@ -1079,19 +1295,34 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
             showNotification(t('auth_files.delete_success'), 'success');
             applyDeletedFiles(result.files);
           } catch (err: unknown) {
+            if (authFilesOperationGenerationRef.current !== operationGeneration) return;
             const errorMessage = err instanceof Error ? err.message : '';
             showNotification(`${t('notification.delete_failed')}: ${errorMessage}`, 'error');
           } finally {
-            setDeleting(null);
+            if (deleteOperationRef.current === operationToken) {
+              deleteOperationRef.current = null;
+              setDeleting(null);
+            }
           }
         },
       });
     },
-    [applyDeletedFiles, files, showConfirmation, showNotification, t]
+    [
+      applyDeletedFiles,
+      connectionFingerprint,
+      files,
+      requestScope,
+      showConfirmation,
+      showNotification,
+      t,
+    ]
   );
 
   const handleDeleteAll = useCallback(
     (deleteAllOptions: DeleteAllOptions) => {
+      const confirmationConnectionFingerprint = connectionFingerprint;
+      const confirmationRequestScope = requestScope;
+      const confirmationGeneration = authFilesOperationGenerationRef.current;
       const {
         filter,
         problemOnly,
@@ -1188,11 +1419,21 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           confirmText: t('auth_files.delete_second_action'),
         },
         onConfirm: async () => {
+          if (
+            authFilesOperationGenerationRef.current !== confirmationGeneration ||
+            connectionFingerprintRef.current !== confirmationConnectionFingerprint
+          )
+            return;
+          const operationGeneration = authFilesOperationGenerationRef.current;
+          const operationToken = Symbol('auth-file-delete-all');
+          deleteAllOperationRef.current = operationToken;
           setDeletingAll(true);
           try {
             if (deletesAllFiles) {
-              await authFilesApi.deleteAll();
+              await authFilesApi.deleteAll(confirmationRequestScope);
+              if (authFilesOperationGenerationRef.current !== operationGeneration) return;
               showNotification(t('auth_files.delete_all_success'), 'success');
+              notifySourceFilesChanged(fileNames);
               commitFiles((prev) => prev.filter((file) => isRuntimeOnlyAuthFile(file)));
               deselectAll();
               return;
@@ -1201,8 +1442,10 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
             const result = await deleteVerifiedAuthFileSnapshots(
               deleteSnapshots,
               t('auth_files.delete_target_changed'),
-              t('notification.delete_failed')
+              t('notification.delete_failed'),
+              confirmationRequestScope
             );
+            if (authFilesOperationGenerationRef.current !== operationGeneration) return;
             const success = result.deleted;
             const failed = result.failed.length;
 
@@ -1268,23 +1511,39 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
             }
             deselectAll();
           } catch (err: unknown) {
+            if (authFilesOperationGenerationRef.current !== operationGeneration) return;
             const errorMessage = err instanceof Error ? err.message : '';
             showNotification(`${t('notification.delete_failed')}: ${errorMessage}`, 'error');
           } finally {
-            setDeletingAll(false);
+            if (deleteAllOperationRef.current === operationToken) {
+              deleteAllOperationRef.current = null;
+              setDeletingAll(false);
+            }
           }
         },
       });
     },
-    [applyDeletedFiles, commitFiles, deselectAll, files, showConfirmation, showNotification, t]
+    [
+      applyDeletedFiles,
+      commitFiles,
+      connectionFingerprint,
+      deselectAll,
+      files,
+      notifySourceFilesChanged,
+      requestScope,
+      showConfirmation,
+      showNotification,
+      t,
+    ]
   );
 
   const handleDownload = useCallback(
     async (name: string) => {
       try {
+        const scopedRequestConfig = requestScope ? createScopedApiRequestConfig(requestScope) : {};
         const response = await apiClient.getRaw(
           `/auth-files/download?name=${encodeURIComponent(name)}`,
-          { responseType: 'blob' }
+          { ...scopedRequestConfig, responseType: 'blob' }
         );
         const blob = new Blob([response.data]);
         downloadBlob({ filename: name, blob });
@@ -1294,7 +1553,7 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         showNotification(`${t('notification.download_failed')}: ${errorMessage}`, 'error');
       }
     },
-    [showNotification, t]
+    [requestScope, showNotification, t]
   );
 
   const handleCredentialRefresh = useCallback(
@@ -1308,7 +1567,9 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       setCredentialRefreshing((prev) => ({ ...prev, [operationKey]: true }));
 
       try {
-        const response = await authFilesApi.list();
+        const response = requestScope
+          ? await authFilesApi.list(requestScope)
+          : await authFilesApi.list();
         const currentFiles = Array.isArray(response.files) ? response.files : [];
         const resolution = resolveAuthFileStatusMutationTarget(
           currentFiles,
@@ -1327,13 +1588,23 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         const currentTarget = getAuthFilePatchTarget(currentFile);
         const baselineTimestamp = readCredentialRefreshTimestamp(currentFile);
         const baselinePlanType = readCredentialPlanType(currentFile);
-        const requestedAtMs = Date.now();
         commitFiles(currentFiles);
 
-        await authFilesApi.requestCredentialRefresh(
-          currentTarget,
-          getAuthFileSourceMembers(currentFiles, currentFile.name).map(getAuthFilePatchTarget)
+        const requestedAtMs = await waitForCredentialRefreshTimestampTick(baselineTimestamp);
+        if (credentialRefreshGenerationRef.current !== generation) return;
+
+        const sourceIdentities = getAuthFileSourceMembers(currentFiles, currentFile.name).map(
+          getAuthFilePatchTarget
         );
+        if (requestScope) {
+          await authFilesApi.requestCredentialRefresh(
+            currentTarget,
+            sourceIdentities,
+            requestScope
+          );
+        } else {
+          await authFilesApi.requestCredentialRefresh(currentTarget, sourceIdentities);
+        }
         let latestFiles: AuthFileItem[] | null = null;
 
         for (let attempt = 0; attempt < CREDENTIAL_REFRESH_POLL_ATTEMPTS; attempt += 1) {
@@ -1343,7 +1614,9 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           if (credentialRefreshGenerationRef.current !== generation) return;
 
           try {
-            const data = await authFilesApi.list();
+            const data = requestScope
+              ? await authFilesApi.list(requestScope)
+              : await authFilesApi.list();
             if (credentialRefreshGenerationRef.current !== generation) return;
             latestFiles = data?.files || [];
             const refreshedTarget = findCredentialRefreshTarget(latestFiles, currentFile);
@@ -1356,6 +1629,10 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
                 requestedAtMs
               )
             ) {
+              notifyCredentialSelectionChanged('credential-refreshed', [
+                getAuthFileSelectionKey(currentFile),
+                getAuthFileSelectionKey(refreshedTarget),
+              ]);
               commitFiles(latestFiles);
               showNotification(
                 t('auth_files.credential_refresh_completed', { name: item.name }),
@@ -1395,7 +1672,7 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         }
       }
     },
-    [commitFiles, showNotification, t]
+    [commitFiles, notifyCredentialSelectionChanged, requestScope, showNotification, t]
   );
 
   const handleStatusToggle = useCallback(
@@ -1422,7 +1699,9 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       setStatusUpdating((prev) => ({ ...prev, [operationKey]: true }));
 
       try {
-        const response = await authFilesApi.list();
+        const response = requestScope
+          ? await authFilesApi.list(requestScope)
+          : await authFilesApi.list();
         if (authFilesOperationGenerationRef.current !== generation) return;
         const currentFiles = Array.isArray(response.files) ? response.files : [];
         if (filesRevisionRef.current === filesRevision) commitFiles(currentFiles);
@@ -1478,12 +1757,24 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           return next;
         });
 
-        const res = await setAuthFileStatusWithVerifiedPluginFallback(
-          currentFiles,
-          currentTarget,
-          nextDisabled,
-          t('auth_files.status_mutation_scope_ambiguous', { name: currentFile.name })
-        );
+        const targetChangedError = t('auth_files.status_mutation_scope_ambiguous', {
+          name: currentFile.name,
+        });
+        const res = requestScope
+          ? await setAuthFileStatusWithVerifiedPluginFallback(
+              currentFiles,
+              currentTarget,
+              nextDisabled,
+              targetChangedError,
+              false,
+              requestScope
+            )
+          : await setAuthFileStatusWithVerifiedPluginFallback(
+              currentFiles,
+              currentTarget,
+              nextDisabled,
+              targetChangedError
+            );
         if (authFilesOperationGenerationRef.current !== generation) return;
         const sourceFileMutation =
           resolution.scope === 'source-file' || res.mutationScope === 'source-file';
@@ -1504,6 +1795,10 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         } else {
           clearInspectionOwnershipForIdentity(currentFile);
         }
+        notifyCredentialSelectionChanged(
+          'status-changed',
+          confirmedAffectedFiles.map(getAuthFileSelectionKey)
+        );
         showNotification(
           enabled
             ? t('auth_files.status_enabled_success', { name })
@@ -1536,6 +1831,8 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       clearInspectionOwnershipForIdentity,
       commitFiles,
       files,
+      notifyCredentialSelectionChanged,
+      requestScope,
       showNotification,
       t,
     ]
@@ -1576,7 +1873,9 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       });
 
       try {
-        const response = await authFilesApi.list();
+        const response = requestScope
+          ? await authFilesApi.list(requestScope)
+          : await authFilesApi.list();
         if (authFilesOperationGenerationRef.current !== generation) return;
         const currentFiles = Array.isArray(response.files) ? response.files : [];
         if (filesRevisionRef.current === filesRevision) commitFiles(currentFiles);
@@ -1712,13 +2011,25 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
               if (authFilesOperationGenerationRef.current !== generation) break;
               const entry = entries[index];
               try {
-                const value = await setAuthFileStatusWithVerifiedPluginFallback(
-                  currentFiles,
-                  entry.target,
-                  nextDisabled,
-                  t('auth_files.status_mutation_scope_ambiguous', { name: entry.file.name }),
-                  allowSharedSourceMutation
-                );
+                const targetChangedError = t('auth_files.status_mutation_scope_ambiguous', {
+                  name: entry.file.name,
+                });
+                const value = requestScope
+                  ? await setAuthFileStatusWithVerifiedPluginFallback(
+                      currentFiles,
+                      entry.target,
+                      nextDisabled,
+                      targetChangedError,
+                      allowSharedSourceMutation,
+                      requestScope
+                    )
+                  : await setAuthFileStatusWithVerifiedPluginFallback(
+                      currentFiles,
+                      entry.target,
+                      nextDisabled,
+                      targetChangedError,
+                      allowSharedSourceMutation
+                    );
                 outcomes.push({ entry, result: { status: 'fulfilled', value } });
                 if (authFilesOperationGenerationRef.current !== generation) break;
                 if (value.mutationScope === 'source-file') break;
@@ -1796,6 +2107,10 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
               prev
             )
           );
+          notifyCredentialSelectionChanged(
+            'status-changed',
+            confirmedUpdates.flatMap((update) => update.expectedFiles.map(getAuthFileSelectionKey))
+          );
         }
 
         if (needsReviewCount > 0) {
@@ -1851,6 +2166,8 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       commitFiles,
       deselectAll,
       files,
+      notifyCredentialSelectionChanged,
+      requestScope,
       showNotification,
       t,
     ]
@@ -1873,7 +2190,9 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       setBatchFieldsUpdating(true);
 
       try {
-        const response = await authFilesApi.list();
+        const response = requestScope
+          ? await authFilesApi.list(requestScope)
+          : await authFilesApi.list();
         if (authFilesOperationGenerationRef.current !== generation) return null;
         const currentFiles = Array.isArray(response.files) ? response.files : [];
         if (filesRevisionRef.current === filesRevision) commitFiles(currentFiles);
@@ -1923,18 +2242,33 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         const results = await Promise.allSettled(
           executableGroups.map((group) => {
             if (group.sourceIdentities.length === 1) {
-              return authFilesApi.patchFieldsWithPluginSourceFallback(
-                group.targets[0],
-                fields,
-                group.sourceIdentities
-              );
+              return requestScope
+                ? authFilesApi.patchFieldsWithPluginSourceFallback(
+                    group.targets[0],
+                    fields,
+                    group.sourceIdentities,
+                    requestScope
+                  )
+                : authFilesApi.patchFieldsWithPluginSourceFallback(
+                    group.targets[0],
+                    fields,
+                    group.sourceIdentities
+                  );
             }
-            return authFilesApi.patchFieldsForAuthIndexes(
-              group.name,
-              group.targets,
-              group.sourceIdentities,
-              fields
-            );
+            return requestScope
+              ? authFilesApi.patchFieldsForAuthIndexes(
+                  group.name,
+                  group.targets,
+                  group.sourceIdentities,
+                  fields,
+                  requestScope
+                )
+              : authFilesApi.patchFieldsForAuthIndexes(
+                  group.name,
+                  group.targets,
+                  group.sourceIdentities,
+                  fields
+                );
           })
         );
         if (authFilesOperationGenerationRef.current !== generation) return null;
@@ -1978,7 +2312,7 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         }
       }
     },
-    [commitFiles, deselectAll, loadFiles, showNotification, t]
+    [commitFiles, deselectAll, loadFiles, requestScope, showNotification, t]
   );
 
   const batchDownload = useCallback(
@@ -1991,9 +2325,12 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
 
       for (const name of uniqueNames) {
         try {
+          const scopedRequestConfig = requestScope
+            ? createScopedApiRequestConfig(requestScope)
+            : {};
           const response = await apiClient.getRaw(
             `/auth-files/download?name=${encodeURIComponent(name)}`,
-            { responseType: 'blob' }
+            { ...scopedRequestConfig, responseType: 'blob' }
           );
           const blob = new Blob([response.data]);
           downloadBlob({ filename: name, blob });
@@ -2015,11 +2352,14 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         );
       }
     },
-    [showNotification, t]
+    [requestScope, showNotification, t]
   );
 
   const batchDelete = useCallback(
     (targets: AuthFileItem[], options?: AuthFilesBatchDeleteOptions) => {
+      const confirmationConnectionFingerprint = connectionFingerprint;
+      const confirmationRequestScope = requestScope;
+      const confirmationGeneration = authFilesOperationGenerationRef.current;
       const uniqueNames = Array.from(
         new Set(targets.map(readAuthFileStatusPhysicalName).filter(Boolean))
       );
@@ -2058,12 +2398,20 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           confirmText: t('auth_files.delete_second_action'),
         },
         onConfirm: async () => {
+          if (
+            authFilesOperationGenerationRef.current !== confirmationGeneration ||
+            connectionFingerprintRef.current !== confirmationConnectionFingerprint
+          )
+            return;
+          const operationGeneration = authFilesOperationGenerationRef.current;
           try {
             const result = await deleteVerifiedAuthFileSnapshots(
               deleteSnapshots,
               t('auth_files.delete_target_changed'),
-              t('notification.delete_failed')
+              t('notification.delete_failed'),
+              confirmationRequestScope
             );
+            if (authFilesOperationGenerationRef.current !== operationGeneration) return;
             applyDeletedFiles(result.files);
 
             if (result.failed.length === 0) {
@@ -2082,13 +2430,22 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
               );
             }
           } catch (err: unknown) {
+            if (authFilesOperationGenerationRef.current !== operationGeneration) return;
             const errorMessage = err instanceof Error ? err.message : '';
             showNotification(`${t('notification.delete_failed')}: ${errorMessage}`, 'error');
           }
         },
       });
     },
-    [applyDeletedFiles, files, showConfirmation, showNotification, t]
+    [
+      applyDeletedFiles,
+      connectionFingerprint,
+      files,
+      requestScope,
+      showConfirmation,
+      showNotification,
+      t,
+    ]
   );
 
   return {

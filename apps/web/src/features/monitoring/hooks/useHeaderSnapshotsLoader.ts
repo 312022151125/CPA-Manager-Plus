@@ -11,6 +11,7 @@ import {
 interface UseHeaderSnapshotsLoaderOptions {
   serviceBase: string;
   managementKey: string;
+  requestGenerationRef?: { readonly current: number };
   onResponse?: (response: UsageHeaderSnapshotsResponse) => void;
   onReset?: () => void;
 }
@@ -18,6 +19,7 @@ interface UseHeaderSnapshotsLoaderOptions {
 interface HeaderSnapshotsRequest {
   serviceBase: string;
   managementKey: string;
+  requestGeneration: number;
   controller: AbortController;
   promise: Promise<void>;
 }
@@ -25,6 +27,7 @@ interface HeaderSnapshotsRequest {
 export function useHeaderSnapshotsLoader({
   serviceBase,
   managementKey,
+  requestGenerationRef,
   onResponse,
   onReset,
 }: UseHeaderSnapshotsLoaderOptions) {
@@ -61,13 +64,19 @@ export function useHeaderSnapshotsLoader({
       onResetRef.current?.();
       return;
     }
+    const requestGeneration = requestGenerationRef?.current ?? 0;
     const currentRequest = inFlightRef.current;
     if (
       currentRequest?.serviceBase === serviceBase &&
-      currentRequest.managementKey === managementKey
+      currentRequest.managementKey === managementKey &&
+      currentRequest.requestGeneration === requestGeneration
     ) {
       await currentRequest.promise;
       return;
+    }
+    if (currentRequest) {
+      currentRequest.controller.abort();
+      inFlightRef.current = null;
     }
 
     const scopeVersion = scopeVersionRef.current;
@@ -75,6 +84,7 @@ export function useHeaderSnapshotsLoader({
     const inFlight: HeaderSnapshotsRequest = {
       serviceBase,
       managementKey,
+      requestGeneration,
       controller,
       promise: Promise.resolve(),
     };
@@ -89,6 +99,7 @@ export function useHeaderSnapshotsLoader({
         if (
           inFlightRef.current === inFlight &&
           scopeVersionRef.current === scopeVersion &&
+          (requestGenerationRef?.current ?? 0) === requestGeneration &&
           !controller.signal.aborted
         ) {
           const committed = useUsageHeaderSnapshotStore
@@ -106,5 +117,5 @@ export function useHeaderSnapshotsLoader({
     })();
     inFlightRef.current = inFlight;
     await inFlight.promise;
-  }, [managementKey, scopeKey, serviceBase]);
+  }, [managementKey, requestGenerationRef, scopeKey, serviceBase]);
 }

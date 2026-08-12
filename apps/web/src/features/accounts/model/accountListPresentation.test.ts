@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AuthFileItem } from '@/types';
 import type { QuotaCooldownInfo } from '@/services/api';
-import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/authFilesPageModel';
+import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/credentialStatus';
 import type { AccountRow } from './accountRows';
 import { buildAccountListItem, buildRecommendationBySelectionKey } from './accountListPresentation';
 import { summarizeGroupedQuotaAvailability } from './accountQuotaSummary';
@@ -257,9 +257,7 @@ describe('accountListPresentation', () => {
       basisLabelKey: 'accounts.quota_source_observed_header',
       observedAtMs: 3_000,
     });
-    expect(headerItem.recommendation.reasonKey).toBe(
-      'accounts.recommend_reason_credential_auth'
-    );
+    expect(headerItem.recommendation.reasonKey).toBe('accounts.recommend_reason_credential_auth');
   });
 
   it('treats inspection authentication error kinds as reauthentication evidence', () => {
@@ -347,9 +345,7 @@ describe('accountListPresentation', () => {
       reasonKey: 'accounts.health_reason_exception_inspection',
       tooltipParams: { detail: 'credential malformed' },
     });
-    expect(inspectionItem.recommendation.reasonKey).toBe(
-      'accounts.recommend_reason_inspection'
-    );
+    expect(inspectionItem.recommendation.reasonKey).toBe('accounts.recommend_reason_inspection');
 
     const refreshItem = buildAccountListItem({
       ...baseRow,
@@ -385,7 +381,7 @@ describe('accountListPresentation', () => {
           makeRow({
             quota: { ...makeRow().quota, ...quota },
           })
-      ).health.status
+        ).health.status
       ).toBe('limited');
     }
   });
@@ -478,9 +474,7 @@ describe('accountListPresentation', () => {
     });
 
     expect(quotaItem.health.status).toBe('limited');
-    expect(quotaItem.recommendation.reasonKey).toBe(
-      'accounts.recommend_reason_quota_limited'
-    );
+    expect(quotaItem.recommendation.reasonKey).toBe('accounts.recommend_reason_quota_limited');
     expect(recoveredItem.health.status).toBe('available');
     expect(recoveredItem.recommendation.hasRecommendation).toBe(false);
   });
@@ -1409,5 +1403,28 @@ describe('accountListPresentation', () => {
 
     expect(map.get(first.selectionKey)?.row.authIndex).toBe('auth-1');
     expect(map.get(second.selectionKey)).toBe(secondRecommendation);
+  });
+
+  it('does not show a handled inspection 401 as requiring re-authentication', () => {
+    const item = buildAccountListItem(
+      makeRow({
+        inspection: {
+          source: 'server',
+          action: 'reauth',
+          actionReason: 're-authentication completed',
+          actionStatus: 'success',
+          executedAction: 'reauth',
+          statusCode: 401,
+          usedPercent: null,
+          runId: 1,
+          resultId: 2,
+          createdAtMs: 3,
+        },
+      })
+    );
+
+    expect(item.health.status).toBe('available');
+    expect(item.health.labelKey).toBe('accounts.health_available');
+    expect(item.health.reasonKey).toBe('accounts.health_reason_available');
   });
 });

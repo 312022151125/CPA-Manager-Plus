@@ -1,16 +1,9 @@
-import type { TFunction } from 'i18next';
 import type { AuthFileItem, CodexQuotaState } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
-import {
-  normalizePlanType,
-  resolveCodexChatgptAccountId,
-  resolveCodexPlanType,
-} from '@/utils/quota';
 import { getXaiProbeIssueKey } from '@/utils/quota/xaiPresentation';
 import {
   getHeaderSnapshotErrorCode,
   getHeaderSnapshotErrorKind,
-  getHeaderSnapshotPlanType,
   getHeaderSnapshotReachedWindowKind,
   getHeaderSnapshotRecoverAtMs,
   getHeaderSnapshotSummaryWindowKind,
@@ -21,11 +14,9 @@ import {
 } from '@/utils/usageHeaderSnapshots';
 import {
   getAuthFileStatusMessage,
-  getTypeLabel,
   isHealthyAuthFileStatusMessage,
   isRuntimeOnlyAuthFile,
   normalizeProviderKey,
-  parsePriorityValue,
 } from '@/features/authFiles/constants';
 import {
   getAuthFileStatusIdentityKey,
@@ -35,51 +26,21 @@ import {
   readAuthFileStatusProvider,
 } from '@/utils/authFileStatusMutation';
 
-export const easePower3Out = (progress: number) => 1 - (1 - progress) ** 4;
-export const easePower2In = (progress: number) => progress ** 3;
-export const BATCH_BAR_BASE_TRANSFORM = 'translateX(-50%)';
-export const BATCH_BAR_HIDDEN_TRANSFORM = 'translateX(-50%) translateY(56px)';
-export const DEFAULT_REGULAR_PAGE_SIZE = 9;
-export const DEFAULT_COMPACT_PAGE_SIZE = 12;
-
-const escapeWildcardSearchSegment = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-export const buildWildcardSearch = (value: string): RegExp | null => {
-  if (!value.includes('*')) return null;
-  const pattern = value.split('*').map(escapeWildcardSearchSegment).join('.*');
-  return new RegExp(pattern, 'i');
-};
-
-const PREMIUM_CODEX_PLAN_TYPES = new Set(['pro', 'prolite', 'pro-lite', 'pro_lite']);
 const CODEX_FIVE_HOUR_WINDOW_SECONDS = 18_000;
 const CODEX_WEEKLY_WINDOW_SECONDS = 604_800;
 const CODEX_MONTHLY_WINDOW_SECONDS = 2_592_000;
 const UNKNOWN_AUTH_INDEX_KEY = '-';
 const AUTH_FILE_SELECTION_KEY_SEPARATOR = '\u0000';
 
-export const AUTH_FILES_CODEX_STATUS_FILTERS = [
-  'all',
-  // Legacy URL/query value. The Auth Files UI now presents 401 as "needs reauth".
-  'http_401',
-  'reauth',
-  'quota_limited',
-  'five_hour_limited',
-  'weekly_limited',
-  'monthly_limited',
-  'disabled_with_reset',
-] as const;
-export const AUTH_FILES_CODEX_PLAN_FILTERS = [
-  'all',
-  'free',
-  'plus',
-  'team',
-  'prolite',
-  'pro',
-  'unknown',
-] as const;
-
-export type AuthFilesCodexStatusFilter = (typeof AUTH_FILES_CODEX_STATUS_FILTERS)[number];
-export type AuthFilesCodexPlanFilter = (typeof AUTH_FILES_CODEX_PLAN_FILTERS)[number];
+export type AuthFileCodexStatusFilter =
+  | 'all'
+  | 'http_401'
+  | 'reauth'
+  | 'quota_limited'
+  | 'five_hour_limited'
+  | 'weekly_limited'
+  | 'monthly_limited'
+  | 'disabled_with_reset';
 export type AuthFileCodexStatusBadgeTone = 'danger' | 'warning' | 'info';
 export type AuthFileCodexStatusBadgeKind =
   | 'reauth'
@@ -131,6 +92,8 @@ export type AuthFileCodexInspectionSnapshot = {
   accountSnapshot?: string | null;
   statusCode?: number | string | null;
   action?: string | null;
+  actionStatus?: string | null;
+  executedAction?: string | null;
   usedPercent?: number | string | null;
   isQuota?: boolean | null;
   errorKind?: string | null;
@@ -144,6 +107,11 @@ export type AuthFileCodexStatusSources = {
   headerSnapshot?: UsageHeaderSnapshot;
 };
 
+export type AuthFileCodexStatusOptions = {
+  ignoreRawStatusCode?: boolean;
+  effectiveDisabled?: boolean;
+};
+
 export type AuthFilePatchTarget = {
   name: string;
   runtimeId?: string | null;
@@ -153,14 +121,6 @@ export type AuthFilePatchTarget = {
   accountSnapshot?: string | null;
 };
 
-const CODEX_STATUS_FILTER_SET = new Set<AuthFilesCodexStatusFilter>(
-  AUTH_FILES_CODEX_STATUS_FILTERS
-);
-const CODEX_PLAN_FILTER_SET = new Set<AuthFilesCodexPlanFilter>(AUTH_FILES_CODEX_PLAN_FILTERS);
-
-export const compareAuthFileName = (left: { name: string }, right: { name: string }) =>
-  left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' });
-
 const normalizeNumber = (value: unknown): number | null => {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value !== 'string') return null;
@@ -168,6 +128,35 @@ const normalizeNumber = (value: unknown): number | null => {
   if (!trimmed) return null;
   const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : null;
+};
+
+const HANDLED_CODEX_INSPECTION_ACTION_STATUSES = new Set([
+  'success',
+  'skipped',
+  'executed',
+  'resolved',
+]);
+
+type CodexInspectionAuthenticationEvidence = Pick<
+  AuthFileCodexInspectionSnapshot,
+  'action' | 'actionStatus' | 'executedAction' | 'statusCode' | 'errorKind'
+>;
+
+export const hasActiveCodexInspectionAuthenticationFailure = (
+  inspection: CodexInspectionAuthenticationEvidence | null | undefined
+): boolean => {
+  if (!inspection) return false;
+  const actionStatus = String(inspection.actionStatus ?? '')
+    .trim()
+    .toLowerCase();
+  if (HANDLED_CODEX_INSPECTION_ACTION_STATUSES.has(actionStatus)) return false;
+  if (inspection.action === 'reauth' && inspection.executedAction === 'delete') return false;
+  const errorKind = typeof inspection.errorKind === 'string' ? inspection.errorKind.trim() : '';
+  return (
+    inspection.action === 'reauth' ||
+    normalizeNumber(inspection.statusCode) === 401 ||
+    isObservedCodexAuthenticationError(errorKind, '')
+  );
 };
 
 const formatObservedRecoverLabel = (value: number | null) => {
@@ -190,10 +179,12 @@ const OBSERVED_AUTH_ERROR_PATTERNS = [
   /\bno[_ -]?auth[_ -]?context\b/,
 ] as const;
 
-const isObservedAuthError = (kind: string, code: string) => {
+export const isObservedCodexAuthenticationError = (kind: string, code: string) => {
   const text = `${kind} ${code}`.trim().toLowerCase();
   return OBSERVED_AUTH_ERROR_PATTERNS.some((pattern) => pattern.test(text));
 };
+
+const isObservedAuthError = isObservedCodexAuthenticationError;
 
 const isObservedQuotaLimitError = (kind: string, code: string) => {
   const text = `${kind} ${code}`.toLowerCase().replace(/[_-]+/g, ' ');
@@ -303,22 +294,6 @@ const findCodexMonthlyQuotaWindow = (quota?: CodexQuotaState) =>
     (window) => window.id === 'monthly' || window.labelKey === 'codex_quota.monthly_window',
     CODEX_MONTHLY_WINDOW_SECONDS
   );
-
-export const normalizeAuthFilesCodexStatusFilter = (
-  value: unknown
-): AuthFilesCodexStatusFilter | null => {
-  if (value === 'http_401') return 'reauth';
-  return CODEX_STATUS_FILTER_SET.has(value as AuthFilesCodexStatusFilter)
-    ? (value as AuthFilesCodexStatusFilter)
-    : null;
-};
-
-export const normalizeAuthFilesCodexPlanFilter = (
-  value: unknown
-): AuthFilesCodexPlanFilter | null =>
-  CODEX_PLAN_FILTER_SET.has(value as AuthFilesCodexPlanFilter)
-    ? (value as AuthFilesCodexPlanFilter)
-    : null;
 
 export const getAuthFileCodexInspectionKey = (fileName: string, authIndex?: unknown) =>
   getAuthFileStatusIdentityKey({
@@ -693,7 +668,7 @@ const classifyInspectionCredentialEvidence = (
   const errorKind = typeof inspection.errorKind === 'string' ? inspection.errorKind.trim() : '';
   if (statusCode === 499) return null;
 
-  if (isAuthFileInspectionAuthenticationFailure(inspection)) {
+  if (hasActiveCodexInspectionAuthenticationFailure(inspection)) {
     return 'negative';
   }
   if (
@@ -884,12 +859,7 @@ const hasCurrentAuthFileRawStatusWarning = (
     normalizeNumber(
       file.errorStatus ?? file['error_status'] ?? file.statusCode ?? file['status_code']
     ) ?? readHttpStatusCodeFromText(statusMessage);
-  const statusText = readCredentialText(
-    statusMessage,
-    file.status,
-    file.state,
-    file.error
-  );
+  const statusText = readCredentialText(statusMessage, file.status, file.state, file.error);
   if (statusCode === 401 || isObservedAuthError('', statusText)) {
     return currentAuthenticationFailure !== null;
   }
@@ -899,18 +869,12 @@ const hasCurrentAuthFileRawStatusWarning = (
     0,
     ...evidences
       .filter(
-        (evidence): evidence is AuthFileCredentialEvidence =>
-          evidence?.direction === 'positive'
+        (evidence): evidence is AuthFileCredentialEvidence => evidence?.direction === 'positive'
       )
       .map((evidence) => evidence.observedAtMs ?? 0)
   );
-  const supersededByPositiveEvidence =
-    observedAtMs !== null && latestPositiveAtMs > observedAtMs;
-  if (
-    statusCode === 402 ||
-    statusCode === 429 ||
-    isObservedQuotaLimitError('', statusText)
-  ) {
+  const supersededByPositiveEvidence = observedAtMs !== null && latestPositiveAtMs > observedAtMs;
+  if (statusCode === 402 || statusCode === 429 || isObservedQuotaLimitError('', statusText)) {
     return !supersededByPositiveEvidence;
   }
   if (statusCode !== null && statusCode >= 200 && statusCode < 400) return false;
@@ -1090,8 +1054,11 @@ export const getAuthFileCodexStatus = (
   quota?: CodexQuotaState,
   inspection?: AuthFileCodexInspectionSnapshot,
   headerSnapshot?: UsageHeaderSnapshot,
-  nowMs = Date.now()
+  nowMsOrOptions: number | AuthFileCodexStatusOptions = Date.now(),
+  optionsOverride?: AuthFileCodexStatusOptions
 ): AuthFileCodexStatusSummary => {
+  const nowMs = typeof nowMsOrOptions === 'number' ? nowMsOrOptions : Date.now();
+  const options = typeof nowMsOrOptions === 'number' ? (optionsOverride ?? {}) : nowMsOrOptions;
   const provider = normalizeProviderKey(file.type ?? file.provider ?? '');
   const isCodex = isCodexAuthFile(file);
   const isXai = provider === 'xai';
@@ -1195,7 +1162,7 @@ export const getAuthFileCodexStatus = (
     ? monthlyWindow.resetLabel.trim()
     : null;
   const credentialEvidences = [
-    getAuthFileCredentialEvidence(file),
+    options.ignoreRawStatusCode ? null : getAuthFileCredentialEvidence(file),
     getInspectionCredentialEvidence(inspection),
     getQuotaCredentialEvidence(file, quota),
     getHeaderCredentialEvidence(headerSnapshot, nowMs),
@@ -1205,11 +1172,12 @@ export const getAuthFileCodexStatus = (
     typeof inspection?.errorKind === 'string' ? inspection.errorKind.trim() : '';
   const isHttp401 = currentAuthenticationFailure?.statusCode === 401;
   const needsReauth = currentAuthenticationFailure !== null;
+  const effectiveDisabled = options.effectiveDisabled ?? file.disabled === true;
   const inspectionReachedQuota =
     inspection?.isQuota === true &&
     (action === 'disable' ||
       (longWindowUsedPercent !== null && longWindowUsedPercent >= 100) ||
-      (file.disabled === true && action === 'keep'));
+      (effectiveDisabled && action === 'keep'));
   const isWeeklyLimited =
     isCodex &&
     ((weeklyUsedPercent !== null && weeklyUsedPercent >= 100) ||
@@ -1236,7 +1204,7 @@ export const getAuthFileCodexStatus = (
     (isFiveHourLimited && fiveHourResetLabel) ||
     (observedQuotaLimitedStatus && observedRecoverLabel) ||
     null;
-  const hasDisabledRecoveryReset = file.disabled === true && recoveryResetLabel !== null;
+  const hasDisabledRecoveryReset = effectiveDisabled && recoveryResetLabel !== null;
   const badges: AuthFileCodexStatusBadge[] = [];
 
   if (needsReauth) {
@@ -1399,7 +1367,7 @@ export const getAuthFileCodexStatus = (
 
 export const authFileMatchesCodexStatusFilter = (
   status: AuthFileCodexStatusSummary,
-  filter: AuthFilesCodexStatusFilter
+  filter: AuthFileCodexStatusFilter
 ): boolean => {
   if (filter === 'all') return true;
   if (filter === 'http_401') return status.isHttp401;
@@ -1411,7 +1379,6 @@ export const authFileMatchesCodexStatusFilter = (
   if (filter === 'disabled_with_reset') return status.hasDisabledRecoveryReset;
   return true;
 };
-
 export const hasAuthFileCodexProblemBadge = (
   status: AuthFileCodexStatusSummary | null | undefined
 ): boolean => status?.badges.some((badge) => badge.kind !== 'observed_error') ?? false;
@@ -1419,191 +1386,3 @@ export const hasAuthFileCodexProblemBadge = (
 export const hasAuthFileStatusProblem = (
   status: AuthFileCodexStatusSummary | null | undefined
 ): boolean => Boolean(status?.hasRawStatusWarning) || hasAuthFileCodexProblemBadge(status);
-
-const getAuthFileCodexStatusSearchValues = (
-  status: AuthFileCodexStatusSummary | undefined,
-  t: TFunction
-) =>
-  status?.badges.flatMap((badge) => [
-    badge.kind,
-    badge.labelKey,
-    badge.defaultLabel,
-    t(badge.labelKey, { defaultValue: badge.defaultLabel, ...badge.labelParams }),
-    badge.defaultTitle,
-    badge.titleKey
-      ? t(badge.titleKey, { defaultValue: badge.defaultTitle ?? badge.defaultLabel })
-      : null,
-  ]) ?? [];
-
-const getAuthFileNoteValue = (file: AuthFileItem): string => {
-  const raw = file.note ?? file['note'];
-  if (raw === undefined || raw === null) return '';
-  return String(raw).trim();
-};
-
-export const compareAuthFileNote = (
-  left: AuthFileItem,
-  right: AuthFileItem,
-  direction: 'asc' | 'desc'
-) => {
-  const leftNote = getAuthFileNoteValue(left);
-  const rightNote = getAuthFileNoteValue(right);
-  const leftKnown = leftNote.length > 0;
-  const rightKnown = rightNote.length > 0;
-
-  if (leftKnown || rightKnown) {
-    if (!leftKnown) return 1;
-    if (!rightKnown) return -1;
-    const diff = leftNote.localeCompare(rightNote, undefined, {
-      numeric: true,
-      sensitivity: 'base',
-    });
-    if (diff !== 0) return direction === 'asc' ? diff : -diff;
-  }
-
-  return compareAuthFileName(left, right);
-};
-
-export const compareAuthFilePriority = (
-  left: AuthFileItem,
-  right: AuthFileItem,
-  direction: 'asc' | 'desc'
-) => {
-  const leftPriority = parsePriorityValue(left.priority ?? left['priority']);
-  const rightPriority = parsePriorityValue(right.priority ?? right['priority']);
-  const leftKnown = leftPriority !== undefined;
-  const rightKnown = rightPriority !== undefined;
-
-  if (leftKnown || rightKnown) {
-    if (!leftKnown) return 1;
-    if (!rightKnown) return -1;
-    const leftValue = leftPriority ?? 0;
-    const rightValue = rightPriority ?? 0;
-    const diff = direction === 'desc' ? rightValue - leftValue : leftValue - rightValue;
-    if (diff !== 0) return diff;
-  }
-
-  return compareAuthFileName(left, right);
-};
-
-export const stringifySearchValue = (value: unknown): string[] => {
-  if (value === undefined || value === null) return [];
-  if (Array.isArray(value)) return value.flatMap(stringifySearchValue);
-  if (typeof value === 'string') return value.trim() ? [value] : [];
-  if (typeof value === 'number' || typeof value === 'boolean') return [String(value)];
-  return [];
-};
-
-const getCodexPlanLabel = (planType: string | null | undefined, t: TFunction): string | null => {
-  const normalized = normalizePlanType(planType);
-  if (!normalized) return null;
-  if (normalized === 'pro') return t('codex_quota.plan_pro');
-  if (PREMIUM_CODEX_PLAN_TYPES.has(normalized) && normalized !== 'pro') {
-    return t('codex_quota.plan_prolite');
-  }
-  if (normalized === 'plus') return t('codex_quota.plan_plus');
-  if (normalized === 'team') return t('codex_quota.plan_team');
-  if (normalized === 'free') return t('codex_quota.plan_free');
-  return planType || normalized;
-};
-
-const getAuthFilePlanType = (
-  file: AuthFileItem,
-  quota?: CodexQuotaState,
-  headerSnapshot?: UsageHeaderSnapshot
-): string | null =>
-  resolveCodexPlanType(file) ??
-  quota?.planType ??
-  getHeaderSnapshotPlanType(headerSnapshot) ??
-  null;
-
-const getCodexPlanFilterValue = (
-  file: AuthFileItem,
-  quota?: CodexQuotaState,
-  headerSnapshot?: UsageHeaderSnapshot
-): AuthFilesCodexPlanFilter | null => {
-  const normalized = normalizePlanType(getAuthFilePlanType(file, quota, headerSnapshot));
-  if (!normalized) return null;
-  if (normalized === 'free') return 'free';
-  if (normalized === 'plus') return 'plus';
-  if (normalized === 'team') return 'team';
-  if (normalized === 'pro') return 'pro';
-  if (PREMIUM_CODEX_PLAN_TYPES.has(normalized) && normalized !== 'pro') return 'prolite';
-  return null;
-};
-
-export const authFileMatchesCodexPlanFilter = (
-  file: AuthFileItem,
-  quota: CodexQuotaState | undefined,
-  filter: AuthFilesCodexPlanFilter,
-  headerSnapshot?: UsageHeaderSnapshot
-): boolean => {
-  if (filter === 'all') return true;
-  if (!isCodexAuthFile(file)) return false;
-
-  const planFilterValue = getCodexPlanFilterValue(file, quota, headerSnapshot);
-  if (filter === 'unknown') return planFilterValue === null;
-  return planFilterValue === filter;
-};
-
-export const getAuthFilePlanSortRank = (
-  file: AuthFileItem,
-  quota?: CodexQuotaState,
-  headerSnapshot?: UsageHeaderSnapshot
-): number | null => {
-  const normalized = normalizePlanType(getAuthFilePlanType(file, quota, headerSnapshot));
-  if (!normalized) return null;
-  if (normalized === 'pro') return 50;
-  if (PREMIUM_CODEX_PLAN_TYPES.has(normalized) && normalized !== 'pro') return 40;
-  if (normalized === 'team') return 30;
-  if (normalized === 'plus') return 20;
-  if (normalized === 'free') return 10;
-  return 0;
-};
-
-export const getAuthFileSearchValues = (
-  file: AuthFileItem,
-  t: TFunction,
-  quota?: CodexQuotaState,
-  codexStatus?: AuthFileCodexStatusSummary,
-  headerSnapshot?: UsageHeaderSnapshot,
-  planHeaderSnapshot: UsageHeaderSnapshot | undefined = headerSnapshot
-) => {
-  const planType = getAuthFilePlanType(file, quota, planHeaderSnapshot);
-  const planLabel = getCodexPlanLabel(planType, t);
-  const accountId = resolveCodexChatgptAccountId(file);
-  const type = file.type || file.provider;
-  const headerErrorKind = getHeaderSnapshotErrorKind(headerSnapshot);
-  const headerErrorCode = getHeaderSnapshotErrorCode(headerSnapshot);
-  const headerTraceID = getHeaderSnapshotTraceId(headerSnapshot);
-  const headerUsedPercent = getHeaderSnapshotUsedPercent(headerSnapshot);
-  const headerRecoverAtMS = getHeaderSnapshotRecoverAtMs(headerSnapshot);
-
-  return [
-    file.name,
-    file.type,
-    file.provider,
-    type ? getTypeLabel(t, String(type)) : null,
-    file.authIndex,
-    file['auth_index'],
-    file.status,
-    file.state,
-    file.statusMessage,
-    file['status_message'],
-    file.error,
-    file.errorStatus,
-    file['error_status'],
-    quota?.status,
-    quota?.error,
-    quota?.errorStatus,
-    planType,
-    planLabel,
-    headerErrorKind,
-    headerErrorCode,
-    headerTraceID,
-    headerUsedPercent,
-    headerRecoverAtMS,
-    accountId,
-    getAuthFileCodexStatusSearchValues(codexStatus, t),
-  ];
-};

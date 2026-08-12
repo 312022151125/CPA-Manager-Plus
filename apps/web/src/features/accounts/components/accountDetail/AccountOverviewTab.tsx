@@ -12,7 +12,7 @@ import type {
   AccountDetailOverviewTargetTab,
   AccountDetailViewModel,
 } from '@/features/accounts/model/accountDetailViewModel';
-import authFileStyles from '@/features/authFiles/AuthFilesPage.module.scss';
+import { isHealthyAuthFileStatusMessage } from '@/features/authFiles/constants';
 import type { AccountListHealthStatusKey } from '@/features/accounts/model/accountListPresentation';
 import {
   formatCompactNumber,
@@ -228,7 +228,7 @@ export function AccountOverviewTab({ detailView, getHealthStatusClass }: Account
               <span>{t('accounts.detail_overview_recent_status_timeline')}</span>
               <span>{t('accounts.detail_overview_recent_status_timeline_hint')}</span>
             </div>
-            <ProviderStatusBar statusData={recentStatusData} styles={authFileStyles} />
+            <ProviderStatusBar statusData={recentStatusData} styles={styles} />
           </div>
         </div>
 

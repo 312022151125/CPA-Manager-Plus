@@ -1237,11 +1237,11 @@ export const buildObservedCodexAccountQuotaEntry = (
   const metaLabels = [
     planLabel ? `${t('codex_quota.plan_label')}: ${planLabel}` : '',
     observedAt
-      ? t('quota_management.observed_from_usage_headers_at', {
+      ? t('monitoring.observed_from_usage_headers_at', {
           time: observedAt,
           defaultValue: `Observed from latest usage response headers · ${observedAt}`,
         })
-      : t('quota_management.observed_from_usage_headers', {
+      : t('monitoring.observed_from_usage_headers', {
           defaultValue: 'Observed from latest usage response headers',
         }),
     [errorKind, errorCode].filter(Boolean).join(' / '),

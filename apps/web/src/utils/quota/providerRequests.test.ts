@@ -201,6 +201,39 @@ describe('fetchCodexQuota', () => {
     expect(result.windows).toEqual([]);
   });
 
+  it('keeps every Codex quota request on the captured CPA scope', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { rate_limit: {} },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: { available_count: 0, credits: [] },
+      });
+
+    await fetchCodexQuota({ name: 'codex.json', type: 'codex', authIndex: 'auth-1' }, t, {
+      apiBase: 'https://captured-cpa.example.test',
+      managementKey: 'captured-key',
+    });
+
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+    for (const call of mocks.request.mock.calls) {
+      expect(call[1]).toMatchObject({
+        baseURL: 'https://captured-cpa.example.test/v0/management',
+        headers: { Authorization: 'Bearer captured-key' },
+        cpampScopedRequest: true,
+      });
+    }
+    expect(mocks.request.mock.calls[1]?.[1]).toMatchObject({ timeout: 8000 });
+  });
+
   it.each([
     ['code-review family', { code_review_rate_limit: {} }],
     ['additional families', { additional_rate_limits: [] }],
@@ -2835,7 +2868,7 @@ describe('fetchAntigravityQuota', () => {
     expect(mocks.request.mock.calls[0][0]).toMatchObject({
       url: ANTIGRAVITY_QUOTA_SUMMARY_URLS[0],
     });
-    expect(mocks.getSubscription).toHaveBeenCalledWith('ag-1');
+    expect(mocks.getSubscription).toHaveBeenCalledWith('ag-1', undefined);
     expect(result.subscription).toEqual({
       plan: 'pro',
       tierName: 'Antigravity Pro',
@@ -2851,6 +2884,39 @@ describe('fetchAntigravityQuota', () => {
       ],
     });
     expect(result.quotaInventoryObserved).toBe(true);
+  });
+
+  it('keeps Antigravity quota and subscription requests on the captured CPA scope', async () => {
+    mocks.getSubscription.mockResolvedValue(null);
+    mocks.request.mockResolvedValueOnce({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: { groups: [] },
+    });
+    const requestScope = {
+      apiBase: 'https://captured-cpa.example.test',
+      managementKey: 'captured-key',
+    };
+
+    await fetchAntigravityQuota(
+      {
+        name: 'antigravity.json',
+        type: 'antigravity',
+        authIndex: 'ag-1',
+        project_id: 'project-1',
+      },
+      t,
+      requestScope
+    );
+
+    expect(mocks.getSubscription).toHaveBeenCalledWith('ag-1', requestScope);
+    expect(mocks.request.mock.calls[0]?.[1]).toMatchObject({
+      baseURL: 'https://captured-cpa.example.test/v0/management',
+      headers: { Authorization: 'Bearer captured-key' },
+      cpampScopedRequest: true,
+    });
   });
 
   it('falls back to available models when summary endpoints have no usable data', async () => {

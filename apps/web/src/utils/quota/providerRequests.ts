@@ -24,7 +24,9 @@ import type {
   XaiProductUsageSummary,
 } from '@/types';
 import { apiCallApi, getApiCallErrorMessage } from '@/services/api/apiCall';
+import { createScopedApiRequestConfig, type ApiClientRequestScope } from '@/services/api/client';
 import { isRecord } from '@/utils/helpers';
+import { sha256Hex } from '@/utils/apiKeyHash';
 import {
   antigravitySubscriptionApi,
   type AntigravitySubscriptionSummary,
@@ -106,7 +108,7 @@ export type CodexQuotaData = {
 const isCodexRateLimitInventory = (value: unknown): boolean =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const hasCodexQuotaInventory = (payload: CodexUsagePayload): boolean =>
+export const hasCodexQuotaInventory = (payload: CodexUsagePayload): boolean =>
   [
     payload.rate_limit,
     payload.rateLimit,
@@ -159,23 +161,30 @@ const toAntigravityQuotaSubscription = (
 };
 
 const fetchAntigravityQuotaSubscription = (
-  authIndex: string
+  authIndex: string,
+  requestScope?: ApiClientRequestScope
 ): Promise<AntigravityQuotaSubscription | null> => {
-  const existing = antigravitySubscriptionRequests.get(authIndex);
+  const requestKey = requestScope
+    ? `${sha256Hex(`${requestScope.apiBase.trim()}\u0000${requestScope.managementKey.trim()}`)}\u0000${authIndex}`
+    : authIndex;
+  const existing = antigravitySubscriptionRequests.get(requestKey);
   if (existing) return existing;
 
   const request = antigravitySubscriptionApi
-    .get(authIndex)
+    .get(authIndex, requestScope)
     .then(toAntigravityQuotaSubscription)
     .catch(() => null)
     .finally(() => {
-      antigravitySubscriptionRequests.delete(authIndex);
+      antigravitySubscriptionRequests.delete(requestKey);
     });
-  antigravitySubscriptionRequests.set(authIndex, request);
+  antigravitySubscriptionRequests.set(requestKey, request);
   return request;
 };
 
-export const resolveAntigravityProjectId = async (file: AuthFileItem): Promise<string> => {
+export const resolveAntigravityProjectId = async (
+  file: AuthFileItem,
+  requestScope?: ApiClientRequestScope
+): Promise<string> => {
   const directProjectId = normalizeStringValue(file.project_id ?? file.projectId);
   if (directProjectId) return directProjectId;
 
@@ -200,7 +209,7 @@ export const resolveAntigravityProjectId = async (file: AuthFileItem): Promise<s
   if (attributesProjectId) return attributesProjectId;
 
   try {
-    const text = await authFilesApi.downloadText(file.name);
+    const text = await authFilesApi.downloadText(file.name, requestScope);
     const trimmed = text.trim();
     if (!trimmed) return DEFAULT_ANTIGRAVITY_PROJECT_ID;
 
@@ -244,7 +253,8 @@ const resolveResponseServerTimeOffsetMs = (
 
 export const fetchAntigravityQuota = async (
   file: AuthFileItem,
-  t: TFunction
+  t: TFunction,
+  requestScope?: ApiClientRequestScope
 ): Promise<AntigravityQuotaData> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
@@ -252,9 +262,10 @@ export const fetchAntigravityQuota = async (
     throw new Error(t('antigravity_quota.missing_auth_index'));
   }
 
-  const projectId = await resolveAntigravityProjectId(file);
+  const projectId = await resolveAntigravityProjectId(file, requestScope);
   const requestBody = JSON.stringify({ project: projectId });
-  const subscriptionPromise = fetchAntigravityQuotaSubscription(authIndex);
+  const subscriptionPromise = fetchAntigravityQuotaSubscription(authIndex, requestScope);
+  const requestConfig = requestScope ? createScopedApiRequestConfig(requestScope) : undefined;
 
   let lastError = '';
   let lastStatus: number | undefined;
@@ -264,13 +275,16 @@ export const fetchAntigravityQuota = async (
 
   for (const url of [...ANTIGRAVITY_QUOTA_SUMMARY_URLS, ...ANTIGRAVITY_AVAILABLE_MODELS_URLS]) {
     try {
-      const result = await apiCallApi.request({
-        authIndex,
-        method: 'POST',
-        url,
-        header: { ...ANTIGRAVITY_REQUEST_HEADERS },
-        data: requestBody,
-      });
+      const result = await apiCallApi.request(
+        {
+          authIndex,
+          method: 'POST',
+          url,
+          header: { ...ANTIGRAVITY_REQUEST_HEADERS },
+          data: requestBody,
+        },
+        requestConfig
+      );
 
       if (result.statusCode < 200 || result.statusCode >= 300) {
         lastError = getApiCallErrorMessage(result);
@@ -421,7 +435,8 @@ const resolveCodexResetCreditsAvailableCount = (
 const fetchCodexResetCredits = async (
   authIndex: string,
   accountId: string | null | undefined,
-  t: TFunction
+  t: TFunction,
+  requestConfig?: AxiosRequestConfig
 ): Promise<CodexResetCreditsData> => {
   try {
     const result = await apiCallApi.request(
@@ -431,7 +446,7 @@ const fetchCodexResetCredits = async (
         url: CODEX_RATE_LIMIT_RESET_CREDITS_URL,
         header: buildCodexResetCreditsRequestHeaders(accountId),
       },
-      { timeout: CODEX_RESET_CREDITS_REQUEST_TIMEOUT_MS }
+      { ...requestConfig, timeout: CODEX_RESET_CREDITS_REQUEST_TIMEOUT_MS }
     );
 
     if (result.statusCode < 200 || result.statusCode >= 300) {
@@ -467,7 +482,8 @@ const fetchCodexResetCredits = async (
 
 export const fetchCodexQuota = async (
   file: AuthFileItem,
-  t: TFunction
+  t: TFunction,
+  requestScope?: ApiClientRequestScope
 ): Promise<CodexQuotaData> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
@@ -477,12 +493,16 @@ export const fetchCodexQuota = async (
 
   const planTypeFromFile = resolveCodexPlanType(file);
   const accountId = resolveCodexChatgptAccountId(file);
-  const result = await apiCallApi.request({
-    authIndex,
-    method: 'GET',
-    url: CODEX_USAGE_URL,
-    header: buildCodexUsageRequestHeaders(accountId),
-  });
+  const requestConfig = requestScope ? createScopedApiRequestConfig(requestScope) : undefined;
+  const result = await apiCallApi.request(
+    {
+      authIndex,
+      method: 'GET',
+      url: CODEX_USAGE_URL,
+      header: buildCodexUsageRequestHeaders(accountId),
+    },
+    requestConfig
+  );
 
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw createStatusError(getApiCallErrorMessage(result), result.statusCode);
@@ -498,7 +518,7 @@ export const fetchCodexQuota = async (
   const observedAtMs = Date.now();
   const windows = buildCodexQuotaWindows(payload, t, planType, observedAtMs);
   const usageResetCreditsAvailableCount = resolveCodexRateLimitResetCreditsAvailableCount(payload);
-  const resetCredits = await fetchCodexResetCredits(authIndex, accountId, t);
+  const resetCredits = await fetchCodexResetCredits(authIndex, accountId, t, requestConfig);
   return {
     planType,
     windows,
@@ -957,7 +977,8 @@ const hasClaudeQuotaInventory = (
 
 export const fetchClaudeQuota = async (
   file: AuthFileItem,
-  t: TFunction
+  t: TFunction,
+  requestScope?: ApiClientRequestScope
 ): Promise<ClaudeQuotaData> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
@@ -965,19 +986,26 @@ export const fetchClaudeQuota = async (
     throw new Error(t('claude_quota.missing_auth_index'));
   }
 
+  const requestConfig = requestScope ? createScopedApiRequestConfig(requestScope) : undefined;
   const [usageResult, profileResult] = await Promise.allSettled([
-    apiCallApi.request({
-      authIndex,
-      method: 'GET',
-      url: CLAUDE_USAGE_URL,
-      header: { ...CLAUDE_REQUEST_HEADERS },
-    }),
-    apiCallApi.request({
-      authIndex,
-      method: 'GET',
-      url: CLAUDE_PROFILE_URL,
-      header: { ...CLAUDE_REQUEST_HEADERS },
-    }),
+    apiCallApi.request(
+      {
+        authIndex,
+        method: 'GET',
+        url: CLAUDE_USAGE_URL,
+        header: { ...CLAUDE_REQUEST_HEADERS },
+      },
+      requestConfig
+    ),
+    apiCallApi.request(
+      {
+        authIndex,
+        method: 'GET',
+        url: CLAUDE_PROFILE_URL,
+        header: { ...CLAUDE_REQUEST_HEADERS },
+      },
+      requestConfig
+    ),
   ]);
 
   if (usageResult.status === 'rejected') {
@@ -1020,19 +1048,26 @@ const hasKimiQuotaInventory = (payload: KimiUsagePayload, rows: KimiQuotaRow[]):
   return hasOwn(payload, 'usage') && payload.usage === null;
 };
 
-export const fetchKimiQuota = async (file: AuthFileItem, t: TFunction): Promise<KimiQuotaData> => {
+export const fetchKimiQuota = async (
+  file: AuthFileItem,
+  t: TFunction,
+  requestScope?: ApiClientRequestScope
+): Promise<KimiQuotaData> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
   if (!authIndex) {
     throw new Error(t('kimi_quota.missing_auth_index'));
   }
 
-  const result = await apiCallApi.request({
-    authIndex,
-    method: 'GET',
-    url: KIMI_USAGE_URL,
-    header: { ...KIMI_REQUEST_HEADERS },
-  });
+  const result = await apiCallApi.request(
+    {
+      authIndex,
+      method: 'GET',
+      url: KIMI_USAGE_URL,
+      header: { ...KIMI_REQUEST_HEADERS },
+    },
+    requestScope ? createScopedApiRequestConfig(requestScope) : undefined
+  );
 
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw createStatusError(getApiCallErrorMessage(result), result.statusCode);
@@ -1737,8 +1772,16 @@ export const probeXaiQuota = async (
   }
 };
 
-export const fetchXaiQuota = async (file: AuthFileItem, t: TFunction): Promise<XaiBillingSummary> =>
-  probeXaiQuota(file, t).then(({ summary, partial, failures }) => ({
+export const fetchXaiQuota = async (
+  file: AuthFileItem,
+  t: TFunction,
+  requestScope?: ApiClientRequestScope
+): Promise<XaiBillingSummary> =>
+  probeXaiQuota(
+    file,
+    t,
+    requestScope ? createScopedApiRequestConfig(requestScope) : undefined
+  ).then(({ summary, partial, failures }) => ({
     ...summary,
     partial,
     diagnostics: failures.map((failure): XaiBillingDiagnostic => {

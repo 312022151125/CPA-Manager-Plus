@@ -89,6 +89,7 @@ import {
   buildPastedAuthJsonPayloads,
   prepareAuthFilesForUpload,
   useAuthFilesData,
+  type AuthFilesCredentialMutation,
 } from './useAuthFilesData';
 import {
   getCodexInspectionOwnedDisableIdentityKeys,
@@ -132,7 +133,9 @@ const mountUseAuthFilesData = (
   onConnectionLayout?: (
     value: ReturnType<typeof useAuthFilesData>,
     connectionFingerprint?: string
-  ) => void
+  ) => void,
+  onCredentialFilesChanged?: (mutation: AuthFilesCredentialMutation) => void,
+  requestScope?: { apiBase: string; managementKey: string }
 ): UseAuthFilesDataHarness => {
   let currentConnectionFingerprint = connectionFingerprint;
   let lastLayoutConnectionFingerprint: string | undefined | symbol = Symbol('uninitialized');
@@ -150,7 +153,11 @@ const mountUseAuthFilesData = (
   };
 
   function HookHarness() {
-    const value = useAuthFilesData({ connectionFingerprint: currentConnectionFingerprint });
+    const value = useAuthFilesData({
+      connectionFingerprint: currentConnectionFingerprint,
+      requestScope,
+      onCredentialMutation: onCredentialFilesChanged,
+    });
     captureHook(value);
     useLayoutEffect(() => {
       if (lastLayoutConnectionFingerprint === currentConnectionFingerprint) return;
@@ -518,7 +525,8 @@ describe('prepareAuthFilesForUpload', () => {
 
 describe('useAuthFilesData handleFileChange', () => {
   it('auto-converts an uploaded sub2api export before calling the backend upload API', async () => {
-    const hook = mountUseAuthFilesData();
+    const onCredentialFilesChanged = vi.fn();
+    const hook = mountUseAuthFilesData(undefined, undefined, onCredentialFilesChanged);
     const file = new File(
       [
         JSON.stringify({
@@ -577,12 +585,17 @@ describe('useAuthFilesData handleFileChange', () => {
       'auth_files.upload_success (2/2)',
       'success'
     );
+    expect(onCredentialFilesChanged).toHaveBeenCalledWith({
+      kind: 'source-files-changed',
+      fileNames: uploadedFiles.map((item) => item.name),
+    });
     expect(mocks.list).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
 
   it('does not report direct upload success when the backend returns an explicit failure status', async () => {
-    const hook = mountUseAuthFilesData();
+    const onCredentialFilesChanged = vi.fn();
+    const hook = mountUseAuthFilesData(undefined, undefined, onCredentialFilesChanged);
     const file = new File(
       [
         JSON.stringify({
@@ -604,10 +617,10 @@ describe('useAuthFilesData handleFileChange', () => {
       'sub2api-export.json',
       { type: 'application/json' }
     );
-    mocks.uploadFiles.mockImplementationOnce(async (files: File[]) => ({
+    mocks.uploadFiles.mockImplementationOnce(async () => ({
       status: 'error',
-      uploaded: files.length,
-      files: files.map((item) => item.name),
+      uploaded: 0,
+      files: [],
       failed: [],
     }));
     const target = {
@@ -623,9 +636,79 @@ describe('useAuthFilesData handleFileChange', () => {
         >[0]);
     });
 
-    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(onCredentialFilesChanged).not.toHaveBeenCalled();
     expect(mocks.showNotification).not.toHaveBeenCalledWith('auth_files.upload_success', 'success');
     expect(mocks.showNotification).toHaveBeenCalledWith('notification.upload_failed', 'error');
+    hook.unmount();
+  });
+
+  it('does not let an old connection upload clear or notify the new upload', async () => {
+    const oldUpload = createDeferred<{
+      status: string;
+      uploaded: number;
+      files: string[];
+      failed: Array<{ name: string; error: string }>;
+    }>();
+    const newUpload = createDeferred<{
+      status: string;
+      uploaded: number;
+      files: string[];
+      failed: Array<{ name: string; error: string }>;
+    }>();
+    const onCredentialMutation = vi.fn();
+    mocks.uploadFiles.mockReturnValueOnce(oldUpload.promise).mockReturnValueOnce(newUpload.promise);
+    const hook = mountUseAuthFilesData('connection-a', undefined, onCredentialMutation);
+    const makeTarget = (name: string) => ({
+      files: [new File(['{}'], name, { type: 'application/json' })] as unknown as FileList,
+      value: name,
+    });
+    const oldTarget = makeTarget('old.json');
+    const newTarget = makeTarget('new.json');
+    let oldPromise!: Promise<void>;
+    let newPromise!: Promise<void>;
+
+    await act(async () => {
+      oldPromise = hook
+        .getCurrent()
+        .handleFileChange({ target: oldTarget } as unknown as Parameters<
+          ReturnType<typeof useAuthFilesData>['handleFileChange']
+        >[0]);
+      await Promise.resolve();
+    });
+    expect(hook.getCurrent().uploading).toBe(true);
+
+    hook.rerender('connection-b');
+    expect(hook.getCurrent().uploading).toBe(false);
+    await act(async () => {
+      newPromise = hook
+        .getCurrent()
+        .handleFileChange({ target: newTarget } as unknown as Parameters<
+          ReturnType<typeof useAuthFilesData>['handleFileChange']
+        >[0]);
+      await Promise.resolve();
+    });
+    expect(hook.getCurrent().uploading).toBe(true);
+
+    await act(async () => {
+      oldUpload.resolve({ status: 'ok', uploaded: 1, files: ['old.json'], failed: [] });
+      await oldPromise;
+    });
+    expect(hook.getCurrent().uploading).toBe(true);
+    expect(onCredentialMutation).not.toHaveBeenCalled();
+    expect(mocks.showNotification).not.toHaveBeenCalled();
+
+    await act(async () => {
+      newUpload.resolve({ status: 'ok', uploaded: 1, files: ['new.json'], failed: [] });
+      await newPromise;
+    });
+    expect(hook.getCurrent().uploading).toBe(false);
+    expect(onCredentialMutation).toHaveBeenCalledTimes(1);
+    expect(onCredentialMutation).toHaveBeenCalledWith({
+      kind: 'source-files-changed',
+      fileNames: ['new.json'],
+    });
+    expect(mocks.showNotification).toHaveBeenCalledWith('auth_files.upload_success', 'success');
     hook.unmount();
   });
 });
@@ -662,7 +745,8 @@ describe('useAuthFilesData savePastedAuthJson', () => {
   });
 
   it('saves CPA JSON unchanged with explicit file name', async () => {
-    const hook = mountUseAuthFilesData();
+    const onCredentialFilesChanged = vi.fn();
+    const hook = mountUseAuthFilesData(undefined, undefined, onCredentialFilesChanged);
     const cpaInput = {
       type: 'codex',
       email: 'user@example.com',
@@ -675,6 +759,10 @@ describe('useAuthFilesData savePastedAuthJson', () => {
 
     expect(savedName).toEqual(['custom-auth.json']);
     expect(mocks.saveJsonObject).toHaveBeenCalledWith('custom-auth.json', cpaInput);
+    expect(onCredentialFilesChanged).toHaveBeenCalledWith({
+      kind: 'source-files-changed',
+      fileNames: ['custom-auth.json'],
+    });
     expect(mocks.list).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
@@ -746,7 +834,8 @@ describe('useAuthFilesData savePastedAuthJson', () => {
   });
 
   it('rejects an explicit partial upload status even when all generated files are counted', async () => {
-    const hook = mountUseAuthFilesData();
+    const onCredentialFilesChanged = vi.fn();
+    const hook = mountUseAuthFilesData(undefined, undefined, onCredentialFilesChanged);
     const sub2apiInput = JSON.stringify({
       exported_at: '2026-06-01T12:00:00.000Z',
       proxies: [],
@@ -787,11 +876,17 @@ describe('useAuthFilesData savePastedAuthJson', () => {
       'auth_files.paste_success_many',
       'success'
     );
+    const uploadedFiles = mocks.uploadFiles.mock.calls[0]?.[0] as File[];
+    expect(onCredentialFilesChanged).toHaveBeenCalledWith({
+      kind: 'source-files-changed',
+      fileNames: uploadedFiles.map((file) => file.name),
+    });
     hook.unmount();
   });
 
   it('reloads files and reports the failed name after a partial sub2api paste upload', async () => {
-    const hook = mountUseAuthFilesData();
+    const onCredentialFilesChanged = vi.fn();
+    const hook = mountUseAuthFilesData(undefined, undefined, onCredentialFilesChanged);
     const sub2apiInput = JSON.stringify({
       exported_at: '2026-06-01T12:00:00.000Z',
       proxies: [],
@@ -836,6 +931,11 @@ describe('useAuthFilesData savePastedAuthJson', () => {
       'auth_files.paste_success_many',
       'success'
     );
+    const uploadedFiles = mocks.uploadFiles.mock.calls[0]?.[0] as File[];
+    expect(onCredentialFilesChanged).toHaveBeenCalledWith({
+      kind: 'source-files-changed',
+      fileNames: [uploadedFiles[0].name],
+    });
     hook.unmount();
   });
 
@@ -1006,7 +1106,8 @@ describe('useAuthFilesData savePastedAuthJson', () => {
   });
 
   it('throws a generic save failure on upload failure and does not show success notification or reload files', async () => {
-    const hook = mountUseAuthFilesData();
+    const onCredentialFilesChanged = vi.fn();
+    const hook = mountUseAuthFilesData(undefined, undefined, onCredentialFilesChanged);
     const validInput = JSON.stringify({
       type: 'codex',
       email: 'user@example.com',
@@ -1022,6 +1123,7 @@ describe('useAuthFilesData savePastedAuthJson', () => {
 
     expect(mocks.showNotification).not.toHaveBeenCalled();
     expect(mocks.list).not.toHaveBeenCalled();
+    expect(onCredentialFilesChanged).not.toHaveBeenCalled();
     hook.unmount();
   });
 
@@ -1111,6 +1213,59 @@ describe('useAuthFilesData savePastedAuthJson', () => {
     );
     hook.unmount();
   });
+
+  it('does not let an old connection pasted save clear or notify the new save', async () => {
+    const oldSave = createDeferred<void>();
+    const newSave = createDeferred<void>();
+    const onCredentialMutation = vi.fn();
+    mocks.saveJsonObject.mockReturnValueOnce(oldSave.promise).mockReturnValueOnce(newSave.promise);
+    const hook = mountUseAuthFilesData('connection-a', undefined, onCredentialMutation);
+    const input = JSON.stringify({
+      type: 'codex',
+      email: 'user@example.com',
+      access_token: 'existing-access-token',
+    });
+    let oldPromise!: Promise<string[]>;
+    let newPromise!: Promise<string[]>;
+
+    await act(async () => {
+      oldPromise = hook.getCurrent().savePastedAuthJson('cpa', 'old.json', input);
+      await Promise.resolve();
+    });
+    expect(hook.getCurrent().authJsonPasteSaving).toBe(true);
+
+    hook.rerender('connection-b');
+    expect(hook.getCurrent().authJsonPasteSaving).toBe(false);
+    await act(async () => {
+      newPromise = hook.getCurrent().savePastedAuthJson('cpa', 'new.json', input);
+      await Promise.resolve();
+    });
+    expect(hook.getCurrent().authJsonPasteSaving).toBe(true);
+
+    await act(async () => {
+      oldSave.resolve();
+      await oldPromise;
+    });
+    expect(hook.getCurrent().authJsonPasteSaving).toBe(true);
+    expect(onCredentialMutation).not.toHaveBeenCalled();
+    expect(mocks.showNotification).not.toHaveBeenCalled();
+
+    await act(async () => {
+      newSave.resolve();
+      await newPromise;
+    });
+    expect(hook.getCurrent().authJsonPasteSaving).toBe(false);
+    expect(onCredentialMutation).toHaveBeenCalledTimes(1);
+    expect(onCredentialMutation).toHaveBeenCalledWith({
+      kind: 'source-files-changed',
+      fileNames: ['new.json'],
+    });
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.paste_success:new.json',
+      'success'
+    );
+    hook.unmount();
+  });
 });
 
 describe('useAuthFilesData handleDelete', () => {
@@ -1138,7 +1293,8 @@ describe('useAuthFilesData handleDelete', () => {
       files: [],
       failed: [{ name: 'owned.json', error: 'still in use' }],
     });
-    const hook = mountUseAuthFilesData('scope-a');
+    const onCredentialFilesChanged = vi.fn();
+    const hook = mountUseAuthFilesData('scope-a', undefined, onCredentialFilesChanged);
 
     act(() => hook.getCurrent().handleDelete(disabledFile));
     const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as
@@ -1184,6 +1340,7 @@ describe('useAuthFilesData handleDelete', () => {
       'notification.delete_failed: still in use',
       'error'
     );
+    expect(onCredentialFilesChanged).not.toHaveBeenCalled();
     hook.unmount();
   });
 
@@ -1204,7 +1361,8 @@ describe('useAuthFilesData handleDelete', () => {
       files: ['owned.json'],
       failed: [],
     });
-    const hook = mountUseAuthFilesData('scope-a');
+    const onCredentialFilesChanged = vi.fn();
+    const hook = mountUseAuthFilesData('scope-a', undefined, onCredentialFilesChanged);
 
     act(() => hook.getCurrent().handleDelete(disabledFile));
     const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as
@@ -1242,6 +1400,50 @@ describe('useAuthFilesData handleDelete', () => {
         accountSnapshot: 'owned@example.com',
       }),
     ]);
+    expect(onCredentialFilesChanged).toHaveBeenCalledWith({
+      kind: 'source-files-changed',
+      fileNames: ['owned.json'],
+    });
+    hook.unmount();
+  });
+
+  it('does not execute a delete confirmation after the CPA connection changes', async () => {
+    mocks.list.mockResolvedValue({ files: [disabledFile] });
+    const requestScope = {
+      apiBase: 'https://scope-a.example.test',
+      managementKey: 'scope-a-key',
+    };
+    const hook = mountUseAuthFilesData('scope-a', undefined, undefined, requestScope);
+    await act(async () => hook.getCurrent().loadFiles());
+
+    act(() => hook.getCurrent().handleDelete(disabledFile));
+    const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as
+      | { onConfirm?: () => Promise<void> }
+      | undefined;
+
+    hook.rerender('scope-b');
+    await act(async () => confirmation?.onConfirm?.());
+
+    expect(mocks.deleteFileByName).not.toHaveBeenCalled();
+    expect(mocks.list).toHaveBeenCalledWith(requestScope);
+    hook.unmount();
+  });
+
+  it('does not revive a delete confirmation after switching away and back to the same connection', async () => {
+    mocks.list.mockResolvedValue({ files: [disabledFile] });
+    const hook = mountUseAuthFilesData('scope-a');
+    await act(async () => hook.getCurrent().loadFiles());
+
+    act(() => hook.getCurrent().handleDelete(disabledFile));
+    const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as
+      | { onConfirm?: () => Promise<void> }
+      | undefined;
+
+    hook.rerender('scope-b');
+    hook.rerender('scope-a');
+    await act(async () => confirmation?.onConfirm?.());
+
+    expect(mocks.deleteFileByName).not.toHaveBeenCalled();
     hook.unmount();
   });
 
@@ -1837,8 +2039,8 @@ describe('useAuthFilesData status targeting', () => {
     const newLoad = createDeferred<{ files: AuthFileItem[] }>();
     mocks.list.mockReturnValueOnce(oldLoad.promise).mockReturnValueOnce(newLoad.promise);
     const hook = mountUseAuthFilesData('connection-a');
-    let oldPromise!: Promise<void>;
-    let newPromise!: Promise<void>;
+    let oldPromise!: Promise<AuthFileItem[] | undefined>;
+    let newPromise!: Promise<AuthFileItem[] | undefined>;
 
     act(() => {
       oldPromise = hook.getCurrent().loadFiles();
@@ -1850,14 +2052,14 @@ describe('useAuthFilesData status targeting', () => {
 
     await act(async () => {
       newLoad.resolve({ files: newFiles });
-      await newPromise;
+      expect(await newPromise).toEqual(newFiles);
     });
     expect(hook.getCurrent().files).toEqual(newFiles);
     expect(hook.getCurrent().loading).toBe(false);
 
     await act(async () => {
       oldLoad.resolve({ files: oldFiles });
-      await oldPromise;
+      expect(await oldPromise).toBeUndefined();
     });
     expect(hook.getCurrent().files).toEqual(newFiles);
     expect(hook.getCurrent().loading).toBe(false);
@@ -1887,8 +2089,8 @@ describe('useAuthFilesData status targeting', () => {
     const secondLoad = createDeferred<{ files: AuthFileItem[] }>();
     mocks.list.mockReturnValueOnce(firstLoad.promise).mockReturnValueOnce(secondLoad.promise);
     const hook = mountUseAuthFilesData('connection-a');
-    let firstPromise!: Promise<void>;
-    let secondPromise!: Promise<void>;
+    let firstPromise!: Promise<AuthFileItem[] | undefined>;
+    let secondPromise!: Promise<AuthFileItem[] | undefined>;
 
     act(() => {
       firstPromise = hook.getCurrent().loadFiles();
@@ -1896,13 +2098,62 @@ describe('useAuthFilesData status targeting', () => {
     });
     await act(async () => {
       secondLoad.resolve({ files: secondFiles });
-      await secondPromise;
+      expect(await secondPromise).toEqual(secondFiles);
     });
     await act(async () => {
       firstLoad.resolve({ files: firstFiles });
-      await firstPromise;
+      expect(await firstPromise).toBeUndefined();
     });
 
+    expect(hook.getCurrent().files).toEqual(secondFiles);
+    expect(hook.getCurrent().loading).toBe(false);
+    hook.unmount();
+  });
+
+  it('rejects a strict same-connection load when a newer request supersedes it', async () => {
+    const firstFiles = [
+      {
+        id: 'runtime-first',
+        name: 'first.json',
+        type: 'codex',
+        auth_index: 'auth-first',
+      },
+    ] as AuthFileItem[];
+    const secondFiles = [
+      {
+        id: 'runtime-second',
+        name: 'second.json',
+        type: 'codex',
+        auth_index: 'auth-second',
+      },
+    ] as AuthFileItem[];
+    const firstLoad = createDeferred<{ files: AuthFileItem[] }>();
+    const secondLoad = createDeferred<{ files: AuthFileItem[] }>();
+    mocks.list.mockReturnValueOnce(firstLoad.promise).mockReturnValueOnce(secondLoad.promise);
+    const hook = mountUseAuthFilesData('connection-a');
+    let strictPromise!: Promise<AuthFileItem[] | undefined>;
+    let latestPromise!: Promise<AuthFileItem[] | undefined>;
+
+    act(() => {
+      strictPromise = hook.getCurrent().loadFiles({ throwOnError: true });
+      latestPromise = hook.getCurrent().loadFiles();
+    });
+    await act(async () => {
+      secondLoad.resolve({ files: secondFiles });
+      expect(await latestPromise).toEqual(secondFiles);
+    });
+
+    let strictError: unknown;
+    await act(async () => {
+      firstLoad.resolve({ files: firstFiles });
+      try {
+        await strictPromise;
+      } catch (error) {
+        strictError = error;
+      }
+    });
+
+    expect(strictError).toBeInstanceOf(Error);
     expect(hook.getCurrent().files).toEqual(secondFiles);
     expect(hook.getCurrent().loading).toBe(false);
     hook.unmount();
@@ -2377,7 +2628,8 @@ describe('useAuthFilesData status targeting', () => {
     ] as AuthFileItem[];
     mocks.list.mockResolvedValue({ files });
     mocks.setStatus.mockResolvedValue({ status: 'ok', disabled: true });
-    const hook = mountUseAuthFilesData();
+    const onCredentialMutation = vi.fn();
+    const hook = mountUseAuthFilesData(undefined, undefined, onCredentialMutation);
 
     await act(async () => {
       await hook.getCurrent().loadFiles();
@@ -2403,6 +2655,10 @@ describe('useAuthFilesData status targeting', () => {
       'auth_files.status_disabled_success:shared.json',
       'success'
     );
+    expect(onCredentialMutation).toHaveBeenCalledWith({
+      kind: 'status-changed',
+      selectionKeys: ['shared.json\u0000auth-1'],
+    });
     hook.unmount();
   });
 
@@ -2948,7 +3204,8 @@ describe('useAuthFilesData status targeting', () => {
     ] as AuthFileItem[];
     mocks.list.mockResolvedValue({ files });
     mocks.setStatus.mockResolvedValue({ status: 'ok', disabled: true });
-    const hook = mountUseAuthFilesData();
+    const onCredentialMutation = vi.fn();
+    const hook = mountUseAuthFilesData(undefined, undefined, onCredentialMutation);
 
     await act(async () => {
       await hook.getCurrent().loadFiles();
@@ -3005,6 +3262,10 @@ describe('useAuthFilesData status targeting', () => {
       'auth_files.batch_status_success:2',
       'success'
     );
+    expect(onCredentialMutation).toHaveBeenCalledWith({
+      kind: 'status-changed',
+      selectionKeys: ['shared.json\u0000auth-1', 'shared.json\u0000auth-2'],
+    });
     hook.unmount();
   });
 
@@ -3397,6 +3658,50 @@ describe('useAuthFilesData status targeting', () => {
 });
 
 describe('useAuthFilesData handleCredentialRefresh', () => {
+  it('waits a full timestamp tick before refreshing a credential updated in the same second', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.100Z'));
+    const file: AuthFileItem = {
+      id: 'codex-runtime-auth-id',
+      name: 'codex-account.json',
+      authIndex: 'auth-1',
+      type: 'codex',
+      last_refresh: '2026-01-01T00:00:00Z',
+    };
+    const refreshedFile = {
+      ...file,
+      last_refresh: '2026-01-01T00:00:01Z',
+    } as AuthFileItem;
+    mocks.list.mockResolvedValueOnce({ files: [file] }).mockResolvedValue({
+      files: [refreshedFile],
+    });
+    const hook = mountUseAuthFilesData();
+    let request!: Promise<void>;
+
+    await act(async () => {
+      request = hook.getCurrent().handleCredentialRefresh(file);
+      await Promise.resolve();
+    });
+
+    expect(mocks.requestCredentialRefresh).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(mocks.requestCredentialRefresh).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+      await request;
+    });
+
+    expect(mocks.requestCredentialRefresh).toHaveBeenCalledTimes(1);
+    expect(hook.getCurrent().files).toEqual([refreshedFile]);
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.credential_refresh_completed:codex-account.json',
+      'success'
+    );
+    hook.unmount();
+  });
+
   it('tracks the exact auth row until CPA confirms the refreshed credential', async () => {
     let resolveRequest!: () => void;
     mocks.requestCredentialRefresh.mockImplementation(
@@ -3405,7 +3710,8 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
           resolveRequest = resolve;
         })
     );
-    const hook = mountUseAuthFilesData();
+    const onCredentialFilesChanged = vi.fn();
+    const hook = mountUseAuthFilesData(undefined, undefined, onCredentialFilesChanged);
     const file: AuthFileItem = {
       id: 'codex-runtime-auth-id',
       name: 'shared-codex.json',
@@ -3477,6 +3783,10 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
       'auth_files.credential_refresh_completed:shared-codex.json',
       'success'
     );
+    expect(onCredentialFilesChanged).toHaveBeenCalledWith({
+      kind: 'credential-refreshed',
+      selectionKeys: ['shared-codex.json\u0000auth-2'],
+    });
     hook.unmount();
   });
 
@@ -3491,7 +3801,8 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
       id_token: { plan_type: 'free' },
     };
     mocks.list.mockResolvedValue({ files: [file] });
-    const hook = mountUseAuthFilesData();
+    const onCredentialFilesChanged = vi.fn();
+    const hook = mountUseAuthFilesData(undefined, undefined, onCredentialFilesChanged);
     let request!: Promise<void>;
 
     await act(async () => {
@@ -3515,6 +3826,7 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
       'auth_files.credential_refresh_pending:codex-account.json',
       'warning'
     );
+    expect(onCredentialFilesChanged).not.toHaveBeenCalled();
     hook.unmount();
   });
 

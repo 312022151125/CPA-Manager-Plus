@@ -12,14 +12,16 @@ import {
   getAuthFileCodexInspectionKeyForIdentity,
   getAuthFileSelectionKey,
   isAuthFileInspectionAuthenticationFailure,
+  hasActiveCodexInspectionAuthenticationFailure,
   type AuthFileCodexStatusSummary,
-} from '@/features/authFiles/model/authFilesPageModel';
+} from '@/features/authFiles/model/credentialStatus';
 import { resolveCodexPlanType } from '@/utils/quota/resolvers';
 import {
   compareQuotaResetLabels,
   compareQuotaResets,
   normalizeAccountProvider,
   readAuthFileCreatedAtMs,
+  readAuthFileCredentialRefreshAtMs,
   readAuthFileUpdatedAtMs,
   resolveAccountQuota,
   type AccountQuotaOverrides,
@@ -41,12 +43,19 @@ import {
   resolveAccountRequestHealthEvidence,
   type AccountRequestEvidenceBySelectionKey,
 } from './accountHealthEvidence';
+import {
+  getAccountCredentialEvidenceCutoffs,
+  type AccountCredentialEvidenceBoundary,
+  type AccountInspectionSummary,
+} from '@/features/accounts/model/accountCredentialEvidence';
+import { getCredentialScopedQuotaState } from '@/utils/quota/credentialScope';
 
 export {
   compareQuotaResetLabels,
   compareQuotaResets,
   normalizeAccountProvider,
   readAuthFileCreatedAtMs,
+  readAuthFileCredentialRefreshAtMs,
   readAuthFileUpdatedAtMs,
   resolveAccountQuota,
 };
@@ -96,19 +105,7 @@ export interface AccountRowSort {
   direction: AccountRowSortDirection;
 }
 
-export interface AccountInspectionSummary {
-  source: 'local' | 'server';
-  action: string;
-  actionReason: string;
-  actionStatus: string;
-  statusCode: number | null;
-  usedPercent: number | null;
-  isQuota?: boolean | null;
-  errorKind?: string;
-  runId: number;
-  resultId: number;
-  createdAtMs: number;
-}
+export type { AccountInspectionSummary } from '@/features/accounts/model/accountCredentialEvidence';
 
 export type AccountInspectionResult = CodexInspectionResult & {
   inspectionSource?: 'local' | 'server';
@@ -144,8 +141,7 @@ export const getHandledAccountInspectionResultKeys = (
 
   const fileNameFallbackKey = getAuthFileCodexInspectionKey(normalizedFileName, null);
   const targetHasStableIdentity = targetIdentityKey !== fileNameFallbackKey;
-  const hasUniqueFileName =
-    files.filter((file) => file.name === normalizedFileName).length === 1;
+  const hasUniqueFileName = files.filter((file) => file.name === normalizedFileName).length === 1;
 
   return results
     .filter((result) => {
@@ -311,19 +307,74 @@ const buildInspectionMap = (
     if (current && current.createdAtMs >= result.createdAtMs) return;
     map.set(key, {
       source: result.inspectionSource ?? 'server',
+      disabled: result.disabled,
       action: result.action || 'keep',
       actionReason: result.actionReason || '',
       actionStatus: result.actionStatus || 'none',
+      executedAction: result.executedAction || '',
       statusCode: result.statusCode ?? null,
       usedPercent: result.usedPercent ?? null,
       isQuota: result.isQuota ?? null,
-      errorKind: result.errorKind,
+      planType: result.planType ?? null,
+      quotaWindows: result.quotaWindows ?? [],
+      quotaInventoryObserved: result.quotaInventoryObserved,
+      error: result.error ?? '',
+      errorKind: result.errorKind ?? '',
       runId: result.runId,
       resultId: result.id,
       createdAtMs: result.createdAtMs,
     });
   });
   return map;
+};
+
+export const buildAccountInspectionBySelectionKey = (
+  files: AuthFileItem[],
+  results: AccountInspectionResult[] | undefined,
+  evidenceBoundaryBySelectionKey?: ReadonlyMap<string, AccountCredentialEvidenceBoundary>
+): Map<string, AccountInspectionSummary> => {
+  const inspectionByIdentity = buildInspectionMap(results);
+  const fileNameCounts = files.reduce((counts, file) => {
+    counts.set(file.name, (counts.get(file.name) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>());
+  const inspections = new Map<string, AccountInspectionSummary>();
+  files.forEach((file) => {
+    const selectionKey = getAuthFileSelectionKey(file);
+    const exactInspection = inspectionByIdentity.get(getAuthFileCodexInspectionKeyForFile(file));
+    const fallbackInspection =
+      fileNameCounts.get(file.name) === 1
+        ? inspectionByIdentity.get(getAuthFileCodexInspectionKey(file.name, null))
+        : undefined;
+    const inspection =
+      exactInspection && fallbackInspection
+        ? fallbackInspection.createdAtMs > exactInspection.createdAtMs
+          ? fallbackInspection
+          : exactInspection
+        : (exactInspection ?? fallbackInspection);
+    if (!inspection) return;
+    const boundary = evidenceBoundaryBySelectionKey?.get(selectionKey);
+    const usesExactInspection = inspection === exactInspection;
+    const boundaryAtMs = Math.max(
+      boundary?.inspectionAtMs ?? 0,
+      usesExactInspection ? 0 : (boundary?.fallbackInspectionAtMs ?? 0)
+    );
+    const inspectionBaselinePending = usesExactInspection
+      ? boundary?.inspectionBaselinePending === true
+      : boundary?.fallbackInspectionBaselinePending === true;
+    if (inspectionBaselinePending) return;
+    if (inspection.createdAtMs <= boundaryAtMs) return;
+    const credentialRefreshAtMs = readAuthFileCredentialRefreshAtMs(file) ?? 0;
+    if (
+      credentialRefreshAtMs > 0 &&
+      inspection.createdAtMs <= credentialRefreshAtMs &&
+      hasActiveCodexInspectionAuthenticationFailure(inspection)
+    ) {
+      return;
+    }
+    inspections.set(selectionKey, inspection);
+  });
+  return inspections;
 };
 
 const buildUsageSummary = (file: AuthFileItem): AccountUsageSummary => {
@@ -338,36 +389,63 @@ const buildUsageSummary = (file: AuthFileItem): AccountUsageSummary => {
   };
 };
 
-const selectLatestAccountInspection = (
-  exact: AccountInspectionSummary | undefined,
-  fileNameFallback: AccountInspectionSummary | undefined
-): AccountInspectionSummary | null => {
-  if (!exact) return fileNameFallback ?? null;
-  if (!fileNameFallback) return exact;
-  return fileNameFallback.createdAtMs > exact.createdAtMs ? fileNameFallback : exact;
-};
-
 export const buildAccountRows = (
   files: AuthFileItem[],
   stores: AccountQuotaStores,
   inspectionResults?: AccountInspectionResult[],
-  overrides?: AccountQuotaOverrides
+  overrides?: AccountQuotaOverrides,
+  inspectionBySelectionKey?: ReadonlyMap<string, AccountInspectionSummary>,
+  evidenceBoundaryBySelectionKey?: ReadonlyMap<string, AccountCredentialEvidenceBoundary>,
+  statusBoundaryBySelectionKey?: ReadonlyMap<string, AccountCredentialEvidenceBoundary>
 ): AccountRow[] => {
-  const inspectionByFile = buildInspectionMap(inspectionResults);
-  const fileNameCounts = files.reduce((counts, file) => {
-    counts.set(file.name, (counts.get(file.name) ?? 0) + 1);
-    return counts;
-  }, new Map<string, number>());
+  const resolvedInspectionBySelectionKey =
+    inspectionBySelectionKey ?? buildAccountInspectionBySelectionKey(files, inspectionResults);
   return files.map((file) => {
     const provider = normalizeAccountProvider(file);
     const authIndex = readAuthIndex(file);
     const selectionKey = getAuthFileSelectionKey(file);
-    const quota = resolveAccountQuota(file, stores, overrides);
-    const exactInspection = inspectionByFile.get(getAuthFileCodexInspectionKeyForFile(file));
-    const fileNameFallbackInspection =
-      fileNameCounts.get(file.name) === 1
-        ? inspectionByFile.get(getAuthFileCodexInspectionKey(file.name, null))
+    const resolvedInspection = resolvedInspectionBySelectionKey.get(selectionKey) ?? null;
+    const evidenceBoundary = evidenceBoundaryBySelectionKey?.get(selectionKey);
+    const statusBoundary = statusBoundaryBySelectionKey?.get(selectionKey);
+    const statusBoundaryAtMs = statusBoundary?.inspectionAtMs ?? 0;
+    const inspection =
+      resolvedInspection && resolvedInspection.createdAtMs <= statusBoundaryAtMs
+        ? null
+        : resolvedInspection;
+    const updatedAtMs = readAuthFileUpdatedAtMs(file);
+    const inspectionSupersedesRawDisabled =
+      typeof inspection?.disabled === 'boolean' &&
+      inspection.createdAtMs > 0 &&
+      (updatedAtMs === null || inspection.createdAtMs >= updatedAtMs);
+    const effectiveFile = inspectionSupersedesRawDisabled
+      ? { ...file, disabled: inspection.disabled }
+      : file;
+    const codexQuota =
+      provider === 'codex'
+        ? (overrides?.codexQuotaBySelectionKey?.get(selectionKey) ??
+          getCredentialScopedQuotaState(stores.codexQuota, file))
         : undefined;
+    const authenticationAtMs = getAccountCredentialEvidenceCutoffs({
+      providerQuota: codexQuota,
+      inspection,
+      credentialRefreshAtMs: readAuthFileCredentialRefreshAtMs(file) ?? 0,
+    }).authenticationAtMs;
+    const rawStatusMessage = resolveStatusMessage(file);
+    const boundarySupersedesRawStatus = (
+      boundary: AccountCredentialEvidenceBoundary | undefined
+    ): boolean => {
+      if (!boundary || boundary.localAtMs <= 0) return false;
+      if (rawStatusMessage === '' || !boundary.rawStatusMessages.includes(rawStatusMessage)) {
+        return false;
+      }
+      if (updatedAtMs === null) return true;
+      return updatedAtMs <= Math.max(boundary.rawStatusAtMs, boundary.localAtMs);
+    };
+    const rawStatusSuperseded =
+      boundarySupersedesRawStatus(evidenceBoundary) ||
+      boundarySupersedesRawStatus(statusBoundary) ||
+      (authenticationAtMs > 0 && updatedAtMs !== null && authenticationAtMs >= updatedAtMs);
+    const quota = resolveAccountQuota(effectiveFile, stores, overrides);
     return {
       key: file.name,
       selectionKey,
@@ -375,19 +453,19 @@ export const buildAccountRows = (
       accountLabel: resolveAccountLabel(file),
       provider,
       planType: quota.planType ?? readPlanType(file),
-      disabled: file.disabled === true,
+      disabled: effectiveFile.disabled === true,
       runtimeOnly:
         file.runtimeOnly === true || file.runtimeOnly === 'true' || file.runtime_only === true,
-      statusMessage: resolveStatusMessage(file),
+      statusMessage: rawStatusSuperseded ? '' : rawStatusMessage,
       authIndex,
       projectId: readProjectId(file),
       note: readString(file.note),
       priority: readNumber(file.priority),
       createdAtMs: readAuthFileCreatedAtMs(file),
-      updatedAtMs: readAuthFileUpdatedAtMs(file),
+      updatedAtMs,
       quota,
       usage: buildUsageSummary(file),
-      inspection: selectLatestAccountInspection(exactInspection, fileNameFallbackInspection),
+      inspection,
       raw: file,
     };
   });
