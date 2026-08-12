@@ -39,6 +39,47 @@ describe('GitHub Actions workflow integrity', () => {
     }
   });
 
+  it('retargets non-dev pull requests without executing contributor code', () => {
+    const workflow = readWorkflow('main-promotion.yml');
+    const targetJob = jobBlock(workflow, 'retarget');
+
+    expect(workflow).toContain('pull_request_target:');
+    expect(workflow).toContain('branches-ignore:');
+    expect(workflow).toContain("github.event.pull_request.base.ref != 'dev'");
+    expect(workflow).toContain(
+      'github.event.pull_request.head.repo.full_name != github.repository'
+    );
+    expect(targetJob).toContain('PR_TARGET_APP_ID');
+    expect(targetJob).toContain('PR_TARGET_PRIVATE_KEY');
+    expect(targetJob).toContain('permission-pull-requests: write');
+    expect(targetJob).toContain('github.rest.pulls.update');
+    expect(targetJob).toContain('base: "dev"');
+    expect(targetJob).not.toContain('actions/checkout@');
+    expect(targetJob).not.toContain('github.event.pull_request.head.sha');
+  });
+
+  it('keeps the main promotion check on the pull request merge commit', () => {
+    const workflow = readWorkflow('main-promotion.yml');
+    const promotionJob = jobBlock(workflow, 'verify-source');
+
+    expect(workflow).toContain('pull_request:');
+    expect(workflow).toContain('- main');
+    expect(promotionJob).toContain('name: Verify dev promotion source');
+    expect(promotionJob).toContain("if: github.event_name == 'pull_request'");
+    expect(promotionJob).toContain('HEAD_REPOSITORY');
+    expect(promotionJob).toContain('HEAD_REF');
+    expect(promotionJob).toContain('main accepts promotions only from');
+  });
+
+  it('reruns pull request checks after an automated base change', () => {
+    const workflow = readWorkflow('pr-check.yml');
+    const trigger = workflow.slice(0, workflow.indexOf('\npermissions:'));
+
+    expect(trigger).toContain('pull_request:');
+    expect(trigger).toContain('types:');
+    expect(trigger).toContain('- edited');
+  });
+
   it('keeps Demo and Docs inside the stable required-check aggregate', () => {
     const workflow = readWorkflow('pr-check.yml');
     const demoJob = jobBlock(workflow, 'demo-docs');
