@@ -47,7 +47,7 @@ AI 提供商页面决定 CPA 如何把客户端请求路由到上游模型服务
 - Provider 优先级、权重和启用状态。
 - 通过 Provider 测试入口验证密钥和模型访问。
 
-xAI API Key 与 xAI/Grok OAuth 认证文件不是同一种凭证。OAuth 登录、billing 证据和账号巡检请分别查看 [OAuth 登录](./oauth.md)、[配额管理](./quota.md) 和[账号巡检](./codex-inspection.md)。
+xAI API Key 与 xAI/Grok OAuth 凭证不是同一种凭证。OAuth 登录、billing 证据和账号巡检请分别查看 [OAuth 登录](./oauth.md)、[凭证管理](./accounts.md) 和[账号巡检](./codex-inspection.md)。
 
 ## 优先级、权重与并发保存
 
@@ -71,7 +71,7 @@ Provider 表格支持直接调整优先级。数值只影响 CPA 当前支持的
 1. 发一条低成本真实请求。
 2. 在请求监控确认 Provider、模型、账号和状态码。
 3. 如果成本为空，检查[模型价格](./model-prices.md)。
-4. 如果像认证或额度问题，检查[认证文件](./auth-files.md)、[配额管理](./quota.md)和[账号处理队列](./account-actions.md)。
+4. 如果像认证或额度问题，检查[凭证管理](./accounts.md)和[账号处理队列](./account-actions.md)。
 5. 如果页面没有请求事件，先排查采集链路，而不是反复修改 Provider。
 
 ## 配置边界

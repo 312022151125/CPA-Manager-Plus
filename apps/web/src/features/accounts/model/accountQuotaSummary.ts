@@ -14,7 +14,7 @@ import {
   resolveAbsoluteQuotaReset,
 } from '@/utils/quota/formatters';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
-import { getAuthFileSelectionKey } from '@/features/authFiles/model/authFilesPageModel';
+import { getAuthFileSelectionKey } from '@/features/authFiles/model/credentialStatus';
 import {
   buildObservedCodexQuotaFromHeaderSnapshot,
   getHeaderSnapshotErrorCode,
@@ -116,6 +116,7 @@ export interface AccountGroupedQuotaAvailabilitySummary {
 }
 
 const QUOTA_LOW_THRESHOLD = 20;
+const CREDENTIAL_REFRESH_FILE_WRITE_SKEW_MS = 5_000;
 
 type AccountQuotaObservationFields = Partial<
   Pick<
@@ -205,6 +206,39 @@ export const readAuthFileUpdatedAtMs = (file: AuthFileItem): number | null => {
     .map(readTimestampMs)
     .filter((value): value is number => value !== null);
   return timestamps.length > 0 ? Math.max(...timestamps) : null;
+};
+
+export const readAuthFileCredentialRefreshAtMs = (file: AuthFileItem): number | null => {
+  const refreshTimestamps = [
+    file.lastRefresh,
+    file['last_refresh'],
+    file['lastRefreshedAt'],
+    file['last_refreshed_at'],
+  ]
+    .map(readTimestampMs)
+    .filter((value): value is number => value !== null);
+  if (refreshTimestamps.length === 0) return null;
+
+  const refreshAtMs = Math.max(...refreshTimestamps);
+  const nearbyFileWriteTimestamps = [
+    file['updatedAtMs'],
+    file['updated_at_ms'],
+    file['updatedAt'],
+    file['updated_at'],
+    file.modified,
+    file['modtime'],
+  ]
+    .map(readTimestampMs)
+    .filter(
+      (value): value is number =>
+        value !== null &&
+        value > refreshAtMs &&
+        value - refreshAtMs <= CREDENTIAL_REFRESH_FILE_WRITE_SKEW_MS
+    );
+
+  return nearbyFileWriteTimestamps.length > 0
+    ? Math.max(...nearbyFileWriteTimestamps)
+    : refreshAtMs;
 };
 
 export const normalizeAccountProvider = (file: AuthFileItem): string => {
@@ -833,6 +867,25 @@ export const resolveAccountQuota = (
           quota.errorStatus,
           quota.failedAtMs
         ),
+        headerObservationFields
+      );
+    }
+    if (
+      quota.quotaInventoryObserved === true &&
+      quota.windows.length === 0 &&
+      !quota.rateLimitReachedType &&
+      quota.spendControlReached !== true &&
+      quota.creditsOverageLimitReached !== true
+    ) {
+      return mergeQuotaObservationFields(
+        {
+          ...quotaFromUsedWindows(
+            quota.windows,
+            quota.planType ?? observedPlanType,
+            quotaObservationFields(quota)
+          ),
+          status: 'ok',
+        },
         headerObservationFields
       );
     }

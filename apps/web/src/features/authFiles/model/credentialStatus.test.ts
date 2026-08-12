@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { AuthFileItem, CodexQuotaState } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import {
-  authFileMatchesCodexPlanFilter,
   authFileMatchesCodexStatusFilter,
   buildAuthFileCodexInspectionMap,
   filterSuppressedAuthFileInspectionSnapshots,
@@ -16,21 +15,15 @@ import {
   getAuthFileNameFromSelectionKey,
   getAuthFilePatchTarget,
   getAuthFileScopedCodexQuota,
-  getAuthFileSearchValues,
   getAuthFileSelectionKey,
   getFreshAuthFileCodexStatusSources,
   getWholeAuthFileDeleteCandidates,
   hasPartialSharedAuthFileSelection,
   isAuthFileInspectionAuthenticationFailure,
-  normalizeAuthFilesCodexStatusFilter,
   sanitizeSupersededAuthQuotaState,
   sanitizeSupersededAuthHeaderSnapshot,
-  stringifySearchValue,
   type AuthFileCodexInspectionSnapshot,
-} from './authFilesPageModel';
-
-const t = ((key: string, options?: { defaultValue?: string }) =>
-  options?.defaultValue ?? key) as never;
+} from './credentialStatus';
 
 const codexFile = (overrides: Partial<AuthFileItem> = {}): AuthFileItem => ({
   name: 'codex-main.json',
@@ -158,6 +151,28 @@ describe('auth file Codex status helpers', () => {
     ).toEqual([newerResult]);
   });
 
+  it('ignores a superseded raw 401 status code when newer evidence is authenticated', () => {
+    const file = codexFile({ errorStatus: 401, statusCode: 401 });
+    const healthyQuota = codexQuota({
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly limit',
+          usedPercent: 30,
+          resetLabel: '06/04 12:00',
+          limitWindowSeconds: 604_800,
+        },
+      ],
+    });
+
+    expect(getAuthFileCodexStatus(file, healthyQuota).needsReauth).toBe(true);
+    expect(
+      getAuthFileCodexStatus(file, healthyQuota, undefined, undefined, {
+        ignoreRawStatusCode: true,
+      }).needsReauth
+    ).toBe(false);
+  });
+
   it('detects weekly-limited Codex quota from the weekly quota window', () => {
     const status = getAuthFileCodexStatus(codexFile(), codexQuota());
 
@@ -232,6 +247,20 @@ describe('auth file Codex status helpers', () => {
     expect(status.badges.find((badge) => badge.kind === 'disabled_with_reset')).toMatchObject({
       labelParams: { reset: '06/04 12:00' },
     });
+  });
+
+  it('uses the effective disabled state after newer Accounts evidence enables a credential', () => {
+    const status = getAuthFileCodexStatus(
+      codexFile({ disabled: true }),
+      codexQuota(),
+      undefined,
+      undefined,
+      { effectiveDisabled: false }
+    );
+
+    expect(status.hasDisabledRecoveryReset).toBe(false);
+    expect(authFileMatchesCodexStatusFilter(status, 'disabled_with_reset')).toBe(false);
+    expect(status.badges.map((badge) => badge.kind)).not.toContain('disabled_with_reset');
   });
 
   it('uses the five-hour reset label for disabled files when only the short window is full', () => {
@@ -330,6 +359,26 @@ describe('auth file Codex status helpers', () => {
     expect(authFileMatchesCodexStatusFilter(status, 'reauth')).toBe(true);
     expect(status.badges.map((badge) => badge.kind)).toContain('reauth');
   });
+
+  it.each(['success', 'skipped'])(
+    'does not expose a handled inspection 401 as reauth when action status is %s',
+    (actionStatus) => {
+      const status = getAuthFileCodexStatus(codexFile(), undefined, {
+        fileName: 'codex-main.json',
+        authIndex: 'codex-main',
+        statusCode: 401,
+        action: 'reauth',
+        actionStatus,
+        executedAction: 'reauth',
+        usedPercent: null,
+        isQuota: false,
+      });
+
+      expect(status.isHttp401).toBe(false);
+      expect(status.needsReauth).toBe(false);
+      expect(status.badges.map((badge) => badge.kind)).not.toContain('reauth');
+    }
+  );
 
   it('does not treat non-quota inspection percentages as weekly quota limits', () => {
     const status = getAuthFileCodexStatus(codexFile(), undefined, {
@@ -1645,7 +1694,7 @@ describe('auth file Codex status helpers', () => {
     const headerSnapshot: UsageHeaderSnapshot = {
       event_hash: 'newer-healthy-header',
       timestamp_ms: 2_000,
-      header_trace_id: 'trace-new',
+      header_quota_used_percent: 30,
     };
 
     const sources = getFreshAuthFileCodexStatusSources(file, undefined, inspection, headerSnapshot);
@@ -1656,9 +1705,9 @@ describe('auth file Codex status helpers', () => {
       sources.headerSnapshot
     );
 
-    expect(sources.inspection).toBe(inspection);
+    expect(sources.inspection).toBeUndefined();
     expect(sources.headerSnapshot).toBe(headerSnapshot);
-    expect(status.needsReauth).toBe(true);
+    expect(status.needsReauth).toBe(false);
   });
 
   it('does not suppress older Codex inspection after a newer transient header failure', () => {
@@ -1709,6 +1758,37 @@ describe('auth file Codex status helpers', () => {
 
     expect(sources.inspection).toBeUndefined();
     expect(sources.headerSnapshot).toBe(headerSnapshot);
+  });
+
+  it('does not let a newer null-status inspection hide an older Header auth error', () => {
+    const file = codexFile();
+    const inspection: AuthFileCodexInspectionSnapshot = {
+      fileName: file.name,
+      authIndex: file.authIndex,
+      statusCode: null,
+      action: 'keep',
+      usedPercent: null,
+      isQuota: false,
+      inspectionAtMs: 2_000,
+    };
+    const headerSnapshot: UsageHeaderSnapshot = {
+      event_hash: 'older-auth-error',
+      timestamp_ms: 1_000,
+      header_error_kind: 'auth_invalid',
+      header_error_code: 'token_expired',
+    };
+
+    const sources = getFreshAuthFileCodexStatusSources(file, undefined, inspection, headerSnapshot);
+    const status = getAuthFileCodexStatus(
+      file,
+      undefined,
+      sources.inspection,
+      sources.headerSnapshot
+    );
+
+    expect(sources.inspection).toBe(inspection);
+    expect(sources.headerSnapshot).toBe(headerSnapshot);
+    expect(status.needsReauth).toBe(true);
   });
 
   it('suppresses older header diagnostics after a newer Codex inspection', () => {
@@ -1847,95 +1927,9 @@ describe('auth file Codex status helpers', () => {
 
     expect(getAuthFileScopedCodexQuota(codexFile(), quota)).toBeUndefined();
   });
-
-  it('keeps plan search fallback while dropping stale header diagnostics from search values', () => {
-    const file = codexFile();
-    const quota = codexQuota({
-      authFileKey: getAuthFileCodexInspectionKey(file.name, file.authIndex),
-      fetchedAtMs: 2_000,
-      windows: [],
-    });
-    const headerSnapshot: UsageHeaderSnapshot = {
-      event_hash: 'old-header-diagnostics',
-      timestamp_ms: 1_000,
-      header_quota_plan_type: 'plus',
-      header_error_kind: 'auth',
-      header_error_code: 'invalid_api_key',
-      header_trace_id: 'trace-old',
-    };
-    const sources = getFreshAuthFileCodexStatusSources(file, quota, undefined, headerSnapshot);
-    const status = getAuthFileCodexStatus(file, quota, undefined, sources.headerSnapshot);
-    const searchValues = stringifySearchValue(
-      getAuthFileSearchValues(file, t, quota, status, sources.headerSnapshot, headerSnapshot)
-    );
-
-    expect(searchValues).toContain('plus');
-    expect(searchValues).not.toContain('invalid_api_key');
-    expect(searchValues).not.toContain('trace-old');
-    expect(searchValues).not.toContain('auth_files.codex_status_badge_reauth');
-  });
-
-  it('adds derived Codex status labels to searchable values', () => {
-    const status = getAuthFileCodexStatus(codexFile(), undefined, {
-      fileName: 'codex-main.json',
-      authIndex: 'codex-main',
-      statusCode: 401,
-      action: 'reauth',
-      usedPercent: null,
-      isQuota: false,
-    });
-
-    expect(
-      stringifySearchValue(getAuthFileSearchValues(codexFile(), t, undefined, status))
-    ).toContain('auth_files.codex_status_badge_reauth');
-    expect(normalizeAuthFilesCodexStatusFilter('http_401')).toBe('reauth');
-    expect(normalizeAuthFilesCodexStatusFilter('quota_limited')).toBe('quota_limited');
-    expect(normalizeAuthFilesCodexStatusFilter('five_hour_limited')).toBe('five_hour_limited');
-    expect(normalizeAuthFilesCodexStatusFilter('monthly_limited')).toBe('monthly_limited');
-    expect(normalizeAuthFilesCodexStatusFilter('disabled_with_reset')).toBe('disabled_with_reset');
-    expect(normalizeAuthFilesCodexStatusFilter('unknown')).toBeNull();
-  });
 });
 
-describe('auth file Codex plan helpers', () => {
-  it('matches Codex files by plan from file metadata or quota fallback', () => {
-    expect(
-      authFileMatchesCodexPlanFilter(codexFile({ plan_type: 'plus' }), undefined, 'plus')
-    ).toBe(true);
-    expect(
-      authFileMatchesCodexPlanFilter(codexFile({ plan_type: 'plus' }), undefined, 'team')
-    ).toBe(false);
-    expect(
-      authFileMatchesCodexPlanFilter(
-        codexFile({ metadata: { planType: 'pro-lite' } }),
-        undefined,
-        'prolite'
-      )
-    ).toBe(true);
-    expect(
-      authFileMatchesCodexPlanFilter(
-        codexFile({ name: 'quota-team.json' }),
-        codexQuota({ planType: 'team' }),
-        'team'
-      )
-    ).toBe(true);
-    expect(authFileMatchesCodexPlanFilter(codexFile(), undefined, 'unknown')).toBe(true);
-    expect(
-      authFileMatchesCodexPlanFilter(codexFile(), undefined, 'unknown', {
-        event_hash: 'active-limit-only',
-        timestamp_ms: 1_700_000_000_000,
-        response_metadata: {
-          quota: {
-            active_limit: 'premium',
-          },
-        },
-      })
-    ).toBe(true);
-    expect(
-      authFileMatchesCodexPlanFilter({ name: 'qwen.json', type: 'qwen' }, undefined, 'plus')
-    ).toBe(false);
-  });
-
+describe('credential identity helpers', () => {
   it('keeps same-file auth rows distinct for selection and patch targets', () => {
     const first = codexFile({
       id: 'runtime-shared-0',

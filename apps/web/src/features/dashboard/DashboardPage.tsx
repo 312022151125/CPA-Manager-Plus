@@ -387,7 +387,7 @@ export function DashboardPage() {
         : undefined,
     },
     {
-      label: t('nav.auth_files'),
+      label: t('nav.accounts'),
       value: stats.authFiles ?? '-',
       icon: <IconFileText size={24} />,
       path: '/accounts',

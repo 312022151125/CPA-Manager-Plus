@@ -10,7 +10,7 @@ import type {
   MonitoringAccountWindowUsageItem,
   QuotaCooldownInfo,
 } from '@/services/api';
-import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/authFilesPageModel';
+import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/credentialStatus';
 import { normalizePlanType, parseIdTokenPayload } from '@/utils/quota/parsers';
 import { isValidQuotaResetAtMs } from '@/utils/quota/formatters';
 import { resolveCodexPlanType } from '@/utils/quota/resolvers';
@@ -46,6 +46,7 @@ import type { UsageValueRow, UsageValueSource } from './usageValueRows';
 import {
   classifyAccountCredentialStatusEvidence,
   getAccountRequestCredentialEvidence,
+  isAccountCredentialStatusProblemCurrent,
   isAccountInspectionAuthenticationFailure,
   isAccountInspectionHealthyEvidence,
   isAccountRequestCredentialEvidenceCurrent,
@@ -1248,22 +1249,25 @@ const buildOverviewActivity = (
 
 const buildOverviewRecentStatus = (
   row: AccountRow,
-  decision: AccountDetailOverviewDecision
+  _decision: AccountDetailOverviewDecision,
+  requestEvidence: ReturnType<typeof resolveAccountRequestHealthEvidence>
 ): AccountDetailOverviewRecentStatus => {
   const recentRequests = row.usage.recentRequests;
   const totals = sumRecentRequests(recentRequests);
   const total = totals.success + totals.failure;
   const credentialStatusKind = classifyAccountCredentialStatusEvidence(row);
-  const statusMessageIsCurrentDecision =
-    decision.basisLabelKey === 'accounts.detail_overview_basis_credential_state' &&
-    (credentialStatusKind === 'credential_failure' || credentialStatusKind === 'quota');
+  const hasProblemStatusMessage =
+    credentialStatusKind === 'quota' ||
+    (credentialStatusKind === 'credential_failure'
+      ? isAccountCredentialStatusProblemCurrent(row, requestEvidence)
+      : credentialStatusKind === 'transient_failure');
 
   return {
     success: totals.success,
     failure: totals.failure,
     successRate: total > 0 ? (totals.success / total) * 100 : null,
     recentRequests,
-    statusMessage: statusMessageIsCurrentDecision ? row.statusMessage : '',
+    statusMessage: hasProblemStatusMessage ? row.statusMessage : '',
   };
 };
 
@@ -1307,9 +1311,7 @@ const getDiagnosticEvidenceDirection = (action: string): DiagnosticEvidenceDirec
   return normalized === 'keep' || normalized === 'enable' ? 'positive' : 'negative';
 };
 
-const getInspectionDiagnosticEvidenceDirection = (
-  row: AccountRow
-): DiagnosticEvidenceDirection => {
+const getInspectionDiagnosticEvidenceDirection = (row: AccountRow): DiagnosticEvidenceDirection => {
   if (!row.inspection) return null;
   if (isAccountInspectionAuthenticationFailure(row)) return 'negative';
   if (row.inspection.isQuota === true || isAccountInspectionHealthyEvidence(row)) {
@@ -1553,7 +1555,11 @@ export const buildAccountDetailViewModel = (
     decision: overviewDecision,
     capacity: buildOverviewCapacity(row, quotaWindows, listItem),
     credential: buildOverviewCredential(row, options.codexQuota),
-    recentStatus: buildOverviewRecentStatus(row, overviewDecision),
+    recentStatus: buildOverviewRecentStatus(
+      row,
+      overviewDecision,
+      resolveAccountRequestHealthEvidence(requestEvidence)
+    ),
     activity: buildOverviewActivity(row, value),
     attention: buildOverviewAttention(recommendation, actionCandidates),
   };

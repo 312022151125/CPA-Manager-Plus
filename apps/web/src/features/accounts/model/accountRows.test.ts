@@ -5,8 +5,9 @@ import {
   getAuthFileCodexInspectionKeyForIdentity,
   getAuthFileCodexStatus,
   getAuthFileSelectionKey,
-} from '@/features/authFiles/model/authFilesPageModel';
+} from '@/features/authFiles/model/credentialStatus';
 import {
+  buildAccountInspectionBySelectionKey,
   buildAccountMetrics,
   buildAccountRows as buildAccountRowsBase,
   filterSuppressedAccountInspectionResults,
@@ -23,6 +24,7 @@ import {
   buildQuotaCredentialIdentity,
   getQuotaCredentialStoreKey,
 } from '@/utils/quota/credentialScope';
+import type { AccountCredentialEvidenceBoundary } from './accountCredentialEvidence';
 
 const emptyStores = (): AccountQuotaStores => ({
   antigravityQuota: {},
@@ -30,6 +32,25 @@ const emptyStores = (): AccountQuotaStores => ({
   codexQuota: {},
   kimiQuota: {},
   xaiQuota: {},
+});
+
+const evidenceBoundary = (
+  overrides: Partial<AccountCredentialEvidenceBoundary> = {}
+): AccountCredentialEvidenceBoundary => ({
+  localAtMs: 0,
+  inspectionAtMs: 0,
+  headerAtMs: 0,
+  actionAtMs: 0,
+  authenticationActionAtMs: 0,
+  quotaActionAtMs: 0,
+  cooldownAtMs: 0,
+  fallbackInspectionAtMs: 0,
+  fallbackHeaderAtMs: 0,
+  fallbackActionAtMs: 0,
+  fallbackCooldownAtMs: 0,
+  rawStatusAtMs: 0,
+  rawStatusMessages: [] as string[],
+  ...overrides,
 });
 
 const scopeTestQuotaStores = (files: AuthFileItem[], stores: AccountQuotaStores) => {
@@ -61,8 +82,20 @@ const buildAccountRows = (
   files: AuthFileItem[],
   stores: AccountQuotaStores,
   inspectionResults?: Parameters<typeof buildAccountRowsBase>[2],
-  overrides?: Parameters<typeof buildAccountRowsBase>[3]
-) => buildAccountRowsBase(files, scopeTestQuotaStores(files, stores), inspectionResults, overrides);
+  overrides?: Parameters<typeof buildAccountRowsBase>[3],
+  inspectionBySelectionKey?: Parameters<typeof buildAccountRowsBase>[4],
+  evidenceBoundaryBySelectionKey?: Parameters<typeof buildAccountRowsBase>[5],
+  statusBoundaryBySelectionKey?: Parameters<typeof buildAccountRowsBase>[6]
+) =>
+  buildAccountRowsBase(
+    files,
+    scopeTestQuotaStores(files, stores),
+    inspectionResults,
+    overrides,
+    inspectionBySelectionKey,
+    evidenceBoundaryBySelectionKey,
+    statusBoundaryBySelectionKey
+  );
 
 describe('accountRows', () => {
   it('suppresses only handled inspection authentication results for the reauthenticated identity', () => {
@@ -200,23 +233,15 @@ describe('accountRows', () => {
     });
 
     expect(
-      getHandledAccountInspectionResultKeys(
-        [result],
-        targetIdentityKey,
-        result.fileName,
-        [{ name: result.fileName, type: 'codex', authIndex: 'auth-1' }]
-      )
+      getHandledAccountInspectionResultKeys([result], targetIdentityKey, result.fileName, [
+        { name: result.fileName, type: 'codex', authIndex: 'auth-1' },
+      ])
     ).toEqual([getAccountInspectionResultSnapshotKey(result)]);
     expect(
-      getHandledAccountInspectionResultKeys(
-        [result],
-        targetIdentityKey,
-        result.fileName,
-        [
-          { name: result.fileName, type: 'codex', authIndex: 'auth-1' },
-          { name: result.fileName, type: 'codex', authIndex: 'auth-2' },
-        ]
-      )
+      getHandledAccountInspectionResultKeys([result], targetIdentityKey, result.fileName, [
+        { name: result.fileName, type: 'codex', authIndex: 'auth-1' },
+        { name: result.fileName, type: 'codex', authIndex: 'auth-2' },
+      ])
     ).toEqual([]);
   });
 
@@ -252,121 +277,122 @@ describe('accountRows', () => {
     expect(rows[0].planType).toBe('plus');
   });
 
-  it.each(
-    [
-      {
-        label: 'Claude',
-        file: { name: 'claude.json', type: 'claude', authIndex: 'auth-1' },
-        stores: {
-          ...emptyStores(),
-          claudeQuota: {
-            'claude.json': {
-              status: 'success',
-              fetchedAtMs: 2_000,
-              windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 25, resetLabel: 'Mon' }],
-            },
+  it.each([
+    {
+      label: 'Claude',
+      file: { name: 'claude.json', type: 'claude', authIndex: 'auth-1' },
+      stores: {
+        ...emptyStores(),
+        claudeQuota: {
+          'claude.json': {
+            status: 'success',
+            fetchedAtMs: 2_000,
+            windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 25, resetLabel: 'Mon' }],
           },
         },
       },
-      {
-        label: 'Antigravity',
-        file: { name: 'antigravity.json', type: 'antigravity', authIndex: 'auth-1' },
-        stores: {
-          ...emptyStores(),
-          antigravityQuota: {
-            'antigravity.json': {
-              status: 'success',
-              fetchedAtMs: 2_000,
-              groups: [
-                {
-                  id: 'primary',
-                  label: 'Primary',
-                  buckets: [
-                    {
-                      id: 'weekly',
-                      label: 'Weekly',
-                      remainingFraction: 0.75,
-                      resetTime: 'Mon',
-                    },
-                  ],
-                },
-              ],
-            },
-          },
-        },
-      },
-      {
-        label: 'Kimi',
-        file: { name: 'kimi.json', type: 'kimi', authIndex: 'auth-1' },
-        stores: {
-          ...emptyStores(),
-          kimiQuota: {
-            'kimi.json': {
-              status: 'success',
-              fetchedAtMs: 2_000,
-              rows: [{ id: 'weekly', used: 25, limit: 100, resetHint: 'Mon' }],
-            },
-          },
-        },
-      },
-      {
-        label: 'xAI',
-        file: { name: 'xai.json', type: 'xai', authIndex: 'auth-1' },
-        stores: {
-          ...emptyStores(),
-          xaiQuota: {
-            'xai.json': {
-              status: 'success',
-              fetchedAtMs: 2_000,
-              billing: {
-                periodType: 'weekly',
-                usagePercent: 25,
-                periodEnd: '2026-08-17T00:00:00Z',
-                productUsage: [],
-                monthlyLimitCents: null,
-                usedCents: null,
-                includedUsedCents: null,
-                onDemandCapCents: null,
-                onDemandUsedCents: null,
-                onDemandUsedPercent: null,
-                usedPercent: null,
+    },
+    {
+      label: 'Antigravity',
+      file: { name: 'antigravity.json', type: 'antigravity', authIndex: 'auth-1' },
+      stores: {
+        ...emptyStores(),
+        antigravityQuota: {
+          'antigravity.json': {
+            status: 'success',
+            fetchedAtMs: 2_000,
+            groups: [
+              {
+                id: 'primary',
+                label: 'Primary',
+                buckets: [
+                  {
+                    id: 'weekly',
+                    label: 'Weekly',
+                    remainingFraction: 0.75,
+                    resetTime: 'Mon',
+                  },
+                ],
               },
+            ],
+          },
+        },
+      },
+    },
+    {
+      label: 'Kimi',
+      file: { name: 'kimi.json', type: 'kimi', authIndex: 'auth-1' },
+      stores: {
+        ...emptyStores(),
+        kimiQuota: {
+          'kimi.json': {
+            status: 'success',
+            fetchedAtMs: 2_000,
+            rows: [{ id: 'weekly', used: 25, limit: 100, resetHint: 'Mon' }],
+          },
+        },
+      },
+    },
+    {
+      label: 'xAI',
+      file: { name: 'xai.json', type: 'xai', authIndex: 'auth-1' },
+      stores: {
+        ...emptyStores(),
+        xaiQuota: {
+          'xai.json': {
+            status: 'success',
+            fetchedAtMs: 2_000,
+            billing: {
+              periodType: 'weekly',
+              usagePercent: 25,
+              periodEnd: '2026-08-17T00:00:00Z',
+              productUsage: [],
+              monthlyLimitCents: null,
+              usedCents: null,
+              includedUsedCents: null,
+              onDemandCapCents: null,
+              onDemandUsedCents: null,
+              onDemandUsedPercent: null,
+              usedPercent: null,
             },
           },
         },
       },
-    ] satisfies Array<{ label: string; file: AuthFileItem; stores: AccountQuotaStores }>
-  )('propagates $label quota freshness so newer success retires old auth evidence', ({ file, stores }) => {
-    const inspection: AccountInspectionResult = {
-      id: 1,
-      runId: 10,
-      accountKey: file.name,
-      fileName: file.name,
-      displayAccount: file.name,
-      provider: String(file.type ?? ''),
-      authIndex: 'auth-1',
-      disabled: false,
-      action: 'reauth',
-      actionReason: 'expired token',
-      statusCode: 401,
-      isQuota: false,
-      createdAtMs: 1_000,
-      inspectionSource: 'server',
-    };
-    const [row] = buildAccountRows([file], stores, [inspection]);
+    },
+  ] satisfies Array<{ label: string; file: AuthFileItem; stores: AccountQuotaStores }>)(
+    'propagates $label quota freshness so newer success retires old auth evidence',
+    ({ file, stores }) => {
+      const inspection: AccountInspectionResult = {
+        id: 1,
+        runId: 10,
+        accountKey: file.name,
+        fileName: file.name,
+        displayAccount: file.name,
+        provider: String(file.type ?? ''),
+        authIndex: 'auth-1',
+        disabled: false,
+        action: 'reauth',
+        actionReason: 'expired token',
+        statusCode: 401,
+        isQuota: false,
+        createdAtMs: 1_000,
+        inspectionSource: 'server',
+      };
+      const [row] = buildAccountRows([file], stores, [inspection]);
 
-    expect(row.quota).toMatchObject({ status: 'ok', fetchedAtMs: 2_000 });
-    expect(
-      filterAccountRows([row], {
-        provider: 'all',
-        status: 'problem',
-        plan: 'all',
-        quotaBand: 'all',
-        search: '',
-      })
-    ).toHaveLength(0);
-    expect(buildAccountMetrics([row])).toMatchObject({ available: 1, needsAttention: 0 });
-  });
+      expect(row.quota).toMatchObject({ status: 'ok', fetchedAtMs: 2_000 });
+      expect(
+        filterAccountRows([row], {
+          provider: 'all',
+          status: 'problem',
+          plan: 'all',
+          quotaBand: 'all',
+          search: '',
+        })
+      ).toHaveLength(0);
+      expect(buildAccountMetrics([row])).toMatchObject({ available: 1, needsAttention: 0 });
+    }
+  );
 
   it('reads the Codex plan from a nested ID token payload', () => {
     const [row] = buildAccountRows(
@@ -797,6 +823,7 @@ describe('accountRows', () => {
       actionReason: 'expired',
       statusCode: 401,
       isQuota: false,
+      quotaInventoryObserved: true,
       createdAtMs: 1000,
       inspectionSource: 'server',
     };
@@ -813,6 +840,349 @@ describe('accountRows', () => {
     expect(rows[1].inspection?.action).toBe('reauth');
     expect(rows[1].inspection?.statusCode).toBe(401);
     expect(rows[1].inspection?.source).toBe('server');
+    expect(rows[1].inspection?.quotaInventoryObserved).toBe(true);
+  });
+
+  it('invalidates inspection evidence for only the targeted shared-file credential', () => {
+    const files: AuthFileItem[] = [
+      { name: 'shared.codex.json', type: 'codex', authIndex: '0' },
+      { name: 'shared.codex.json', type: 'codex', authIndex: '1' },
+    ];
+    const inspections: AccountInspectionResult[] = files.map((file, index) => ({
+      id: index + 1,
+      runId: 1,
+      accountKey: `account-${index}`,
+      fileName: file.name,
+      displayAccount: `account-${index}`,
+      authIndex: String(file.authIndex),
+      provider: 'codex',
+      disabled: false,
+      action: 'reauth',
+      actionReason: 'expired',
+      actionStatus: 'pending',
+      statusCode: 401,
+      isQuota: false,
+      createdAtMs: 1_000,
+      inspectionSource: 'server',
+    }));
+    const boundaries = new Map([
+      [getAuthFileSelectionKey(files[0]), evidenceBoundary({ inspectionAtMs: 2_000 })],
+    ]);
+    const inspectionBySelectionKey = buildAccountInspectionBySelectionKey(
+      files,
+      inspections,
+      boundaries
+    );
+
+    const rows = buildAccountRows(
+      files,
+      emptyStores(),
+      inspections,
+      undefined,
+      inspectionBySelectionKey
+    );
+
+    expect(rows[0].inspection).toBeNull();
+    expect(rows[1].inspection?.action).toBe('reauth');
+  });
+
+  it('suppresses inspection evidence while a post-mutation baseline is still pending', () => {
+    const file: AuthFileItem = {
+      name: 'pending-baseline.json',
+      type: 'codex',
+      authIndex: 'auth-1',
+    };
+    const inspection: AccountInspectionResult = {
+      id: 1,
+      runId: 9,
+      accountKey: 'pending-baseline',
+      fileName: file.name,
+      displayAccount: 'pending@example.com',
+      authIndex: 'auth-1',
+      provider: 'codex',
+      disabled: false,
+      action: 'reauth',
+      actionReason: 'expired',
+      actionStatus: 'pending',
+      statusCode: 401,
+      isQuota: false,
+      createdAtMs: Number.MAX_SAFE_INTEGER - 1,
+      inspectionSource: 'server',
+    };
+    const boundaries = new Map([
+      [getAuthFileSelectionKey(file), evidenceBoundary({ inspectionBaselinePending: true })],
+    ]);
+
+    expect(buildAccountInspectionBySelectionKey([file], [inspection], boundaries).size).toBe(0);
+  });
+
+  it('suppresses filename-only inspection evidence while its fallback baseline is pending', () => {
+    const file: AuthFileItem = {
+      name: 'pending-fallback.json',
+      type: 'codex',
+      authIndex: 'auth-1',
+    };
+    const inspection: AccountInspectionResult = {
+      id: 1,
+      runId: 9,
+      accountKey: 'pending-fallback',
+      fileName: file.name,
+      displayAccount: 'pending@example.com',
+      provider: 'codex',
+      disabled: false,
+      action: 'reauth',
+      actionReason: 'expired',
+      actionStatus: 'pending',
+      statusCode: 401,
+      isQuota: false,
+      createdAtMs: Number.MAX_SAFE_INTEGER - 1,
+      inspectionSource: 'server',
+    };
+    const boundaries = new Map([
+      [
+        getAuthFileSelectionKey(file),
+        evidenceBoundary({ fallbackInspectionBaselinePending: true }),
+      ],
+    ]);
+
+    expect(buildAccountInspectionBySelectionKey([file], [inspection], boundaries).size).toBe(0);
+  });
+
+  it('uses an exact status boundary without hiding a shared-file sibling', () => {
+    const files: AuthFileItem[] = [
+      {
+        name: 'shared.codex.json',
+        type: 'codex',
+        authIndex: '0',
+        disabled: false,
+        statusMessage: 'token_expired',
+      },
+      {
+        name: 'shared.codex.json',
+        type: 'codex',
+        authIndex: '1',
+        disabled: false,
+        statusMessage: 'token_expired',
+      },
+    ];
+    const inspections: AccountInspectionResult[] = files.map((file, index) => ({
+      id: index + 1,
+      runId: 1,
+      accountKey: `account-${index}`,
+      fileName: file.name,
+      displayAccount: `account-${index}`,
+      authIndex: String(file.authIndex),
+      provider: 'codex',
+      disabled: true,
+      action: 'reauth',
+      actionReason: 'expired',
+      actionStatus: 'pending',
+      statusCode: 401,
+      isQuota: false,
+      createdAtMs: 1_000,
+      inspectionSource: 'server',
+    }));
+    const statusBoundaries = new Map([
+      [
+        getAuthFileSelectionKey(files[0]),
+        evidenceBoundary({
+          localAtMs: 2_000,
+          inspectionAtMs: 2_000,
+          rawStatusMessages: ['token_expired'],
+        }),
+      ],
+    ]);
+
+    const rows = buildAccountRows(
+      files,
+      emptyStores(),
+      inspections,
+      undefined,
+      undefined,
+      undefined,
+      statusBoundaries
+    );
+
+    expect(rows[0]).toMatchObject({ disabled: false, statusMessage: '', inspection: null });
+    expect(rows[1]).toMatchObject({
+      disabled: true,
+      statusMessage: 'token_expired',
+      inspection: expect.objectContaining({ action: 'reauth' }),
+    });
+  });
+
+  it('allows later or changed raw status evidence past a status boundary', () => {
+    const updatedFile: AuthFileItem = {
+      name: 'status-updated.codex.json',
+      type: 'codex',
+      authIndex: 'updated',
+      statusMessage: 'service_unavailable',
+      updatedAtMs: 3_000,
+    };
+    const changedFile: AuthFileItem = {
+      name: 'status-changed.codex.json',
+      type: 'codex',
+      authIndex: 'changed',
+      statusMessage: 'service_unavailable',
+    };
+    const boundaries = new Map([
+      [
+        getAuthFileSelectionKey(updatedFile),
+        evidenceBoundary({
+          localAtMs: 2_000,
+          rawStatusMessages: ['token_expired'],
+        }),
+      ],
+      [
+        getAuthFileSelectionKey(changedFile),
+        evidenceBoundary({
+          localAtMs: 2_000,
+          rawStatusMessages: ['token_expired'],
+        }),
+      ],
+    ]);
+
+    const rows = buildAccountRows(
+      [updatedFile, changedFile],
+      emptyStores(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      boundaries
+    );
+
+    expect(rows.map((row) => row.statusMessage)).toEqual([
+      'service_unavailable',
+      'service_unavailable',
+    ]);
+  });
+
+  it('does not reattach reauth inspection evidence older than the credential refresh', () => {
+    const file: AuthFileItem = {
+      name: 'reauthorized.codex.json',
+      type: 'codex',
+      authIndex: 'reauthorized',
+      last_refresh: 1_700_000_001_000,
+    };
+    const inspection: AccountInspectionResult = {
+      id: 1,
+      runId: 1,
+      accountKey: 'reauthorized',
+      fileName: file.name,
+      displayAccount: 'reauthorized@example.com',
+      authIndex: String(file.authIndex),
+      provider: 'codex',
+      disabled: false,
+      action: 'reauth',
+      actionReason: 'expired',
+      actionStatus: 'pending',
+      statusCode: 401,
+      isQuota: false,
+      createdAtMs: 1_700_000_001_000,
+      inspectionSource: 'server',
+    };
+
+    const rows = buildAccountRows([file], emptyStores(), [inspection]);
+
+    expect(rows[0].inspection).toBeNull();
+  });
+
+  it('uses a nearby OAuth file write to cover second-precision refresh timestamps', () => {
+    const refreshAtMs = 1_700_000_001_000;
+    const file: AuthFileItem = {
+      name: 'reauthorized.xai.json',
+      type: 'xai',
+      authIndex: 'reauthorized-xai',
+      last_refresh: refreshAtMs / 1000,
+      modtime: refreshAtMs + 800,
+    };
+    const inspection: AccountInspectionResult = {
+      id: 2,
+      runId: 1,
+      accountKey: 'reauthorized-xai',
+      fileName: file.name,
+      displayAccount: 'reauthorized-xai@example.com',
+      authIndex: String(file.authIndex),
+      provider: 'xai',
+      disabled: false,
+      action: 'reauth',
+      actionReason: 'expired',
+      actionStatus: 'pending',
+      statusCode: 401,
+      isQuota: false,
+      createdAtMs: refreshAtMs + 500,
+      inspectionSource: 'server',
+    };
+
+    const [row] = buildAccountRows([file], emptyStores(), [inspection]);
+
+    expect(row.inspection).toBeNull();
+  });
+
+  it('does not treat a much later file edit as OAuth refresh completion', () => {
+    const refreshAtMs = 1_700_000_001_000;
+    const file: AuthFileItem = {
+      name: 'edited-after-refresh.xai.json',
+      type: 'xai',
+      authIndex: 'edited-after-refresh',
+      last_refresh: refreshAtMs / 1000,
+      modtime: refreshAtMs + 10_000,
+    };
+    const inspection: AccountInspectionResult = {
+      id: 3,
+      runId: 1,
+      accountKey: 'edited-after-refresh',
+      fileName: file.name,
+      displayAccount: 'edited-after-refresh@example.com',
+      authIndex: String(file.authIndex),
+      provider: 'xai',
+      disabled: false,
+      action: 'reauth',
+      actionReason: 'expired',
+      actionStatus: 'pending',
+      statusCode: 401,
+      isQuota: false,
+      createdAtMs: refreshAtMs + 5_000,
+      inspectionSource: 'server',
+    };
+
+    const [row] = buildAccountRows([file], emptyStores(), [inspection]);
+
+    expect(row.inspection).toEqual(expect.objectContaining({ action: 'reauth' }));
+  });
+
+  it('lets same-timestamp healthy inspection state supersede raw disabled state', () => {
+    const observedAtMs = 1_700_000_001_000;
+    const file: AuthFileItem = {
+      name: 'enabled-at-tie.codex.json',
+      type: 'codex',
+      authIndex: 'enabled-at-tie',
+      disabled: true,
+      updatedAtMs: observedAtMs,
+    };
+    const inspection: AccountInspectionResult = {
+      id: 1,
+      runId: 1,
+      accountKey: 'enabled-at-tie',
+      fileName: file.name,
+      displayAccount: 'enabled@example.com',
+      authIndex: String(file.authIndex),
+      provider: 'codex',
+      disabled: false,
+      action: 'enable',
+      actionReason: 'recovered',
+      actionStatus: 'success',
+      executedAction: 'enable',
+      statusCode: 200,
+      isQuota: false,
+      createdAtMs: observedAtMs,
+      inspectionSource: 'server',
+    };
+
+    const [row] = buildAccountRows([file], emptyStores(), [inspection]);
+
+    expect(row.disabled).toBe(false);
   });
 
   it('matches same-file inspection results by canonical identity without auth indexes', () => {
@@ -2211,5 +2581,124 @@ describe('accountRows', () => {
     expect(
       sortAccountRows(rows, { key: 'name', direction: 'asc' }).map((row) => row.fileName)
     ).toEqual(['z-file.json', 'a-file.json']);
+  });
+
+  it('uses a credential replacement boundary to suppress stale raw status messages', () => {
+    const file: AuthFileItem = {
+      name: 'stale-status.codex.json',
+      type: 'codex',
+      authIndex: 'stale-status',
+      statusMessage: 'token_expired',
+      updatedAtMs: 1_700_000_000_000,
+    };
+    const selectionKey = getAuthFileSelectionKey(file);
+    const [row] = buildAccountRows(
+      [file],
+      emptyStores(),
+      undefined,
+      undefined,
+      undefined,
+      new Map([
+        [
+          selectionKey,
+          evidenceBoundary({
+            localAtMs: 1_600_000_000_000,
+            rawStatusAtMs: 1_700_000_000_000,
+            rawStatusMessages: ['token_expired'],
+          }),
+        ],
+      ])
+    );
+
+    expect(row.statusMessage).toBe('');
+  });
+  it('uses the completed mutation time when a refreshed credential repeats the stale status', () => {
+    const file: AuthFileItem = {
+      name: 'reauthorized-status.codex.json',
+      type: 'codex',
+      authIndex: 'reauthorized-status',
+      statusMessage: 'token_expired',
+      updatedAtMs: 1_700_000_005_000,
+    };
+    const selectionKey = getAuthFileSelectionKey(file);
+    const [row] = buildAccountRows(
+      [file],
+      emptyStores(),
+      undefined,
+      undefined,
+      undefined,
+      new Map([
+        [
+          selectionKey,
+          evidenceBoundary({
+            localAtMs: 1_700_000_010_000,
+            rawStatusAtMs: 1_700_000_000_000,
+            rawStatusMessages: ['token_expired'],
+          }),
+        ],
+      ])
+    );
+
+    expect(row.statusMessage).toBe('');
+  });
+  it('suppresses raw status at the inclusive credential-refresh boundary', () => {
+    const refreshedAtMs = 1_700_000_010_000;
+    const file: AuthFileItem = {
+      name: 'refresh-tie.codex.json',
+      type: 'codex',
+      authIndex: 'refresh-tie',
+      statusMessage: 'token_expired',
+      updatedAtMs: refreshedAtMs,
+      last_refresh: refreshedAtMs,
+    };
+
+    const [row] = buildAccountRows([file], emptyStores());
+
+    expect(row.statusMessage).toBe('');
+  });
+  it('does not let cached healthy quota hide an undated raw authentication failure', () => {
+    const file: AuthFileItem = {
+      name: 'undated-auth-failure.codex.json',
+      type: 'codex',
+      authIndex: 'undated-auth-failure',
+      statusMessage: 'token_expired',
+    };
+    const [row] = buildAccountRows(
+      [file],
+      scopeTestQuotaStores([file], {
+        ...emptyStores(),
+        codexQuota: {
+          [file.name]: {
+            status: 'success',
+            windows: [],
+            quotaInventoryObserved: true,
+            fetchedAtMs: 2_000,
+          },
+        },
+      })
+    );
+
+    expect(row.statusMessage).toBe('token_expired');
+  });
+  it('treats an explicitly empty Codex inventory as healthy quota evidence', () => {
+    const [row] = buildAccountRows([{ name: 'codex-empty.json', type: 'codex' }], {
+      ...emptyStores(),
+      codexQuota: {
+        'codex-empty.json': {
+          status: 'success',
+          windows: [],
+          quotaInventoryObserved: true,
+          observedAtMs: 1_700_000_000_000,
+        },
+      },
+    });
+
+    expect(row.quota).toMatchObject({
+      status: 'ok',
+      remainingPercent: null,
+      usedPercent: null,
+      source: 'cache',
+      observedAtMs: 1_700_000_000_000,
+    });
   });
 });

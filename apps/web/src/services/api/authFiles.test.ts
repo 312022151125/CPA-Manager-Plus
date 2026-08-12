@@ -162,9 +162,58 @@ describe('authFilesApi model endpoints', () => {
     ]);
     expect(mocks.get).toHaveBeenCalledWith('/model-definitions/gemini');
   });
+
+  it('pins model definition requests to the captured CPA connection', async () => {
+    mocks.get.mockResolvedValue({ models: [{ id: 'gpt-5-codex' }] });
+    const requestScope = {
+      apiBase: 'http://old-cpa.local:8317',
+      managementKey: 'old-cpa-key',
+    };
+
+    await expect(authFilesApi.getModelDefinitions('codex', requestScope)).resolves.toEqual([
+      { id: 'gpt-5-codex' },
+    ]);
+    expect(mocks.get).toHaveBeenCalledWith('/model-definitions/codex', {
+      baseURL: 'http://old-cpa.local:8317/v0/management',
+      headers: { Authorization: 'Bearer old-cpa-key' },
+      cpampScopedRequest: true,
+    });
+  });
+
+  it('pins credential model requests to the captured CPA connection', async () => {
+    mocks.get.mockResolvedValue({ models: [{ id: 'gpt-5-codex' }] });
+    const requestScope = {
+      apiBase: 'http://old-cpa.local:8317',
+      managementKey: 'old-cpa-key',
+    };
+
+    await authFilesApi.getModelsForAuthFile('runtime-1', requestScope);
+
+    expect(mocks.get).toHaveBeenCalledWith('/auth-files/models?name=runtime-1', {
+      baseURL: 'http://old-cpa.local:8317/v0/management',
+      headers: { Authorization: 'Bearer old-cpa-key' },
+      cpampScopedRequest: true,
+    });
+  });
 });
 
 describe('authFilesApi list normalization', () => {
+  it('pins list requests to the captured CPA connection', async () => {
+    mocks.get.mockResolvedValue({ files: [] });
+    const requestScope = {
+      apiBase: 'http://old-cpa.local:8317',
+      managementKey: 'old-cpa-key',
+    };
+
+    await authFilesApi.list(requestScope);
+
+    expect(mocks.get).toHaveBeenCalledWith('/auth-files', {
+      baseURL: 'http://old-cpa.local:8317/v0/management',
+      headers: { Authorization: 'Bearer old-cpa-key' },
+      cpampScopedRequest: true,
+    });
+  });
+
   it('preserves same-name auth file rows when authIndex differs', async () => {
     mocks.get.mockResolvedValue({
       files: [
@@ -237,6 +286,31 @@ describe('authFilesApi list normalization', () => {
 });
 
 describe('authFilesApi delete contracts', () => {
+  it('preserves scoped authorization alongside delete identity headers', async () => {
+    mocks.delete.mockResolvedValue({ status: 'ok' });
+    const requestScope = {
+      apiBase: 'http://old-cpa.local:8317',
+      managementKey: 'old-cpa-key',
+    };
+
+    await authFilesApi.deleteFileByName(
+      'runtime-auth-1',
+      'shared.json',
+      undefined,
+      [],
+      requestScope
+    );
+
+    expect(mocks.delete).toHaveBeenCalledWith('/auth-files?name=runtime-auth-1', {
+      baseURL: 'http://old-cpa.local:8317/v0/management',
+      headers: {
+        Authorization: 'Bearer old-cpa-key',
+        'X-CPAMP-Auth-File-Physical-Name': 'shared.json',
+      },
+      cpampScopedRequest: true,
+    });
+  });
+
   it('sends a stable runtime selector while normalizing the deleted physical file name', async () => {
     mocks.delete.mockResolvedValue({ status: 'ok' });
 
@@ -671,9 +745,66 @@ describe('authFilesApi requestCredentialRefresh', () => {
       }
     );
   });
+
+  it('preserves scoped authorization alongside field mutation identity headers', async () => {
+    mocks.patch.mockResolvedValue({ status: 'ok' });
+    const target = {
+      name: 'codex-account.json',
+      runtimeId: 'codex-runtime-auth-id',
+      authIndex: 'auth-1',
+      provider: 'codex',
+    };
+    const requestScope = {
+      apiBase: 'http://old-cpa.local:8317',
+      managementKey: 'old-cpa-key',
+    };
+
+    await authFilesApi.patchFields(target, { priority: 10 }, requestScope);
+
+    expect(mocks.patch).toHaveBeenCalledWith(
+      '/auth-files/fields',
+      { name: 'codex-runtime-auth-id', priority: 10 },
+      {
+        baseURL: 'http://old-cpa.local:8317/v0/management',
+        headers: {
+          Authorization: 'Bearer old-cpa-key',
+          'X-CPAMP-Auth-File-Mutation-Identity': encodeURIComponent(JSON.stringify([target])),
+        },
+        cpampScopedRequest: true,
+      }
+    );
+  });
 });
 
 describe('authFilesApi status targeting', () => {
+  it('pins status mutations to the captured CPA connection', async () => {
+    mocks.patch.mockResolvedValue({ status: 'ok', disabled: true });
+    const requestScope = {
+      apiBase: 'http://old-cpa.local:8317',
+      managementKey: 'old-cpa-key',
+    };
+
+    await authFilesApi.setStatus(
+      { name: 'shared.json', runtimeId: 'runtime-auth-0', authIndex: 0 },
+      true,
+      requestScope
+    );
+
+    expect(mocks.patch).toHaveBeenCalledWith(
+      '/auth-files/status',
+      {
+        name: 'runtime-auth-0',
+        auth_index: '0',
+        disabled: true,
+      },
+      {
+        baseURL: 'http://old-cpa.local:8317/v0/management',
+        headers: { Authorization: 'Bearer old-cpa-key' },
+        cpampScopedRequest: true,
+      }
+    );
+  });
+
   it('sends auth_index for an exact status target, including numeric zero', async () => {
     mocks.patch.mockResolvedValue({ status: 'ok', disabled: true });
 

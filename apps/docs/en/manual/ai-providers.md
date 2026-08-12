@@ -47,7 +47,7 @@ The panel manages CPA `xai-api-key` entries, including:
 - Provider priority, weight, and enabled state.
 - Provider test actions for credential and model access.
 
-An xAI API key is different from an xAI/Grok OAuth auth file. See [OAuth Login](./oauth.md), [Quota](./quota.md), and [Account Inspection](./codex-inspection.md) for OAuth, billing evidence, and account health.
+An xAI API key is different from an xAI/Grok OAuth credential. See [OAuth Login](./oauth.md), [Accounts](./accounts.md), and [Account Inspection](./codex-inspection.md) for OAuth, billing evidence, and account health.
 
 ## Priority, Weight, And Concurrent Saves
 
@@ -71,7 +71,7 @@ CPAMP uses targeted update APIs where available and refreshes configuration cach
 1. Send a low-cost real request.
 2. Confirm provider, model, account, and status in Monitoring.
 3. If cost is missing, check [Model Prices](./model-prices.md).
-4. For credential or quota failures, check [Auth Files](./auth-files.md), [Quota](./quota.md), and the [Account Action Queue](./account-actions.md).
+4. For credential or quota failures, check [Accounts](./accounts.md) and the [Account Action Queue](./account-actions.md).
 5. If no event appears, troubleshoot collection before repeatedly changing the provider.
 
 ## Configuration Boundaries
