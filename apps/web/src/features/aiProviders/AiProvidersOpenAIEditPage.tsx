@@ -388,6 +388,7 @@ export function AiProvidersOpenAIEditPage() {
             <div className={styles.keyTableColProxy}>{t('common.proxy_url')}</div>
             <div className={styles.keyTableColAction}>{t('common.action')}</div>
           </div>
+          <div className="hint">{t('ai_providers.model_discovery_proxy_version_hint')}</div>
 
           {/* 数据行 */}
           {list.map((entry, index) => {

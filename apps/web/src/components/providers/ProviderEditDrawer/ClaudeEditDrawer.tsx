@@ -391,7 +391,8 @@ export function ClaudeEditDrawer({
         form.baseUrl ?? '',
         form.apiKey.trim() || undefined,
         headerObject,
-        normalizeAuthIndex(form.authIndex) ?? undefined
+        normalizeAuthIndex(form.authIndex) ?? undefined,
+        form.proxyUrl
       );
       setDiscoveredModels(list);
     } catch (err: unknown) {
@@ -416,7 +417,7 @@ export function ClaudeEditDrawer({
     } finally {
       setModelDiscoveryFetching(false);
     }
-  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, t]);
+  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, form.proxyUrl, t]);
 
   useEffect(() => {
     if (!modelDiscoveryOpen) return;
@@ -713,6 +714,7 @@ export function ClaudeEditDrawer({
               label={t('ai_providers.claude_add_modal_proxy_label')}
               value={form.proxyUrl ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, proxyUrl: e.target.value }))}
+              hint={t('ai_providers.model_discovery_proxy_version_hint')}
               disabled={saving || disabled || isTesting}
             />
             <div className="form-group">
