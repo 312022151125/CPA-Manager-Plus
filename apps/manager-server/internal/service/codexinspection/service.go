@@ -220,7 +220,7 @@ const (
 
 const (
 	fileActionDuplicateReason       = "该认证目标已由另一条结果处理"
-	fileActionMixedReason           = "同一认证文件下存在多个不同建议动作，文件级处理已阻止，请到认证文件管理中手动处理"
+	fileActionMixedReason           = "同一认证文件下存在多个不同建议动作，文件级处理已阻止，请到凭证管理中手动处理"
 	fileDeleteCoverageReason        = "实时认证文件包含未被删除建议完整覆盖的凭证，文件级删除已阻止，请人工确认"
 	inspectionIdentityMissingReason = "巡检结果缺少稳定账号标识，已阻止处理，请人工确认"
 	statusMutationScopeReason       = "当前凭证缺少可安全独立修改的运行时标识，或该标识代表共享源文件，已阻止状态修改，请人工确认"
@@ -3296,7 +3296,7 @@ func selectManualActionItems(
 			outcomes = append(outcomes, skippedActionOutcome(result, result.Action, "该建议动作已跳过"))
 			continue
 		case model.CodexInspectionActionStatusNeedsReview:
-			outcomes = append(outcomes, needsReviewActionOutcome(result, result.Action, "该建议动作需要到认证文件管理中人工处理"))
+			outcomes = append(outcomes, needsReviewActionOutcome(result, result.Action, "该建议动作需要到凭证管理中人工处理"))
 			continue
 		}
 		if fileName == "" {

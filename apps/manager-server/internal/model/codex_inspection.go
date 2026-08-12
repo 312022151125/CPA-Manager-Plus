@@ -175,7 +175,7 @@ type CodexInspectionResult struct {
 	PlanType               string                       `json:"planType,omitempty"`
 	QuotaWindows           []CodexInspectionQuotaWindow `json:"quotaWindows,omitempty"`
 	QuotaWindowsJSON       string                       `json:"-"`
-	QuotaInventoryObserved bool                         `json:"-"`
+	QuotaInventoryObserved bool                         `json:"quotaInventoryObserved"`
 	ErrorKind              string                       `json:"errorKind,omitempty"`
 	ErrorDetail            string                       `json:"errorDetail,omitempty"`
 	CreatedAtMS            int64                        `json:"createdAtMs"`

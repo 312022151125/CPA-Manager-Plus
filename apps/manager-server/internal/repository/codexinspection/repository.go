@@ -200,9 +200,15 @@ func (r *repository) InsertResult(ctx context.Context, result model.CodexInspect
 	if result.CreatedAtMS <= 0 {
 		result.CreatedAtMS = time.Now().UnixMilli()
 	}
-	if result.QuotaWindowsJSON == "" && len(result.QuotaWindows) > 0 {
-		result.QuotaWindowsJSON = model.MarshalCodexInspectionQuotaWindows(result.QuotaWindows)
+	if strings.TrimSpace(result.QuotaWindowsJSON) == "" {
+		switch {
+		case len(result.QuotaWindows) > 0:
+			result.QuotaWindowsJSON = model.MarshalCodexInspectionQuotaWindows(result.QuotaWindows)
+		case result.QuotaInventoryObserved:
+			result.QuotaWindowsJSON = "[]"
+		}
 	}
+	result.QuotaInventoryObserved = strings.TrimSpace(result.QuotaWindowsJSON) != ""
 	result.ActionStatus = model.NormalizeCodexInspectionActionStatus(result.ActionStatus, result.Action)
 	disabled := 0
 	if result.Disabled {
@@ -855,6 +861,7 @@ func scanResult(row scanner) (model.CodexInspectionResult, error) {
 	result.PlanType = planType.String
 	result.QuotaWindowsJSON = quotaWindowsJSON.String
 	result.QuotaWindows = model.UnmarshalCodexInspectionQuotaWindows(result.QuotaWindowsJSON)
+	result.QuotaInventoryObserved = strings.TrimSpace(result.QuotaWindowsJSON) != ""
 	result.ErrorKind = errorKind.String
 	result.ErrorDetail = errorDetail.String
 	if statusCode.Valid {
