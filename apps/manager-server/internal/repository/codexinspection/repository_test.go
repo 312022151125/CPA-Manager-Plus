@@ -127,6 +127,66 @@ func TestResultRoundTripPreservesExplicitEmptyQuotaInventory(t *testing.T) {
 	}
 }
 
+func TestResultRoundTripRejectsMalformedQuotaInventoryAndPreservesValidUpsertEvidence(t *testing.T) {
+	db, err := sqlite.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	repository := New(db)
+	ctx := context.Background()
+	run, err := repository.CreateRun(ctx, model.CodexInspectionRun{
+		TriggerType: "manual",
+		Status:      model.CodexInspectionStatusCompleted,
+		StartedAtMS: 1,
+		Settings:    model.DefaultCodexInspectionConfig(),
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	valid := model.CodexInspectionResult{
+		RunID:          run.ID,
+		AccountKey:     "codex.json::-::alice",
+		FileName:       "codex.json",
+		DisplayAccount: "alice@example.com",
+		Provider:       "codex",
+		Action:         "keep",
+		QuotaWindows: []model.CodexInspectionQuotaWindow{{
+			ID: "five-hour",
+		}},
+	}
+	inserted, err := repository.InsertResult(ctx, valid)
+	if err != nil {
+		t.Fatalf("insert valid result: %v", err)
+	}
+	if !inserted.QuotaInventoryObserved || len(inserted.QuotaWindows) != 1 {
+		t.Fatalf("inserted valid quota inventory = %#v", inserted)
+	}
+
+	for _, raw := range []string{"{", "null", `{"five-hour":{}}`} {
+		updated := valid
+		updated.Action = "disable"
+		updated.QuotaWindows = nil
+		updated.QuotaWindowsJSON = raw
+		stored, insertErr := repository.InsertResult(ctx, updated)
+		if insertErr != nil {
+			t.Fatalf("upsert malformed quota inventory %q: %v", raw, insertErr)
+		}
+		if stored.QuotaInventoryObserved {
+			t.Fatalf("malformed quota inventory %q was accepted: %#v", raw, stored)
+		}
+	}
+
+	items, err := repository.ListResults(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("list results: %v", err)
+	}
+	if len(items) != 1 || !items[0].QuotaInventoryObserved || len(items[0].QuotaWindows) != 1 || items[0].QuotaWindows[0].ID != "five-hour" {
+		t.Fatalf("valid quota inventory was not preserved: %#v", items)
+	}
+}
+
 func TestDisableOwnershipCRUD(t *testing.T) {
 	db, err := sqlite.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
 	if err != nil {

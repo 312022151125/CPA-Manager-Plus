@@ -73,7 +73,7 @@ type Service struct {
 	managerConfigService *managerconfig.Service
 	client               *http.Client
 	authFileMutations    *cpaauthfiles.MutationCoordinator
-	quotaSnapshots       *quotasnapshotsvc.Service
+	quotaSnapshots       quotaSnapshotWriter
 
 	mu                             sync.Mutex
 	cancelMu                       sync.Mutex
@@ -93,6 +93,10 @@ type Service struct {
 	manualActionPersistenceTimeout time.Duration
 	logMu                          sync.Mutex
 	logGate                        chan struct{}
+}
+
+type quotaSnapshotWriter interface {
+	WriteCodexInspectionResult(context.Context, model.CodexInspectionResult) error
 }
 
 type ServiceOptions struct {
@@ -3983,13 +3987,16 @@ func (s *Service) persistInspectionResults(
 			})
 			continue
 		}
+		results[index] = stored
 		snapshotCtx, snapshotCancel := context.WithTimeout(persistCtx, resultWriteTimeout)
 		snapshotErr := s.quotaSnapshots.WriteCodexInspectionResult(snapshotCtx, stored)
 		snapshotCancel()
 		if snapshotErr != nil {
+			failures++
 			logger.warning(ctx, "写入巡检额度快照失败", map[string]any{
 				"fileName":       result.FileName,
 				"displayAccount": result.DisplayAccount,
+				"retryScheduled": true,
 				"error":          snapshotErr.Error(),
 			})
 		}
