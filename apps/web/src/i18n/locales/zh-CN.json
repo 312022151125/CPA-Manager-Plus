@@ -474,6 +474,7 @@
     "priority_label": "优先级 (可选):",
     "priority_hint": "数值越大优先级越高；留空表示默认（0）。",
     "weight_label": "权重",
+    "weight_default_label": "默认",
     "weight_hint": "优先级会先筛选。留空使用默认权重 1；在加权轮询中，正数决定流量比例，非正数会排除此凭据。",
     "weight_error_integer": "权重必须是安全整数。",
     "weight_error_maximum": "权重不能超过 {{max}}。",

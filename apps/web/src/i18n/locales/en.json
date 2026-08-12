@@ -474,6 +474,7 @@
     "priority_label": "Priority (Optional):",
     "priority_hint": "Higher values are preferred. Leave empty for default (0).",
     "weight_label": "Weight",
+    "weight_default_label": "default",
     "weight_hint": "Priority is applied first. Leave empty for the default weight (1). In weighted round robin, positive values set the traffic ratio and non-positive values exclude this credential.",
     "weight_error_integer": "Weight must be a safe integer.",
     "weight_error_maximum": "Weight must not exceed {{max}}.",
