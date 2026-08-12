@@ -25,11 +25,22 @@ vi.mock('@/components/ui/Drawer', () => ({
     open,
     children,
     footer,
+    onClose,
   }: {
     open: boolean;
     children: ReactNode;
     footer: ReactNode;
-  }) => (open ? createElement('div', null, children, footer) : null),
+    onClose: () => void;
+  }) =>
+    open
+      ? createElement(
+          'div',
+          null,
+          children,
+          footer,
+          createElement('button', { type: 'button', 'data-drawer-close': true, onClick: onClose })
+        )
+      : null,
 }));
 
 vi.mock('@/services/api', () => ({
@@ -47,6 +58,9 @@ const findSaveButton = (root: ReactTestInstance) =>
   root
     .findAllByType('button')
     .find((button) => String(button.props.className ?? '').includes('btn-primary'));
+
+const findDrawerCloseButton = (root: ReactTestInstance) =>
+  root.findAllByType('button').find((button) => button.props['data-drawer-close'] === true);
 
 describe('CodexEditDrawer load baseline guard', () => {
   beforeEach(() => {
@@ -106,6 +120,37 @@ describe('CodexEditDrawer load baseline guard', () => {
     expect(renderer!.root.findAllByType('input')).toHaveLength(0);
     expect(findSaveButton(renderer!.root)?.props.disabled).toBe(true);
 
+    act(() => renderer!.unmount());
+  });
+
+  it('treats an invalid weight as an unsaved edit while disabling save', async () => {
+    mocks.fetchConfig.mockResolvedValueOnce([
+      { apiKey: 'codex-key', baseUrl: 'https://api.openai.com/v1' },
+    ]);
+    const onClose = vi.fn();
+    const confirmMock = vi.fn(() => false);
+    vi.stubGlobal('window', { confirm: confirmMock });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer open editIndex={0} disabled={false} onClose={onClose} onSaved={vi.fn()} />
+      );
+    });
+
+    const weightInput = renderer!.root
+      .findAllByType('input')
+      .find((input) => input.props.inputMode === 'text');
+    expect(weightInput).toBeDefined();
+
+    act(() => weightInput?.props.onChange({ target: { value: '1.5' } }));
+    expect(findSaveButton(renderer!.root)?.props.disabled).toBe(true);
+
+    act(() => findDrawerCloseButton(renderer!.root)?.props.onClick());
+    expect(confirmMock).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
     act(() => renderer!.unmount());
   });
 });

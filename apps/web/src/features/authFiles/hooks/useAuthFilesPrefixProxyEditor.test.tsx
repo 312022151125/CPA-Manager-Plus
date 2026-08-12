@@ -24,7 +24,6 @@ vi.mock('@/stores', () => ({
     selector: (state: { showNotification: typeof mocks.showNotification }) => unknown
   ) => selector({ showNotification: mocks.showNotification }),
 }));
-
 vi.mock('@/services/api', () => ({
   authFilesApi: {
     downloadText: mocks.downloadText,
@@ -474,5 +473,115 @@ describe('useAuthFilesPrefixProxyEditor', () => {
       credentialKey: 'shared.json::auth-1',
       prefix: 'reopened-prefix',
     });
+  });
+
+  it('loads and saves an explicit zero weight without treating it as unset', async () => {
+    const file = createAuthFile('auth-1');
+    mocks.downloadText.mockResolvedValue(
+      JSON.stringify({
+        type: 'codex',
+        auth_index: 'auth-1',
+        account_id: 'account-auth-1',
+        weight: 0,
+      })
+    );
+    mocks.list.mockResolvedValue({ files: [file] });
+    harness = mountHarness();
+
+    await act(async () => {
+      await harness?.getLatest().openPrefixProxyEditor(file);
+    });
+    expect(harness.getLatest().prefixProxyEditor?.weight).toBe('0');
+    expect(harness.getLatest().prefixProxyDirty).toBe(false);
+
+    act(() => harness?.getLatest().handlePrefixProxyChange('weight', '3'));
+    expect(harness.getLatest().prefixProxyDirty).toBe(true);
+    expect(JSON.parse(harness.getLatest().prefixProxyUpdatedText)).toMatchObject({ weight: 3 });
+
+    await act(async () => {
+      await harness?.getLatest().handlePrefixProxySave();
+    });
+    expect(mocks.patchFieldsWithPluginSourceFallback.mock.calls[0]?.[1]).toEqual({ weight: 3 });
+  });
+
+  it('uses null to clear an existing weight and removes it from the preview', async () => {
+    const file = createAuthFile('auth-1');
+    mocks.downloadText.mockResolvedValue(
+      JSON.stringify({
+        type: 'codex',
+        auth_index: 'auth-1',
+        account_id: 'account-auth-1',
+        weight: 0,
+      })
+    );
+    mocks.list.mockResolvedValue({ files: [file] });
+    harness = mountHarness();
+
+    await act(async () => {
+      await harness?.getLatest().openPrefixProxyEditor(file);
+    });
+    act(() => harness?.getLatest().handlePrefixProxyChange('weight', ''));
+
+    expect(harness.getLatest().prefixProxyDirty).toBe(true);
+    expect(JSON.parse(harness.getLatest().prefixProxyUpdatedText)).not.toHaveProperty('weight');
+    await act(async () => {
+      await harness?.getLatest().handlePrefixProxySave();
+    });
+    expect(mocks.patchFieldsWithPluginSourceFallback.mock.calls[0]?.[1]).toEqual({ weight: null });
+  });
+
+  it('keeps an invalid source weight visible so it can be removed for recovery', async () => {
+    const file = createAuthFile('auth-1');
+    mocks.downloadText.mockResolvedValue(
+      JSON.stringify({
+        type: 'codex',
+        auth_index: 'auth-1',
+        account_id: 'account-auth-1',
+        weight: 'heavy',
+      })
+    );
+    mocks.list.mockResolvedValue({ files: [file] });
+    harness = mountHarness();
+
+    await act(async () => {
+      await harness?.getLatest().openPrefixProxyEditor(file);
+    });
+    expect(harness.getLatest().prefixProxyEditor?.weight).toBe('heavy');
+
+    act(() => harness?.getLatest().handlePrefixProxyChange('weight', ''));
+    expect(harness.getLatest().prefixProxyDirty).toBe(true);
+    expect(JSON.parse(harness.getLatest().prefixProxyUpdatedText)).not.toHaveProperty('weight');
+
+    await act(async () => {
+      await harness?.getLatest().handlePrefixProxySave();
+    });
+    expect(mocks.patchFieldsWithPluginSourceFallback.mock.calls[0]?.[1]).toEqual({ weight: null });
+  });
+
+  it('blocks fractional weights before building a patch or preview', async () => {
+    const file = createAuthFile('auth-1');
+    mocks.downloadText.mockResolvedValue(
+      JSON.stringify({
+        type: 'codex',
+        auth_index: 'auth-1',
+        account_id: 'account-auth-1',
+      })
+    );
+    harness = mountHarness();
+
+    await act(async () => {
+      await harness?.getLatest().openPrefixProxyEditor(file);
+    });
+    act(() => harness?.getLatest().handlePrefixProxyChange('weight', '1.5'));
+
+    expect(harness.getLatest().prefixProxyEditor?.weightError).toBe(
+      'auth_files.weight_error_integer'
+    );
+    expect(harness.getLatest().prefixProxyUpdatedText).toBe('');
+    expect(harness.getLatest().prefixProxyDirty).toBe(false);
+    await act(async () => {
+      await harness?.getLatest().handlePrefixProxySave();
+    });
+    expect(mocks.patchFieldsWithPluginSourceFallback).not.toHaveBeenCalled();
   });
 });

@@ -133,6 +133,11 @@ import {
 } from '@/utils/authFileStatusMutation';
 import { useAuthStore, useNotificationStore, useQuotaStore, useThemeStore } from '@/stores';
 import styles from './AuthFilesPage.module.scss';
+import {
+  MAX_CREDENTIAL_WEIGHT,
+  getCredentialWeightError,
+  normalizeCredentialWeight,
+} from '@/utils/credentialWeight';
 
 const hasInlineQuotaLayout = (file: AuthFileItem): boolean => {
   if (isRuntimeOnlyAuthFile(file)) return false;
@@ -248,6 +253,8 @@ export function AuthFilesPage() {
   const [authJsonPasteOpen, setAuthJsonPasteOpen] = useState(false);
   const [batchPriorityOpen, setBatchPriorityOpen] = useState(false);
   const [batchPriorityValue, setBatchPriorityValue] = useState('');
+  const [batchWeightOpen, setBatchWeightOpen] = useState(false);
+  const [batchWeightValue, setBatchWeightValue] = useState('');
   const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
   const [lastCodexInspectionResults, setLastCodexInspectionResults] = useState<
     AuthFileCodexInspectionSnapshot[]
@@ -1367,6 +1374,35 @@ export function AuthFilesPage() {
     }
   }, [batchPatchFields, batchPriorityValue, selectedPatchTargets, showNotification, t]);
 
+  const handleOpenBatchWeight = useCallback(() => {
+    setBatchWeightValue('');
+    setBatchWeightOpen(true);
+  }, []);
+
+  const handleBatchWeightSave = useCallback(async () => {
+    const errorCode = getCredentialWeightError(batchWeightValue);
+    if (errorCode) {
+      showNotification(
+        t(
+          errorCode === 'maximum'
+            ? 'auth_files.weight_error_maximum'
+            : 'auth_files.weight_error_integer',
+          { max: MAX_CREDENTIAL_WEIGHT.toLocaleString() }
+        ),
+        'error'
+      );
+      return;
+    }
+
+    const trimmed = batchWeightValue.trim();
+    const weight = normalizeCredentialWeight(trimmed);
+    if (trimmed && weight === undefined) return;
+    const result = await batchPatchFields(selectedPatchTargets, {
+      weight: trimmed ? weight : null,
+    });
+    if (result) setBatchWeightOpen(false);
+  }, [batchPatchFields, batchWeightValue, selectedPatchTargets, showNotification, t]);
+
   const handleBatchCodexWebsockets = useCallback(
     (websockets: boolean) => {
       void batchPatchFields(selectedWebsocketPatchTargets, { websockets });
@@ -2017,6 +2053,54 @@ export function AuthFilesPage() {
         </div>
       </Modal>
 
+      <Modal
+        open={batchWeightOpen}
+        onClose={() => {
+          if (!batchFieldsUpdating) setBatchWeightOpen(false);
+        }}
+        closeDisabled={batchFieldsUpdating}
+        title={t('auth_files.batch_weight_title')}
+        width={420}
+        footer={
+          <div className={styles.batchPriorityFooter}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setBatchWeightOpen(false)}
+              disabled={batchFieldsUpdating}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void handleBatchWeightSave()}
+              disabled={batchFieldsButtonsDisabled}
+              loading={batchFieldsUpdating}
+            >
+              {t('common.confirm')}
+            </Button>
+          </div>
+        }
+      >
+        <div className={styles.batchPriorityModal}>
+          <Input
+            label={t('auth_files.weight_label')}
+            placeholder={t('auth_files.weight_placeholder')}
+            hint={t('auth_files.batch_weight_hint')}
+            value={batchWeightValue}
+            onChange={(event) => setBatchWeightValue(event.target.value)}
+            disabled={disableControls || batchFieldsUpdating}
+            type="text"
+            inputMode="text"
+            autoFocus
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' || batchFieldsButtonsDisabled) return;
+              void handleBatchWeightSave();
+            }}
+          />
+        </div>
+      </Modal>
+
       {batchActionBarVisible && typeof document !== 'undefined'
         ? createPortal(
             <div className={styles.batchActionContainer} ref={floatingBatchActionsRef}>
@@ -2085,6 +2169,15 @@ export function AuthFilesPage() {
                     loading={batchFieldsUpdating}
                   >
                     {t('auth_files.batch_priority_button')}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleOpenBatchWeight}
+                    disabled={batchFieldsButtonsDisabled}
+                    loading={batchFieldsUpdating}
+                  >
+                    {t('auth_files.batch_weight_button')}
                   </Button>
                   <Button
                     variant="secondary"

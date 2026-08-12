@@ -25,7 +25,12 @@ import {
 import type { ModelInfo } from '@/utils/models';
 import { entriesToModels, modelsToEntries } from '@/components/ui/modelInputListUtils';
 import { excludedModelsToText, parseExcludedModels } from '@/components/providers/utils';
-import type { GeminiFormState } from '@/components/providers';
+import { CredentialWeightInput, type GeminiFormState } from '@/components/providers';
+import {
+  getCredentialWeightComparisonValue,
+  getCredentialWeightError,
+  normalizeCredentialWeight,
+} from '@/utils/credentialWeight';
 import { parseProviderIndexParam } from '@/features/aiProviders/model/routeParams';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
 import styles from './AiProvidersPage.module.scss';
@@ -35,6 +40,7 @@ type LocationState = { fromAiProviders?: boolean } | null;
 const buildEmptyForm = (): GeminiFormState => ({
   apiKey: '',
   priority: undefined,
+  weight: undefined,
   prefix: '',
   baseUrl: '',
   proxyUrl: '',
@@ -66,6 +72,7 @@ type GeminiFormBaseline = {
   apiKey: string;
   authIndex: string;
   priority: number | null;
+  weight: number | null;
   prefix: string;
   baseUrl: string;
   proxyUrl: string;
@@ -82,6 +89,7 @@ const buildGeminiBaseline = (form: GeminiFormState): GeminiFormBaseline => ({
     form.priority !== undefined && Number.isFinite(form.priority)
       ? Math.trunc(form.priority)
       : null,
+  weight: normalizeCredentialWeight(form.weight) ?? null,
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
   proxyUrl: String(form.proxyUrl ?? '').trim(),
@@ -207,7 +215,13 @@ export function AiProvidersGeminiEditPage() {
     setBaseline(buildGeminiBaseline(nextForm));
   }, [initialData, loading]);
 
-  const canSave = !disableControls && !saving && !loading && !invalidIndexParam && !invalidIndex;
+  const canSave =
+    !disableControls &&
+    !saving &&
+    !loading &&
+    !invalidIndexParam &&
+    !invalidIndex &&
+    !getCredentialWeightError(form.weight);
   const normalizedHeaders = useMemo(() => normalizeHeaderEntries(form.headers), [form.headers]);
   const normalizedModels = useMemo(
     () => normalizeModelEntries(form.modelEntries),
@@ -222,6 +236,7 @@ export function AiProvidersGeminiEditPage() {
       ? Math.trunc(form.priority)
       : null;
   }, [form.priority]);
+  const comparableWeight = getCredentialWeightComparisonValue(form.weight);
 
   const discoveredModelsFiltered = useMemo(() => {
     const filter = modelDiscoverySearch.trim().toLowerCase();
@@ -445,6 +460,7 @@ export function AiProvidersGeminiEditPage() {
     baseline.apiKey !== form.apiKey.trim() ||
     baseline.authIndex !== (normalizeAuthIndex(form.authIndex) ?? '') ||
     baseline.priority !== normalizedPriority ||
+    baseline.weight !== comparableWeight ||
     baseline.prefix !== String(form.prefix ?? '').trim() ||
     baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
     baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
@@ -481,6 +497,7 @@ export function AiProvidersGeminiEditPage() {
       const payload: GeminiKeyConfig = {
         apiKey: form.apiKey.trim(),
         priority: form.priority !== undefined ? Math.trunc(form.priority) : undefined,
+        weight: normalizeCredentialWeight(form.weight),
         prefix: form.prefix?.trim() || undefined,
         baseUrl: form.baseUrl?.trim() || undefined,
         proxyUrl: form.proxyUrl?.trim() || undefined,
@@ -598,6 +615,11 @@ export function AiProvidersGeminiEditPage() {
                   priority: parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined,
                 }));
               }}
+              disabled={disableControls || saving}
+            />
+            <CredentialWeightInput
+              value={form.weight}
+              onChange={(weight) => setForm((prev) => ({ ...prev, weight }))}
               disabled={disableControls || saving}
             />
             <Input

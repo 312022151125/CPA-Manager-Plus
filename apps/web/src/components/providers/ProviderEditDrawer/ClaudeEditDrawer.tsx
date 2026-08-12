@@ -27,6 +27,12 @@ import {
 } from '@/components/providers/utils';
 import { modelsToEntries } from '@/components/ui/modelInputListUtils';
 import type { ProviderFormState } from '@/components/providers';
+import { CredentialWeightInput } from '../CredentialWeightInput';
+import {
+  getCredentialWeightComparisonValue,
+  getCredentialWeightError,
+  normalizeCredentialWeight,
+} from '@/utils/credentialWeight';
 import type { ModelInfo } from '@/utils/models';
 import styles from '@/features/aiProviders/AiProvidersPage.module.scss';
 
@@ -47,6 +53,7 @@ const buildEmptyForm = (): ProviderFormState => ({
   apiKey: '',
   authIndex: '',
   priority: undefined,
+  weight: undefined,
   prefix: '',
   baseUrl: '',
   proxyUrl: '',
@@ -99,6 +106,7 @@ const buildClaudeBaseline = (form: ProviderFormState) => ({
     form.priority !== undefined && Number.isFinite(form.priority)
       ? Math.trunc(form.priority)
       : null,
+  weight: normalizeCredentialWeight(form.weight) ?? null,
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
   proxyUrl: String(form.proxyUrl ?? '').trim(),
@@ -230,17 +238,25 @@ export function ClaudeEditDrawer({
     lastCloakConfigRef.current = form.cloak;
   }, [form.cloak]);
 
-  const canSave = !disabled && !loading && !saving && !invalidIndex && !isTesting;
+  const canSave =
+    !disabled &&
+    !loading &&
+    !saving &&
+    !invalidIndex &&
+    !isTesting &&
+    !getCredentialWeightError(form.weight);
 
   const isDirty = useMemo(() => {
     const normalizedPriority =
       form.priority !== undefined && Number.isFinite(form.priority)
         ? Math.trunc(form.priority)
         : null;
+    const comparableWeight = getCredentialWeightComparisonValue(form.weight);
     return (
       baseline.apiKey !== form.apiKey.trim() ||
       baseline.authIndex !== (normalizeAuthIndex(form.authIndex) ?? '') ||
       baseline.priority !== normalizedPriority ||
+      baseline.weight !== comparableWeight ||
       baseline.prefix !== String(form.prefix ?? '').trim() ||
       baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
       baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
@@ -565,6 +581,7 @@ export function ClaudeEditDrawer({
       const payload: ProviderKeyConfig = {
         apiKey: form.apiKey.trim(),
         priority: form.priority !== undefined ? Math.trunc(form.priority) : undefined,
+        weight: normalizeCredentialWeight(form.weight),
         prefix: form.prefix?.trim() || undefined,
         baseUrl: (form.baseUrl ?? '').trim() || undefined,
         proxyUrl: form.proxyUrl?.trim() || undefined,
@@ -677,6 +694,11 @@ export function ClaudeEditDrawer({
                   priority: parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined,
                 }));
               }}
+              disabled={saving || disabled || isTesting}
+            />
+            <CredentialWeightInput
+              value={form.weight}
+              onChange={(weight) => setForm((prev) => ({ ...prev, weight }))}
               disabled={saving || disabled || isTesting}
             />
             <Input

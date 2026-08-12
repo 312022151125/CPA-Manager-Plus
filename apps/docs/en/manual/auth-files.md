@@ -1,6 +1,6 @@
 ---
 title: Auth Files And Account State
-description: Manage CPA auth files, Sub2API multi-account imports, priority, quota health, automation state, and safe bulk actions.
+description: Manage CPA auth files, Sub2API multi-account imports, priority, weight, quota health, automation state, and safe bulk actions.
 ---
 
 # Auth Files And Account State
@@ -16,7 +16,7 @@ Open the [Auth Files Demo](https://seakee.github.io/CPA-Manager-Plus/#/demo/auth
 - **File name and provider type**: confirm whether the account belongs to Codex, Claude, Vertex, Antigravity, Kimi, or another source.
 - **`auth_index`**: the stable account index. Usage, quota, inspection, and account actions all depend on it.
 - **Enabled state**: manually disabled accounts are not restored automatically.
-- **Note, priority, and project ID**: use them to separate account purpose and routing preference.
+- **Note, priority, weight, and project ID**: use them to separate account purpose and routing preference.
 - **Quota and health hints**: cooldown, reauth required, manual review, auto-disable, quota windows, or recently observed response headers.
 
 In multi-account setups, stable `auth_index` values are mandatory. Without them, history, quota, inspection, and actions are hard to connect to the right account.
@@ -28,7 +28,7 @@ In multi-account setups, stable `auth_index` values are mandatory. Without them,
 - Download, edit, disable, restore, or delete auth files.
 - Use search, sort, page size, and display mode to find accounts.
 - Filter by Codex status, plan type, problem-only view, or healthy-only view. Account-action candidates and quota cooldowns participate in health classification.
-- Batch edit priority, notes, project ID, or enabled state.
+- Batch edit priority, weight, notes, project ID, or enabled state.
 - View supported models to decide whether an account should handle a target model.
 - Open prefix proxy settings and copy client-facing proxy URLs.
 
@@ -49,6 +49,14 @@ When pasting JSON, choose the format that matches the source. JSON formats diffe
 When you upload an official Sub2API account export, CPAMP detects and converts its OpenAI OAuth accounts in the browser, then uploads one independent CPA Codex auth file per account. Pasted Sub2API JSON uses the same conversion flow. Multi-account imports generate stable, unique file names instead of saving a top-level JSON array as one auth file.
 
 Conversion requires supported OpenAI OAuth accounts with an `access_token`. Empty exports, malformed fields, and partial upload failures produce explicit results; the original export is not silently saved as an ordinary CPA auth file.
+
+## Priority And Weight
+
+The auth-file editor and bulk actions can set a top-level `weight`. When Configuration uses `weighted-round-robin`, CPA first selects the highest currently available `priority` tier, then distributes requests by weight within that tier.
+
+An omitted weight defaults to `1`. Weights must be integers with a maximum of `1,000,000`; non-positive values exclude the account while weighted round robin is active. Clearing the field removes the explicit weight and restores the default instead of saving `0`. An explicit `0` is preserved and can temporarily exclude an account from WRR distribution.
+
+Weights require a CPA build that supports weighted routing. Older CPA versions may ignore or reject the field. After saving, send multiple independent requests and confirm the actual account distribution in [Monitoring](./monitoring.md).
 
 ## Handling Problem Accounts
 

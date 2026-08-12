@@ -24,6 +24,7 @@ export type ClaudeEditBaseline = {
   apiKey: string;
   authIndex: string;
   priority: number | null;
+  weight: number | null;
   prefix: string;
   baseUrl: string;
   proxyUrl: string;
@@ -79,6 +80,7 @@ const resolveAction = <T,>(action: SetStateAction<T>, prev: T): T =>
 
 const buildEmptyForm = (): ProviderFormState => ({
   apiKey: '',
+  weight: undefined,
   prefix: '',
   baseUrl: '',
   proxyUrl: '',

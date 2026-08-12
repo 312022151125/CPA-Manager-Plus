@@ -638,14 +638,35 @@ describe('authFilesApi requestCredentialRefresh', () => {
       accountSnapshot: 'user@example.com',
     };
 
-    await authFilesApi.patchFields(target, { priority: 10 });
+    await authFilesApi.patchFields(target, { priority: 10, weight: 0 });
 
     expect(mocks.patch).toHaveBeenCalledWith(
       '/auth-files/fields',
-      { name: 'codex-runtime-auth-id', priority: 10 },
+      { name: 'codex-runtime-auth-id', priority: 10, weight: 0 },
       {
         headers: {
           'X-CPAMP-Auth-File-Mutation-Identity': encodeURIComponent(JSON.stringify([target])),
+        },
+      }
+    );
+  });
+
+  it('serializes null when an auth-file weight is cleared', async () => {
+    mocks.patch.mockResolvedValue({ status: 'ok' });
+
+    await authFilesApi.patchFields(
+      { name: 'codex-account.json', runtimeId: 'codex-runtime-auth-id' },
+      { weight: null }
+    );
+
+    expect(mocks.patch).toHaveBeenCalledWith(
+      '/auth-files/fields',
+      { name: 'codex-runtime-auth-id', weight: null },
+      {
+        headers: {
+          'X-CPAMP-Auth-File-Mutation-Identity': encodeURIComponent(
+            JSON.stringify([{ name: 'codex-account.json', runtimeId: 'codex-runtime-auth-id' }])
+          ),
         },
       }
     );
@@ -972,9 +993,9 @@ describe('authFilesApi patchFieldsForAuthIndexes', () => {
 
   it('updates only matching auth records in an auth array', async () => {
     const rawText = JSON.stringify([
-      { type: 'codex', authIndex: 0, priority: 1, websocket: true },
-      { type: 'codex', auth_index: 'auth-2', priority: 2 },
-      { type: 'codex', authIndex: 'auth-3', priority: 3, websocket: true },
+      { type: 'codex', authIndex: 0, priority: 1, weight: 4, websocket: true },
+      { type: 'codex', auth_index: 'auth-2', priority: 2, weight: 5 },
+      { type: 'codex', authIndex: 'auth-3', priority: 3, weight: 6, websocket: true },
     ]);
     mocks.getRaw.mockResolvedValue({
       data: new Blob([rawText]),
@@ -1012,6 +1033,7 @@ describe('authFilesApi patchFieldsForAuthIndexes', () => {
 
     await authFilesApi.patchFieldsForAuthIndexes('shared-codex.json', targets, sourceIdentities, {
       priority: 10,
+      weight: 0,
       websockets: false,
     });
 
@@ -1034,10 +1056,39 @@ describe('authFilesApi patchFieldsForAuthIndexes', () => {
     expect(file.name).toBe('shared-codex.json');
     await expect(file.text()).resolves.toBe(
       JSON.stringify([
-        { type: 'codex', authIndex: 0, priority: 10, websockets: false },
-        { type: 'codex', auth_index: 'auth-2', priority: 10, websockets: false },
-        { type: 'codex', authIndex: 'auth-3', priority: 3, websocket: true },
+        { type: 'codex', authIndex: 0, priority: 10, weight: 0, websockets: false },
+        { type: 'codex', auth_index: 'auth-2', priority: 10, weight: 0, websockets: false },
+        { type: 'codex', authIndex: 'auth-3', priority: 3, weight: 6, websocket: true },
       ])
+    );
+  });
+
+  it('removes weight from a verified source record when the patch value is null', async () => {
+    const rawText = JSON.stringify({
+      type: 'codex',
+      auth_index: 'auth-1',
+      weight: 0,
+    });
+    mocks.getRaw.mockResolvedValue({ data: new Blob([rawText]) });
+    mocks.postForm.mockResolvedValue({
+      status: 'ok',
+      uploaded: 1,
+      files: ['codex.json'],
+      failed: [],
+    });
+    const target = {
+      name: 'codex.json',
+      runtimeId: 'runtime-auth-1',
+      authIndex: 'auth-1',
+      provider: 'codex',
+    };
+
+    await authFilesApi.patchFieldsForAuthIndexes('codex.json', [target], [target], {
+      weight: null,
+    });
+
+    await expect(getUploadedFile().text()).resolves.toBe(
+      JSON.stringify({ type: 'codex', auth_index: 'auth-1' })
     );
   });
 

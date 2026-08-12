@@ -30,7 +30,13 @@ import {
   excludedModelsToText,
   parseExcludedModels,
 } from '@/components/providers/utils';
-import type { ProviderFormState } from '@/components/providers';
+import { CredentialWeightInput } from '../CredentialWeightInput';
+import type { ProviderFormState } from '../types';
+import {
+  getCredentialWeightComparisonValue,
+  getCredentialWeightError,
+  normalizeCredentialWeight,
+} from '@/utils/credentialWeight';
 import type { ModelInfo } from '@/utils/models';
 import styles from '@/features/aiProviders/AiProvidersPage.module.scss';
 
@@ -52,6 +58,7 @@ const XAI_API_BASE_URL = 'https://api.x.ai/v1';
 const buildEmptyForm = (baseUrl = ''): ProviderFormState => ({
   apiKey: '',
   priority: undefined,
+  weight: undefined,
   prefix: '',
   baseUrl,
   websockets: false,
@@ -80,6 +87,7 @@ const buildCodexBaseline = (form: ProviderFormState) => ({
     form.priority !== undefined && Number.isFinite(form.priority)
       ? Math.trunc(form.priority)
       : null,
+  weight: normalizeCredentialWeight(form.weight) ?? null,
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
   websockets: Boolean(form.websockets),
@@ -203,17 +211,26 @@ export function CodexEditDrawer({
   }, [defaultBaseUrl, open, loaded, initialData]);
 
   const canSave =
-    loaded && !error && !disabled && !saving && !loading && !invalidIndex && !isTesting;
+    loaded &&
+    !error &&
+    !disabled &&
+    !saving &&
+    !loading &&
+    !invalidIndex &&
+    !isTesting &&
+    !getCredentialWeightError(form.weight);
 
   const isDirty = useMemo(() => {
     const normalizedPriority =
       form.priority !== undefined && Number.isFinite(form.priority)
         ? Math.trunc(form.priority)
         : null;
+    const comparableWeight = getCredentialWeightComparisonValue(form.weight);
     return (
       baseline.apiKey !== form.apiKey.trim() ||
       baseline.authIndex !== (normalizeAuthIndex(form.authIndex) ?? '') ||
       baseline.priority !== normalizedPriority ||
+      baseline.weight !== comparableWeight ||
       baseline.prefix !== String(form.prefix ?? '').trim() ||
       baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
       baseline.websockets !== Boolean(form.websockets) ||
@@ -487,6 +504,7 @@ export function CodexEditDrawer({
       const payload: ProviderKeyConfig = {
         apiKey: form.apiKey.trim(),
         priority: form.priority !== undefined ? Math.trunc(form.priority) : undefined,
+        weight: normalizeCredentialWeight(form.weight),
         prefix: form.prefix?.trim() || undefined,
         baseUrl: trimmedBaseUrl,
         websockets: Boolean(form.websockets),
@@ -660,6 +678,11 @@ export function CodexEditDrawer({
                   priority: parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined,
                 }));
               }}
+              disabled={disabled || saving}
+            />
+            <CredentialWeightInput
+              value={form.weight}
+              onChange={(weight) => setForm((prev) => ({ ...prev, weight }))}
               disabled={disabled || saving}
             />
             <Input

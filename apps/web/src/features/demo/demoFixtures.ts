@@ -367,11 +367,23 @@ const initialRawConfig: Record<string, unknown> = {
       ],
     },
   ],
+  'interactions-api-key': [
+    {
+      'api-key': 'interactions-demo-native-key',
+      'auth-index': 'interactions-native-01',
+      priority: 15,
+      weight: 2,
+      prefix: 'interactions',
+      'base-url': 'https://generativelanguage.googleapis.com',
+      models: [{ name: 'gemini-2.5-flash', alias: 'Interactions Native' }],
+    },
+  ],
   'codex-api-key': [
     {
       'api-key': 'codex-demo-team-pool',
       'auth-index': 'codex-team-01',
       priority: 20,
+      weight: 3,
       prefix: 'codex',
       'base-url': 'https://chatgpt.com',
       models: [{ name: 'gpt-5-codex', alias: 'Codex Team' }],
@@ -384,6 +396,7 @@ const initialRawConfig: Record<string, unknown> = {
       prefix: 'xai-team',
       'base-url': 'https://api.x.ai/v1',
       priority: 9,
+      weight: 2,
       websockets: true,
       models: [{ name: 'grok-4.5', alias: 'Grok Team' }],
     },
@@ -393,6 +406,7 @@ const initialRawConfig: Record<string, unknown> = {
       'api-key': 'claude-demo-team-key',
       'auth-index': 'claude-team-01',
       priority: 30,
+      weight: 4,
       prefix: 'claude',
       'base-url': 'https://api.anthropic.com',
       models: [
@@ -406,6 +420,7 @@ const initialRawConfig: Record<string, unknown> = {
       'api-key': 'vertex-demo-service-account',
       'auth-index': 'vertex-prod-01',
       priority: 40,
+      weight: 5,
       prefix: 'vertex',
       'base-url': 'https://aiplatform.googleapis.com',
       models: [{ name: 'gemini-2.5-pro', alias: 'Vertex Regional' }],
@@ -431,8 +446,8 @@ const initialRawConfig: Record<string, unknown> = {
       name: 'kuaileshifu',
       'base-url': 'https://api.kuaileshifu.example/v1',
       'api-key-entries': [
-        { 'api-key': 'sk-kuai-demo-key-1111aaaa', 'auth-index': 'kuai-auth-1' },
-        { 'api-key': 'sk-kuai-demo-key-2222bbbb', 'auth-index': 'kuai-auth-2' },
+        { 'api-key': 'sk-kuai-demo-key-1111aaaa', 'auth-index': 'kuai-auth-1', weight: 3 },
+        { 'api-key': 'sk-kuai-demo-key-2222bbbb', 'auth-index': 'kuai-auth-2', weight: 1 },
       ],
       models: [
         { name: 'gpt-4.1-mini', alias: 'Kuai Mini' },
