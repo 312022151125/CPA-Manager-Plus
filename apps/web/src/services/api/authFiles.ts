@@ -1369,11 +1369,6 @@ export const authFilesApi = {
     }
   },
 
-  deleteAll: (requestScope?: AuthFilesApiRequestScope) => {
-    const requestConfig = requestScope ? createScopedApiRequestConfig(requestScope) : {};
-    return apiClient.delete('/auth-files', { ...requestConfig, params: { all: true } });
-  },
-
   downloadText: async (name: string, requestScope?: AuthFilesApiRequestScope): Promise<string> => {
     const scopedRequestConfig = requestScope ? createScopedApiRequestConfig(requestScope) : {};
     const response = await apiClient.getRaw(

@@ -315,6 +315,75 @@ describe('CodexInspectionPage connection lifecycle', () => {
     act(() => renderer!.unmount());
   });
 
+  it('reports a successful action with an Accounts synchronization warning', async () => {
+    mocks.executeActions.mockResolvedValue({
+      outcomes: [
+        {
+          accountKey: 'codex.json::auth-1',
+          action: 'enable',
+          fileName: 'codex.json',
+          displayAccount: 'account@example.com',
+          status: 'success',
+          success: true,
+          error: '',
+        },
+      ],
+      refreshedFiles: [file(false)],
+      refreshError: '',
+    });
+    const onCredentialsChanged = vi
+      .fn()
+      .mockRejectedValue(new Error('temporary Accounts reload failure'));
+    const onSnapshotChange = vi.fn();
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <MemoryRouter>
+          <CodexInspectionPage
+            onCredentialsChanged={onCredentialsChanged}
+            onSnapshotChange={onSnapshotChange}
+          />
+        </MemoryRouter>
+      );
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      pendingActionButton(renderer)?.props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onCredentialsChanged).toHaveBeenCalledTimes(1);
+    expect(onSnapshotChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'local',
+        results: [
+          expect.objectContaining({
+            action: 'keep',
+            actionStatus: 'pending',
+            disabled: false,
+          }),
+        ],
+      })
+    );
+    expect(onSnapshotChange.mock.invocationCallOrder[0]).toBeLessThan(
+      onCredentialsChanged.mock.invocationCallOrder[0]
+    );
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      expect.stringContaining('temporary Accounts reload failure'),
+      'warning'
+    );
+    expect(mocks.showNotification).not.toHaveBeenCalledWith(
+      expect.stringContaining('monitoring.codex_inspection_log_execution_failed'),
+      'error'
+    );
+    expect(isExecuting(renderer)).toBe(false);
+
+    act(() => renderer.unmount());
+  });
+
   it('closes Codex re-login and publishes the new request scope after switching CPA', async () => {
     const buildReauthLastRun = (connectionFingerprint: string): CodexInspectionLastRunState => {
       const state = lastRun(connectionFingerprint);

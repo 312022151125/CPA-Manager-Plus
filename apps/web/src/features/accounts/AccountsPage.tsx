@@ -121,6 +121,14 @@ import {
   listAccountCredentialMutationMarkers,
   type AccountCredentialMutationMarker,
 } from '@/features/accounts/model/accountCredentialMutationMarker';
+import {
+  acknowledgePendingAccountDirectReauths,
+  confirmAccountDirectReauth,
+  createAccountDirectReauthBaseline,
+  listPendingAccountDirectReauths,
+  recordPendingAccountDirectReauth,
+  type AccountDirectReauthBaseline,
+} from '@/features/accounts/model/accountDirectReauth';
 import { buildAccountRecommendations } from '@/features/accounts/model/quotaRecommendations';
 import {
   buildAccountListItem,
@@ -1281,6 +1289,10 @@ export function AccountsPage() {
   const credentialMutationMarkerSynchronizationsRef = useRef<Map<string, Promise<boolean>>>(
     new Map()
   );
+  const directReauthSynchronizationsRef = useRef<Map<string, Promise<boolean>>>(new Map());
+  const synchronizePendingAccountDirectReauthsRef = useRef<
+    (options?: { reload?: boolean }) => Promise<boolean>
+  >(async () => false);
   const synchronizedInspectionMutationKeysRef = useRef<Set<string>>(new Set());
   const synchronizingInspectionMutationsRef = useRef<Map<string, Promise<boolean>>>(new Map());
   const pendingInspectionMutationSnapshotsRef = useRef<Map<string, CredentialInspectionSnapshot>>(
@@ -1717,6 +1729,7 @@ export function AccountsPage() {
       synchronizedInspectionMutationKeysRef.current.clear();
       synchronizingInspectionMutationsRef.current.clear();
       pendingInspectionMutationSnapshotsRef.current.clear();
+      directReauthSynchronizationsRef.current.clear();
     }
     accountWindowUsageReqIdRef.current += 1;
     accountWindowUsageAbortRef.current?.abort();
@@ -1777,6 +1790,8 @@ export function AccountsPage() {
   }, [loadOauthExcluded, loadOauthModelAlias]);
   const refreshAccountsWorkspace = useCallback(async () => {
     const refreshScopeKey = credentialEvidenceScopeKey;
+    const synchronizedDirectReauth = await synchronizePendingAccountDirectReauthsRef.current();
+    if (activeCredentialEvidenceScopeKeyRef.current !== refreshScopeKey) return;
     const synchronizedExternalArtifacts = await synchronizeExternalCredentialMutationMarkers();
     if (activeCredentialEvidenceScopeKeyRef.current !== refreshScopeKey) return;
     const snapshot = await loadInspectionSummary();
@@ -1793,7 +1808,7 @@ export function AccountsPage() {
     await Promise.all([
       synchronizedInspectionArtifacts || synchronizedPendingArtifacts
         ? Promise.resolve()
-        : synchronizedExternalArtifacts
+        : synchronizedDirectReauth || synchronizedExternalArtifacts
           ? Promise.resolve()
           : loadFiles(),
       loadHeaderSnapshots(),
@@ -1841,6 +1856,11 @@ export function AccountsPage() {
   useEffect(() => {
     void loadFiles();
   }, [connectionFingerprint, loadFiles]);
+
+  useEffect(() => {
+    if (!connectionFingerprint || loading || error) return;
+    void synchronizePendingAccountDirectReauthsRef.current({ reload: false });
+  }, [connectionFingerprint, error, files, loading]);
 
   useEffect(() => {
     if (!connectionFingerprint || loading || error) return;
@@ -2778,48 +2798,127 @@ export function AccountsPage() {
     [buildCurrentCredentialEvidenceBoundary, setCredentialEvidenceBoundaries]
   );
 
+  const completeConfirmedAccountDirectReauth = useCallback(
+    (
+      baseline: AccountDirectReauthBaseline,
+      confirmedFile: AuthFileItem,
+      pendingId?: string
+    ): void => {
+      if (baseline.resultKeys.length > 0) {
+        recordCompletedAccountReauthSession({
+          connectionFingerprint,
+          oauthProvider: 'codex',
+          resultKeys: baseline.resultKeys,
+          completedAtMs: Date.now(),
+        });
+        setSuppressedInspectionResultKeys((current) => {
+          const next = new Set(current);
+          baseline.resultKeys.forEach((key) => next.add(key));
+          return next;
+        });
+      }
+      if (pendingId) acknowledgePendingAccountDirectReauths([pendingId]);
+      const invalidation = invalidateCodexCredentialEvidence(baseline.target);
+      captureReloadedCodexOperationalEvidence(
+        invalidation ?? { file: confirmedFile, invalidatedAtMs: Date.now() }
+      );
+    },
+    [
+      captureReloadedCodexOperationalEvidence,
+      connectionFingerprint,
+      invalidateCodexCredentialEvidence,
+    ]
+  );
+
+  const synchronizePendingAccountDirectReauths = useCallback(
+    async (options: { reload?: boolean } = {}): Promise<boolean> => {
+      const pendingItems = listPendingAccountDirectReauths(connectionFingerprint);
+      if (pendingItems.length === 0) return false;
+      const synchronizationScopeKey = credentialEvidenceScopeKey;
+      const existing = directReauthSynchronizationsRef.current.get(synchronizationScopeKey);
+      if (existing) return existing;
+
+      const synchronization = (async () => {
+        try {
+          const reloadedFiles =
+            options.reload === false
+              ? files
+              : await reloadInspectionCredentialArtifacts({ requireSuccessfulReload: true });
+          if (activeCredentialEvidenceScopeKeyRef.current !== synchronizationScopeKey) return false;
+          if (!reloadedFiles) return false;
+
+          let synchronized = false;
+          pendingItems.forEach((pending) => {
+            const confirmedFile = confirmAccountDirectReauth(pending, reloadedFiles);
+            if (!confirmedFile) return;
+            completeConfirmedAccountDirectReauth(pending, confirmedFile, pending.id);
+            synchronized = true;
+          });
+          return synchronized;
+        } catch {
+          return false;
+        } finally {
+          directReauthSynchronizationsRef.current.delete(synchronizationScopeKey);
+        }
+      })();
+      directReauthSynchronizationsRef.current.set(synchronizationScopeKey, synchronization);
+      return synchronization;
+    },
+    [
+      completeConfirmedAccountDirectReauth,
+      connectionFingerprint,
+      credentialEvidenceScopeKey,
+      files,
+      reloadInspectionCredentialArtifacts,
+    ]
+  );
+  synchronizePendingAccountDirectReauthsRef.current = synchronizePendingAccountDirectReauths;
+
   const handleCodexReauthSuccess = useCallback(async () => {
     const target = codexReauthTarget;
-    if (target?.fileName) {
-      const targetIdentityKey = getAuthFileCodexInspectionKeyForIdentity({
-        fileName: target.fileName,
-        runtimeId: target.runtimeId,
-        provider: target.provider,
-        authIndex: target.authIndex ?? null,
-        accountId: target.accountId,
-        accountSnapshot: target.accountSnapshot,
-      });
-      const handledResultKeys = getHandledAccountInspectionResultKeys(
+    if (!target?.fileName) return;
+    const targetIdentityKey = getAuthFileCodexInspectionKeyForIdentity({
+      fileName: target.fileName,
+      runtimeId: target.runtimeId,
+      provider: target.provider,
+      authIndex: target.authIndex ?? null,
+      accountId: target.accountId,
+      accountSnapshot: target.accountSnapshot,
+    });
+    const targetFile = files.find(
+      (file) => getAuthFileCodexInspectionKeyForFile(file) === targetIdentityKey
+    );
+    if (!targetFile) throw new Error(t('notification.refresh_failed'));
+    const baseline = createAccountDirectReauthBaseline({
+      target,
+      file: targetFile,
+      resultKeys: getHandledAccountInspectionResultKeys(
         inspectionResults,
         targetIdentityKey,
         target.fileName,
         files
-      );
-      if (handledResultKeys.length > 0) {
-        recordCompletedAccountReauthSession({
-          connectionFingerprint,
-          oauthProvider: 'codex',
-          resultKeys: handledResultKeys,
-        });
-        setSuppressedInspectionResultKeys((current) => {
-          const next = new Set(current);
-          handledResultKeys.forEach((key) => next.add(key));
-          return next;
-        });
-      }
-    }
+      ),
+    });
+    if (!baseline) throw new Error(t('notification.refresh_failed'));
+    const pending = recordPendingAccountDirectReauth({ connectionFingerprint, baseline });
+    if (!pending) throw new Error(t('notification.refresh_failed'));
     const reauthScopeKey = credentialEvidenceScopeKey;
-    const invalidation = invalidateCodexCredentialEvidence(codexReauthTarget);
-    await reloadInspectionCredentialArtifacts();
+    const reloadedFiles = await reloadInspectionCredentialArtifacts({
+      requireSuccessfulReload: true,
+    });
     if (activeCredentialEvidenceScopeKeyRef.current !== reauthScopeKey) return;
-    captureReloadedCodexOperationalEvidence(invalidation);
-    setCodexReauthTarget(null);
+    const confirmedFile = reloadedFiles ? confirmAccountDirectReauth(pending, reloadedFiles) : null;
+    if (!confirmedFile) throw new Error(t('notification.refresh_failed'));
+    completeConfirmedAccountDirectReauth(pending, confirmedFile, pending.id);
   }, [
-    captureReloadedCodexOperationalEvidence,
     codexReauthTarget,
+    completeConfirmedAccountDirectReauth,
+    connectionFingerprint,
     credentialEvidenceScopeKey,
-    invalidateCodexCredentialEvidence,
+    files,
+    inspectionResults,
     reloadInspectionCredentialArtifacts,
+    t,
   ]);
 
   const handleReauthAccount = useCallback(
@@ -3289,6 +3388,7 @@ export function AccountsPage() {
     return statusMap;
   }, [
     getActiveCodexQuota,
+    getDisplayCodexQuota,
     getDisplayCodexHeaderSnapshot,
     getLatestPositiveRequestAtMs,
     headerSnapshotGeneratedAtMs,
@@ -4365,24 +4465,65 @@ export function AccountsPage() {
       const callbackScopeKey = credentialEvidenceScopeKey;
       if (activeCredentialEvidenceScopeKeyRef.current !== callbackScopeKey) return;
       if (target) {
-        const invalidation = invalidateCodexCredentialEvidence(target);
-        await reloadInspectionCredentialArtifacts();
+        const targetIdentityKey = getAuthFileCodexInspectionKeyForIdentity({
+          fileName: target.fileName ?? '',
+          runtimeId: target.runtimeId,
+          provider: target.provider,
+          authIndex: target.authIndex ?? null,
+          accountId: target.accountId,
+          accountSnapshot: target.accountSnapshot,
+        });
+        const targetFile = files.find(
+          (file) => getAuthFileCodexInspectionKeyForFile(file) === targetIdentityKey
+        );
+        if (!targetFile) throw new Error(t('notification.refresh_failed'));
+        const baseline = createAccountDirectReauthBaseline({
+          target,
+          file: targetFile,
+          resultKeys: getHandledAccountInspectionResultKeys(
+            inspectionResults,
+            targetIdentityKey,
+            target.fileName ?? '',
+            files
+          ),
+        });
+        if (!baseline) throw new Error(t('notification.refresh_failed'));
+        const pending = recordPendingAccountDirectReauth({ connectionFingerprint, baseline });
+        if (!pending) throw new Error(t('notification.refresh_failed'));
+        const reloadedFiles = await reloadInspectionCredentialArtifacts({
+          requireSuccessfulReload: true,
+        });
         if (activeCredentialEvidenceScopeKeyRef.current !== callbackScopeKey) return;
-        captureReloadedCodexOperationalEvidence(invalidation);
+        const confirmedFile = reloadedFiles
+          ? confirmAccountDirectReauth(pending, reloadedFiles)
+          : null;
+        if (!confirmedFile) throw new Error(t('notification.refresh_failed'));
+        completeConfirmedAccountDirectReauth(pending, confirmedFile, pending.id);
         return;
       }
       if (snapshot) {
-        await synchronizeInspectionCredentialMutations(snapshot, false);
+        const scopedKey = getInspectionCredentialMutationScopedKey(snapshot, false);
+        if (!scopedKey) return;
+        const synchronized = await synchronizeInspectionCredentialMutations(snapshot, false);
+        if (activeCredentialEvidenceScopeKeyRef.current !== callbackScopeKey) return;
+        if (synchronized || synchronizedInspectionMutationKeysRef.current.has(scopedKey)) return;
+        if (pendingInspectionMutationSnapshotsRef.current.has(scopedKey)) {
+          throw new Error(t('notification.refresh_failed'));
+        }
         return;
       }
-      await reloadInspectionCredentialArtifacts();
+      await reloadInspectionCredentialArtifacts({ requireSuccessfulReload: true });
     },
     [
-      captureReloadedCodexOperationalEvidence,
+      completeConfirmedAccountDirectReauth,
+      connectionFingerprint,
       credentialEvidenceScopeKey,
-      invalidateCodexCredentialEvidence,
+      files,
+      getInspectionCredentialMutationScopedKey,
+      inspectionResults,
       reloadInspectionCredentialArtifacts,
       synchronizeInspectionCredentialMutations,
+      t,
     ]
   );
 

@@ -11,13 +11,14 @@ const { mocks } = vi.hoisted(() => ({
     getAuthStatus: vi.fn(),
     submitCallback: vi.fn(),
     showNotification: vi.fn(),
+    translate: vi.fn((key: string) => key),
     intervalCallback: null as null | (() => void | Promise<void>),
   },
 }));
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => undefined },
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: mocks.translate }),
 }));
 
 vi.mock('@/services/api', () => ({
@@ -207,10 +208,10 @@ describe('CodexReauthDialog connection lifecycle', () => {
     expect(mocks.intervalCallback).not.toBeNull();
 
     let pollingPromise!: Promise<void>;
-    await act(async () => {
+    act(() => {
       pollingPromise = Promise.resolve(mocks.intervalCallback?.());
-      await Promise.resolve();
     });
+    await flushEffects();
     expect(mocks.getAuthStatus).toHaveBeenCalledWith('state-1', REQUEST_SCOPE);
 
     await act(async () => {
@@ -223,6 +224,8 @@ describe('CodexReauthDialog connection lifecycle', () => {
           onSuccess={onSuccess}
         />
       );
+    });
+    await act(async () => {
       pollRequest.resolve({ status: 'ok' });
       await pollingPromise;
     });
@@ -275,12 +278,96 @@ describe('CodexReauthDialog connection lifecycle', () => {
           onSuccess={onSuccess}
         />
       );
+    });
+    await act(async () => {
       callbackRequest.resolve({ status: 'ok' });
       await Promise.resolve();
     });
 
     expect(onSuccess).not.toHaveBeenCalled();
     expect(mocks.showNotification).not.toHaveBeenCalledWith('codex_reauth.success', 'success');
+
+    act(() => renderer.unmount());
+  });
+
+  it('waits for Accounts synchronization before announcing re-login success', async () => {
+    const synchronization = deferred<void>();
+    mocks.startAuth.mockResolvedValue({ url: 'https://auth.example/codex', state: 'state-1' });
+    mocks.submitCallback.mockResolvedValue({ status: 'ok' });
+    const onSuccess = vi.fn(() => synchronization.promise);
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexReauthDialog
+          open
+          target={TARGET}
+          requestScope={REQUEST_SCOPE}
+          onClose={vi.fn()}
+          onSuccess={onSuccess}
+        />
+      );
+    });
+    await flushEffects();
+
+    const input = renderer.root.findByType('input');
+    act(() => input.props.onChange({ target: { value: 'http://localhost/callback?code=1' } }));
+    await act(async () => {
+      findButton(renderer, 'codex_reauth.submit_callback').props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(textContent(renderer.root)).toContain('codex_reauth.synchronizing');
+    expect(mocks.showNotification).not.toHaveBeenCalledWith('codex_reauth.success', 'success');
+
+    await act(async () => {
+      synchronization.resolve();
+      await flush();
+    });
+
+    expect(mocks.showNotification).toHaveBeenCalledWith('codex_reauth.success', 'success');
+    expect(textContent(renderer.root)).toContain('codex_reauth.success');
+
+    act(() => renderer.unmount());
+  });
+
+  it('reports re-login success with a synchronization warning when Accounts reload fails', async () => {
+    mocks.startAuth.mockResolvedValue({ url: 'https://auth.example/codex', state: 'state-1' });
+    mocks.submitCallback.mockResolvedValue({ status: 'ok' });
+    const onSuccess = vi.fn().mockRejectedValue(new Error('temporary Accounts reload failure'));
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexReauthDialog
+          open
+          target={TARGET}
+          requestScope={REQUEST_SCOPE}
+          onClose={vi.fn()}
+          onSuccess={onSuccess}
+        />
+      );
+    });
+    await flushEffects();
+
+    const input = renderer.root.findByType('input');
+    act(() => input.props.onChange({ target: { value: 'http://localhost/callback?code=1' } }));
+    await act(async () => {
+      findButton(renderer, 'codex_reauth.submit_callback').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      expect.stringContaining('temporary Accounts reload failure'),
+      'warning'
+    );
+    expect(mocks.showNotification).not.toHaveBeenCalledWith(
+      expect.stringContaining('codex_reauth.error'),
+      'error'
+    );
+    expect(textContent(renderer.root)).toContain('temporary Accounts reload failure');
 
     act(() => renderer.unmount());
   });

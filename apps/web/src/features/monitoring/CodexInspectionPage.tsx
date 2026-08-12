@@ -664,6 +664,21 @@ export function CodexInspectionPage({
               message: execution.refreshError,
             })
           : '';
+        const nextResult = applyCodexInspectionExecutionResult(currentResult, execution);
+        setResult(nextResult);
+        setResultConnectionFingerprint(currentResultFingerprint);
+        onSnapshotChange?.(createLocalCredentialInspectionSnapshot(nextResult, Date.now()));
+        let synchronizationWarning = '';
+        try {
+          await onCredentialsChanged?.();
+        } catch (error: unknown) {
+          if (!isCurrentExecution()) return;
+          const message =
+            error instanceof Error ? error.message : String(error || t('common.unknown_error'));
+          synchronizationWarning = `${t('notification.refresh_failed')}: ${message}`;
+        }
+        if (!isCurrentExecution()) return;
+
         if (source === 'manual') {
           if (
             outcomeSummary.failed > 0 ||
@@ -676,20 +691,19 @@ export function CodexInspectionPage({
               review: outcomeSummary.needs_review,
               failed: outcomeSummary.failed,
             });
+            const warnings = [failureSummary, refreshWarning, synchronizationWarning].filter(
+              Boolean
+            );
+            showNotification(warnings.join('；'), 'warning');
+          } else if (refreshWarning || synchronizationWarning) {
             showNotification(
-              refreshWarning ? `${failureSummary}；${refreshWarning}` : failureSummary,
+              [refreshWarning, synchronizationWarning].filter(Boolean).join('；'),
               'warning'
             );
-          } else if (refreshWarning) {
-            showNotification(refreshWarning, 'warning');
           } else {
             showNotification(t('monitoring.codex_inspection_execute_success'), 'success');
           }
         }
-        const nextResult = applyCodexInspectionExecutionResult(currentResult, execution);
-        setResult(nextResult);
-        setResultConnectionFingerprint(currentResultFingerprint);
-        void onCredentialsChanged?.();
 
         if (source === 'auto') {
           const successCount = outcomeSummary.success;
@@ -702,14 +716,15 @@ export function CodexInspectionPage({
             failed: failedCount,
             remaining: remainingCount,
           });
-          const summaryMessage = refreshWarning
-            ? `${baseSummaryMessage}；${refreshWarning}`
-            : baseSummaryMessage;
+          const summaryMessage = [baseSummaryMessage, refreshWarning, synchronizationWarning]
+            .filter(Boolean)
+            .join('；');
           const hasExecutionWarning =
             failedCount > 0 ||
             outcomeSummary.needs_review > 0 ||
             remainingCount > 0 ||
-            Boolean(execution.refreshError);
+            Boolean(execution.refreshError) ||
+            Boolean(synchronizationWarning);
           appendLog(hasExecutionWarning ? 'warning' : 'success', summaryMessage, {
             successCount,
             failedCount,
@@ -726,6 +741,8 @@ export function CodexInspectionPage({
               })),
             refreshFailed: Boolean(execution.refreshError),
             ...(execution.refreshError ? { refreshError: execution.refreshError } : {}),
+            synchronizationFailed: Boolean(synchronizationWarning),
+            ...(synchronizationWarning ? { synchronizationWarning } : {}),
           });
           showNotification(summaryMessage, hasExecutionWarning ? 'warning' : 'success');
           appendInspectionCompletionLog(nextResult, execution.outcomes, execution.refreshError);
@@ -796,6 +813,7 @@ export function CodexInspectionPage({
       connectionFingerprint,
       managementKey,
       onCredentialsChanged,
+      onSnapshotChange,
       result,
       resultConnectionFingerprint,
       showNotification,
@@ -948,9 +966,9 @@ export function CodexInspectionPage({
     [navigate]
   );
 
-  const handleCodexReauthSuccess = useCallback(() => {
+  const handleCodexReauthSuccess = useCallback(async () => {
+    await onCredentialsChanged?.(codexReauthTarget);
     showNotification(t('codex_reauth.rerun_hint'), 'success');
-    void onCredentialsChanged?.(codexReauthTarget);
   }, [codexReauthTarget, onCredentialsChanged, showNotification, t]);
 
   const summaryCards = useMemo<SummaryCard[]>(() => {

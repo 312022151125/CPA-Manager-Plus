@@ -1463,7 +1463,14 @@ export function ServerCodexInspectionPage({
           response.detail.run,
           ...currentRuns.filter((run) => run.id !== response.detail.run.id),
         ]);
-        void onCredentialsChanged?.(undefined, actionSnapshot);
+        let synchronizationWarning = '';
+        try {
+          await onCredentialsChanged?.(undefined, actionSnapshot);
+        } catch (error: unknown) {
+          if (!isCurrentConnection()) return;
+          synchronizationWarning = `${t('notification.refresh_failed')}: ${getUsageServiceDisplayError(error, t)}`;
+        }
+        if (!isCurrentConnection()) return;
 
         try {
           const runsResponse = await usageServiceApi.listCodexInspectionRuns(
@@ -1507,14 +1514,21 @@ export function ServerCodexInspectionPage({
           outcomeSummary.failed > 0 || outcomeSummary.skipped > 0 || outcomeSummary.needsReview > 0;
         if (hasNonSuccessOutcome) {
           showNotification(
-            t('monitoring.codex_inspection_log_manual_completed', {
-              success: outcomeSummary.success,
-              skipped: outcomeSummary.skipped,
-              review: outcomeSummary.needsReview,
-              failed: outcomeSummary.failed,
-            }),
+            [
+              t('monitoring.codex_inspection_log_manual_completed', {
+                success: outcomeSummary.success,
+                skipped: outcomeSummary.skipped,
+                review: outcomeSummary.needsReview,
+                failed: outcomeSummary.failed,
+              }),
+              synchronizationWarning,
+            ]
+              .filter(Boolean)
+              .join('；'),
             'warning'
           );
+        } else if (synchronizationWarning) {
+          showNotification(synchronizationWarning, 'warning');
         } else {
           showNotification(t('monitoring.server_codex_inspection_execute_success'), 'success');
         }

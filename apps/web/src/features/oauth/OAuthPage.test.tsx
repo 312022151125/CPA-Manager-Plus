@@ -11,8 +11,9 @@ import {
 } from './oauthProviderHelpers';
 
 const { pageMocks } = vi.hoisted(() => {
-  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
-    .IS_REACT_ACT_ENVIRONMENT = true;
+  (
+    globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+  ).IS_REACT_ACT_ENVIRONMENT = true;
   return {
     pageMocks: {
       apiBase: 'http://cpa-a.local:8317',
@@ -40,25 +41,25 @@ vi.mock('react-router-dom', () => ({
   useNavigate: () => vi.fn(),
 }));
 
-vi.mock('@/stores', () => ({
-  useAuthStore: (
-    selector: (state: {
-      connectionStatus: 'connected';
-      apiBase: string;
-      managementKey: string;
-      supportsPlugin: boolean;
-    }) => unknown
-  ) =>
-    selector({
-      connectionStatus: 'connected',
-      apiBase: pageMocks.apiBase,
-      managementKey: pageMocks.managementKey,
-      supportsPlugin: false,
-    }),
-  useNotificationStore: () => ({ showNotification: pageMocks.showNotification }),
-  useThemeStore: (selector: (state: { resolvedTheme: 'light' }) => unknown) =>
-    selector({ resolvedTheme: 'light' }),
-}));
+vi.mock('@/stores', () => {
+  const readAuthState = () => ({
+    connectionStatus: 'connected' as const,
+    apiBase: pageMocks.apiBase,
+    managementKey: pageMocks.managementKey,
+    supportsPlugin: false,
+  });
+  const useAuthStore = Object.assign(
+    (selector: (state: ReturnType<typeof readAuthState>) => unknown) => selector(readAuthState()),
+    { getState: readAuthState }
+  );
+
+  return {
+    useAuthStore,
+    useNotificationStore: () => ({ showNotification: pageMocks.showNotification }),
+    useThemeStore: (selector: (state: { resolvedTheme: 'light' }) => unknown) =>
+      selector({ resolvedTheme: 'light' }),
+  };
+});
 
 vi.mock('@/services/api', () => ({
   oauthApi: {
@@ -315,11 +316,7 @@ describe('plugin OAuth provider helpers', () => {
     expect(isOAuthProviderAttemptCurrent(attempt, { ...scope }, 1)).toBe(true);
     expect(isOAuthProviderAttemptCurrent(attempt, { ...scope }, 2)).toBe(false);
     expect(
-      isOAuthProviderAttemptCurrent(
-        attempt,
-        { ...scope, connectionFingerprint: 'connection-b' },
-        1
-      )
+      isOAuthProviderAttemptCurrent(attempt, { ...scope, connectionFingerprint: 'connection-b' }, 1)
     ).toBe(false);
   });
 });

@@ -968,6 +968,98 @@ describe('ServerCodexInspectionPage lifecycle controls', () => {
     act(() => renderer!.unmount());
   });
 
+  it('keeps a successful server mutation distinct from an Accounts synchronization failure', async () => {
+    const completed = run({
+      id: 10,
+      status: 'completed',
+      active: false,
+      cancellable: false,
+      finishedAtMs: 2_000,
+      enableCount: 1,
+    });
+    const pendingResult = {
+      id: 42,
+      runId: completed.id,
+      accountKey: 'codex.json\u0000auth-1',
+      fileName: 'codex.json',
+      displayAccount: 'codex@example.com',
+      authIndex: 'auth-1',
+      provider: 'codex',
+      disabled: true,
+      action: 'enable',
+      actionReason: 'quota recovered',
+      actionStatus: 'pending',
+      statusCode: 200,
+      isQuota: false,
+      createdAtMs: 2_000,
+    };
+    mocks.listRuns.mockResolvedValue({ items: [completed] });
+    mocks.getRun.mockResolvedValue({
+      run: completed,
+      results: [pendingResult],
+      logs: [],
+    });
+    mocks.executeActions.mockResolvedValue({
+      outcomes: [
+        {
+          resultId: pendingResult.id,
+          accountKey: pendingResult.accountKey,
+          fileName: pendingResult.fileName,
+          displayAccount: pendingResult.displayAccount,
+          action: 'enable',
+          status: 'success',
+          success: true,
+        },
+      ],
+      detail: {
+        run: { ...completed, updatedAtMs: 2_500 },
+        results: [
+          {
+            ...pendingResult,
+            disabled: false,
+            actionStatus: 'success',
+            executedAction: 'enable',
+          },
+        ],
+        logs: [],
+      },
+    });
+    const onCredentialsChanged = vi
+      .fn()
+      .mockRejectedValue(new Error('temporary Accounts reload failure'));
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <MemoryRouter>
+          <ServerCodexInspectionPage onCredentialsChanged={onCredentialsChanged} />
+        </MemoryRouter>
+      );
+      await flush();
+    });
+
+    const enableButton = renderer.root
+      .findAllByType('button')
+      .find((button) => textContent(button) === 'monitoring.codex_inspection_action_enable');
+    await act(async () => {
+      enableButton?.props.onClick();
+      await flush();
+      await flush();
+    });
+
+    expect(onCredentialsChanged).toHaveBeenCalledTimes(1);
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      expect.stringContaining('temporary Accounts reload failure'),
+      'warning'
+    );
+    expect(mocks.showNotification).not.toHaveBeenCalledWith(
+      expect.stringContaining('monitoring.server_codex_inspection_execute_failed'),
+      'error'
+    );
+
+    act(() => renderer.unmount());
+  });
+
   it('ignores an in-flight action response after switching Manager Server scope', async () => {
     const completed = run({
       id: 19,

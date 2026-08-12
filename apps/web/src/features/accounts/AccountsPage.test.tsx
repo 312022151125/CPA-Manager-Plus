@@ -50,6 +50,10 @@ import {
   completeAccountOAuthReauthSession,
   readAccountOAuthReauthSessionId,
 } from './model/accountReauthSession';
+import {
+  clearPendingAccountDirectReauthsForTests,
+  listPendingAccountDirectReauths,
+} from './model/accountDirectReauth';
 import { useUsageHeaderSnapshotStore } from '@/stores/useUsageHeaderSnapshotStore';
 import { AccountsPage } from './AccountsPage';
 
@@ -434,6 +438,7 @@ const { mocks } = vi.hoisted(() => {
         target: CodexReauthTarget | null;
         requestScope?: { apiBase: string; managementKey: string };
         onClose: () => void;
+        onSuccess?: () => void | Promise<void>;
       },
       localInspection: null as null | Record<string, unknown>,
       lastHealthWorkspaceProps: null as null | {
@@ -720,6 +725,7 @@ vi.mock('@/features/oauth/CodexReauthDialog', () => ({
     target: CodexReauthTarget | null;
     requestScope?: { apiBase: string; managementKey: string };
     onClose: () => void;
+    onSuccess?: () => void | Promise<void>;
   }) => {
     mocks.lastCodexReauthProps = props;
     return props.open ? <div data-codex-reauth-open="true" /> : null;
@@ -1029,6 +1035,20 @@ const flushPromises = async () => {
   });
 };
 
+const runCodexReauthSuccessAndCaptureError = async (): Promise<unknown> => {
+  const onSuccess = mocks.lastCodexReauthProps?.onSuccess;
+  if (!onSuccess) throw new Error('Codex re-login success callback not found');
+  let caught: unknown;
+  await act(async () => {
+    try {
+      await onSuccess();
+    } catch (error) {
+      caught = error;
+    }
+  });
+  return caught;
+};
+
 describe('AccountsPage replacement flows', () => {
   afterEach(async () => {
     const restoreWindow = typeof window === 'undefined';
@@ -1050,6 +1070,7 @@ describe('AccountsPage replacement flows', () => {
   beforeEach(() => {
     clearAccountCredentialEvidenceBoundaryStateCache();
     clearAccountCredentialMutationMarkersForTests();
+    clearPendingAccountDirectReauthsForTests();
     if (typeof window !== 'undefined') {
       window.localStorage.clear();
       window.sessionStorage?.clear();
@@ -1278,6 +1299,165 @@ describe('AccountsPage replacement flows', () => {
       apiBase: 'http://cpa-b.local:8317',
       managementKey: 'manager-key',
     });
+  });
+
+  it('keeps a direct re-login pending after a credential reload failure and retries it manually', async () => {
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      status: 'error',
+      statusMessage: 'token_expired',
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    mocks.files = [file];
+    const selectionKey = getAuthFileSelectionKey(file);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles
+      .mockRejectedValueOnce(new Error('temporary auth-file list failure'))
+      .mockImplementationOnce(async () => {
+        mocks.files = [
+          { ...file, status: 'ready', statusMessage: '', last_refresh: 3_000, modified: 3_100 },
+        ] as AuthFileItem[];
+        return mocks.files;
+      });
+
+    expect(await runCodexReauthSuccessAndCaptureError()).toEqual(
+      new Error('temporary auth-file list failure')
+    );
+    expect(listPendingAccountDirectReauths('http://cpa-a.local:8317:manager-key')).toHaveLength(1);
+
+    await act(async () => {
+      await findButtonByText(renderer, 'common.refresh').props.onClick();
+    });
+    await flushPromises();
+
+    expect(listPendingAccountDirectReauths('http://cpa-a.local:8317:manager-key')).toEqual([]);
+    expect(getAccountCardText(renderer, selectionKey)).not.toContain('accounts.health_reauth');
+  });
+
+  it('does not confirm a direct re-login when OAuth returns another account', async () => {
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      status: 'error',
+      statusMessage: 'token_expired',
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const wrongAccount = {
+      ...makeCodexFile(file.name, 'auth-2', 'other@example.com'),
+      status: 'ready',
+      statusMessage: '',
+      last_refresh: 3_000,
+      modified: 3_100,
+    } as AuthFileItem;
+    mocks.files = [file];
+    const selectionKey = getAuthFileSelectionKey(file);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [wrongAccount];
+      return mocks.files;
+    });
+
+    expect(await runCodexReauthSuccessAndCaptureError()).toEqual(
+      new Error('notification.refresh_failed')
+    );
+
+    expect(listPendingAccountDirectReauths('http://cpa-a.local:8317:manager-key')).toHaveLength(1);
+  });
+
+  it('retries a pending direct re-login after Accounts remounts', async () => {
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      status: 'error',
+      statusMessage: 'token_expired',
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    mocks.files = [file];
+    const selectionKey = getAuthFileSelectionKey(file);
+    const firstRenderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        firstRenderer,
+        selectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockRejectedValueOnce(new Error('temporary auth-file list failure'));
+    expect(await runCodexReauthSuccessAndCaptureError()).toEqual(
+      new Error('temporary auth-file list failure')
+    );
+    expect(listPendingAccountDirectReauths('http://cpa-a.local:8317:manager-key')).toHaveLength(1);
+
+    await act(async () => firstRenderer.unmount());
+    mountedAccountsRenderers.delete(firstRenderer);
+    mocks.files = [
+      { ...file, status: 'ready', statusMessage: '', last_refresh: 3_000, modified: 3_100 },
+    ] as AuthFileItem[];
+
+    const secondRenderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(listPendingAccountDirectReauths('http://cpa-a.local:8317:manager-key')).toEqual([]);
+    expect(getAccountCardText(secondRenderer, selectionKey)).not.toContain(
+      'accounts.health_reauth'
+    );
+  });
+
+  it('keeps pending direct re-login retries isolated by CPA connection', async () => {
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      status: 'error',
+      statusMessage: 'token_expired',
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    mocks.files = [file];
+    const selectionKey = getAuthFileSelectionKey(file);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockRejectedValueOnce(new Error('temporary auth-file list failure'));
+    expect(await runCodexReauthSuccessAndCaptureError()).toEqual(
+      new Error('temporary auth-file list failure')
+    );
+
+    mocks.apiBase = 'http://cpa-b.local:8317';
+    mocks.managementKey = 'key-b';
+    mocks.loadFiles.mockImplementation(async () => [
+      { ...file, status: 'ready', statusMessage: '', last_refresh: 3_000, modified: 3_100 },
+    ]);
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(listPendingAccountDirectReauths('http://cpa-a.local:8317:manager-key')).toHaveLength(1);
+    expect(listPendingAccountDirectReauths('http://cpa-b.local:8317:key-b')).toEqual([]);
   });
 
   it('reloads credentials when the CPA connection fingerprint changes', async () => {
@@ -4612,7 +4792,11 @@ describe('AccountsPage replacement flows', () => {
   );
 
   it('invalidates only the reauthorized shared credential and ignores its late quota response', async () => {
-    const first = makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com');
+    const first = {
+      ...makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com'),
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
     const second = makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com');
     mocks.files = [first, second];
     installCodexQuotaStoreMutationMock();
@@ -4647,6 +4831,13 @@ describe('AccountsPage replacement flows', () => {
     });
     await act(async () => {
       findHostButtonByText(renderer, 'accounts.tab_health').props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [
+        { ...first, last_refresh: 3_000, modified: 3_100, status: 'ready', statusMessage: '' },
+        second,
+      ] as AuthFileItem[];
+      return mocks.files;
     });
     await act(async () => {
       mocks.lastHealthWorkspaceProps?.onSnapshotChange(
@@ -5847,11 +6038,11 @@ describe('AccountsPage replacement flows', () => {
   });
 
   it('does not reattach filename-only inspection evidence after reauth or capability rechecks', async () => {
-    const original = makeCodexFile(
-      'rotated-codex.json',
-      'auth-before-reauth',
-      'before@example.com'
-    );
+    const original = {
+      ...makeCodexFile('rotated-codex.json', 'auth-before-reauth', 'before@example.com'),
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
     const replacement = makeCodexFile(original.name, 'auth-after-reauth', 'after@example.com');
     mocks.files = [original];
     installCodexQuotaStoreMutationMock();
@@ -5875,6 +6066,18 @@ describe('AccountsPage replacement flows', () => {
 
     await act(async () => {
       findHostButtonByText(renderer, 'accounts.tab_health').props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [
+        {
+          ...original,
+          last_refresh: 3_000,
+          modified: 3_100,
+          status: 'ready',
+          statusMessage: '',
+        },
+      ] as AuthFileItem[];
+      return mocks.files;
     });
     await act(async () => {
       mocks.lastHealthWorkspaceProps?.onSnapshotChange(
@@ -6053,13 +6256,24 @@ describe('AccountsPage replacement flows', () => {
   });
 
   it('does not reattach filename-only inspection evidence when a shared file becomes singular after reauth', async () => {
-    const first = makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com');
+    const first = {
+      ...makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com'),
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
     const second = makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com');
     mocks.files = [first, second];
     const renderer = await renderAccountsPage();
 
     await act(async () => {
       findHostButtonByText(renderer, 'accounts.tab_health').props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [
+        { ...first, last_refresh: 3_000, modified: 3_100, status: 'ready', statusMessage: '' },
+        second,
+      ] as AuthFileItem[];
+      return mocks.files;
     });
     await act(async () => {
       mocks.lastHealthWorkspaceProps?.onSnapshotChange(
@@ -6103,7 +6317,11 @@ describe('AccountsPage replacement flows', () => {
   });
 
   it('preserves exact sibling evidence when a shared file becomes singular after reauth', async () => {
-    const first = makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com');
+    const first = {
+      ...makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com'),
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
     const second = makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com');
     const fallbackAtMs = 2_000;
     const inspectionAtMs = 3_000;
@@ -6163,6 +6381,13 @@ describe('AccountsPage replacement flows', () => {
 
     await act(async () => {
       findHostButtonByText(renderer, 'accounts.tab_health').props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [
+        second,
+        { ...first, last_refresh: 5_000, modified: 5_100, status: 'ready', statusMessage: '' },
+      ] as AuthFileItem[];
+      return mocks.files;
     });
     await act(async () => {
       mocks.lastHealthWorkspaceProps?.onSnapshotChange(
@@ -11572,7 +11797,11 @@ describe('AccountsPage replacement flows', () => {
     mocks.loadFiles.mockRejectedValueOnce(new Error('temporary auth-file list failure'));
 
     await act(async () => {
-      await mocks.lastHealthWorkspaceProps?.onCredentialsChanged(undefined, historicalSnapshot);
+      try {
+        await mocks.lastHealthWorkspaceProps?.onCredentialsChanged(undefined, historicalSnapshot);
+      } catch {
+        // The mutation succeeded, but Accounts reports the failed synchronization to its caller.
+      }
     });
     expect(mocks.loadFiles).toHaveBeenCalledTimes(2);
 
@@ -11666,7 +11895,11 @@ describe('AccountsPage replacement flows', () => {
 
     await act(async () => {
       secondReload.reject(new Error('newer reload failed'));
-      await secondSynchronization;
+      try {
+        await secondSynchronization;
+      } catch {
+        // The newer snapshot remains pending and must be retried below.
+      }
     });
     await act(async () => {
       firstReload.resolve(undefined);

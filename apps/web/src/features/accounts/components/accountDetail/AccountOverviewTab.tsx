@@ -12,7 +12,6 @@ import type {
   AccountDetailOverviewTargetTab,
   AccountDetailViewModel,
 } from '@/features/accounts/model/accountDetailViewModel';
-import { isHealthyAuthFileStatusMessage } from '@/features/authFiles/constants';
 import type { AccountListHealthStatusKey } from '@/features/accounts/model/accountListPresentation';
 import {
   formatCompactNumber,

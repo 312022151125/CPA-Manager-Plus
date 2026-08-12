@@ -753,9 +753,9 @@ export function OAuthPage() {
     const importGeneration = vertexImportGenerationRef.current + 1;
     vertexImportGenerationRef.current = importGeneration;
     const importConnectionFingerprint = connectionFingerprint;
+    if (!importConnectionFingerprint) return;
     const importRequestScope = requestScope;
     const isCurrentImport = () =>
-      Boolean(importConnectionFingerprint) &&
       connectionFingerprintRef.current === importConnectionFingerprint &&
       vertexImportGenerationRef.current === importGeneration;
     setVertexState((prev) => ({ ...prev, loading: true, error: undefined, result: undefined }));

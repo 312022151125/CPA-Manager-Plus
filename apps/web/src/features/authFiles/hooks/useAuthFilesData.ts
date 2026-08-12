@@ -28,18 +28,11 @@ import {
   type AuthJsonFilePayload,
   type AuthJsonInputType,
 } from '@/features/authFiles/sessionAuthConverter';
-import {
-  getTypeLabel,
-  hasAuthFileStatusMessage,
-  isHealthyAuthFile,
-  isRuntimeOnlyAuthFile,
-  normalizeProviderKey,
-} from '@/features/authFiles/constants';
+import { isRuntimeOnlyAuthFile } from '@/features/authFiles/constants';
 import {
   getAuthFileNameFromSelectionKey,
   getAuthFilePatchTarget,
   getAuthFileSelectionKey,
-  getWholeAuthFileDeleteCandidates,
   type AuthFilePatchTarget,
 } from '@/features/authFiles/model/credentialStatus';
 import {
@@ -58,19 +51,6 @@ import {
   readAuthFileStatusRuntimeId,
   resolveAuthFileStatusMutationTarget,
 } from '@/utils/authFileStatusMutation';
-
-type DeleteAllOptions = {
-  filter: string;
-  problemOnly: boolean;
-  disabledOnly: boolean;
-  healthyOnly: boolean;
-  filteredFiles?: AuthFileItem[];
-  onResetFilterToAll: () => void;
-  onResetProblemOnly: () => void;
-  onResetDisabledOnly: () => void;
-  onResetHealthyOnly: () => void;
-  onResetResultFilters?: () => void;
-};
 
 export type AuthFilesBatchPatchResult = {
   success: number;
@@ -107,8 +87,6 @@ export type UseAuthFilesDataResult = {
   uploading: boolean;
   authJsonPasteSaving: boolean;
   deleting: string | null;
-  deletingAll: boolean;
-  statusUpdating: Record<string, boolean>;
   credentialRefreshing: Record<string, boolean>;
   batchStatusUpdating: boolean;
   batchFieldsUpdating: boolean;
@@ -122,10 +100,8 @@ export type UseAuthFilesDataResult = {
     jsonText: string
   ) => Promise<string[]>;
   handleDelete: (item: AuthFileItem) => void;
-  handleDeleteAll: (options: DeleteAllOptions) => void;
   handleDownload: (name: string) => Promise<void>;
   handleCredentialRefresh: (item: AuthFileItem) => Promise<void>;
-  handleStatusToggle: (item: AuthFileItem, enabled: boolean) => Promise<void>;
   toggleSelect: (key: string) => void;
   selectAllVisible: (visibleFiles: AuthFileItem[]) => void;
   invertVisibleSelection: (visibleFiles: AuthFileItem[]) => void;
@@ -763,8 +739,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
   const [authJsonPasteSaving, setAuthJsonPasteSaving] = useState(false);
   const authJsonPasteSavingRef = useRef(false);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [deletingAll, setDeletingAll] = useState(false);
-  const [statusUpdating, setStatusUpdating] = useState<Record<string, boolean>>({});
   const [credentialRefreshing, setCredentialRefreshing] = useState<Record<string, boolean>>({});
   const [batchStatusUpdating, setBatchStatusUpdating] = useState(false);
   const [batchFieldsUpdating, setBatchFieldsUpdating] = useState(false);
@@ -776,7 +750,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
   const uploadOperationRef = useRef<symbol | null>(null);
   const authJsonPasteOperationRef = useRef<symbol | null>(null);
   const deleteOperationRef = useRef<symbol | null>(null);
-  const deleteAllOperationRef = useRef<symbol | null>(null);
   const loadFilesRequestRef = useRef(0);
   const filesRevisionRef = useRef(0);
   const batchStatusPendingRef = useRef<number | null>(null);
@@ -801,7 +774,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     authJsonPasteOperationRef.current = null;
     authJsonPasteSavingRef.current = false;
     deleteOperationRef.current = null;
-    deleteAllOperationRef.current = null;
     commitFiles([]);
     setSelectedFiles(new Set());
     setLoading(true);
@@ -809,8 +781,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     setUploading(false);
     setAuthJsonPasteSaving(false);
     setDeleting(null);
-    setDeletingAll(false);
-    setStatusUpdating({});
     setBatchStatusUpdating(false);
     setBatchFieldsUpdating(false);
 
@@ -1318,225 +1288,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     ]
   );
 
-  const handleDeleteAll = useCallback(
-    (deleteAllOptions: DeleteAllOptions) => {
-      const confirmationConnectionFingerprint = connectionFingerprint;
-      const confirmationRequestScope = requestScope;
-      const confirmationGeneration = authFilesOperationGenerationRef.current;
-      const {
-        filter,
-        problemOnly,
-        disabledOnly,
-        healthyOnly,
-        filteredFiles,
-        onResetFilterToAll,
-        onResetProblemOnly,
-        onResetDisabledOnly,
-        onResetHealthyOnly,
-        onResetResultFilters,
-      } = deleteAllOptions;
-      const normalizedFilter = normalizeProviderKey(filter);
-      const isFiltered = normalizedFilter !== 'all';
-      const isProblemOnly = problemOnly === true;
-      const isDisabledOnly = disabledOnly === true;
-      const isHealthyOnly = healthyOnly === true;
-      const usesProvidedFilteredFiles = Array.isArray(filteredFiles);
-      const isFilteredResult = usesProvidedFilteredFiles || isDisabledOnly || isHealthyOnly;
-      const deletesAllFiles =
-        !isFiltered &&
-        !isProblemOnly &&
-        !isDisabledOnly &&
-        !isHealthyOnly &&
-        !usesProvidedFilteredFiles;
-      const typeLabel = isFiltered ? getTypeLabel(t, normalizedFilter) : t('auth_files.filter_all');
-      let confirmMessage = t('auth_files.delete_all_confirm');
-      if (isFilteredResult) {
-        confirmMessage = t('auth_files.delete_filtered_result_confirm_file_scope');
-      } else if (isProblemOnly) {
-        confirmMessage = isFiltered
-          ? t('auth_files.delete_problem_filtered_confirm', { type: typeLabel })
-          : t('auth_files.delete_problem_confirm');
-      } else if (isFiltered) {
-        confirmMessage = t('auth_files.delete_filtered_confirm', { type: typeLabel });
-      }
-
-      const eligibleRows = (
-        usesProvidedFilteredFiles
-          ? filteredFiles
-          : files.filter((file) => {
-              if (
-                isFiltered &&
-                normalizeProviderKey(String(file.type ?? file.provider ?? '')) !== normalizedFilter
-              ) {
-                return false;
-              }
-              if (isProblemOnly && !hasAuthFileStatusMessage(file)) return false;
-              if (isDisabledOnly && file.disabled !== true) return false;
-              if (isHealthyOnly && !isHealthyAuthFile(file)) return false;
-              return true;
-            })
-      ).filter((file) => !isRuntimeOnlyAuthFile(file));
-      const filesToDelete = getWholeAuthFileDeleteCandidates(files, eligibleRows);
-
-      if (filesToDelete.length === 0) {
-        let emptyMessage = t('auth_files.delete_filtered_none', { type: typeLabel });
-        if (isFilteredResult) {
-          emptyMessage = t('auth_files.delete_filtered_result_none');
-        } else if (isProblemOnly) {
-          emptyMessage = isFiltered
-            ? t('auth_files.delete_problem_filtered_none', { type: typeLabel })
-            : t('auth_files.delete_problem_none');
-        }
-        showNotification(emptyMessage, 'info');
-        return;
-      }
-
-      const fileNames = filesToDelete.map((file) => file.name);
-      const deleteSnapshots = buildAuthFileDeleteSnapshots(files, filesToDelete);
-      let deleteScope = t('auth_files.delete_scope_all');
-      if (isFilteredResult) {
-        deleteScope = t('auth_files.delete_scope_filtered_result');
-      } else if (isProblemOnly) {
-        deleteScope = isFiltered
-          ? t('auth_files.delete_scope_problem_provider', { type: typeLabel })
-          : t('auth_files.delete_scope_problem');
-      } else if (isFiltered) {
-        deleteScope = t('auth_files.delete_scope_provider', { type: typeLabel });
-      }
-
-      showConfirmation({
-        title: t('auth_files.delete_all_title', { defaultValue: 'Delete All Files' }),
-        message: confirmMessage,
-        variant: 'danger',
-        confirmText: t('common.next'),
-        secondConfirmation: {
-          title: t('auth_files.delete_many_second_title'),
-          message: t('auth_files.delete_many_second_confirm', {
-            count: fileNames.length,
-            scope: deleteScope,
-          }),
-          variant: 'danger',
-          confirmText: t('auth_files.delete_second_action'),
-        },
-        onConfirm: async () => {
-          if (
-            authFilesOperationGenerationRef.current !== confirmationGeneration ||
-            connectionFingerprintRef.current !== confirmationConnectionFingerprint
-          )
-            return;
-          const operationGeneration = authFilesOperationGenerationRef.current;
-          const operationToken = Symbol('auth-file-delete-all');
-          deleteAllOperationRef.current = operationToken;
-          setDeletingAll(true);
-          try {
-            if (deletesAllFiles) {
-              await authFilesApi.deleteAll(confirmationRequestScope);
-              if (authFilesOperationGenerationRef.current !== operationGeneration) return;
-              showNotification(t('auth_files.delete_all_success'), 'success');
-              notifySourceFilesChanged(fileNames);
-              commitFiles((prev) => prev.filter((file) => isRuntimeOnlyAuthFile(file)));
-              deselectAll();
-              return;
-            }
-
-            const result = await deleteVerifiedAuthFileSnapshots(
-              deleteSnapshots,
-              t('auth_files.delete_target_changed'),
-              t('notification.delete_failed'),
-              confirmationRequestScope
-            );
-            if (authFilesOperationGenerationRef.current !== operationGeneration) return;
-            const success = result.deleted;
-            const failed = result.failed.length;
-
-            applyDeletedFiles(result.files);
-
-            if (failed === 0 && isFilteredResult) {
-              showNotification(
-                t('auth_files.delete_filtered_result_success', { count: success }),
-                'success'
-              );
-            } else if (failed === 0 && isProblemOnly) {
-              showNotification(
-                isFiltered
-                  ? t('auth_files.delete_problem_filtered_success', {
-                      count: success,
-                      type: typeLabel,
-                    })
-                  : t('auth_files.delete_problem_success', { count: success }),
-                'success'
-              );
-            } else if (failed === 0) {
-              showNotification(
-                t('auth_files.delete_filtered_success', { count: success, type: typeLabel }),
-                'success'
-              );
-            } else if (isFilteredResult) {
-              showNotification(
-                t('auth_files.delete_filtered_result_partial', { success, failed }),
-                'warning'
-              );
-            } else if (isProblemOnly) {
-              showNotification(
-                isFiltered
-                  ? t('auth_files.delete_problem_filtered_partial', {
-                      success,
-                      failed,
-                      type: typeLabel,
-                    })
-                  : t('auth_files.delete_problem_partial', { success, failed }),
-                'warning'
-              );
-            } else {
-              showNotification(
-                t('auth_files.delete_filtered_partial', { success, failed, type: typeLabel }),
-                'warning'
-              );
-            }
-
-            if (isFiltered) {
-              onResetFilterToAll();
-            }
-            if (isProblemOnly) {
-              onResetProblemOnly();
-            }
-            if (isDisabledOnly) {
-              onResetDisabledOnly();
-            }
-            if (isHealthyOnly) {
-              onResetHealthyOnly();
-            }
-            if (usesProvidedFilteredFiles) {
-              onResetResultFilters?.();
-            }
-            deselectAll();
-          } catch (err: unknown) {
-            if (authFilesOperationGenerationRef.current !== operationGeneration) return;
-            const errorMessage = err instanceof Error ? err.message : '';
-            showNotification(`${t('notification.delete_failed')}: ${errorMessage}`, 'error');
-          } finally {
-            if (deleteAllOperationRef.current === operationToken) {
-              deleteAllOperationRef.current = null;
-              setDeletingAll(false);
-            }
-          }
-        },
-      });
-    },
-    [
-      applyDeletedFiles,
-      commitFiles,
-      connectionFingerprint,
-      deselectAll,
-      files,
-      notifySourceFilesChanged,
-      requestScope,
-      showConfirmation,
-      showNotification,
-      t,
-    ]
-  );
-
   const handleDownload = useCallback(
     async (name: string) => {
       try {
@@ -1675,169 +1426,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     [commitFiles, notifyCredentialSelectionChanged, requestScope, showNotification, t]
   );
 
-  const handleStatusToggle = useCallback(
-    async (item: AuthFileItem, enabled: boolean) => {
-      const generation = authFilesOperationGenerationRef.current;
-      const filesRevision = filesRevisionRef.current;
-      const name = item.name;
-      const requestedTarget = getAuthFilePatchTarget(item);
-      const operationKey = getAuthFileSelectionKey(item);
-      const nextDisabled = !enabled;
-      const lockedKeys = getAuthFileStatusMutationLockKeys(files, requestedTarget);
-      const displayKeys = new Set([operationKey]);
-      let affectedFiles: AuthFileItem[] = [];
-
-      if (
-        authFileStatusMutationLockSetsOverlap(
-          lockedKeys,
-          getPendingStatusMutationKeys(statusMutationPendingRef.current, generation)
-        )
-      ) {
-        return;
-      }
-      lockedKeys.forEach((key) => statusMutationPendingRef.current.set(key, generation));
-      setStatusUpdating((prev) => ({ ...prev, [operationKey]: true }));
-
-      try {
-        const response = requestScope
-          ? await authFilesApi.list(requestScope)
-          : await authFilesApi.list();
-        if (authFilesOperationGenerationRef.current !== generation) return;
-        const currentFiles = Array.isArray(response.files) ? response.files : [];
-        if (filesRevisionRef.current === filesRevision) commitFiles(currentFiles);
-        const resolution = resolveAuthFileStatusMutationTarget(currentFiles, requestedTarget);
-        const currentFile = resolution.target;
-        if (
-          !currentFile ||
-          resolution.failure === 'not-found' ||
-          resolution.failure === 'identity-changed'
-        ) {
-          showNotification(t('notification.update_failed'), 'error');
-          return;
-        }
-        if (resolution.failure === 'runtime-id-changed') {
-          showNotification(t('notification.update_failed'), 'error');
-          return;
-        }
-        if (
-          resolution.failure === 'ambiguous' ||
-          resolution.scope === 'ambiguous' ||
-          resolution.scope === 'expanded-child'
-        ) {
-          showNotification(t('auth_files.status_mutation_scope_ambiguous', { name }), 'warning');
-          return;
-        }
-
-        const currentTarget = getAuthFilePatchTarget(currentFile);
-        const refreshedLockKeys = getAuthFileStatusMutationLockKeys(currentFiles, currentTarget);
-        const foreignLocks = new Set(
-          [...getPendingStatusMutationKeys(statusMutationPendingRef.current, generation)].filter(
-            (key) => !lockedKeys.has(key)
-          )
-        );
-        if (authFileStatusMutationLockSetsOverlap(refreshedLockKeys, foreignLocks)) {
-          showNotification(t('notification.update_failed'), 'error');
-          return;
-        }
-        refreshedLockKeys.forEach((key) => {
-          lockedKeys.add(key);
-          statusMutationPendingRef.current.set(key, generation);
-        });
-
-        affectedFiles =
-          resolution.scope === 'source-file' ? resolution.affectedFiles : [currentFile];
-        affectedFiles.forEach((file) => {
-          displayKeys.add(getAuthFileSelectionKey(file));
-        });
-        setStatusUpdating((prev) => {
-          const next = { ...prev };
-          displayKeys.forEach((key) => {
-            next[key] = true;
-          });
-          return next;
-        });
-
-        const targetChangedError = t('auth_files.status_mutation_scope_ambiguous', {
-          name: currentFile.name,
-        });
-        const res = requestScope
-          ? await setAuthFileStatusWithVerifiedPluginFallback(
-              currentFiles,
-              currentTarget,
-              nextDisabled,
-              targetChangedError,
-              false,
-              requestScope
-            )
-          : await setAuthFileStatusWithVerifiedPluginFallback(
-              currentFiles,
-              currentTarget,
-              nextDisabled,
-              targetChangedError
-            );
-        if (authFilesOperationGenerationRef.current !== generation) return;
-        const sourceFileMutation =
-          resolution.scope === 'source-file' || res.mutationScope === 'source-file';
-        const confirmedAffectedFiles = sourceFileMutation
-          ? currentFiles.filter(
-              (file) => readAuthFileStatusPhysicalName(file) === currentFile.name.trim()
-            )
-          : affectedFiles;
-        commitFiles((prev) =>
-          applyConfirmedAuthFileStatusUpdate(prev, {
-            expectedFiles: confirmedAffectedFiles,
-            disabled: res.disabled,
-            sourceFile: sourceFileMutation,
-          })
-        );
-        if (sourceFileMutation) {
-          clearInspectionOwnershipForFile(currentFile.name);
-        } else {
-          clearInspectionOwnershipForIdentity(currentFile);
-        }
-        notifyCredentialSelectionChanged(
-          'status-changed',
-          confirmedAffectedFiles.map(getAuthFileSelectionKey)
-        );
-        showNotification(
-          enabled
-            ? t('auth_files.status_enabled_success', { name })
-            : t('auth_files.status_disabled_success', { name }),
-          'success'
-        );
-      } catch (err: unknown) {
-        if (authFilesOperationGenerationRef.current !== generation) return;
-        const errorMessage = err instanceof Error ? err.message : '';
-        showNotification(`${t('notification.update_failed')}: ${errorMessage}`, 'error');
-      } finally {
-        lockedKeys.forEach((key) => {
-          if (statusMutationPendingRef.current.get(key) === generation) {
-            statusMutationPendingRef.current.delete(key);
-          }
-        });
-        if (authFilesOperationGenerationRef.current === generation) {
-          setStatusUpdating((prev) => {
-            const next = { ...prev };
-            displayKeys.forEach((key) => {
-              delete next[key];
-            });
-            return next;
-          });
-        }
-      }
-    },
-    [
-      clearInspectionOwnershipForFile,
-      clearInspectionOwnershipForIdentity,
-      commitFiles,
-      files,
-      notifyCredentialSelectionChanged,
-      requestScope,
-      showNotification,
-      t,
-    ]
-  );
-
   const batchSetStatus = useCallback(
     async (targets: AuthFilePatchTarget[], enabled: boolean) => {
       const generation = authFilesOperationGenerationRef.current;
@@ -1859,18 +1447,9 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       ) {
         return;
       }
-      const displayKeys = new Set(normalizedTargets.map(getAuthFileStatusSelectionKey));
-
       batchStatusPendingRef.current = generation;
       lockedKeys.forEach((key) => statusMutationPendingRef.current.set(key, generation));
       setBatchStatusUpdating(true);
-      setStatusUpdating((prev) => {
-        const next = { ...prev };
-        displayKeys.forEach((key) => {
-          next[key] = true;
-        });
-        return next;
-      });
 
       try {
         const response = requestScope
@@ -1927,8 +1506,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
             lockedKeys.add(key);
             statusMutationPendingRef.current.set(key, generation);
           });
-          displayKeys.add(getAuthFileSelectionKey(file));
-
           const runtimeId = readAuthFileStatusRuntimeId(file);
           if (runtimeId && seenRuntimeIds.has(runtimeId)) return;
           if (runtimeId) seenRuntimeIds.add(runtimeId);
@@ -1973,18 +1550,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           });
         });
 
-        executableEntries.forEach((entry) => {
-          entry.affectedFiles.forEach((file) => {
-            displayKeys.add(getAuthFileSelectionKey(file));
-          });
-        });
-        setStatusUpdating((prev) => {
-          const next = { ...prev };
-          displayKeys.forEach((key) => {
-            next[key] = true;
-          });
-          return next;
-        });
         type StatusExecutionResult = Awaited<
           ReturnType<typeof authFilesApi.setStatusWithPluginSourceFallback>
         >;
@@ -2150,13 +1715,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
         });
         if (authFilesOperationGenerationRef.current === generation) {
           setBatchStatusUpdating(false);
-          setStatusUpdating((prev) => {
-            const next = { ...prev };
-            displayKeys.forEach((key) => {
-              delete next[key];
-            });
-            return next;
-          });
         }
       }
     },
@@ -2457,8 +2015,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     uploading,
     authJsonPasteSaving,
     deleting,
-    deletingAll,
-    statusUpdating,
     credentialRefreshing,
     batchStatusUpdating,
     batchFieldsUpdating,
@@ -2468,10 +2024,8 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     handleFileChange,
     savePastedAuthJson,
     handleDelete,
-    handleDeleteAll,
     handleDownload,
     handleCredentialRefresh,
-    handleStatusToggle,
     toggleSelect,
     selectAllVisible,
     invertVisibleSelection,
