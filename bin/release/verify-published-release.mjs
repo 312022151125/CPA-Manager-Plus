@@ -66,19 +66,27 @@ export const buildExpectedReleaseAssets = (assetsDir, tag) => {
   return assets;
 };
 
-const verifyReleaseIdentity = ({ release, tag, prerelease, body }) => {
+const verifyReleaseIdentity = ({ release, tag, prerelease, body, draft }) => {
   parseReleaseTag(tag);
   if (!release || typeof release !== 'object') fail('GitHub Release response must be an object');
   if (release.tag_name !== tag) {
     fail(`Existing GitHub Release tag mismatch: expected ${tag}, received ${release.tag_name}`);
   }
-  if (release.draft !== false) fail(`Existing GitHub Release ${tag} is still a draft`);
+  if (release.draft !== draft) {
+    fail(
+      `Existing GitHub Release ${tag} draft mismatch: expected ${draft}, received ${release.draft}`
+    );
+  }
   if (release.prerelease !== prerelease) {
     fail(
       `Existing GitHub Release prerelease mismatch: expected ${prerelease}, received ${release.prerelease}`
     );
   }
-  if (typeof release.published_at !== 'string' || release.published_at.trim() === '') {
+  if (draft) {
+    if (release.published_at !== null) {
+      fail(`Existing GitHub Release ${tag} draft has an unexpected published_at value`);
+    }
+  } else if (typeof release.published_at !== 'string' || release.published_at.trim() === '') {
     fail(`Existing GitHub Release ${tag} is not published`);
   }
   if (normalizeBody(release.body) !== normalizeBody(body)) {
@@ -111,15 +119,7 @@ const verifyUploadedAssetMetadata = (asset) => {
   }
 };
 
-export const verifyPublishedRelease = ({
-  release,
-  tag,
-  prerelease,
-  body,
-  assets,
-  allowMissingAssets = false,
-}) => {
-  verifyReleaseIdentity({ release, tag, prerelease, body });
+const verifyReleaseAssets = ({ release, tag, assets, allowMissingAssets }) => {
   const actualAssets = sortedPublishedAssets(release);
   const expectedByName = new Map(assets.map((asset) => [asset.name, asset]));
 
@@ -161,8 +161,37 @@ export const verifyPublishedRelease = ({
   };
 };
 
+export const verifyPublishedRelease = ({
+  release,
+  tag,
+  prerelease,
+  body,
+  assets,
+  allowMissingAssets = false,
+}) => {
+  verifyReleaseIdentity({ release, tag, prerelease, body, draft: false });
+  return verifyReleaseAssets({ release, tag, assets, allowMissingAssets });
+};
+
+export const verifyDraftRelease = ({
+  release,
+  tag,
+  prerelease,
+  body,
+  assets,
+  allowMissingAssets = false,
+}) => {
+  verifyReleaseIdentity({ release, tag, prerelease, body, draft: true });
+  return verifyReleaseAssets({
+    release,
+    tag,
+    assets,
+    allowMissingAssets,
+  });
+};
+
 export const verifyPublishedReleaseMetadata = ({ release, tag, prerelease, body }) => {
-  verifyReleaseIdentity({ release, tag, prerelease, body });
+  verifyReleaseIdentity({ release, tag, prerelease, body, draft: false });
   const actualAssets = sortedPublishedAssets(release);
   const expectedNames = expectedReleaseAssetNames(tag);
   if (actualAssets.length !== expectedNames.length) {
@@ -235,21 +264,32 @@ const runCli = () => {
   const releaseJsonPath = requiredOption(options, 'release-json');
   const prerelease = booleanOption(options, 'prerelease');
   const mode = options.mode || 'artifact';
-  if (mode !== 'artifact' && mode !== 'metadata') fail('--mode must be artifact or metadata');
+  if (mode !== 'artifact' && mode !== 'draft' && mode !== 'metadata') {
+    fail('--mode must be artifact, draft, or metadata');
+  }
 
   const release = JSON.parse(readFileSync(releaseJsonPath, 'utf8'));
   const body = readFileSync(bodyPath, 'utf8');
   const result =
     mode === 'metadata'
       ? verifyPublishedReleaseMetadata({ release, tag, prerelease, body })
-      : verifyPublishedRelease({
-          release,
-          tag,
-          prerelease,
-          body,
-          assets: buildExpectedReleaseAssets(requiredOption(options, 'assets-dir'), tag),
-          allowMissingAssets: booleanOption(options, 'allow-missing-assets'),
-        });
+      : mode === 'draft'
+        ? verifyDraftRelease({
+            release,
+            tag,
+            prerelease,
+            body,
+            assets: buildExpectedReleaseAssets(requiredOption(options, 'assets-dir'), tag),
+            allowMissingAssets: booleanOption(options, 'allow-missing-assets'),
+          })
+        : verifyPublishedRelease({
+            release,
+            tag,
+            prerelease,
+            body,
+            assets: buildExpectedReleaseAssets(requiredOption(options, 'assets-dir'), tag),
+            allowMissingAssets: booleanOption(options, 'allow-missing-assets'),
+          });
 
   if (options['result-path']) {
     writeFileSync(options['result-path'], `${JSON.stringify(result, null, 2)}\n`);

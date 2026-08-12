@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildExpectedReleaseAssets,
   expectedReleaseAssetNames,
+  verifyDraftRelease,
   verifyPublishedRelease,
   verifyPublishedReleaseMetadata,
 } from '../bin/release/verify-published-release.mjs';
@@ -46,6 +47,17 @@ const makePublishedRelease = ({ assets, overrides = {} }) => ({
   ...overrides,
 });
 
+const makeDraftRelease = ({ assets, overrides = {} }) => ({
+  tag_name: tag,
+  draft: true,
+  prerelease: true,
+  immutable: false,
+  published_at: null,
+  body: '# Release\n',
+  assets: assets.map(publishedAsset),
+  ...overrides,
+});
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -71,6 +83,58 @@ describe('published release verification', () => {
       missingAssets: [],
       complete: true,
       immutable: true,
+    });
+  });
+
+  it('accepts a complete draft Release before final publication', () => {
+    const assets = buildExpectedReleaseAssets(makeReleaseFixture(), tag);
+
+    expect(
+      verifyDraftRelease({
+        release: makeDraftRelease({ assets }),
+        tag,
+        prerelease: true,
+        body: '# Release\n',
+        assets,
+      })
+    ).toEqual({
+      expectedAssets: 8,
+      publishedAssets: 8,
+      missingAssets: [],
+      complete: true,
+      immutable: false,
+    });
+  });
+
+  it('allows a draft with matching missing assets to be completed', () => {
+    const assets = buildExpectedReleaseAssets(makeReleaseFixture(), tag);
+    const release = makeDraftRelease({ assets: assets.slice(1) });
+
+    expect(() =>
+      verifyDraftRelease({
+        release,
+        tag,
+        prerelease: true,
+        body: '# Release\n',
+        assets,
+      })
+    ).toThrow('asset count mismatch');
+
+    expect(
+      verifyDraftRelease({
+        release,
+        tag,
+        prerelease: true,
+        body: '# Release\n',
+        assets,
+        allowMissingAssets: true,
+      })
+    ).toMatchObject({
+      expectedAssets: 8,
+      publishedAssets: 7,
+      missingAssets: [{ name: assets[0].name, filePath: assets[0].filePath }],
+      complete: false,
+      immutable: false,
     });
   });
 
@@ -174,7 +238,7 @@ describe('published release verification', () => {
       makePublishedRelease({ assets, overrides: { body: '# Other' } }),
       'body differs'
     );
-    assertRejected(makePublishedRelease({ assets, overrides: { draft: true } }), 'still a draft');
+    assertRejected(makePublishedRelease({ assets, overrides: { draft: true } }), 'draft mismatch');
     assertRejected(
       makePublishedRelease({ assets, overrides: { prerelease: false } }),
       'prerelease mismatch'
@@ -183,6 +247,16 @@ describe('published release verification', () => {
       makePublishedRelease({ assets, overrides: { published_at: null } }),
       'is not published'
     );
+
+    expect(() =>
+      verifyDraftRelease({
+        release: makeDraftRelease({ assets, overrides: { published_at: '2026-08-12T00:00:00Z' } }),
+        tag,
+        prerelease: true,
+        body: '# Release',
+        assets,
+      })
+    ).toThrow('draft has an unexpected published_at value');
   });
 
   it('requires a complete healthy asset set for Telegram recovery', () => {

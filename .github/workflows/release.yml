@@ -170,9 +170,12 @@ jobs:
       - build_release_assets
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     outputs:
       publish: ${{ steps.release_state.outputs.publish }}
+      finalize: ${{ steps.release_state.outputs.finalize }}
+      release_id: ${{ steps.prepared_release.outputs.release_id }}
+      state: ${{ steps.release_state.outputs.state }}
       upload_files: ${{ steps.release_state.outputs.upload_files }}
     env:
       RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
@@ -204,6 +207,10 @@ jobs:
 
           if [ "${DRY_RUN}" = "true" ]; then
             echo "publish=false" >> "${GITHUB_OUTPUT}"
+            echo "finalize=false" >> "${GITHUB_OUTPUT}"
+            echo "release_id=" >> "${GITHUB_OUTPUT}"
+            echo "state=none" >> "${GITHUB_OUTPUT}"
+            echo "upload_files=" >> "${GITHUB_OUTPUT}"
             echo "Dry-run does not inspect or publish a GitHub Release." >> "${GITHUB_STEP_SUMMARY}"
             exit 0
           fi
@@ -234,10 +241,58 @@ jobs:
             --header "X-GitHub-Api-Version: 2022-11-28" \
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
 
+          if [ "${http_code}" = "404" ]; then
+            release_list_json="${RUNNER_TEMP}/release-list.json"
+            release_list_code="$(curl \
+              --silent \
+              --show-error \
+              --output "${release_list_json}" \
+              --write-out "%{http_code}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
+            case "${release_list_code}" in
+              200)
+                matching_release_count="$(jq --arg tag "${RELEASE_TAG}" \
+                  'map(select(.tag_name == $tag)) | length' \
+                  "${release_list_json}")"
+                if [ "${matching_release_count}" -gt 1 ]; then
+                  echo "GitHub Release list contains multiple entries for ${RELEASE_TAG}." >&2
+                  exit 1
+                fi
+                jq -c --arg tag "${RELEASE_TAG}" \
+                  'map(select(.tag_name == $tag)) | if length == 1 then .[0] else empty end' \
+                  "${release_list_json}" > "${release_json}"
+                if [ -s "${release_json}" ]; then
+                  http_code=200
+                fi
+                ;;
+              *)
+                echo "GitHub Release list lookup failed with HTTP ${release_list_code}." >&2
+                exit 1
+                ;;
+            esac
+          fi
+
           case "${http_code}" in
             200)
+              release_id="$(jq -r '.id' "${release_json}")"
+              if ! [[ "${release_id}" =~ ^[1-9][0-9]*$ ]]; then
+                echo "GitHub Release response has an invalid id: ${release_id}." >&2
+                exit 1
+              fi
+              echo "release_id=${release_id}" >> "${GITHUB_OUTPUT}"
+              is_draft="$(jq -r '.draft' "${release_json}")"
+              verification_mode=artifact
+              if [ "${is_draft}" = "true" ]; then
+                verification_mode=draft
+              elif [ "${is_draft}" != "false" ]; then
+                echo "GitHub Release response has an invalid draft value: ${is_draft}." >&2
+                exit 1
+              fi
               allow_missing=false
-              if [ "${RUN_ATTEMPT}" -gt 1 ]; then
+              if [ "${verification_mode}" = "draft" ] || [ "${RUN_ATTEMPT}" -gt 1 ]; then
                 allow_missing=true
               fi
               verification_json="${RUNNER_TEMP}/release-verification.json"
@@ -247,6 +302,7 @@ jobs:
                 --body-path dist/release/release-notes.md \
                 --release-json "${release_json}" \
                 --prerelease "${EXPECTED_PRERELEASE}" \
+                --mode "${verification_mode}" \
                 --allow-missing-assets "${allow_missing}" \
                 --result-path "${verification_json}"
               complete="$(node --input-type=module - "${verification_json}" <<'NODE'
@@ -256,9 +312,22 @@ jobs:
               process.stdout.write(String(result.complete));
               NODE
               )"
+              echo "state=${verification_mode}" >> "${GITHUB_OUTPUT}"
+              if [ "${verification_mode}" = "draft" ]; then
+                echo "finalize=true" >> "${GITHUB_OUTPUT}"
+              else
+                echo "finalize=false" >> "${GITHUB_OUTPUT}"
+              fi
               if [ "${complete}" = "true" ]; then
-                echo "publish=false" >> "${GITHUB_OUTPUT}"
-                echo "Existing GitHub Release matches the checked payload; upload skipped." >> "${GITHUB_STEP_SUMMARY}"
+                if [ "${verification_mode}" = "draft" ]; then
+                  echo "publish=true" >> "${GITHUB_OUTPUT}"
+                  echo "upload_files=" >> "${GITHUB_OUTPUT}"
+                  echo "A complete draft GitHub Release is ready for publication." >> "${GITHUB_STEP_SUMMARY}"
+                else
+                  echo "publish=false" >> "${GITHUB_OUTPUT}"
+                  echo "upload_files=" >> "${GITHUB_OUTPUT}"
+                  echo "Existing GitHub Release matches the checked payload; upload skipped." >> "${GITHUB_STEP_SUMMARY}"
+                fi
               else
                 missing_upload_files="$(node --input-type=module - "${verification_json}" <<'NODE'
                 import { readFileSync } from 'node:fs';
@@ -269,11 +338,18 @@ jobs:
                 )"
                 echo "publish=true" >> "${GITHUB_OUTPUT}"
                 write_upload_files "${missing_upload_files}"
-                echo "Existing matching assets will be preserved; only missing assets will be uploaded." >> "${GITHUB_STEP_SUMMARY}"
+                if [ "${verification_mode}" = "draft" ]; then
+                  echo "Existing draft assets will be preserved; only missing assets will be uploaded before publication." >> "${GITHUB_STEP_SUMMARY}"
+                else
+                  echo "Existing matching assets will be preserved; only missing assets will be uploaded." >> "${GITHUB_STEP_SUMMARY}"
+                fi
               fi
               ;;
             404)
               echo "publish=true" >> "${GITHUB_OUTPUT}"
+              echo "finalize=true" >> "${GITHUB_OUTPUT}"
+              echo "release_id=" >> "${GITHUB_OUTPUT}"
+              echo "state=missing" >> "${GITHUB_OUTPUT}"
               write_upload_files "${all_upload_files}"
               ;;
             *)
@@ -281,6 +357,130 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Create or update draft GitHub Release
+        id: draft_release
+        if: env.DRY_RUN != 'true' && steps.release_state.outputs.finalize == 'true' && steps.release_state.outputs.upload_files != ''
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ needs.preflight.outputs.release_tag }}
+          files: ${{ steps.release_state.outputs.upload_files }}
+          body_path: dist/release/release-notes.md
+          draft: true
+          prerelease: ${{ needs.preflight.outputs.prerelease == 'true' }}
+          overwrite_files: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload missing assets to existing mutable Release
+        id: published_release
+        if: env.DRY_RUN != 'true' && steps.release_state.outputs.state == 'artifact' && steps.release_state.outputs.upload_files != ''
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ needs.preflight.outputs.release_tag }}
+          files: ${{ steps.release_state.outputs.upload_files }}
+          body_path: dist/release/release-notes.md
+          draft: false
+          prerelease: ${{ needs.preflight.outputs.prerelease == 'true' }}
+          overwrite_files: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve prepared GitHub Release id
+        id: prepared_release
+        if: env.DRY_RUN != 'true'
+        shell: bash
+        env:
+          DRAFT_RELEASE_ID: ${{ steps.draft_release.outputs.id }}
+          EXISTING_RELEASE_ID: ${{ steps.release_state.outputs.release_id }}
+          PUBLISHED_RELEASE_ID: ${{ steps.published_release.outputs.id }}
+        run: |
+          set -euo pipefail
+          release_id=""
+          for candidate in "${EXISTING_RELEASE_ID}" "${DRAFT_RELEASE_ID}" "${PUBLISHED_RELEASE_ID}"; do
+            if [ -z "${candidate}" ]; then
+              continue
+            fi
+            if ! [[ "${candidate}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "GitHub Release action returned an invalid id: ${candidate}." >&2
+              exit 1
+            fi
+            if [ -n "${release_id}" ] && [ "${release_id}" != "${candidate}" ]; then
+              echo "GitHub Release id changed during preparation: ${release_id} -> ${candidate}." >&2
+              exit 1
+            fi
+            release_id="${candidate}"
+          done
+          if [ -z "${release_id}" ]; then
+            echo "Prepared GitHub Release id is missing." >&2
+            exit 1
+          fi
+          echo "release_id=${release_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify prepared draft Release
+        if: env.DRY_RUN != 'true' && steps.release_state.outputs.finalize == 'true'
+        shell: bash
+        env:
+          EXPECTED_PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.prepared_release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          release_json="${RUNNER_TEMP}/prepared-draft-release.json"
+          http_code="$(curl \
+            --silent \
+            --show-error \
+            --output "${release_json}" \
+            --write-out "%{http_code}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          if [ "${http_code}" != "200" ]; then
+            echo "GitHub Release lookup after draft upload failed with HTTP ${http_code} for id ${RELEASE_ID}." >&2
+            exit 1
+          fi
+          node bin/release/verify-published-release.mjs \
+            --tag "${RELEASE_TAG}" \
+            --assets-dir dist/release \
+            --body-path dist/release/release-notes.md \
+            --release-json "${release_json}" \
+            --prerelease "${EXPECTED_PRERELEASE}" \
+            --mode draft \
+            --allow-missing-assets false
+
+      - name: Verify completed mutable Release upload
+        if: env.DRY_RUN != 'true' && steps.release_state.outputs.state == 'artifact' && steps.release_state.outputs.upload_files != ''
+        shell: bash
+        env:
+          EXPECTED_PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.prepared_release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          release_json="${RUNNER_TEMP}/prepared-published-release.json"
+          http_code="$(curl \
+            --silent \
+            --show-error \
+            --output "${release_json}" \
+            --write-out "%{http_code}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          if [ "${http_code}" != "200" ]; then
+            echo "GitHub Release lookup after asset upload failed with HTTP ${http_code} for id ${RELEASE_ID}." >&2
+            exit 1
+          fi
+          node bin/release/verify-published-release.mjs \
+            --tag "${RELEASE_TAG}" \
+            --assets-dir dist/release \
+            --body-path dist/release/release-notes.md \
+            --release-json "${release_json}" \
+            --prerelease "${EXPECTED_PRERELEASE}" \
+            --allow-missing-assets false
 
   build_and_push_docker:
     name: Build and publish Docker images
@@ -434,19 +634,103 @@ jobs:
         if: needs.inspect_github_release.outputs.publish != 'true'
         run: echo "Existing GitHub Release already matches the checked payload." >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Create Release
-        if: needs.inspect_github_release.outputs.publish == 'true'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.preflight.outputs.release_tag }}
-          files: ${{ needs.inspect_github_release.outputs.upload_files }}
-          body_path: dist/release/release-notes.md
-          draft: false
-          prerelease: ${{ needs.preflight.outputs.prerelease == 'true' }}
-          overwrite_files: false
-          fail_on_unmatched_files: true
+      - name: Publish verified draft GitHub Release
+        if: needs.inspect_github_release.outputs.publish == 'true' && needs.inspect_github_release.outputs.finalize == 'true'
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+          RELEASE_ID: ${{ needs.inspect_github_release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          release_json="${RUNNER_TEMP}/draft-release.json"
+          http_code="$(curl \
+            --silent \
+            --show-error \
+            --output "${release_json}" \
+            --write-out "%{http_code}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          if [ "${http_code}" != "200" ]; then
+            echo "Draft GitHub Release lookup failed with HTTP ${http_code} for id ${RELEASE_ID}." >&2
+            exit 1
+          fi
+
+          node bin/release/verify-published-release.mjs \
+            --tag "${RELEASE_TAG}" \
+            --assets-dir dist/release \
+            --body-path dist/release/release-notes.md \
+            --release-json "${release_json}" \
+            --prerelease "${EXPECTED_PRERELEASE}" \
+            --mode draft \
+            --allow-missing-assets false
+
+          release_id="$(jq -r '.id' "${release_json}")"
+          if [ "${release_id}" != "${RELEASE_ID}" ]; then
+            echo "Draft GitHub Release id changed during publication: ${RELEASE_ID} -> ${release_id}." >&2
+            exit 1
+          fi
+          publish_payload="$(jq -cn --argjson prerelease "${EXPECTED_PRERELEASE}" '{draft: false, prerelease: $prerelease}')"
+          publish_json="${RUNNER_TEMP}/published-release.json"
+          publish_code="$(curl \
+            --silent \
+            --show-error \
+            --output "${publish_json}" \
+            --write-out "%{http_code}" \
+            --request PATCH \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --header "Content-Type: application/json" \
+            --data "${publish_payload}" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
+          if [ "${publish_code}" != "200" ]; then
+            echo "Publishing the verified draft GitHub Release failed with HTTP ${publish_code}." >&2
+            exit 1
+          fi
+
+          node bin/release/verify-published-release.mjs \
+            --tag "${RELEASE_TAG}" \
+            --assets-dir dist/release \
+            --body-path dist/release/release-notes.md \
+            --release-json "${publish_json}" \
+            --prerelease "${EXPECTED_PRERELEASE}" \
+            --allow-missing-assets false
+
+          echo "Verified draft GitHub Release published after all assets were uploaded." >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Verify existing published GitHub Release
+        if: needs.inspect_github_release.outputs.publish == 'true' && needs.inspect_github_release.outputs.finalize != 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+          RELEASE_ID: ${{ needs.inspect_github_release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          release_json="${RUNNER_TEMP}/published-release.json"
+          http_code="$(curl \
+            --silent \
+            --show-error \
+            --output "${release_json}" \
+            --write-out "%{http_code}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          if [ "${http_code}" != "200" ]; then
+            echo "Published GitHub Release lookup failed with HTTP ${http_code} for id ${RELEASE_ID}." >&2
+            exit 1
+          fi
+          node bin/release/verify-published-release.mjs \
+            --tag "${RELEASE_TAG}" \
+            --assets-dir dist/release \
+            --body-path dist/release/release-notes.md \
+            --release-json "${release_json}" \
+            --prerelease "${EXPECTED_PRERELEASE}" \
+            --allow-missing-assets false
 
   notify_telegram:
     name: Notify Telegram

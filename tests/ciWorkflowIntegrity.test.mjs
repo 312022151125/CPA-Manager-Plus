@@ -168,13 +168,47 @@ describe('GitHub Actions workflow integrity', () => {
     expect(inspectJob).toContain('bin/release/verify-published-release.mjs');
     expect(inspectJob).toContain('--allow-missing-assets "${allow_missing}"');
     expect(inspectJob).toContain('only missing assets will be uploaded');
+    expect(inspectJob).toContain('matching_release_count');
+    expect(inspectJob).toContain('multiple entries for ${RELEASE_TAG}');
     expect(dockerJob).toContain('- inspect_github_release');
     expect(publishJob).toContain('- inspect_github_release');
     expect(publishJob).toContain("if: needs.inspect_github_release.outputs.publish == 'true'");
     expect(workflow.indexOf('  inspect_github_release:')).toBeLessThan(
       workflow.indexOf('  build_and_push_docker:')
     );
-    expect(publishJob).toContain('overwrite_files: false');
+    expect(inspectJob).toContain('overwrite_files: false');
+  });
+
+  it('uploads every new Release as a draft and publishes only after verification', () => {
+    const workflow = readWorkflow('release.yml');
+    const inspectJob = jobBlock(workflow, 'inspect_github_release');
+    const publishJob = jobBlock(workflow, 'publish_github_release');
+
+    expect(inspectJob).toContain('contents: write');
+    expect(inspectJob).toContain('verification_mode=draft');
+    expect(inspectJob).toContain('draft: true');
+    expect(inspectJob).toContain('Resolve prepared GitHub Release id');
+    expect(inspectJob).toContain('release_id: ${{ steps.prepared_release.outputs.release_id }}');
+    expect(inspectJob).toContain('Verify prepared draft Release');
+    expect(inspectJob).toContain('/releases/${RELEASE_ID}');
+    expect(publishJob).toContain('Publish verified draft GitHub Release');
+    expect(publishJob).toContain(
+      "if: needs.inspect_github_release.outputs.publish == 'true' && needs.inspect_github_release.outputs.finalize == 'true'"
+    );
+    expect(publishJob).toContain('--request PATCH');
+    expect(publishJob).toContain(
+      'RELEASE_ID: ${{ needs.inspect_github_release.outputs.release_id }}'
+    );
+    expect(publishJob).toContain(
+      '"${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"'
+    );
+    expect(publishJob).not.toContain('/releases/tags/${RELEASE_TAG}');
+    expect(publishJob).toContain('draft: false');
+    expect(publishJob).toContain(
+      'Verified draft GitHub Release published after all assets were uploaded.'
+    );
+    expect(inspectJob).toContain('echo "state=${verification_mode}"');
+    expect(inspectJob).toContain('echo "state=missing"');
   });
 
   it('prevents automatic Telegram delivery on workflow reruns', () => {
