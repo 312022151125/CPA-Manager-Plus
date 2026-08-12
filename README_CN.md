@@ -164,18 +164,18 @@ docker run -d \
 
 ## 文档
 
-| 任务                                  | 文档                                                                                                                                                                                  |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 选择面板和部署模式                    | [如何选择 CPA 面板](https://seakee.github.io/CPA-Manager-Plus/docs/guide/choosing-a-panel.html)                                                                                       |
-| 不部署额外服务，直接替换官方 UI       | [CPAMP 轻量面板](https://seakee.github.io/CPA-Manager-Plus/docs/deployment/cpa-panel.html)                                                                                            |
-| 安装并完成首次配置                    | [快速开始](https://seakee.github.io/CPA-Manager-Plus/docs/guide/getting-started.html)                                                                                                 |
-| 查看功能、Provider 和模式边界         | [能力矩阵](https://seakee.github.io/CPA-Manager-Plus/docs/reference/capability-matrix.html)                                                                                           |
-| 了解运行端口、密钥和请求流向          | [运行模型](https://seakee.github.io/CPA-Manager-Plus/docs/guide/runtime-model.html)                                                                                                   |
-| 配置 Provider、认证文件、配额和插件   | [面板手册](https://seakee.github.io/CPA-Manager-Plus/docs/manual/ai-providers.html)                                                                                                   |
-| 运维 Manager Server、备份、升级与迁移 | [Manager Server 指南](https://seakee.github.io/CPA-Manager-Plus/docs/operations/manager-server.html)                                                                                  |
-| 备份数据或恢复丢失的管理员密钥        | [备份与恢复](https://seakee.github.io/CPA-Manager-Plus/docs/operations/backup.html)、[重置管理员密钥](https://seakee.github.io/CPA-Manager-Plus/docs/operations/reset-admin-key.html) |
-| 从旧版 CPA-Manager 迁移               | [CPA-Manager 迁移指南](https://seakee.github.io/CPA-Manager-Plus/docs/migration/from-cpa-manager.html)                                                                                |
-| 排查监控为空或队列问题                | [请求监控排障](https://seakee.github.io/CPA-Manager-Plus/docs/troubleshooting/request-monitoring.html)                                                                                |
+| 任务                                  | 文档                                                                                                                                                                                                                                                    |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 选择面板和部署模式                    | [如何选择 CPA 面板](https://seakee.github.io/CPA-Manager-Plus/docs/guide/choosing-a-panel.html)                                                                                                                                                         |
+| 不部署额外服务，直接替换官方 UI       | [CPAMP 轻量面板](https://seakee.github.io/CPA-Manager-Plus/docs/deployment/cpa-panel.html)                                                                                                                                                              |
+| 安装并完成首次配置                    | [快速开始](https://seakee.github.io/CPA-Manager-Plus/docs/guide/getting-started.html)                                                                                                                                                                   |
+| 查看功能、Provider 和模式边界         | [能力矩阵](https://seakee.github.io/CPA-Manager-Plus/docs/reference/capability-matrix.html)                                                                                                                                                             |
+| 了解运行端口、密钥和请求流向          | [运行模型](https://seakee.github.io/CPA-Manager-Plus/docs/guide/runtime-model.html)                                                                                                                                                                     |
+| 配置 Provider、凭证、配额和插件       | [AI Provider](https://seakee.github.io/CPA-Manager-Plus/docs/manual/ai-providers.html)、[凭证管理](https://seakee.github.io/CPA-Manager-Plus/docs/manual/accounts.html)、[插件管理](https://seakee.github.io/CPA-Manager-Plus/docs/manual/plugins.html) |
+| 运维 Manager Server、备份、升级与迁移 | [Manager Server 指南](https://seakee.github.io/CPA-Manager-Plus/docs/operations/manager-server.html)                                                                                                                                                    |
+| 备份数据或恢复丢失的管理员密钥        | [备份与恢复](https://seakee.github.io/CPA-Manager-Plus/docs/operations/backup.html)、[重置管理员密钥](https://seakee.github.io/CPA-Manager-Plus/docs/operations/reset-admin-key.html)                                                                   |
+| 从旧版 CPA-Manager 迁移               | [CPA-Manager 迁移指南](https://seakee.github.io/CPA-Manager-Plus/docs/migration/from-cpa-manager.html)                                                                                                                                                  |
+| 排查监控为空或队列问题                | [请求监控排障](https://seakee.github.io/CPA-Manager-Plus/docs/troubleshooting/request-monitoring.html)                                                                                                                                                  |
 
 ## 数据、隐私与安全
 
