@@ -140,6 +140,41 @@ func TestCatchUpDashboardHourlyPreservesDimensionStrings(t *testing.T) {
 	}
 }
 
+func TestCatchUpDashboardHourlyUsesAnalyticsModel(t *testing.T) {
+	db := newRollupTestDB(t)
+	ctx := context.Background()
+	events := usageevent.New(db)
+	repo := New(db)
+	baseMS := int64(1_700_000_000_000)
+	hourMS := baseMS - baseMS%dashboardHourMS
+	low := rollupTestEvent("dashboard-canonical-low", hourMS+1_000, "deepseek-v4-flash(low)", "resolved-model", "", "", "auth-a", false, 1, 2, 0, 0, 0, 0, 3)
+	max := rollupTestEvent("dashboard-canonical-max", hourMS+2_000, "deepseek-v4-flash(max)", "resolved-model", "", "", "auth-a", false, 4, 5, 0, 0, 0, 0, 9)
+	unknown := rollupTestEvent("dashboard-canonical-unknown", hourMS+3_000, "deepseek-v4-flash(region-us)", "resolved-model", "", "", "auth-a", false, 6, 7, 0, 0, 0, 0, 13)
+	if _, err := events.InsertBatch(ctx, []usage.Event{low, max, unknown}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	if _, err := repo.CatchUpDashboardHourly(ctx, 10, baseMS+10_000); err != nil {
+		t.Fatalf("catch up: %v", err)
+	}
+	rows, err := repo.DashboardHourlyRows(ctx, hourMS, hourMS+dashboardHourMS)
+	if err != nil {
+		t.Fatalf("query rows: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %#v, want canonical and unknown rows", rows)
+	}
+	byModel := make(map[string]DashboardHourlyRow, len(rows))
+	for _, row := range rows {
+		byModel[row.Model] = row
+	}
+	if byModel["deepseek-v4-flash"].Calls != 2 || byModel["deepseek-v4-flash"].TotalTokens != 12 {
+		t.Fatalf("canonical row = %#v", byModel["deepseek-v4-flash"])
+	}
+	if byModel["deepseek-v4-flash(region-us)"].Calls != 1 {
+		t.Fatalf("unknown row = %#v", byModel["deepseek-v4-flash(region-us)"])
+	}
+}
+
 func TestCatchUpDashboardHourlyFailureDoesNotAdvanceCheckpoint(t *testing.T) {
 	db := newRollupTestDB(t)
 	ctx := context.Background()

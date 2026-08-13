@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
+	usageaggregaterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageaggregate"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usagemonitoring"
 )
 
@@ -80,6 +81,7 @@ func TestUsageCacheAccountingMigratesInBatchesExcludesNewRowsAndInvalidatesAtCom
 	assertCount(t, db, "usage_account_model_rollups", 1)
 	assertCount(t, db, "usage_hourly_aggregate_v1", 1)
 	assertPermanentAggregateState(t, db, "backfilling", 1, 1, 3)
+	assertIdentityAggregateVersion(t, db, "legacy-anthropic", usageaggregaterepo.SchemaVersion)
 	assertCount(t, db, "usage_pricing_hourly_rollups_v1", 1)
 	assertCount(t, db, "usage_pricing_account_rollups_v1", 1)
 	assertPricingAggregateState(t, db, "backfilling", 1, 1, 3)
@@ -521,9 +523,9 @@ func insertPermanentAggregateFixture(t *testing.T, db *sql.DB, eventHash string)
 			query: `insert into usage_event_identity_ledger (
 				event_hash, raw_event_id, timestamp_ms, bucket_ms, aggregate_schema_version,
 				first_seen_at_ms, updated_at_ms
-			) select event_hash, id, timestamp_ms, 0, 1, created_at_ms, 1
+			) select event_hash, id, timestamp_ms, 0, ?, created_at_ms, 1
 			from usage_events where event_hash = ?`,
-			args: []any{eventHash},
+			args: []any{usageaggregaterepo.SchemaVersion, eventHash},
 		},
 		{
 			query: `update usage_hourly_aggregate_state set
@@ -536,8 +538,13 @@ func insertPermanentAggregateFixture(t *testing.T, db *sql.DB, eventHash string)
 				max_bucket_ms = 0,
 				updated_at_ms = 1,
 				finished_at_ms = null
-			where aggregate_name = 'hourly_core' and schema_version = 1`,
-			args: []any{eventHash, eventHash},
+			where aggregate_name = ? and schema_version = ?`,
+			args: []any{
+				eventHash,
+				eventHash,
+				usageaggregaterepo.AggregateName,
+				usageaggregaterepo.SchemaVersion,
+			},
 		},
 	}
 	for _, statement := range statements {
@@ -664,10 +671,12 @@ func assertCheckpoint(t *testing.T, db *sql.DB, name string, want int64) {
 
 func assertPermanentAggregateState(t *testing.T, db *sql.DB, wantStatus string, wantCheckpoint, wantCoverage, wantTarget int64) {
 	t.Helper()
+	var schemaVersion int
 	var status string
 	var checkpoint, coverage, target int64
-	if err := db.QueryRow(`select status, backfill_last_event_id, coverage_event_id, target_event_id
+	if err := db.QueryRow(`select schema_version, status, backfill_last_event_id, coverage_event_id, target_event_id
 		from usage_hourly_aggregate_state where aggregate_name = 'hourly_core'`).Scan(
+		&schemaVersion,
 		&status,
 		&checkpoint,
 		&coverage,
@@ -675,13 +684,15 @@ func assertPermanentAggregateState(t *testing.T, db *sql.DB, wantStatus string, 
 	); err != nil {
 		t.Fatalf("read permanent aggregate state: %v", err)
 	}
-	if status != wantStatus || checkpoint != wantCheckpoint || coverage != wantCoverage || target != wantTarget {
+	if schemaVersion != usageaggregaterepo.SchemaVersion || status != wantStatus || checkpoint != wantCheckpoint || coverage != wantCoverage || target != wantTarget {
 		t.Fatalf(
-			"permanent aggregate state = status:%q checkpoint:%d coverage:%d target:%d, want status:%q checkpoint:%d coverage:%d target:%d",
+			"permanent aggregate state = schema:%d status:%q checkpoint:%d coverage:%d target:%d, want schema:%d status:%q checkpoint:%d coverage:%d target:%d",
+			schemaVersion,
 			status,
 			checkpoint,
 			coverage,
 			target,
+			usageaggregaterepo.SchemaVersion,
 			wantStatus,
 			wantCheckpoint,
 			wantCoverage,

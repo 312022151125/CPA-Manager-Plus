@@ -13,6 +13,7 @@ import type { MonitoringAccountQuotaTarget } from '@/features/monitoring/account
 import type {
   MonitoringAccountRow,
   MonitoringApiKeyRow,
+  MonitoringEventRow,
 } from '@/features/monitoring/hooks/useMonitoringData';
 import {
   buildAccountOptions,
@@ -22,6 +23,7 @@ import {
   buildMonitoringInitialStateFromQuery,
   buildModelOptionsFromValues,
   buildProviderOptionsFromValues,
+  buildSyncPriceModels,
   mergeObservedAccountQuotaEntry,
   mergeObservedAccountQuotaState,
   requestAccountQuota,
@@ -80,6 +82,24 @@ const t = ((key: string, options?: Record<string, unknown>) => {
   });
   return value;
 }) as TFunction;
+
+describe('monitoringCenterPageModel price sync', () => {
+  it('syncs canonical and resolved identities while preserving saved suffix prices', () => {
+    const rows = [
+      {
+        model: 'deepseek-v4-flash',
+        requestedModel: 'deepseek-v4-flash(max)',
+        resolvedModel: 'resolved-deepseek-v4-flash',
+      },
+    ] as MonitoringEventRow[];
+
+    expect(
+      buildSyncPriceModels(rows, {
+        'deepseek-v4-flash(low)': { prompt: 1, completion: 2, cache: 0.5 },
+      })
+    ).toEqual(['deepseek-v4-flash', 'deepseek-v4-flash(low)', 'resolved-deepseek-v4-flash']);
+  });
+});
 
 const createTarget = (
   overrides: Partial<MonitoringAccountQuotaTarget>

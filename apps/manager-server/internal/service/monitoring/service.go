@@ -766,6 +766,8 @@ type EventRow struct {
 	EventHash              string                        `json:"event_hash"`
 	TimestampMS            int64                         `json:"timestamp_ms"`
 	Model                  string                        `json:"model"`
+	AnalyticsModel         string                        `json:"analytics_model,omitempty"`
+	RequestedModel         string                        `json:"requested_model,omitempty"`
 	ResolvedModel          string                        `json:"resolved_model,omitempty"`
 	Endpoint               string                        `json:"endpoint"`
 	Method                 string                        `json:"method"`
@@ -3364,6 +3366,8 @@ func buildEvents(page store.EventsPage, totalCount int64) *EventsResponse {
 			EventHash:              item.EventHash,
 			TimestampMS:            item.TimestampMS,
 			Model:                  item.Model,
+			AnalyticsModel:         item.AnalyticsModel,
+			RequestedModel:         item.RequestedModel,
 			ResolvedModel:          item.ResolvedModel,
 			Endpoint:               item.Endpoint,
 			Method:                 item.Method,
@@ -3696,7 +3700,7 @@ func normalizeAccountWindowModelScope(scope AccountWindowModelScope) AccountWind
 }
 
 func normalizeQuotaModelName(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
+	return strings.ToLower(usageidentity.AnalyticsModel(strings.TrimSpace(value)))
 }
 
 func classifyQuotaModelFamily(modelName string) string {

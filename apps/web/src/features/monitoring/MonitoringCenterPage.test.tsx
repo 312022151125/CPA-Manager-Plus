@@ -377,6 +377,26 @@ describe('MonitoringCenterPage account card', () => {
     expect(display.meta).toBe('Provider: openai');
   });
 
+  it('keeps the provider metadata line when it matches the realtime primary label', () => {
+    const display = buildRealtimeSourceDisplay(
+      {
+        account: 'Edge Experiments',
+        accountMasked: 'Edge Experiments',
+        authLabel: 'DeepSeek Ops',
+        channel: 'deepseek',
+        channelHost: '-',
+        provider: 'deepseek',
+        source: 'Edge Experiments',
+        sourceMasked: 'Edge Experiments',
+      },
+      t
+    );
+
+    expect(display.primary).toBe('deepseek');
+    expect(display.meta).toBe('Provider: deepseek');
+    expect(display.meta).not.toContain('Edge Experiments');
+  });
+
   it('shows one realtime source meta value by priority', () => {
     const baseRow = {
       account: 'alice@example.com',

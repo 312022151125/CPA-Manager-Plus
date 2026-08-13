@@ -1099,10 +1099,11 @@ export function RealtimeEventsPanel({
             {pagination.pageItems.map((row) => {
               const sourceDisplay = buildRealtimeSourceDisplay(row, t, accountDisplayMode);
               const apiKeyDisplay = buildRealtimeApiKeyDisplay(row, t);
-              const showResolvedModel =
-                row.resolvedModel &&
-                row.resolvedModel.trim() &&
-                row.resolvedModel.trim() !== row.model;
+              const requestedModel = row.requestedModel?.trim() || row.model;
+              const resolvedModel = row.resolvedModel?.trim() || '';
+              const showResolvedModel = Boolean(
+                resolvedModel && resolvedModel !== requestedModel
+              );
               const reasoningEffort = formatOptionalText(row.reasoningEffort);
               const serviceTier = formatOptionalText(row.serviceTier);
               const requestServiceTier = formatOptionalText(row.requestServiceTier);
@@ -1150,16 +1151,16 @@ export function RealtimeEventsPanel({
                   <td>
                     <div
                       className={`${styles.primaryCell} ${styles.realtimeModelCell}`}
-                      title={[row.model, showResolvedModel ? row.resolvedModel : '']
+                      title={[requestedModel, showResolvedModel ? resolvedModel : '']
                         .filter(Boolean)
                         .join('\n')}
                     >
                       <span className={`${styles.monoCell} ${styles.realtimeModelText}`}>
-                        {row.model}
+                        {requestedModel}
                       </span>
                       {showResolvedModel ? (
                         <small className={`${styles.monoCell} ${styles.realtimeModelText}`}>
-                          {row.resolvedModel}
+                          {resolvedModel}
                         </small>
                       ) : null}
                     </div>

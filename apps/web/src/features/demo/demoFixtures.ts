@@ -1533,8 +1533,16 @@ const buildMonitoringAnalytics = (
   baseNow = now(),
   request?: MonitoringAnalyticsRequest
 ): MonitoringAnalyticsResponse => {
-  const dashboard = dashboardBase(baseNow);
-  const analyticsNow = dashboard.generated_at_ms;
+  const requestNow =
+    typeof request?.now_ms === 'number' && Number.isFinite(request.now_ms) && request.now_ms > 0
+      ? request.now_ms
+      : baseNow;
+  const rangeEnd =
+    typeof request?.to_ms === 'number' && Number.isFinite(request.to_ms) && request.to_ms > 0
+      ? request.to_ms
+      : requestNow;
+  const analyticsNow = Math.min(requestNow, rangeEnd);
+  const dashboard = dashboardBase(requestNow);
   const timeline = Array.from({ length: 14 }, (_, index) => {
     const bucket = analyticsNow - (13 - index) * day;
     const calls = 1180 + ((index * 137) % 620);
@@ -3897,7 +3905,108 @@ const buildMonitoringAnalytics = (
       },
     },
   };
+  const reasoningSuffixEvents: DemoMonitoringEventRow[] = [
+    {
+      request_id: 'demo-deepseek-reasoning-max',
+      event_hash: 'demo-event-deepseek-reasoning-max',
+      timestamp_ms: analyticsNow - minute / 2,
+      model: 'deepseek-chat(max)',
+      analytics_model: 'deepseek-chat',
+      requested_model: 'deepseek-chat(max)',
+      resolved_model: 'deepseek-chat-202608',
+      endpoint: '/v1/chat/completions',
+      method: 'POST',
+      path: '/v1/chat/completions',
+      auth_index: 'deepseek-ops-01',
+      auth_file_snapshot: 'deepseek-ops-01.json',
+      source: 'ops',
+      source_hash: 'src_deepseek_ops',
+      api_key_hash: 'hash_deepseek_ops',
+      account_snapshot: 'Edge Experiments',
+      auth_label_snapshot: 'DeepSeek Ops',
+      auth_provider_snapshot: 'deepseek',
+      reasoning_effort: 'max',
+      service_tier: 'standard',
+      executor_type: 'ops',
+      input_tokens: 1_860,
+      output_tokens: 624,
+      cached_tokens: 0,
+      cache_read_tokens: 420,
+      cache_creation_tokens: 80,
+      reasoning_tokens: 512,
+      total_tokens: 2_996,
+      latency_ms: 1_486,
+      ttft_ms: 264,
+      failed: false,
+    },
+    {
+      request_id: 'demo-deepseek-reasoning-low',
+      event_hash: 'demo-event-deepseek-reasoning-low',
+      timestamp_ms: analyticsNow - minute - minute / 2,
+      model: 'deepseek-chat(low)',
+      analytics_model: 'deepseek-chat',
+      requested_model: 'deepseek-chat(low)',
+      resolved_model: 'deepseek-chat-202608',
+      endpoint: '/v1/chat/completions',
+      method: 'POST',
+      path: '/v1/chat/completions',
+      auth_index: 'kuai-auth-1',
+      auth_file_snapshot: 'kuai-auth-1.json',
+      source: 'k:sk-kuai-demo-key-1111aaaa',
+      source_hash: 'src_kuai_key_1',
+      api_key_hash: 'hash_kuai_key_1',
+      account_snapshot: 'kuaileshifu',
+      auth_label_snapshot: 'kuaileshifu',
+      auth_provider_snapshot: 'openai',
+      reasoning_effort: 'low',
+      service_tier: 'standard',
+      executor_type: 'compat',
+      input_tokens: 1_240,
+      output_tokens: 438,
+      cached_tokens: 0,
+      cache_read_tokens: 240,
+      cache_creation_tokens: 60,
+      reasoning_tokens: 128,
+      total_tokens: 1_806,
+      latency_ms: 1_032,
+      ttft_ms: 198,
+      failed: false,
+    },
+    {
+      request_id: 'demo-deepseek-region-alias',
+      event_hash: 'demo-event-deepseek-region-alias',
+      timestamp_ms: analyticsNow - 2 * minute - minute / 2,
+      model: 'deepseek-chat(region-us)',
+      analytics_model: 'deepseek-chat(region-us)',
+      requested_model: 'deepseek-chat(region-us)',
+      resolved_model: 'deepseek-chat(region-us)',
+      endpoint: '/v1/chat/completions',
+      method: 'POST',
+      path: '/v1/chat/completions',
+      auth_index: 'anyrouter-auth-1',
+      auth_file_snapshot: 'anyrouter-auth-1.json',
+      source: 'k:sk-anyrouter-demo-key',
+      source_hash: 'src_anyrouter_top',
+      api_key_hash: 'hash_anyrouter_top',
+      account_snapshot: 'anyrouter.top #1',
+      auth_label_snapshot: 'anyrouter.top #1',
+      auth_provider_snapshot: 'openai',
+      service_tier: 'standard',
+      executor_type: 'compat',
+      input_tokens: 980,
+      output_tokens: 352,
+      cached_tokens: 0,
+      cache_read_tokens: 180,
+      cache_creation_tokens: 40,
+      reasoning_tokens: 0,
+      total_tokens: 1_332,
+      latency_ms: 884,
+      ttft_ms: 172,
+      failed: false,
+    },
+  ];
   const events: DemoMonitoringEventRow[] = [
+    ...reasoningSuffixEvents,
     xaiFreeUsageEvent,
     xaiSuccessfulRateLimitEvent,
     ...Array.from({ length: 72 }, (_, index) => {

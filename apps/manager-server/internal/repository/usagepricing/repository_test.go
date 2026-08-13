@@ -187,6 +187,108 @@ func TestPricingRollupRateUpdatesKeepRevisionAndThresholdUpdatesRebuild(t *testi
 	}
 }
 
+func TestPricingRollupUsesResolvedThenAnalyticsThenRawModelPrices(t *testing.T) {
+	ctx := context.Background()
+	cfg := testutil.NewConfig(t)
+	st := testutil.NewStore(t, cfg)
+	if err := st.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"resolved-model":               {Prompt: 1},
+		"deepseek-v4-flash":            {Prompt: 2},
+		"deepseek-v4-flash(max)":       {Prompt: 3},
+		"deepseek-v4-flash(region-us)": {Prompt: 4},
+	}); err != nil {
+		t.Fatalf("save prices: %v", err)
+	}
+	events := []usage.Event{
+		pricingIdentityEvent("resolved-priority", 3_600_001, "deepseek-v4-flash(max)", "resolved-model"),
+		pricingIdentityEvent("analytics-priority", 3_600_002, "deepseek-v4-flash(max)", ""),
+		pricingIdentityEvent("raw-fallback", 3_600_003, "deepseek-v4-flash(region-us)", ""),
+	}
+	if _, err := st.UsageEvents.InsertBatch(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	if _, err := st.CatchUpUsagePricing(ctx, 10, 10_000); err != nil {
+		t.Fatalf("catch up pricing: %v", err)
+	}
+	rows, _, available, err := st.UsagePricingHourlyRows(ctx, store.UsagePricingHourlyFilter{
+		FromMS:        3_600_000,
+		ToMS:          7_200_000,
+		IncludeFailed: true,
+	})
+	if err != nil || !available {
+		t.Fatalf("load pricing rows: available=%v err=%v", available, err)
+	}
+	byPricingModel := make(map[string]store.UsagePricingHourlyRow, len(rows))
+	for _, row := range rows {
+		byPricingModel[row.PricingModel] = row
+	}
+	if row := byPricingModel["resolved-model"]; row.Model != "deepseek-v4-flash" || row.BillingModel != "resolved-model" || row.Calls != 1 {
+		t.Fatalf("resolved-priority row = %#v", row)
+	}
+	if row := byPricingModel["deepseek-v4-flash"]; row.Model != "deepseek-v4-flash" || row.BillingModel != "deepseek-v4-flash" || row.Calls != 1 {
+		t.Fatalf("analytics-priority row = %#v", row)
+	}
+	if row := byPricingModel["deepseek-v4-flash(region-us)"]; row.Model != "deepseek-v4-flash(region-us)" || row.Calls != 1 {
+		t.Fatalf("raw-fallback row = %#v", row)
+	}
+	filtered, _, available, err := st.UsagePricingHourlyRows(ctx, store.UsagePricingHourlyFilter{
+		FromMS:        3_600_000,
+		ToMS:          7_200_000,
+		Models:        []string{"deepseek-v4-flash"},
+		IncludeFailed: true,
+	})
+	if err != nil || !available || len(filtered) != 2 {
+		t.Fatalf("canonical filtered rows available=%v err=%v rows=%#v", available, err, filtered)
+	}
+	suffixFiltered, _, available, err := st.UsagePricingHourlyRows(ctx, store.UsagePricingHourlyFilter{
+		FromMS:        3_600_000,
+		ToMS:          7_200_000,
+		Models:        []string{"deepseek-v4-flash(max)"},
+		IncludeFailed: true,
+	})
+	if err != nil || !available || len(suffixFiltered) != 2 {
+		t.Fatalf("suffix filtered rows available=%v err=%v rows=%#v", available, err, suffixFiltered)
+	}
+}
+
+func TestPricingAccountRollupSeparatesAnalyticsModelsSharingBillingModel(t *testing.T) {
+	ctx := context.Background()
+	cfg := testutil.NewConfig(t)
+	st := testutil.NewStore(t, cfg)
+	if err := st.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"resolved-x": {Prompt: 1},
+	}); err != nil {
+		t.Fatalf("save prices: %v", err)
+	}
+	first := pricingIdentityEvent("pricing-shared-billing-a", 3_600_001, "model-a", "resolved-x")
+	second := pricingIdentityEvent("pricing-shared-billing-b", 3_600_002, "model-b", "resolved-x")
+	second.InputTokens = 20
+	second.TotalTokens = 30
+	if _, err := st.UsageEvents.InsertBatch(ctx, []usage.Event{first, second}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	if _, err := st.CatchUpUsagePricing(ctx, 10, 10_000); err != nil {
+		t.Fatalf("catch up pricing: %v", err)
+	}
+	rows, _, available, err := st.UsagePricingAccountRows(ctx, []string{pricingAccountKey("team-a.json", "auth-team-a")})
+	if err != nil || !available {
+		t.Fatalf("load account rows: available=%v err=%v", available, err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("account rows = %#v, want one row per analytics model", rows)
+	}
+	byModel := make(map[string]store.UsagePricingAccountRow, len(rows))
+	for _, row := range rows {
+		byModel[row.Model] = row
+	}
+	if row := byModel["model-a"]; row.BillingModel != "resolved-x" || row.PricingModel != "resolved-x" || row.Calls != 1 || row.TotalTokens != 20 {
+		t.Fatalf("model-a row = %#v", row)
+	}
+	if row := byModel["model-b"]; row.BillingModel != "resolved-x" || row.PricingModel != "resolved-x" || row.Calls != 1 || row.TotalTokens != 30 {
+		t.Fatalf("model-b row = %#v", row)
+	}
+}
+
 func pricingEvent(hash string, timestampMS int64, inputTokens int64) usage.Event {
 	return usage.Event{
 		EventHash:            hash,
@@ -204,6 +306,13 @@ func pricingEvent(hash string, timestampMS int64, inputTokens int64) usage.Event
 		TotalTokens:          inputTokens + 10,
 		CreatedAtMS:          timestampMS,
 	}
+}
+
+func pricingIdentityEvent(hash string, timestampMS int64, requestedModel, resolvedModel string) usage.Event {
+	event := pricingEvent(hash, timestampMS, 10)
+	event.Model = requestedModel
+	event.ResolvedModel = resolvedModel
+	return event
 }
 
 func pricingAccountKey(authFileSnapshot, authIndex string) string {
