@@ -2713,6 +2713,61 @@ func TestAccountWindowUsageSeparatesPeriodsAndAppliesModelScopeAcrossOverlapping
 	}
 }
 
+func TestAccountWindowUsageCanonicalizesReasoningSuffixScopeAndPreservesRawPriceFallback(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_700_101_000_000)
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"deepseek-v4-flash(max)": {Prompt: 3},
+		"deepseek-v4-flash(low)": {Prompt: 4},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+
+	events := []usage.Event{
+		monitoringEvent("scope-reasoning-max", baseMS+1_000, "deepseek-v4-flash(max)", "auth-1", "source-a", false, 1_000_000, 0, 0, 0, 1_000_000, nil),
+		monitoringEvent("scope-reasoning-low", baseMS+2_000, "deepseek-v4-flash(low)", "auth-1", "source-a", false, 1_000_000, 0, 0, 0, 1_000_000, nil),
+	}
+	for index := range events {
+		events[index].AccountSnapshot = "reasoning-scope@example.com"
+		events[index].AuthFileSnapshot = "reasoning-scope.json"
+		events[index].AuthProviderSnapshot = "openai"
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).AccountWindowUsage(ctx, AccountWindowUsageRequest{
+		Windows: []AccountWindowUsageTarget{{
+			RequestKey:           "reasoning-scope",
+			RowKey:               "reasoning-scope.json\x00auth-1",
+			ProviderWindowID:     "current",
+			Period:               "current",
+			FromMS:               baseMS,
+			ToMS:                 baseMS + 5_000,
+			ModelScope:           AccountWindowModelScope{Kind: "models", Models: []string{"DEEPSEEK-V4-FLASH(MAX)"}},
+			AccountSnapshot:      "reasoning-scope@example.com",
+			AuthFileSnapshot:     "reasoning-scope.json",
+			AuthProviderSnapshot: "openai",
+			AuthIndex:            "auth-1",
+			Source:               "reasoning-scope.json",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("account window usage: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("items = %#v", resp.Items)
+	}
+	item := resp.Items[0]
+	if !item.Matched || item.ScopeMatchStatus != "complete" || item.TotalRequests != 2 || item.TotalTokens != 2_000_000 {
+		t.Fatalf("canonical reasoning scope = %#v", item)
+	}
+	if math.Abs(item.TotalCost-7) > 0.000001 {
+		t.Fatalf("raw suffix price fallback cost = %v, want 7", item.TotalCost)
+	}
+}
+
 func TestAccountWindowUsagePricesContextLongContextAndServiceTierBands(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()
