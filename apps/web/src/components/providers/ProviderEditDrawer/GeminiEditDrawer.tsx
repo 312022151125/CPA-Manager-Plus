@@ -294,7 +294,8 @@ export function GeminiEditDrawer({
         form.baseUrl ?? '',
         form.apiKey.trim() || undefined,
         headerObject,
-        normalizeAuthIndex(form.authIndex) ?? undefined
+        normalizeAuthIndex(form.authIndex) ?? undefined,
+        form.proxyUrl
       );
       setDiscoveredModels(list);
     } catch (err: unknown) {
@@ -305,7 +306,7 @@ export function GeminiEditDrawer({
     } finally {
       setModelDiscoveryFetching(false);
     }
-  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, t]);
+  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, form.proxyUrl, t]);
 
   const handleSave = useCallback(async () => {
     if (!canSave) return;
@@ -542,6 +543,7 @@ export function GeminiEditDrawer({
               placeholder={t('ai_providers.gemini_add_modal_proxy_placeholder')}
               value={form.proxyUrl ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, proxyUrl: e.target.value }))}
+              hint={t('ai_providers.model_discovery_proxy_version_hint')}
               disabled={disabled || saving}
             />
             <HeaderInputList

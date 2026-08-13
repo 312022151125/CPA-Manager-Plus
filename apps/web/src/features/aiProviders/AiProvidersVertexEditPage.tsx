@@ -384,6 +384,7 @@ export function AiProvidersVertexEditPage() {
               placeholder={t('ai_providers.vertex_add_modal_proxy_placeholder')}
               value={form.proxyUrl ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, proxyUrl: e.target.value }))}
+              hint={t('ai_providers.model_discovery_proxy_version_hint')}
               disabled={disableControls || saving}
             />
             <HeaderInputList
