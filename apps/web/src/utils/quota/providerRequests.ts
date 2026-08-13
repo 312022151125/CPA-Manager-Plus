@@ -85,6 +85,7 @@ import { classifyXaiProbe, parseXaiErrorEnvelope, XaiProbeError } from './xaiErr
 
 const DEFAULT_ANTIGRAVITY_PROJECT_ID = 'bamboo-precept-lgxtn';
 const CODEX_RESET_CREDITS_REQUEST_TIMEOUT_MS = 8000;
+const XAI_LEGACY_BILLING_REQUEST_TIMEOUT_MS = 3000;
 
 export type CodexQuotaData = {
   planType: string | null;
@@ -1088,9 +1089,31 @@ export const fetchKimiQuota = async (
 const normalizeXaiCentValue = (value: unknown): number | null => {
   if (value === undefined || value === null) return null;
   if (typeof value === 'object' && !Array.isArray(value)) {
-    return normalizeNumberValue((value as { val?: unknown }).val);
+    const record = value as { val?: unknown; value?: unknown };
+    if (Object.keys(record).length === 0) return null;
+    return normalizeNumberValue(record.val) ?? normalizeNumberValue(record.value);
   }
   return normalizeNumberValue(value);
+};
+
+const resolveXaiCentCandidate = (...values: unknown[]) => {
+  for (const value of values) {
+    const normalized = normalizeXaiCentValue(value);
+    if (normalized !== null) {
+      return { value: normalized, hasEvidence: true };
+    }
+  }
+  return { value: null, hasEvidence: false };
+};
+
+const normalizeXaiPeriodTimestamp = (value: unknown): string | undefined =>
+  normalizeStringValue(value) ?? undefined;
+
+const hasValidXaiPeriodWindow = (start?: string, end?: string): boolean => {
+  if (!start || !end) return false;
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  return Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs;
 };
 
 const resolveXaiBillingConfig = (payload: XaiBillingPayload | null): XaiBillingConfig | null => {
@@ -1134,6 +1157,25 @@ const emptyXaiBillingSummary = (): XaiBillingSummary => ({
   usedPercent: null,
 });
 
+type XaiBillingFieldEvidence = {
+  monthlyLimit: boolean;
+  used: boolean;
+  includedUsed: boolean;
+  onDemandCap: boolean;
+  onDemandUsed: boolean;
+};
+
+const xaiBillingFieldEvidence = new WeakMap<XaiBillingSummary, XaiBillingFieldEvidence>();
+
+const getXaiBillingFieldEvidence = (summary: XaiBillingSummary): XaiBillingFieldEvidence =>
+  xaiBillingFieldEvidence.get(summary) ?? {
+    monthlyLimit: summary.monthlyLimitCents !== null,
+    used: summary.usedCents !== null,
+    includedUsed: summary.includedUsedCents !== null,
+    onDemandCap: summary.onDemandCapCents !== null,
+    onDemandUsed: summary.onDemandUsedCents !== null,
+  };
+
 export const buildXaiBillingSummary = (
   config: XaiBillingConfig | null | undefined
 ): XaiBillingSummary | null => {
@@ -1142,42 +1184,47 @@ export const buildXaiBillingSummary = (
   const summary = emptyXaiBillingSummary();
   const currentPeriod = config.currentPeriod ?? config.current_period ?? null;
   const periodType = resolveXaiPeriodType(currentPeriod);
-  const creditUsagePercent = normalizeNumberValue(
+  const rawCreditUsagePercent = normalizeNumberValue(
     config.creditUsagePercent ?? config.credit_usage_percent
   );
-  const periodStart =
-    normalizeStringValue(currentPeriod?.start) ??
-    normalizeStringValue(config.billingPeriodStart ?? config.billing_period_start) ??
-    undefined;
-  const periodEnd =
-    normalizeStringValue(currentPeriod?.end) ??
-    normalizeStringValue(config.billingPeriodEnd ?? config.billing_period_end) ??
-    undefined;
+  const periodStart = normalizeXaiPeriodTimestamp(currentPeriod?.start);
+  const periodEnd = normalizeXaiPeriodTimestamp(currentPeriod?.end);
+  const creditUsagePercent =
+    rawCreditUsagePercent ??
+    (periodType === 'weekly' && hasValidXaiPeriodWindow(periodStart, periodEnd) ? 0 : null);
   const billingCycle = config.billingCycle ?? config.billing_cycle ?? null;
   const nestedUsage = config.usage ?? null;
   const productUsage = normalizeXaiProductUsage(
     config.productUsage ?? config.product_usage,
     'Product'
   );
-  const monthlyLimitCents = normalizeXaiCentValue(config.monthlyLimit ?? config.monthly_limit);
-  const nestedIncludedUsedCents = normalizeXaiCentValue(
-    nestedUsage?.includedUsed ?? nestedUsage?.included_used
+  const monthlyLimit = resolveXaiCentCandidate(config.monthlyLimit, config.monthly_limit);
+  const nestedIncludedUsed = resolveXaiCentCandidate(
+    nestedUsage?.includedUsed,
+    nestedUsage?.included_used
   );
-  const explicitOnDemandUsedCents = normalizeXaiCentValue(
-    config.onDemandUsed ??
-      config.on_demand_used ??
-      nestedUsage?.onDemandUsed ??
-      nestedUsage?.on_demand_used
+  const explicitOnDemandUsed = resolveXaiCentCandidate(
+    config.onDemandUsed,
+    config.on_demand_used,
+    nestedUsage?.onDemandUsed,
+    nestedUsage?.on_demand_used
   );
-  const rawUsedCents = normalizeXaiCentValue(
-    config.used ?? nestedUsage?.totalUsed ?? nestedUsage?.total_used
+  const rawUsed = resolveXaiCentCandidate(
+    config.used,
+    nestedUsage?.totalUsed,
+    nestedUsage?.total_used
   );
+  const onDemandCap = resolveXaiCentCandidate(config.onDemandCap, config.on_demand_cap);
+  const monthlyLimitCents = monthlyLimit.value;
+  const nestedIncludedUsedCents = nestedIncludedUsed.value;
+  const explicitOnDemandUsedCents = explicitOnDemandUsed.value;
+  const rawUsedCents = rawUsed.value;
   const usedCents =
     rawUsedCents ??
     (nestedIncludedUsedCents !== null || explicitOnDemandUsedCents !== null
       ? (nestedIncludedUsedCents ?? 0) + (explicitOnDemandUsedCents ?? 0)
       : null);
-  const onDemandCapCents = normalizeXaiCentValue(config.onDemandCap ?? config.on_demand_cap);
+  const onDemandCapCents = onDemandCap.value;
   const billingPeriodStart =
     normalizeStringValue(
       config.billingPeriodStart ??
@@ -1193,13 +1240,16 @@ export const buildXaiBillingSummary = (
         billingCycle?.billing_period_end
     ) ?? undefined;
 
-  const includedUsedCents =
-    nestedIncludedUsedCents ??
-    (usedCents === null
-      ? null
-      : monthlyLimitCents !== null && monthlyLimitCents > 0
-        ? Math.min(usedCents, monthlyLimitCents)
-        : usedCents);
+  const hasMonthlyData =
+    monthlyLimit.hasEvidence || rawUsed.hasEvidence || nestedIncludedUsed.hasEvidence;
+  const includedUsedCents = hasMonthlyData
+    ? (nestedIncludedUsedCents ??
+      (usedCents === null
+        ? null
+        : monthlyLimitCents !== null && monthlyLimitCents > 0
+          ? Math.min(usedCents, monthlyLimitCents)
+          : usedCents))
+    : null;
   const derivedOnDemandUsedCents =
     usedCents !== null && monthlyLimitCents !== null
       ? Math.max(0, usedCents - monthlyLimitCents)
@@ -1216,33 +1266,41 @@ export const buildXaiBillingSummary = (
 
   const hasWeeklyData =
     creditUsagePercent !== null || periodType === 'weekly' || productUsage.length > 0;
-  const hasMonthlyData =
-    monthlyLimitCents !== null ||
-    usedCents !== null ||
-    (!hasWeeklyData && (onDemandCapCents !== null || !!billingPeriodEnd));
-  const hasBillingPeriodData =
-    hasMonthlyData || onDemandCapCents !== null || onDemandUsedCents !== null;
+  const hasOnDemandData =
+    onDemandCap.hasEvidence ||
+    explicitOnDemandUsed.hasEvidence ||
+    (derivedOnDemandUsedCents !== null && derivedOnDemandUsedCents > 0);
+  const hasBillingPeriodData = hasMonthlyData || hasOnDemandData;
 
-  if (!hasWeeklyData && !hasMonthlyData) return null;
+  if (!hasWeeklyData && !hasMonthlyData && !hasOnDemandData) return null;
 
   summary.periodType = hasWeeklyData
     ? periodType === 'unknown'
       ? 'weekly'
       : periodType
-    : 'monthly';
+    : hasMonthlyData
+      ? 'monthly'
+      : 'unknown';
   summary.usagePercent = hasWeeklyData ? creditUsagePercent : usedPercent;
   summary.periodStart = hasWeeklyData ? periodStart : billingPeriodStart;
   summary.periodEnd = hasWeeklyData ? periodEnd : billingPeriodEnd;
   summary.productUsage = productUsage;
-  summary.monthlyLimitCents = monthlyLimitCents;
-  summary.usedCents = usedCents;
+  summary.monthlyLimitCents = hasMonthlyData ? monthlyLimitCents : null;
+  summary.usedCents = hasBillingPeriodData ? usedCents : null;
   summary.includedUsedCents = includedUsedCents;
-  summary.onDemandCapCents = onDemandCapCents;
-  summary.onDemandUsedCents = onDemandUsedCents;
-  summary.onDemandUsedPercent = onDemandUsedPercent;
+  summary.onDemandCapCents = hasOnDemandData ? onDemandCapCents : null;
+  summary.onDemandUsedCents = hasOnDemandData ? onDemandUsedCents : null;
+  summary.onDemandUsedPercent = hasOnDemandData ? onDemandUsedPercent : null;
   summary.billingPeriodStart = hasBillingPeriodData ? billingPeriodStart : undefined;
   summary.billingPeriodEnd = hasBillingPeriodData ? billingPeriodEnd : undefined;
   summary.usedPercent = usedPercent;
+  xaiBillingFieldEvidence.set(summary, {
+    monthlyLimit: monthlyLimit.hasEvidence,
+    used: rawUsed.hasEvidence,
+    includedUsed: nestedIncludedUsed.hasEvidence,
+    onDemandCap: onDemandCap.hasEvidence,
+    onDemandUsed: explicitOnDemandUsed.hasEvidence,
+  });
 
   return summary;
 };
@@ -1254,22 +1312,93 @@ export const mergeXaiBillingSummaries = (
   if (!primary) return fallback;
   if (!fallback) return primary;
 
-  return {
-    periodType: primary.periodType !== 'unknown' ? primary.periodType : fallback.periodType,
-    usagePercent: primary.usagePercent ?? fallback.usagePercent,
-    periodStart: primary.periodStart ?? fallback.periodStart,
-    periodEnd: primary.periodEnd ?? fallback.periodEnd,
-    productUsage: primary.productUsage.length > 0 ? primary.productUsage : fallback.productUsage,
-    monthlyLimitCents: primary.monthlyLimitCents ?? fallback.monthlyLimitCents,
-    usedCents: primary.usedCents ?? fallback.usedCents,
-    includedUsedCents: primary.includedUsedCents ?? fallback.includedUsedCents,
-    onDemandCapCents: primary.onDemandCapCents ?? fallback.onDemandCapCents,
-    onDemandUsedCents: primary.onDemandUsedCents ?? fallback.onDemandUsedCents,
-    onDemandUsedPercent: primary.onDemandUsedPercent ?? fallback.onDemandUsedPercent,
+  const primaryHasWeeklyData =
+    primary.periodType === 'weekly' ||
+    primary.usagePercent !== null ||
+    primary.productUsage.length > 0;
+  const weeklySource = primaryHasWeeklyData ? primary : fallback;
+  const primaryEvidence = getXaiBillingFieldEvidence(primary);
+  const fallbackEvidence = getXaiBillingFieldEvidence(fallback);
+  const primaryMonthlyLimit = primaryEvidence.monthlyLimit ? primary.monthlyLimitCents : null;
+  const fallbackMonthlyLimit = fallbackEvidence.monthlyLimit ? fallback.monthlyLimitCents : null;
+  const monthlyLimitCents = primaryMonthlyLimit ?? fallbackMonthlyLimit;
+  const primaryRawUsed = primaryEvidence.used ? primary.usedCents : null;
+  const fallbackRawUsed = fallbackEvidence.used ? fallback.usedCents : null;
+  let includedUsedHasEvidence = primaryEvidence.includedUsed;
+  let includedUsedCents = includedUsedHasEvidence ? primary.includedUsedCents : null;
+  if (includedUsedCents === null && primaryRawUsed !== null) {
+    includedUsedCents = primaryRawUsed;
+  }
+  if (includedUsedCents === null && fallbackEvidence.includedUsed) {
+    includedUsedCents = fallback.includedUsedCents;
+    includedUsedHasEvidence = includedUsedCents !== null;
+  }
+  if (includedUsedCents === null && fallbackRawUsed !== null) {
+    includedUsedCents = fallbackRawUsed;
+  }
+  if (includedUsedCents !== null && monthlyLimitCents !== null && monthlyLimitCents > 0) {
+    includedUsedCents = Math.min(includedUsedCents, monthlyLimitCents);
+  }
+
+  const primaryOnDemandCap = primaryEvidence.onDemandCap ? primary.onDemandCapCents : null;
+  const fallbackOnDemandCap = fallbackEvidence.onDemandCap ? fallback.onDemandCapCents : null;
+  const onDemandCapCents = primaryOnDemandCap ?? fallbackOnDemandCap;
+  let onDemandUsedHasEvidence = primaryEvidence.onDemandUsed;
+  let onDemandUsedCents = onDemandUsedHasEvidence ? primary.onDemandUsedCents : null;
+  if (onDemandUsedCents === null && primaryRawUsed !== null && monthlyLimitCents !== null) {
+    onDemandUsedCents = Math.max(0, primaryRawUsed - monthlyLimitCents);
+  }
+  if (onDemandUsedCents === null && fallbackEvidence.onDemandUsed) {
+    onDemandUsedCents = fallback.onDemandUsedCents;
+    onDemandUsedHasEvidence = onDemandUsedCents !== null;
+  }
+  if (onDemandUsedCents === null && fallbackRawUsed !== null && monthlyLimitCents !== null) {
+    onDemandUsedCents = Math.max(0, fallbackRawUsed - monthlyLimitCents);
+  }
+  const hasPrimaryComponentEvidence = primaryEvidence.includedUsed || primaryEvidence.onDemandUsed;
+  const usedCents =
+    primaryRawUsed ??
+    (hasPrimaryComponentEvidence
+      ? includedUsedCents !== null && onDemandUsedCents !== null
+        ? includedUsedCents + onDemandUsedCents
+        : (includedUsedCents ?? onDemandUsedCents)
+      : (fallbackRawUsed ??
+        (includedUsedCents !== null && onDemandUsedCents !== null
+          ? includedUsedCents + onDemandUsedCents
+          : (includedUsedCents ?? onDemandUsedCents))));
+  const usedPercent =
+    monthlyLimitCents !== null && monthlyLimitCents > 0 && includedUsedCents !== null
+      ? (includedUsedCents / monthlyLimitCents) * 100
+      : (primary.usedPercent ?? fallback.usedPercent);
+  const onDemandUsedPercent =
+    onDemandCapCents !== null && onDemandCapCents > 0 && onDemandUsedCents !== null
+      ? (onDemandUsedCents / onDemandCapCents) * 100
+      : (primary.onDemandUsedPercent ?? fallback.onDemandUsedPercent);
+
+  const merged: XaiBillingSummary = {
+    periodType: weeklySource.periodType,
+    usagePercent: weeklySource.usagePercent,
+    periodStart: weeklySource.periodStart,
+    periodEnd: weeklySource.periodEnd,
+    productUsage: weeklySource.productUsage,
+    monthlyLimitCents,
+    usedCents,
+    includedUsedCents,
+    onDemandCapCents,
+    onDemandUsedCents,
+    onDemandUsedPercent,
     billingPeriodStart: primary.billingPeriodStart ?? fallback.billingPeriodStart,
     billingPeriodEnd: primary.billingPeriodEnd ?? fallback.billingPeriodEnd,
-    usedPercent: primary.usedPercent ?? fallback.usedPercent,
+    usedPercent,
   };
+  xaiBillingFieldEvidence.set(merged, {
+    monthlyLimit: primaryEvidence.monthlyLimit || fallbackEvidence.monthlyLimit,
+    used: primaryEvidence.used || (!hasPrimaryComponentEvidence && fallbackEvidence.used),
+    includedUsed: includedUsedHasEvidence,
+    onDemandCap: primaryEvidence.onDemandCap || fallbackEvidence.onDemandCap,
+    onDemandUsed: onDemandUsedHasEvidence,
+  });
+  return merged;
 };
 
 const toXaiRecord = (value: unknown): Record<string, unknown> | null =>
@@ -1692,17 +1821,26 @@ const requestXaiBillingProbe = async (
 ) => {
   const authIndex = resolveXaiProbeAuthIndex(file, t);
   const requestHeader = buildXaiRequestHeaders(file);
+  const configuredTimeout = requestConfig?.timeout;
+  const legacyRequestConfig: AxiosRequestConfig = {
+    ...requestConfig,
+    timeout:
+      typeof configuredTimeout === 'number' && configuredTimeout > 0
+        ? Math.min(configuredTimeout, XAI_LEGACY_BILLING_REQUEST_TIMEOUT_MS)
+        : XAI_LEGACY_BILLING_REQUEST_TIMEOUT_MS,
+  };
   const [weeklyResult, monthlyResult] = await Promise.allSettled([
     requestXaiBilling(authIndex, XAI_BILLING_WEEKLY_URL, requestHeader, requestConfig),
-    requestXaiBilling(authIndex, XAI_BILLING_MONTHLY_URL, requestHeader, requestConfig),
+    requestXaiBilling(authIndex, XAI_BILLING_MONTHLY_URL, requestHeader, legacyRequestConfig),
   ]);
   const weeklyProbe = weeklyResult.status === 'fulfilled' ? weeklyResult.value : null;
   const monthlyProbe = monthlyResult.status === 'fulfilled' ? monthlyResult.value : null;
   const weeklySummary = weeklyProbe?.summary ?? null;
   const monthlySummary = monthlyProbe?.summary ?? null;
-  const failures = [weeklyResult, monthlyResult].flatMap((result) =>
-    result.status === 'rejected' ? [result.reason] : []
-  );
+  const weeklyFailures = weeklyResult.status === 'rejected' ? [weeklyResult.reason] : [];
+  const monthlyFailures = monthlyResult.status === 'rejected' ? [monthlyResult.reason] : [];
+  const weeklyFailure = weeklyFailures[0];
+  const failures = weeklySummary ? [] : weeklyFailure ? [weeklyFailure] : monthlyFailures;
 
   return {
     authIndex,
@@ -1719,8 +1857,11 @@ export const probeXaiBilling = async (
   t: TFunction,
   requestConfig?: AxiosRequestConfig
 ): Promise<XaiBillingProbeResult> => {
-  const { failures, monthlySummary, statusCode, summary, weeklySummary } =
-    await requestXaiBillingProbe(file, t, requestConfig);
+  const { failures, statusCode, summary, weeklySummary } = await requestXaiBillingProbe(
+    file,
+    t,
+    requestConfig
+  );
   if (!summary) {
     if (failures.length > 0) throw selectXaiBillingFailure(failures);
     throw new Error(t('xai_quota.empty_data'));
@@ -1729,7 +1870,7 @@ export const probeXaiBilling = async (
   return {
     summary,
     failures,
-    partial: failures.length > 0 || weeklySummary === null || monthlySummary === null,
+    partial: weeklySummary === null,
     statusCode,
   };
 };
@@ -1739,22 +1880,27 @@ export const probeXaiQuota = async (
   t: TFunction,
   requestConfig?: AxiosRequestConfig
 ): Promise<XaiQuotaProbeResult> => {
-  const { authIndex, failures, monthlySummary, statusCode, summary, weeklySummary } =
-    await requestXaiBillingProbe(file, t, requestConfig);
+  const { authIndex, failures, statusCode, summary, weeklySummary } = await requestXaiBillingProbe(
+    file,
+    t,
+    requestConfig
+  );
   if (summary) {
     return {
       summary,
       failures,
-      partial: failures.length > 0 || weeklySummary === null || monthlySummary === null,
+      partial: weeklySummary === null,
       source: 'billing',
       statusCode,
-      blockingFailure: selectXaiBlockingBillingFailure(failures),
+      blockingFailure:
+        weeklySummary === null ? selectXaiBlockingBillingFailure(failures) : undefined,
     };
   }
   if (failures.length === 0) {
     throw new Error(t('xai_quota.empty_data'));
   }
-  if (!failures.every(isXaiOfficialApiFallbackFailure)) {
+  const canFallbackToOfficialApi = failures.every(isXaiOfficialApiFallbackFailure);
+  if (!canFallbackToOfficialApi) {
     throw selectXaiBillingFailure(failures);
   }
 

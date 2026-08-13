@@ -474,7 +474,8 @@ describe('DemoPage', () => {
     expect(kimiQuotaByFileName.get('kimi-exhausted.json')?.rows[1]?.used).toBe(200);
     expect(xaiQuotaByFileName.get('xai-ops.json')?.billing?.periodType).toBe('weekly');
     expect(xaiQuotaByFileName.get('xai-ops.json')?.billing?.usagePercent).toBe(42);
-    expect(xaiQuotaByFileName.get('xai-ops.json')?.billing?.usedPercent).toBe(86);
+    expect(xaiQuotaByFileName.get('xai-ops.json')?.billing?.monthlyLimitCents).toBeNull();
+    expect(xaiQuotaByFileName.get('xai-ops.json')?.billing?.usedPercent).toBeNull();
     expect(xaiQuotaByFileName.get('xai-payg-buffer.json')?.billing?.usedPercent).toBe(100);
     expect(xaiQuotaByFileName.get('xai-payg-buffer.json')?.billing?.onDemandUsedPercent).toBe(26);
     expect(xaiQuotaByFileName.get('xai-payg-cap.json')?.billing?.onDemandUsedPercent).toBe(100);
