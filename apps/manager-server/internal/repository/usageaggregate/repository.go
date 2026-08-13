@@ -10,13 +10,16 @@ import (
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 const (
 	AggregateName = "hourly_core"
-	SchemaVersion = 1
+	SchemaVersion = 2
 	hourMS        = int64(time.Hour / time.Millisecond)
 )
+
+var analyticsModelExpression = usageidentity.SQLRequestAnalyticsModelExpression("model", "requested_model")
 
 var ErrUnsupportedSchema = errors.New("unsupported usage hourly aggregate schema")
 
@@ -402,8 +405,8 @@ func upsertAggregateBatch(ctx context.Context, tx *sql.Tx, afterID, throughID, n
 	)
 	select
 		timestamp_ms - (timestamp_ms %% %d) as bucket_ms,
-		model,
-		coalesce(nullif(resolved_model, ''), model) as billing_model,
+		%s as model,
+		coalesce(nullif(resolved_model, ''), %s) as billing_model,
 		coalesce(service_tier, '') as service_tier,
 		failed,
 		count(*),
@@ -429,7 +432,7 @@ func upsertAggregateBatch(ctx context.Context, tx *sql.Tx, afterID, throughID, n
 			select 1 from usage_event_identity_ledger ledger
 			where ledger.event_hash = e.event_hash and ledger.aggregate_schema_version >= %d
 		)
-	group by bucket_ms, model, coalesce(nullif(resolved_model, ''), model), coalesce(service_tier, ''), failed
+	group by 1, 2, 3, 4, 5
 	on conflict(bucket_ms, model, billing_model, service_tier, failed) do update set
 		calls = usage_hourly_aggregate_v1.calls + excluded.calls,
 		input_tokens = usage_hourly_aggregate_v1.input_tokens + excluded.input_tokens,
@@ -449,6 +452,8 @@ func upsertAggregateBatch(ctx context.Context, tx *sql.Tx, afterID, throughID, n
 		zero_token_calls = usage_hourly_aggregate_v1.zero_token_calls + excluded.zero_token_calls,
 		updated_at_ms = excluded.updated_at_ms`,
 		hourMS,
+		analyticsModelExpression,
+		analyticsModelExpression,
 		usage.LongContextInputTokenThreshold,
 		usage.LongContextInputTokenThreshold,
 		usage.LongContextInputTokenThreshold,
@@ -547,7 +552,7 @@ func mergeStoredRows(ctx context.Context, tx *sql.Tx, filter Filter, fromMS, toM
 	from usage_hourly_aggregate_v1
 	where %s
 	group by 1, 2, 3, 4, 5
-	order by 1, 2, 3, 4, 5`, bucketExpr, strings.Join(conditions, " and ")), args...)
+		order by 1, 2, 3, 4, 5`, bucketExpr, strings.Join(conditions, " and ")), args...)
 	if err != nil {
 		return err
 	}
@@ -577,8 +582,8 @@ func rawRowsStatement(filter Filter, fromMS, toMS, afterID int64, excludeAggrega
 	}
 	return fmt.Sprintf(`select
 		%s as bucket_ms,
-		model,
-		coalesce(nullif(resolved_model, ''), model) as billing_model,
+		%s as model,
+		coalesce(nullif(resolved_model, ''), %s) as billing_model,
 		coalesce(service_tier, '') as service_tier,
 		failed,
 		count(*),
@@ -602,6 +607,8 @@ func rawRowsStatement(filter Filter, fromMS, toMS, afterID int64, excludeAggrega
 	group by 1, 2, 3, 4, 5
 	order by 1, 2, 3, 4, 5`,
 		bucketExpr,
+		analyticsModelExpression,
+		analyticsModelExpression,
 		usage.LongContextInputTokenThreshold,
 		usage.LongContextInputTokenThreshold,
 		usage.LongContextInputTokenThreshold,
@@ -650,7 +657,7 @@ func scanAndMergeRows(rows *sql.Rows, grouped map[rowKey]*Row) error {
 func aggregateConditions(filter Filter, fromMS, toMS int64) ([]string, []any) {
 	conditions := []string{"bucket_ms >= ?", "bucket_ms < ?"}
 	args := []any{fromMS, toMS}
-	return appendFilterConditions(conditions, args, filter)
+	return appendFilterConditions(conditions, args, filter, "model")
 }
 
 func rawConditions(filter Filter, fromMS, toMS, afterID int64, excludeAggregated bool) ([]string, []any) {
@@ -668,14 +675,14 @@ func rawConditions(filter Filter, fromMS, toMS, afterID int64, excludeAggregated
 		)`)
 		args = append(args, SchemaVersion)
 	}
-	return appendFilterConditions(conditions, args, filter)
+	return appendFilterConditions(conditions, args, filter, analyticsModelExpression)
 }
 
-func appendFilterConditions(conditions []string, args []any, filter Filter) ([]string, []any) {
-	models := normalizeValues(filter.Models)
+func appendFilterConditions(conditions []string, args []any, filter Filter, modelExpression string) ([]string, []any) {
+	models := normalizeModelValues(filter.Models)
 	if len(models) > 0 {
 		placeholders := strings.TrimRight(strings.Repeat("?,", len(models)), ",")
-		conditions = append(conditions, "model in ("+placeholders+")")
+		conditions = append(conditions, modelExpression+" in ("+placeholders+")")
 		for _, model := range models {
 			args = append(args, model)
 		}
@@ -704,6 +711,18 @@ func normalizeValues(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func normalizeModelValues(values []string) []string {
+	models := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		models = append(models, usageidentity.AnalyticsModel(trimmed))
+	}
+	return normalizeValues(models)
 }
 
 func mergeRow(grouped map[rowKey]*Row, row Row) {

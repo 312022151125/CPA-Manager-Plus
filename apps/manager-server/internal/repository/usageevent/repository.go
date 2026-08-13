@@ -8,6 +8,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 type Repository interface {
@@ -379,6 +380,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 			return nil, err
 		}
 		event.RequestID = requestID.String
+		event.AnalyticsModel = usageidentity.AnalyticsModelForRequest(event.Model, requestedModel.String)
 		event.Provider = provider.String
 		event.ExecutorType = executorType.String
 		event.Endpoint = endpoint.String

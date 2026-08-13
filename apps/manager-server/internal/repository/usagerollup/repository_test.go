@@ -110,6 +110,92 @@ func TestCatchUpAccountHistoryAggregatesByCheckpoint(t *testing.T) {
 	}
 }
 
+func TestCatchUpAccountHistoryUsesAnalyticsModel(t *testing.T) {
+	db := newRollupTestDB(t)
+	ctx := context.Background()
+	events := usageevent.New(db)
+	repo := New(db)
+	low := rollupTestEvent("account-canonical-low", 1_700_000_001_000, "deepseek-v4-flash(low)", "", "alice@example.com", "", "auth-a", false, 1, 2, 0, 0, 0, 0, 3)
+	max := rollupTestEvent("account-canonical-max", 1_700_000_002_000, "deepseek-v4-flash(max)", "", "alice@example.com", "", "auth-a", false, 4, 5, 0, 0, 0, 0, 9)
+	unknown := rollupTestEvent("account-canonical-unknown", 1_700_000_003_000, "deepseek-v4-flash(region-us)", "", "alice@example.com", "", "auth-a", false, 6, 7, 0, 0, 0, 0, 13)
+	if _, err := events.InsertBatch(ctx, []usage.Event{low, max, unknown}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	if _, err := repo.CatchUpAccountHistory(ctx, 10, 1_700_000_010_000); err != nil {
+		t.Fatalf("catch up: %v", err)
+	}
+	rows, err := repo.AccountHistoryRows(ctx, []string{rollupTestAccountKey("alice@example.com", "", "auth-a")})
+	if err != nil {
+		t.Fatalf("query rows: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %#v, want canonical and unknown rows", rows)
+	}
+	byModel := make(map[string]AccountHistoryRow, len(rows))
+	for _, row := range rows {
+		byModel[row.Model] = row
+	}
+	if byModel["deepseek-v4-flash"].Calls != 2 || byModel["deepseek-v4-flash"].TotalTokens != 12 {
+		t.Fatalf("canonical row = %#v", byModel["deepseek-v4-flash"])
+	}
+	if byModel["deepseek-v4-flash(region-us)"].Calls != 1 {
+		t.Fatalf("unknown row = %#v", byModel["deepseek-v4-flash(region-us)"])
+	}
+}
+
+func TestCatchUpAccountHistorySeparatesAnalyticsModelsSharingBillingModel(t *testing.T) {
+	db := newRollupTestDB(t)
+	ctx := context.Background()
+	events := usageevent.New(db)
+	repo := New(db)
+	first := rollupTestEvent("account-shared-billing-a", 1_700_000_001_000, "model-a", "resolved-x", "alice@example.com", "", "auth-a", false, 10, 1, 0, 0, 0, 0, 11)
+	second := rollupTestEvent("account-shared-billing-b", 1_700_000_002_000, "model-b", "resolved-x", "alice@example.com", "", "auth-a", false, 20, 2, 0, 0, 0, 0, 22)
+	if _, err := events.InsertBatch(ctx, []usage.Event{first, second}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	if _, err := repo.CatchUpAccountHistory(ctx, 10, 1_700_000_010_000); err != nil {
+		t.Fatalf("catch up: %v", err)
+	}
+	rows, err := repo.AccountHistoryRows(ctx, []string{rollupTestAccountKey("alice@example.com", "", "auth-a")})
+	if err != nil {
+		t.Fatalf("query rows: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %#v, want one row per analytics model", rows)
+	}
+	byModel := make(map[string]AccountHistoryRow, len(rows))
+	for _, row := range rows {
+		byModel[row.Model] = row
+	}
+	if row := byModel["model-a"]; row.BillingModel != "resolved-x" || row.Calls != 1 || row.TotalTokens != 11 {
+		t.Fatalf("model-a row = %#v", row)
+	}
+	if row := byModel["model-b"]; row.BillingModel != "resolved-x" || row.Calls != 1 || row.TotalTokens != 22 {
+		t.Fatalf("model-b row = %#v", row)
+	}
+}
+
+func TestCatchUpAccountHistoryPreservesAnalyticsModelWhitespace(t *testing.T) {
+	db := newRollupTestDB(t)
+	ctx := context.Background()
+	events := usageevent.New(db)
+	repo := New(db)
+	event := rollupTestEvent("account-model-whitespace", 1_700_000_001_000, " custom-model(max)", "", "alice@example.com", "", "auth-a", false, 10, 1, 0, 0, 0, 0, 11)
+	if _, err := events.InsertBatch(ctx, []usage.Event{event}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+	if _, err := repo.CatchUpAccountHistory(ctx, 10, 1_700_000_010_000); err != nil {
+		t.Fatalf("catch up: %v", err)
+	}
+	rows, err := repo.AccountHistoryRows(ctx, []string{rollupTestAccountKey("alice@example.com", "", "auth-a")})
+	if err != nil {
+		t.Fatalf("query rows: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Model != " custom-model" || rows[0].BillingModel != " custom-model" {
+		t.Fatalf("rows = %#v, want analytics model whitespace preserved", rows)
+	}
+}
+
 func TestRollupsPreserveLongContextTokenBuckets(t *testing.T) {
 	db := newRollupTestDB(t)
 	ctx := context.Background()

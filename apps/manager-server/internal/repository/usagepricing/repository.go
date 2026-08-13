@@ -128,6 +128,7 @@ type hourlyKey struct {
 
 type accountKey struct {
 	accountKey             string
+	model                  string
 	billingModel           string
 	pricingModel           string
 	serviceTier            string
@@ -434,10 +435,14 @@ func batchBucketRange(ctx context.Context, tx *sql.Tx, afterID, throughID int64)
 
 func bandedEventsCTE(whereClause string) string {
 	accountKeyExpression := usageidentity.SQLAccountKeyExpression("e")
+	requestedModelExpression := usageidentity.SQLEffectiveRequestedModelExpression("e.model", "e.requested_model")
+	analyticsModelExpression := usageidentity.SQLRequestAnalyticsModelExpression("e.model", "e.requested_model")
 	return fmt.Sprintf(`with base_events as (
 		select
 			e.*,
-			coalesce(nullif(e.resolved_model, ''), e.model) as billing_model_value,
+			%s as requested_model_value,
+			%s as analytics_model_value,
+			coalesce(nullif(e.resolved_model, ''), %s) as billing_model_value,
 			coalesce(e.normalized_total_input_tokens, e.input_tokens, 0) as normalized_input_tokens_value,
 			max(
 				max(coalesce(e.cached_tokens, 0), coalesce(e.cache_tokens, 0)) -
@@ -453,12 +458,14 @@ func bandedEventsCTE(whereClause string) string {
 			base_events.*,
 			case
 				when billing_price.model is not null then billing_model_value
-				when display_price.model is not null then base_events.model
+				when analytics_price.model is not null then base_events.analytics_model_value
+				when display_price.model is not null then base_events.requested_model_value
 				else billing_model_value
 			end as pricing_model_value
 		from base_events
 		left join model_prices billing_price on billing_price.model = base_events.billing_model_value
-		left join model_prices display_price on display_price.model = base_events.model
+		left join model_prices analytics_price on analytics_price.model = base_events.analytics_model_value
+		left join model_prices display_price on display_price.model = base_events.requested_model_value
 	), banded_events as (
 		select
 			priced_events.*,
@@ -469,7 +476,7 @@ func bandedEventsCTE(whereClause string) string {
 					and priced_events.normalized_input_tokens_value > tier.threshold_tokens
 			), %d) as context_threshold_tokens_value
 		from priced_events
-		)`, accountKeyExpression, whereClause, model.ModelPriceBaseContextThreshold)
+		)`, requestedModelExpression, analyticsModelExpression, analyticsModelExpression, accountKeyExpression, whereClause, model.ModelPriceBaseContextThreshold)
 }
 
 func upsertHourlyBatch(ctx context.Context, tx *sql.Tx, revision string, afterID, throughID, nowMS int64) error {
@@ -486,7 +493,7 @@ func upsertHourlyBatch(ctx context.Context, tx *sql.Tx, revision string, afterID
 	select
 		?,
 		timestamp_ms - (timestamp_ms %% %d),
-		model,
+		analytics_model_value,
 		billing_model_value,
 		pricing_model_value,
 		coalesce(service_tier, ''),
@@ -564,7 +571,7 @@ func upsertAccountBatch(ctx context.Context, tx *sql.Tx, revision string, afterI
 		max(nullif(auth_index, '')),
 		max(nullif(source, '')),
 		max(nullif(source_hash, '')),
-		min(model),
+		min(analytics_model_value),
 		billing_model_value,
 		pricing_model_value,
 		coalesce(service_tier, ''),
@@ -589,11 +596,11 @@ func upsertAccountBatch(ctx context.Context, tx *sql.Tx, revision string, afterI
 			?
 		from banded_events
 		where account_key_value <> ''
-		group by account_key_value, billing_model_value, pricing_model_value,
+		group by account_key_value, analytics_model_value, billing_model_value, pricing_model_value,
 		coalesce(service_tier, ''), context_threshold_tokens_value
-	on conflict(
-		structure_revision, account_key, billing_model, pricing_model,
-		service_tier, context_threshold_tokens
+		on conflict(
+			structure_revision, account_key, model, billing_model, pricing_model,
+			service_tier, context_threshold_tokens
 	) do update set
 		account_snapshot = coalesce(nullif(excluded.account_snapshot, ''), usage_pricing_account_rollups_v1.account_snapshot),
 		auth_label_snapshot = coalesce(nullif(excluded.auth_label_snapshot, ''), usage_pricing_account_rollups_v1.auth_label_snapshot),
@@ -753,10 +760,10 @@ func rawHourlyStatement(filter HourlyFilter, fromMS, toMS, afterID int64, useAft
 		conditions = append(conditions, "e.id > ?")
 		args = append(args, afterID)
 	}
-	models := normalizeValues(filter.Models)
+	models := normalizeModelValues(filter.Models)
 	if len(models) > 0 {
 		placeholders := strings.TrimRight(strings.Repeat("?,", len(models)), ",")
-		conditions = append(conditions, "e.model in ("+placeholders+")")
+		conditions = append(conditions, usageidentity.SQLRequestAnalyticsModelExpression("e.model", "e.requested_model")+" in ("+placeholders+")")
 		for _, modelID := range models {
 			args = append(args, modelID)
 		}
@@ -774,7 +781,7 @@ func rawHourlyStatement(filter HourlyFilter, fromMS, toMS, afterID int64, useAft
 	query := bandedEventsCTE(strings.Join(conditions, " and ")) + fmt.Sprintf(`
 	select
 		%s,
-		model, billing_model_value, pricing_model_value, coalesce(service_tier, ''),
+			analytics_model_value, billing_model_value, pricing_model_value, coalesce(service_tier, ''),
 		context_threshold_tokens_value, failed, count(*),
 		coalesce(sum(normalized_input_tokens_value), 0),
 		coalesce(sum(output_tokens), 0),
@@ -1011,7 +1018,7 @@ func mergeRawAccountRows(
 		coalesce(max(nullif(auth_index, '')), ''),
 		coalesce(max(nullif(source, '')), ''),
 		coalesce(max(nullif(source_hash, '')), ''),
-		min(model), billing_model_value, pricing_model_value, coalesce(service_tier, ''),
+			min(analytics_model_value), billing_model_value, pricing_model_value, coalesce(service_tier, ''),
 		context_threshold_tokens_value,
 		count(*),
 		coalesce(sum(case when failed = 0 then 1 else 0 end), 0),
@@ -1030,7 +1037,7 @@ func mergeRawAccountRows(
 		coalesce(sum(total_tokens), 0), min(timestamp_ms), max(timestamp_ms), 0
 	from banded_events
 	where account_key_value in (%s)
-	group by account_key_value, billing_model_value, pricing_model_value,
+		group by account_key_value, analytics_model_value, billing_model_value, pricing_model_value,
 		coalesce(service_tier, ''), context_threshold_tokens_value
 	order by account_key_value, max(timestamp_ms) desc`,
 		usage.LongContextInputTokenThreshold,
@@ -1098,6 +1105,7 @@ func scanAndMergeAccountRows(rows *sql.Rows, grouped map[accountKey]*AccountRow)
 func mergeAccountRow(grouped map[accountKey]*AccountRow, row AccountRow) {
 	key := accountKey{
 		accountKey:             row.AccountKey,
+		model:                  row.Model,
 		billingModel:           row.BillingModel,
 		pricingModel:           row.PricingModel,
 		serviceTier:            row.ServiceTier,
@@ -1173,6 +1181,9 @@ func sortedAccountRows(grouped map[accountKey]*AccountRow) []AccountRow {
 		if left.LastSeenMS != right.LastSeenMS {
 			return left.LastSeenMS > right.LastSeenMS
 		}
+		if left.Model != right.Model {
+			return left.Model < right.Model
+		}
 		if left.BillingModel != right.BillingModel {
 			return left.BillingModel < right.BillingModel
 		}
@@ -1190,7 +1201,7 @@ func sortedAccountRows(grouped map[accountKey]*AccountRow) []AccountRow {
 func storedHourlyConditions(revision string, filter HourlyFilter, fromMS, toMS int64) ([]string, []any) {
 	conditions := []string{"structure_revision = ?", "bucket_ms >= ?", "bucket_ms < ?"}
 	args := []any{revision, fromMS, toMS}
-	models := normalizeValues(filter.Models)
+	models := normalizeModelValues(filter.Models)
 	if len(models) > 0 {
 		placeholders := strings.TrimRight(strings.Repeat("?,", len(models)), ",")
 		conditions = append(conditions, "model in ("+placeholders+")")
@@ -1222,6 +1233,18 @@ func normalizeValues(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func normalizeModelValues(values []string) []string {
+	models := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		models = append(models, usageidentity.AnalyticsModel(trimmed))
+	}
+	return normalizeValues(models)
 }
 
 func ceilHourMS(value int64) int64 {

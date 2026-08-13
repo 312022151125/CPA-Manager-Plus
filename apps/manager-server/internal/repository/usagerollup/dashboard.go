@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 const dashboardHourMS int64 = 60 * 60 * 1000
@@ -296,8 +297,8 @@ func dashboardEventsAfterCheckpoint(ctx context.Context, tx *sql.Tx, lastEventID
 	rows, err := tx.QueryContext(ctx, `select
 	id,
 	timestamp_ms,
-	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	`+usageidentity.SQLRequestAnalyticsModelExpression("model", "requested_model")+` as model,
+	coalesce(nullif(resolved_model, ''), `+usageidentity.SQLRequestAnalyticsModelExpression("model", "requested_model")+`) as billing_model,
 	coalesce(service_tier, '') as service_tier,
 	failed,
 	coalesce(normalized_total_input_tokens, input_tokens, 0),

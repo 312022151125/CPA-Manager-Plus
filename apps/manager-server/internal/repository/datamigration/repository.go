@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageaggregate"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
@@ -488,9 +489,9 @@ func completeInTx(ctx context.Context, tx *sql.Tx, state State) (State, error) {
 			`update usage_rollup_checkpoints set last_event_id = 0, updated_at_ms = 0, last_error = null
 					where name in ('account_history', 'dashboard_hourly')`,
 			`delete from usage_hourly_aggregate_v1`,
-			`update usage_event_identity_ledger set aggregate_schema_version = 0
-					where aggregate_schema_version = 1`,
-			`update usage_hourly_aggregate_state set
+			fmt.Sprintf(`update usage_event_identity_ledger set aggregate_schema_version = 0
+					where aggregate_schema_version = %d`, usageaggregate.SchemaVersion),
+			fmt.Sprintf(`update usage_hourly_aggregate_state set
 					status = case when exists (select 1 from usage_events limit 1) then 'pending' else 'ready' end,
 					backfill_last_event_id = 0,
 					coverage_event_id = 0,
@@ -502,7 +503,7 @@ func completeInTx(ctx context.Context, tx *sql.Tx, state State) (State, error) {
 					updated_at_ms = 0,
 					finished_at_ms = null,
 					last_error = null
-				where aggregate_name = 'hourly_core' and schema_version = 1`,
+				where aggregate_name = 'hourly_core' and schema_version = %d`, usageaggregate.SchemaVersion),
 			`delete from usage_pricing_hourly_rollups_v1`,
 			`delete from usage_pricing_account_rollups_v1`,
 			`update usage_pricing_rollup_state set

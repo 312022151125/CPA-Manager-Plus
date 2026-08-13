@@ -64,6 +64,39 @@ func TestMigrationCreatesUsageMonitoringRollupSchema(t *testing.T) {
 	if accountWindowIndexes != 1 {
 		t.Fatalf("projection account window indexes = %d, want 1", accountWindowIndexes)
 	}
+	var modelIndexes int
+	if err := sqlDB.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_usage_monitoring_event_projection_model_timestamp'`).Scan(&modelIndexes); err != nil {
+		t.Fatalf("inspect projection analytics model index: %v", err)
+	}
+	if modelIndexes != 1 {
+		t.Fatalf("projection analytics model indexes = %d, want 1", modelIndexes)
+	}
+	planRows, err := sqlDB.Query(`explain query plan select event_id
+		from usage_monitoring_event_projection_v1
+		where analytics_model = ? and timestamp_ms >= ? and timestamp_ms < ?
+		order by timestamp_ms desc, event_id desc`, "deepseek-v4-flash", int64(0), int64(1))
+	if err != nil {
+		t.Fatalf("explain projection analytics model query: %v", err)
+	}
+	var planDetails []string
+	for planRows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := planRows.Scan(&id, &parent, &unused, &detail); err != nil {
+			_ = planRows.Close()
+			t.Fatalf("scan projection analytics model query plan: %v", err)
+		}
+		planDetails = append(planDetails, detail)
+	}
+	if err := planRows.Close(); err != nil {
+		t.Fatalf("close projection analytics model query plan: %v", err)
+	}
+	if err := planRows.Err(); err != nil {
+		t.Fatalf("read projection analytics model query plan: %v", err)
+	}
+	if !strings.Contains(strings.Join(planDetails, "\n"), "idx_usage_monitoring_event_projection_model_timestamp") {
+		t.Fatalf("projection analytics model query plan = %v", planDetails)
+	}
 	for indexName, expression := range map[string]string{
 		"idx_usage_monitoring_account_daily_credential_window": "trim(auth_file_snapshot)",
 		"idx_usage_monitoring_account_daily_legacy_window":     "trim(source)",
@@ -825,6 +858,167 @@ func TestUsageMonitoringProjectionSearchMatchesRawAndPreservesWildcardFallback(t
 				t.Fatal("filter option projection accepted a LIKE wildcard search that requires raw per-field semantics")
 			}
 		})
+	}
+}
+
+func TestUsageMonitoringCanonicalModelMatchesProjectionTailSelectorsSearchAndPricing(t *testing.T) {
+	_, db := newMonitoringRepositoryStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_800_057_600_000)
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"resolved-model":         {Prompt: 1},
+		"deepseek-v4-flash":      {Prompt: 2},
+		"deepseek-v4-flash(max)": {Prompt: 3},
+		"deepseek-v4-flash(low)": {Prompt: 4},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+
+	projected := monitoringRepositoryEvent(
+		"canonical-projected",
+		baseMS+1_000,
+		"stored-display-model",
+		"key-a",
+		"alice@example.com",
+		"auth-a",
+		"source-a",
+		false,
+		10,
+		5,
+		10,
+	)
+	projected.ResolvedModel = ""
+	projected.RequestedModel = "deepseek-v4-flash(low)"
+	unknown := monitoringRepositoryEvent(
+		"canonical-unknown",
+		baseMS+2_000,
+		"deepseek-v4-flash(region-us)",
+		"key-b",
+		"bob@example.com",
+		"auth-b",
+		"source-b",
+		false,
+		10,
+		5,
+		10,
+	)
+	unknown.ResolvedModel = ""
+	resolved := monitoringRepositoryEvent(
+		"canonical-resolved",
+		baseMS+3_000,
+		"deepseek-v4-flash(max)",
+		"key-c",
+		"carol@example.com",
+		"auth-c",
+		"source-c",
+		false,
+		10,
+		5,
+		10,
+	)
+	resolved.ResolvedModel = "resolved-model"
+	if _, err := db.InsertEvents(ctx, []usage.Event{projected, unknown, resolved}); err != nil {
+		t.Fatalf("insert projected canonical events: %v", err)
+	}
+	catchUpMonitoringRepository(t, ctx, db)
+
+	tail := monitoringRepositoryEvent(
+		"canonical-tail",
+		baseMS+4_000,
+		"deepseek-v4-flash(max)",
+		"key-d",
+		"dave@example.com",
+		"auth-d",
+		"source-d",
+		false,
+		10,
+		5,
+		10,
+	)
+	tail.ResolvedModel = ""
+	if _, err := db.InsertEvents(ctx, []usage.Event{tail}); err != nil {
+		t.Fatalf("insert canonical tail: %v", err)
+	}
+
+	filter := store.AnalyticsFilter{
+		FromMS:        baseMS,
+		ToMS:          baseMS + testDayMS,
+		Models:        []string{"deepseek-v4-flash"},
+		IncludeFailed: true,
+	}
+	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
+	assertProjectionCoreReadersMatchRaw(t, ctx, db, filter)
+	suffixFilter := filter
+	suffixFilter.Models = []string{"deepseek-v4-flash(max)"}
+	assertMonitoringReadersMatchRaw(t, ctx, db, suffixFilter)
+	assertProjectionCoreReadersMatchRaw(t, ctx, db, suffixFilter)
+	suffixPage, _, available, err := db.UsageMonitoringEventsPage(ctx, suffixFilter, 0, 0, 10)
+	if err != nil || !available || len(suffixPage.Items) != 3 {
+		t.Fatalf("suffix model filter page: available=%v err=%v items=%#v", available, err, suffixPage.Items)
+	}
+
+	selectors, _, available, err := db.UsageMonitoringFilterSelectors(ctx, store.AnalyticsFilter{
+		FromMS:        baseMS,
+		ToMS:          baseMS + testDayMS,
+		IncludeFailed: true,
+	})
+	if err != nil || !available {
+		t.Fatalf("load canonical selectors: available=%v err=%v", available, err)
+	}
+	if !reflect.DeepEqual(selectors.Models, []string{"deepseek-v4-flash", "deepseek-v4-flash(region-us)"}) {
+		t.Fatalf("canonical selector models = %#v", selectors.Models)
+	}
+
+	for _, query := range []string{"deepseek-v4-flash(max)", "deepseek-v4-flash"} {
+		searchFilter := store.AnalyticsFilter{
+			FromMS:        baseMS,
+			ToMS:          baseMS + testDayMS,
+			SearchQuery:   query,
+			IncludeFailed: true,
+		}
+		assertProjectionCoreReadersMatchRaw(t, ctx, db, searchFilter)
+	}
+
+	models, _, available, err := db.UsageMonitoringModelStats(ctx, store.AnalyticsFilter{
+		FromMS:        baseMS,
+		ToMS:          baseMS + testDayMS,
+		IncludeFailed: true,
+	})
+	if err != nil || !available {
+		t.Fatalf("load canonical model stats: available=%v err=%v", available, err)
+	}
+	byBillingModel := make(map[string]store.ModelStat, len(models))
+	for _, row := range models {
+		byBillingModel[row.BillingModel] = row
+	}
+	if row := byBillingModel["resolved-model"]; row.Model != "deepseek-v4-flash" || row.PricingModel != "resolved-model" || row.Calls != 1 {
+		t.Fatalf("resolved pricing row = %#v", row)
+	}
+	if row := byBillingModel["deepseek-v4-flash"]; row.Model != "deepseek-v4-flash" || row.PricingModel != "deepseek-v4-flash" || row.Calls != 2 {
+		t.Fatalf("canonical pricing row = %#v", row)
+	}
+	if row := byBillingModel["deepseek-v4-flash(region-us)"]; row.Model != "deepseek-v4-flash(region-us)" || row.PricingModel != "deepseek-v4-flash(region-us)" || row.Calls != 1 {
+		t.Fatalf("raw fallback pricing row = %#v", row)
+	}
+
+	page, _, available, err := db.UsageMonitoringEventsPage(ctx, filter, 0, 0, 10)
+	if err != nil || !available {
+		t.Fatalf("load canonical event page: available=%v err=%v", available, err)
+	}
+	if len(page.Items) != 3 {
+		t.Fatalf("canonical event page = %#v", page.Items)
+	}
+	for _, item := range page.Items {
+		if item.AnalyticsModel != "deepseek-v4-flash" || item.Model == item.AnalyticsModel {
+			t.Fatalf("event page model identities = raw:%q analytics:%q", item.Model, item.AnalyticsModel)
+		}
+		if item.EventHash == projected.EventHash {
+			if item.RequestedModel != projected.RequestedModel {
+				t.Fatalf("event page requested model = %q, want explicit value %q", item.RequestedModel, projected.RequestedModel)
+			}
+		} else if item.RequestedModel != item.Model {
+			t.Fatalf("event page requested model = %q, want raw fallback %q", item.RequestedModel, item.Model)
+		}
 	}
 }
 
