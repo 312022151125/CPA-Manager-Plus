@@ -104,6 +104,20 @@ describe('buildEventRows', () => {
     expect(row.searchText).toContain('medium');
   });
 
+  it('uses the analytics model as primary identity while keeping requested and resolved models searchable', () => {
+    const [row] = buildRows({
+      __modelName: 'deepseek-v4-flash',
+      __requestedModel: 'deepseek-v4-flash(max)',
+      __resolvedModel: 'resolved-deepseek-v4-flash',
+    });
+
+    expect(row.model).toBe('deepseek-v4-flash');
+    expect(row.requestedModel).toBe('deepseek-v4-flash(max)');
+    expect(row.resolvedModel).toBe('resolved-deepseek-v4-flash');
+    expect(row.searchText).toContain('deepseek-v4-flash(max)');
+    expect(row.searchText).toContain('resolved-deepseek-v4-flash');
+  });
+
   it('keeps response header diagnostics searchable', () => {
     const [row] = buildRows({
       failed: true,

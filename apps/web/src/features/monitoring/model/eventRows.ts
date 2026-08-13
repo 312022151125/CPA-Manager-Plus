@@ -103,6 +103,7 @@ export const buildEventRows = (
       const endpoint = readString(detail.__endpoint) || '-';
       const endpointMethod = readString(detail.__endpointMethod) || '-';
       const endpointPath = readString(detail.__endpointPath) || endpoint;
+      const requestedModel = readString(detail.__requestedModel);
       const resolvedModel = readString(detail.__resolvedModel);
       const projectId = readString(detail.auth_project_id_snapshot ?? detail.authProjectIdSnapshot);
       const inputTokens = Math.max(Number(detail.tokens?.input_tokens) || 0, 0);
@@ -190,6 +191,7 @@ export const buildEventRows = (
         dayKey,
         hourLabel,
         model: readString(detail.__modelName) || '-',
+        requestedModel: requestedModel || undefined,
         resolvedModel: resolvedModel || undefined,
         endpoint,
         endpointMethod,
@@ -254,6 +256,7 @@ export const buildEventRows = (
           endpointMethod,
           authMeta?.provider || snapshotProvider,
           authMeta?.planType,
+          requestedModel,
           resolvedModel,
           projectId,
           reasoningEffort,

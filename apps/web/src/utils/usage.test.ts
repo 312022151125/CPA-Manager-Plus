@@ -14,6 +14,7 @@ import {
   getServiceTierMultiplier,
   inferCacheInputMode,
   loadModelPrices,
+  normalizeAnalyticsModel,
   normalizeCacheAccounting,
   normalizeUsageSourceId,
 } from './usage';
@@ -120,6 +121,20 @@ describe('usage source candidates', () => {
   });
 });
 
+describe('normalizeAnalyticsModel', () => {
+  it('removes only supported CPA reasoning suffixes', () => {
+    expect(normalizeAnalyticsModel('deepseek-v4-flash(max)')).toBe('deepseek-v4-flash');
+    expect(normalizeAnalyticsModel('gemini-2.5-pro(+08192)')).toBe('gemini-2.5-pro');
+    expect(normalizeAnalyticsModel('gemini-2.5-pro(-000)')).toBe('gemini-2.5-pro');
+    expect(normalizeAnalyticsModel('custom(model)(HIGH)')).toBe('custom(model)');
+    expect(normalizeAnalyticsModel('custom-model(region-us)')).toBe('custom-model(region-us)');
+    expect(normalizeAnalyticsModel('custom-model(9223372036854775808)')).toBe(
+      'custom-model(9223372036854775808)'
+    );
+    expect(normalizeAnalyticsModel(' custom-model(max) ')).toBe(' custom-model(max) ');
+  });
+});
+
 describe('usage detail collection', () => {
   it('preserves Codex identity from legacy auth type metadata', () => {
     const usageData = {
@@ -218,7 +233,7 @@ describe('usage detail collection', () => {
     );
   });
 
-  it('extracts resolved_model alongside the requested model name', () => {
+  it('extracts analytics, requested, and resolved model identities', () => {
     const usageData = {
       apis: {
         'POST /v1/chat/completions': {
@@ -229,6 +244,8 @@ describe('usage detail collection', () => {
                   timestamp: '2026-05-19T10:00:00Z',
                   source: 'alice@example.com',
                   auth_index: 'auth-1',
+                  analytics_model: 'gpt-5',
+                  requested_model: 'gpt-5.4(max)',
                   resolved_model: 'gpt-5.5',
                   tokens: { input_tokens: 1 },
                   failed: false,
@@ -242,8 +259,53 @@ describe('usage detail collection', () => {
 
     const detail = collectUsageDetails(usageData)[0];
     expect(detail.__modelName).toBe('gpt-5.4');
+    expect(detail.__requestedModel).toBe('gpt-5.4(max)');
     expect(detail.__resolvedModel).toBe('gpt-5.5');
-    expect(collectUsageDetailsWithEndpoint(usageData)[0].__resolvedModel).toBe('gpt-5.5');
+    expect(collectUsageDetailsWithEndpoint(usageData)[0]).toMatchObject({
+      __modelName: 'gpt-5.4',
+      __requestedModel: 'gpt-5.4(max)',
+      __resolvedModel: 'gpt-5.5',
+    });
+  });
+
+  it('derives analytics identity for legacy payloads without analytics_model', () => {
+    const usageData = {
+      apis: {
+        'POST /v1/chat/completions': {
+          models: {
+            'deepseek-v4-flash(max)': {
+              details: [
+                {
+                  timestamp: '2026-05-19T10:00:00Z',
+                  tokens: { input_tokens: 1 },
+                  failed: false,
+                },
+              ],
+            },
+            'custom-model(region-us)': {
+              details: [
+                {
+                  timestamp: '2026-05-19T10:00:01Z',
+                  tokens: { input_tokens: 1 },
+                  failed: false,
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    expect(collectUsageDetailsWithEndpoint(usageData)).toEqual([
+      expect.objectContaining({
+        __modelName: 'deepseek-v4-flash',
+        __requestedModel: 'deepseek-v4-flash(max)',
+      }),
+      expect.objectContaining({
+        __modelName: 'custom-model(region-us)',
+        __requestedModel: 'custom-model(region-us)',
+      }),
+    ]);
   });
 
   it('copies TTFT metadata into normalized usage details', () => {
@@ -653,6 +715,37 @@ describe('calculateCost model price preference', () => {
       prices
     );
     expect(cost).toBeCloseTo(50);
+  });
+
+  it('prefers analytics model pricing before the raw requested suffix model', () => {
+    const cost = calculateCost(
+      {
+        tokens: { input_tokens: 1_000_000, output_tokens: 0 },
+        __modelName: 'deepseek-v4-flash',
+        __requestedModel: 'deepseek-v4-flash(max)',
+      },
+      {
+        'deepseek-v4-flash': { prompt: 2, completion: 0, cache: 0 },
+        'deepseek-v4-flash(max)': { prompt: 9, completion: 0, cache: 0 },
+      }
+    );
+
+    expect(cost).toBeCloseTo(2);
+  });
+
+  it('falls back to the raw requested model when analytics pricing is unavailable', () => {
+    const cost = calculateCost(
+      {
+        tokens: { input_tokens: 1_000_000, output_tokens: 0 },
+        __modelName: 'deepseek-v4-flash',
+        __requestedModel: 'deepseek-v4-flash(max)',
+      },
+      {
+        'deepseek-v4-flash(max)': { prompt: 9, completion: 0, cache: 0 },
+      }
+    );
+
+    expect(cost).toBeCloseTo(9);
   });
 
   it('keeps resolved model tier behavior when using a requested price fallback', () => {

@@ -148,6 +148,7 @@ export type MonitoringEventRow = {
   dayKey: string;
   hourLabel: string;
   model: string;
+  requestedModel?: string;
   resolvedModel?: string;
   endpoint: string;
   endpointMethod: string;

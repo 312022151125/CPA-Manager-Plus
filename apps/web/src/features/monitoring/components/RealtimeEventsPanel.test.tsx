@@ -399,6 +399,26 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toMatch(/class="[^"]*realtimeModelText[^"]*"/);
   });
 
+  it('renders the analytics model first and preserves requested and resolved model audit values', () => {
+    const markup = renderPanel(
+      baseRow({
+        model: 'deepseek-v4-flash',
+        requestedModel: 'deepseek-v4-flash(max)',
+        resolvedModel: 'resolved-deepseek-v4-flash',
+      })
+    );
+
+    expect(markup).toContain(
+      'title="deepseek-v4-flash\ndeepseek-v4-flash(max)\nresolved-deepseek-v4-flash"'
+    );
+    expect(markup.indexOf('>deepseek-v4-flash</span>')).toBeLessThan(
+      markup.indexOf('>deepseek-v4-flash(max)</small>')
+    );
+    expect(markup.indexOf('>deepseek-v4-flash(max)</small>')).toBeLessThan(
+      markup.indexOf('>resolved-deepseek-v4-flash</small>')
+    );
+  });
+
   it('switches realtime source labels between masked and full display', () => {
     const row = baseRow({
       source: 'very-long-user@example.com',
