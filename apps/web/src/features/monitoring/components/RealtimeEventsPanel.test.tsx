@@ -399,7 +399,7 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toMatch(/class="[^"]*realtimeModelText[^"]*"/);
   });
 
-  it('renders the analytics model first and preserves requested and resolved model audit values', () => {
+  it('renders the requested model first and the upstream resolved model second', () => {
     const markup = renderPanel(
       baseRow({
         model: 'deepseek-v4-flash',
@@ -409,14 +409,27 @@ describe('RealtimeEventsPanel', () => {
     );
 
     expect(markup).toContain(
-      'title="deepseek-v4-flash\ndeepseek-v4-flash(max)\nresolved-deepseek-v4-flash"'
+      'title="deepseek-v4-flash(max)\nresolved-deepseek-v4-flash"'
     );
-    expect(markup.indexOf('>deepseek-v4-flash</span>')).toBeLessThan(
-      markup.indexOf('>deepseek-v4-flash(max)</small>')
-    );
-    expect(markup.indexOf('>deepseek-v4-flash(max)</small>')).toBeLessThan(
+    expect(markup.indexOf('>deepseek-v4-flash(max)</span>')).toBeLessThan(
       markup.indexOf('>resolved-deepseek-v4-flash</small>')
     );
+    expect(markup).not.toContain('>deepseek-v4-flash</span>');
+  });
+
+  it('does not duplicate an unchanged requested and resolved model', () => {
+    const model = 'deepseek-chat(region-us)';
+    const markup = renderPanel(
+      baseRow({
+        model,
+        requestedModel: model,
+        resolvedModel: model,
+      })
+    );
+
+    expect(markup).toContain(`title="${model}"`);
+    expect(markup).toContain(`>${model}</span>`);
+    expect(markup).not.toContain(`>${model}</small>`);
   });
 
   it('switches realtime source labels between masked and full display', () => {

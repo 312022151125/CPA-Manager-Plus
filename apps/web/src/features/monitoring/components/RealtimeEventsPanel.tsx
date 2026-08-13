@@ -1099,15 +1099,11 @@ export function RealtimeEventsPanel({
             {pagination.pageItems.map((row) => {
               const sourceDisplay = buildRealtimeSourceDisplay(row, t, accountDisplayMode);
               const apiKeyDisplay = buildRealtimeApiKeyDisplay(row, t);
-              const showRequestedModel =
-                row.requestedModel &&
-                row.requestedModel.trim() &&
-                row.requestedModel.trim() !== row.model;
-              const showResolvedModel =
-                row.resolvedModel &&
-                row.resolvedModel.trim() &&
-                row.resolvedModel.trim() !== row.model &&
-                row.resolvedModel.trim() !== row.requestedModel?.trim();
+              const requestedModel = row.requestedModel?.trim() || row.model;
+              const resolvedModel = row.resolvedModel?.trim() || '';
+              const showResolvedModel = Boolean(
+                resolvedModel && resolvedModel !== requestedModel
+              );
               const reasoningEffort = formatOptionalText(row.reasoningEffort);
               const serviceTier = formatOptionalText(row.serviceTier);
               const requestServiceTier = formatOptionalText(row.requestServiceTier);
@@ -1145,25 +1141,16 @@ export function RealtimeEventsPanel({
                   <td>
                     <div
                       className={`${styles.primaryCell} ${styles.realtimeModelCell}`}
-                      title={[
-                        row.model,
-                        showRequestedModel ? row.requestedModel : '',
-                        showResolvedModel ? row.resolvedModel : '',
-                      ]
+                      title={[requestedModel, showResolvedModel ? resolvedModel : '']
                         .filter(Boolean)
                         .join('\n')}
                     >
                       <span className={`${styles.monoCell} ${styles.realtimeModelText}`}>
-                        {row.model}
+                        {requestedModel}
                       </span>
-                      {showRequestedModel ? (
-                        <small className={`${styles.monoCell} ${styles.realtimeModelText}`}>
-                          {row.requestedModel}
-                        </small>
-                      ) : null}
                       {showResolvedModel ? (
                         <small className={`${styles.monoCell} ${styles.realtimeModelText}`}>
-                          {row.resolvedModel}
+                          {resolvedModel}
                         </small>
                       ) : null}
                     </div>
