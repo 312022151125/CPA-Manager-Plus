@@ -305,13 +305,12 @@ jobs:
                 --mode "${verification_mode}" \
                 --allow-missing-assets "${allow_missing}" \
                 --result-path "${verification_json}"
-              complete="$(node --input-type=module - "${verification_json}" <<'NODE'
-              import { readFileSync } from 'node:fs';
+              complete="$(node --input-type=module -e '
+                import { readFileSync } from "node:fs";
 
-              const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-              process.stdout.write(String(result.complete));
-              NODE
-              )"
+                const result = JSON.parse(readFileSync(process.argv[1], "utf8"));
+                process.stdout.write(String(result.complete));
+              ' "${verification_json}")"
               echo "state=${verification_mode}" >> "${GITHUB_OUTPUT}"
               if [ "${verification_mode}" = "draft" ]; then
                 echo "finalize=true" >> "${GITHUB_OUTPUT}"
@@ -329,13 +328,12 @@ jobs:
                   echo "Existing GitHub Release matches the checked payload; upload skipped." >> "${GITHUB_STEP_SUMMARY}"
                 fi
               else
-                missing_upload_files="$(node --input-type=module - "${verification_json}" <<'NODE'
-                import { readFileSync } from 'node:fs';
+                missing_upload_files="$(node --input-type=module -e '
+                  import { readFileSync } from "node:fs";
 
-                const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-                process.stdout.write(result.missingAssets.map(({ filePath }) => filePath).join('\n'));
-                NODE
-                )"
+                  const result = JSON.parse(readFileSync(process.argv[1], "utf8"));
+                  process.stdout.write(result.missingAssets.map(({ filePath }) => filePath).join("\n"));
+                ' "${verification_json}")"
                 echo "publish=true" >> "${GITHUB_OUTPUT}"
                 write_upload_files "${missing_upload_files}"
                 if [ "${verification_mode}" = "draft" ]; then
