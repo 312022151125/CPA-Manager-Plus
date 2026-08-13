@@ -1098,6 +1098,79 @@ describe('monitoringCenterPageModel account quota', () => {
     });
   });
 
+  it('does not synthesize monthly credits from an on-demand reset timestamp', async () => {
+    vi.mocked(fetchXaiQuota).mockResolvedValue({
+      periodType: 'weekly',
+      usagePercent: 0,
+      periodStart: '2026-08-13T00:00:00Z',
+      periodEnd: '2026-08-20T00:00:00Z',
+      productUsage: [],
+      monthlyLimitCents: null,
+      usedCents: null,
+      includedUsedCents: null,
+      onDemandCapCents: 5_000,
+      onDemandUsedCents: 0,
+      onDemandUsedPercent: 0,
+      billingPeriodEnd: '2026-09-01T00:00:00Z',
+      usedPercent: null,
+    });
+
+    const entry = await requestAccountQuota(
+      createTarget({ provider: 'xai', authIndex: '3', fileName: 'xai.json' }),
+      t
+    );
+
+    expect(entry.windows?.map((window) => window.id)).toEqual(['weekly-limit', 'pay-as-you-go']);
+  });
+
+  it('does not synthesize monthly credits from weekly protobuf zero placeholders', async () => {
+    vi.mocked(fetchXaiQuota).mockResolvedValue({
+      periodType: 'weekly',
+      usagePercent: 0,
+      periodStart: '2026-08-13T00:00:00Z',
+      periodEnd: '2026-08-20T00:00:00Z',
+      productUsage: [],
+      monthlyLimitCents: null,
+      usedCents: 0,
+      includedUsedCents: 0,
+      onDemandCapCents: 0,
+      onDemandUsedCents: 0,
+      onDemandUsedPercent: null,
+      billingPeriodEnd: '2026-09-01T00:00:00Z',
+      usedPercent: null,
+    });
+
+    const entry = await requestAccountQuota(
+      createTarget({ provider: 'xai', authIndex: '3', fileName: 'xai.json' }),
+      t
+    );
+
+    expect(entry.windows?.map((window) => window.id)).toEqual(['weekly-limit']);
+  });
+
+  it('does not synthesize monthly credits from usage without limit evidence', async () => {
+    vi.mocked(fetchXaiQuota).mockResolvedValue({
+      periodType: 'monthly',
+      usagePercent: null,
+      productUsage: [],
+      monthlyLimitCents: null,
+      usedCents: 500,
+      includedUsedCents: 500,
+      onDemandCapCents: null,
+      onDemandUsedCents: null,
+      onDemandUsedPercent: null,
+      billingPeriodEnd: '2026-09-01T00:00:00Z',
+      usedPercent: null,
+    });
+
+    const entry = await requestAccountQuota(
+      createTarget({ provider: 'xai', authIndex: '3', fileName: 'xai.json' }),
+      t
+    );
+
+    expect(entry.windows).toEqual([]);
+  });
+
   it('maps official API health without synthesizing quota windows', async () => {
     vi.mocked(fetchXaiQuota).mockResolvedValue({
       periodType: 'unknown',

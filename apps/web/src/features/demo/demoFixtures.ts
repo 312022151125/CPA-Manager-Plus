@@ -4737,7 +4737,7 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
     actionReason: 'monitoring.xai_inspection_reason_inference_manual_disable',
     actionStatus: 'none',
     statusCode: 200,
-    usedPercent: 22,
+    usedPercent: 3,
     isQuota: false,
     planType: null,
     quotaWindows: [
@@ -4746,13 +4746,6 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
         labelKey: 'xai_quota.weekly_limit',
         usedPercent: 3,
         resetLabel: new Date(baseNow + 6 * day).toISOString(),
-        limitWindowSeconds: null,
-      },
-      {
-        id: 'xai-monthly',
-        labelKey: 'xai_quota.monthly_limit',
-        usedPercent: 22,
-        resetLabel: new Date(baseNow + 19 * day).toISOString(),
         limitWindowSeconds: null,
       },
       {
@@ -4791,13 +4784,6 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
         labelKey: 'xai_quota.weekly_limit',
         usedPercent: 100,
         resetLabel: new Date(baseNow + 6 * day).toISOString(),
-        limitWindowSeconds: null,
-      },
-      {
-        id: 'xai-monthly',
-        labelKey: 'xai_quota.monthly_limit',
-        usedPercent: 100,
-        resetLabel: new Date(baseNow + 19 * day).toISOString(),
         limitWindowSeconds: null,
       },
       {
@@ -4841,13 +4827,6 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
         limitWindowSeconds: null,
       },
       {
-        id: 'xai-monthly',
-        labelKey: 'xai_quota.monthly_limit',
-        usedPercent: 12,
-        resetLabel: new Date(baseNow + 19 * day).toISOString(),
-        limitWindowSeconds: null,
-      },
-      {
         id: 'xai-product-0',
         labelKey: 'xai_quota.product_usage',
         labelParams: { product: 'Grok Build' },
@@ -4875,7 +4854,7 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
     actionReason: 'monitoring.xai_inspection_reason_inference_healthy',
     actionStatus: 'none',
     statusCode: 200,
-    usedPercent: 22,
+    usedPercent: 100,
     isQuota: false,
     planType: null,
     quotaWindows: [
@@ -4889,7 +4868,14 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
       {
         id: 'xai-monthly',
         labelKey: 'xai_quota.monthly_limit',
-        usedPercent: 22,
+        usedPercent: 100,
+        resetLabel: new Date(baseNow + 19 * day).toISOString(),
+        limitWindowSeconds: null,
+      },
+      {
+        id: 'xai-on-demand',
+        labelKey: 'xai_quota.on_demand_cap',
+        usedPercent: 26,
         resetLabel: new Date(baseNow + 19 * day).toISOString(),
         limitWindowSeconds: null,
       },
@@ -4920,7 +4906,7 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
     actionReason: 'monitoring.xai_inspection_reason_inference_healthy',
     actionStatus: 'none',
     statusCode: 200,
-    usedPercent: 22,
+    usedPercent: 100,
     isQuota: false,
     planType: null,
     quotaWindows: [
@@ -4934,7 +4920,14 @@ const buildDemoInspectionResults = (baseNow: number): CodexInspectionResult[] =>
       {
         id: 'xai-monthly',
         labelKey: 'xai_quota.monthly_limit',
-        usedPercent: 22,
+        usedPercent: 100,
+        resetLabel: new Date(baseNow + 19 * day).toISOString(),
+        limitWindowSeconds: null,
+      },
+      {
+        id: 'xai-on-demand',
+        labelKey: 'xai_quota.on_demand_cap',
+        usedPercent: 100,
         resetLabel: new Date(baseNow + 19 * day).toISOString(),
         limitWindowSeconds: null,
       },
@@ -6217,15 +6210,13 @@ const getDemoQuotaStoreStateByFileName = (): DemoQuotaStoreState => ({
           { product: 'Grok Code Fast', usagePercent: 37 },
           { product: 'Grok Code Thinking', usagePercent: 52 },
         ],
-        monthlyLimitCents: 100_000,
-        usedCents: 86_000,
-        includedUsedCents: 86_000,
-        onDemandCapCents: 50_000,
-        onDemandUsedCents: 12_000,
-        onDemandUsedPercent: 24,
-        billingPeriodStart: demoResetIso(-15 * day),
-        billingPeriodEnd: demoResetIso(15 * day),
-        usedPercent: 86,
+        monthlyLimitCents: null,
+        usedCents: null,
+        includedUsedCents: null,
+        onDemandCapCents: null,
+        onDemandUsedCents: null,
+        onDemandUsedPercent: null,
+        usedPercent: null,
       },
     },
     'xai-payg-buffer.json': {
@@ -7123,21 +7114,24 @@ export const getDemoApiCallResult = (payload: DemoApiCallPayload = {}) => {
       },
     };
   } else if (requestUrl.includes('/billing') && requestUrl.includes('grok.com')) {
-    body = {
-      config: {
-        currentPeriod: {
-          type: 'USAGE_PERIOD_TYPE_MONTHLY',
-          start: new Date(now() - 11 * day).toISOString(),
-          end: new Date(now() + 19 * day).toISOString(),
-        },
-        monthlyLimit: { val: 10000 },
-        used: { val: isXaiSpendingLimited ? 10000 : isXaiExpired ? 1200 : 2200 },
-        onDemandCap: { val: 0 },
-        onDemandUsed: { val: 0 },
-        billingPeriodStart: new Date(now() - 11 * day).toISOString(),
-        billingPeriodEnd: new Date(now() + 19 * day).toISOString(),
-      },
-    };
+    const usesLegacyBilling = ['xai-payg-buffer-02', 'xai-payg-cap-03'].includes(authIndex);
+    body = usesLegacyBilling
+      ? {
+          config: {
+            currentPeriod: {
+              type: 'USAGE_PERIOD_TYPE_MONTHLY',
+              start: new Date(now() - 11 * day).toISOString(),
+              end: new Date(now() + 19 * day).toISOString(),
+            },
+            monthlyLimit: { val: 10000 },
+            used: { val: authIndex === 'xai-payg-cap-03' ? 15000 : 12600 },
+            onDemandCap: { val: authIndex === 'xai-payg-cap-03' ? 5000 : 10000 },
+            onDemandUsed: { val: authIndex === 'xai-payg-cap-03' ? 5000 : 2600 },
+            billingPeriodStart: new Date(now() - 11 * day).toISOString(),
+            billingPeriodEnd: new Date(now() + 19 * day).toISOString(),
+          },
+        }
+      : { config: {} };
   } else if (requestUrl.includes('api.x.ai/v1/me')) {
     if (isXaiExpired) {
       statusCode = 401;
