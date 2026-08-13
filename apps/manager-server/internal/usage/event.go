@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 type Event struct {
@@ -20,6 +22,7 @@ type Event struct {
 	Provider              string `json:"provider,omitempty"`
 	ExecutorType          string `json:"executor_type,omitempty"`
 	Model                 string `json:"model"`
+	AnalyticsModel        string `json:"analytics_model,omitempty"`
 	RequestedModel        string `json:"requested_model,omitempty"`
 	ResolvedModel         string `json:"resolved_model,omitempty"`
 	Endpoint              string `json:"endpoint,omitempty"`
@@ -131,6 +134,7 @@ type Detail struct {
 	AuthSnapshotAtMS      int64                   `json:"auth_snapshot_at_ms,omitempty"`
 	LatencyMS             *int64                  `json:"latency_ms,omitempty"`
 	TTFTMS                *int64                  `json:"ttft_ms,omitempty"`
+	RequestedModel        string                  `json:"requested_model,omitempty"`
 	ResolvedModel         string                  `json:"resolved_model,omitempty"`
 	ReasoningEffort       string                  `json:"reasoning_effort,omitempty"`
 	ServiceTier           string                  `json:"service_tier,omitempty"`
@@ -565,6 +569,7 @@ func NormalizeRaw(raw []byte) (Event, error) {
 		Provider:                      provider,
 		ExecutorType:                  executorType,
 		Model:                         model,
+		AnalyticsModel:                usageidentity.AnalyticsModelForRequest(model, requestedModel),
 		RequestedModel:                requestedModel,
 		ResolvedModel:                 resolvedModel,
 		Endpoint:                      endpoint,
@@ -610,6 +615,7 @@ func NormalizeRaw(raw []byte) (Event, error) {
 	if event.Model == "" {
 		event.Model = "-"
 	}
+	event.AnalyticsModel = usageidentity.AnalyticsModelForRequest(event.Model, event.RequestedModel)
 	AttachResponseHeaderMetadata(&event, ResponseHeaderMetadataFromRecord(record, time.UnixMilli(timestampMS)))
 	event.EventHash = buildEventHash(event)
 	return event, nil
@@ -635,7 +641,7 @@ func BuildPayload(events []Event) Payload {
 			apiEntry = &APIAggregate{Models: map[string]*ModelAggregate{}}
 			payload.APIs[endpoint] = apiEntry
 		}
-		model := event.Model
+		model := usageidentity.AnalyticsModelForRequest(event.Model, event.RequestedModel)
 		if model == "" {
 			model = "-"
 		}
@@ -650,6 +656,10 @@ func BuildPayload(events []Event) Payload {
 			event.CacheReadTokens,
 			event.CacheCreationTokens,
 		)
+		requestedModel := event.RequestedModel
+		if requestedModel == "" {
+			requestedModel = event.Model
+		}
 		modelEntry.Details = append(modelEntry.Details, Detail{
 			Timestamp:             event.Timestamp,
 			Source:                event.Source,
@@ -663,6 +673,7 @@ func BuildPayload(events []Event) Payload {
 			AuthSnapshotAtMS:      event.AuthSnapshotAtMS,
 			LatencyMS:             event.LatencyMS,
 			TTFTMS:                event.TTFTMS,
+			RequestedModel:        requestedModel,
 			ResolvedModel:         event.ResolvedModel,
 			ReasoningEffort:       event.ReasoningEffort,
 			ServiceTier:           event.ServiceTier,
