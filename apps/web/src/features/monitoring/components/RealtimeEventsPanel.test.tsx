@@ -107,6 +107,7 @@ type PanelOverrides = {
   eventsRetentionLimited?: boolean;
   eventsTotalCount?: number;
   eventsLoadedCount?: number;
+  hasPrices?: boolean;
 };
 
 const baseRow = (overrides: Partial<PanelRow> = {}): PanelRow => ({
@@ -180,7 +181,7 @@ const renderPanel = (row: PanelRow, overrides: PanelOverrides = {}) =>
       eventsTotalCount={overrides.eventsTotalCount ?? 1}
       eventsLoadedCount={overrides.eventsLoadedCount ?? 1}
       overallLoading={false}
-      hasPrices={false}
+      hasPrices={overrides.hasPrices ?? false}
       accountDisplayMode={overrides.accountDisplayMode ?? 'masked'}
       locale="en-US"
       emptyState={<span>empty</span>}
@@ -370,6 +371,12 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain('role="tooltip"');
     expect(markup).toContain('aria-describedby=');
     expect(markup).not.toContain('HTTP');
+  });
+
+  it('keeps realtime request estimated cost at three decimal places', () => {
+    const markup = renderPanel(baseRow({ totalCost: 0.1264 }), { hasPrices: true });
+
+    expect(markup).toContain('$0.126');
   });
 
   it('renders API key alias inside the source cell without adding another column', () => {
