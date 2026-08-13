@@ -11,6 +11,7 @@ export type {
   ProviderHealthCheckSummary,
 } from './ProviderHealthCheckDrawer';
 export * from './ProviderEditDrawer';
+export * from './CredentialWeightInput';
 export * from './hooks/useProviderRecentRequests';
 export * from './types';
 export * from './utils';

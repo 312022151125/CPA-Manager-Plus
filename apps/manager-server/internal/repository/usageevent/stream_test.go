@@ -39,6 +39,9 @@ func TestWriteCompatibleUsageMatchesBuildPayload(t *testing.T) {
 	events[2].CacheTokens = 7
 	events[2].CacheReadTokens = 3
 	events[2].CacheCreationTokens = 2
+	events[2].ClientIP = "192.0.2.10"
+	events[2].XForwardedFor = "203.0.113.5"
+	events[2].UserAgent = "test-client/1.0"
 	events[3].Failed = true
 	events[3].FailStatusCode = 429
 	events[3].FailSummary = "rate limited"
@@ -60,6 +63,11 @@ func TestWriteCompatibleUsageMatchesBuildPayload(t *testing.T) {
 	}
 	if !json.Valid(output.Bytes()) {
 		t.Fatalf("invalid JSON: %s", output.String())
+	}
+	for _, key := range []string{"client_ip", "x_forwarded_for", "user_agent"} {
+		if strings.Contains(output.String(), key) {
+			t.Fatalf("compatible usage leaked %s: %s", key, output.String())
+		}
 	}
 	var actual usage.Payload
 	if err := json.Unmarshal(output.Bytes(), &actual); err != nil {
@@ -538,6 +546,9 @@ func TestWriteExportJSONLUsesRecentLimitAndAscendingKeysetOrder(t *testing.T) {
 		event := streamTestEvent(fmt.Sprintf("event-%03d", index), int64(index), "POST /v1/responses", "gpt-test")
 		event.RawJSON = `{"secret":"must-not-export"}`
 		event.FailBody = "must-not-export"
+		event.ClientIP = "192.0.2.10"
+		event.XForwardedFor = "203.0.113.5"
+		event.UserAgent = "test-client/1.0"
 		events = append(events, event)
 	}
 	usage.AttachResponseHeaderMetadata(&events[len(events)-1], &usage.ResponseHeaderMetadata{
@@ -566,6 +577,15 @@ func TestWriteExportJSONLUsesRecentLimitAndAscendingKeysetOrder(t *testing.T) {
 		}
 		if event.RawJSON != "" || event.FailBody != "" {
 			t.Fatalf("line %d exposes sensitive fields: %#v", index, event)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			t.Fatalf("decode raw line %d: %v", index, err)
+		}
+		for _, key := range []string{"client_ip", "x_forwarded_for", "user_agent"} {
+			if _, ok := raw[key]; ok {
+				t.Fatalf("line %d exposes request metadata %s: %s", index, key, line)
+			}
 		}
 	}
 	var last usage.Event

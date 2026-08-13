@@ -13,10 +13,11 @@ import type {
 import {
   getAuthFilePatchTarget,
   type AuthFileCodexInspectionSnapshot,
-} from '@/features/authFiles/model/authFilesPageModel';
+} from '@/features/authFiles/model/credentialStatus';
 import type { MonitoringAccountHistoryItem, MonitoringAnalyticsEventRow } from '@/services/api';
 import { parseQuotaResetLabelMs } from '@/utils/quota/formatters';
 import { formatUsd } from '@/utils/usage';
+import { getEffectiveAccountInspectionAction } from './accountCredentialEvidence';
 
 export type AccountsView = 'accounts' | 'health' | 'oauth';
 export type DetailTab = 'overview' | 'quota' | 'config' | 'models' | 'diagnostics';
@@ -369,11 +370,16 @@ export const toAuthFileCodexInspectionSnapshot = (
     accountId: identity.accountId,
     accountSnapshot: identity.accountSnapshot,
     statusCode: row.inspection.statusCode,
-    action: row.inspection.action,
+    action: getEffectiveAccountInspectionAction(row.inspection),
+    actionStatus: row.inspection.actionStatus,
+    executedAction: row.inspection.executedAction,
     usedPercent: row.inspection.usedPercent,
     isQuota:
       row.inspection.isQuota ??
-      (row.inspection.usedPercent !== null || row.inspection.action === 'disable' ? true : null),
+      (row.inspection.usedPercent !== null ||
+      getEffectiveAccountInspectionAction(row.inspection) === 'disable'
+        ? true
+        : null),
     inspectionAtMs: row.inspection.createdAtMs,
   };
 };

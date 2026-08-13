@@ -8,6 +8,7 @@ import type {
 } from '@/types';
 import type { Config } from '@/types/config';
 import { buildHeaderObject } from '@/utils/headers';
+import { normalizeCredentialWeight } from '@/utils/credentialWeight';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -173,6 +174,8 @@ const normalizeApiKeyEntry = (entry: unknown): ApiKeyEntry | null => {
     proxyUrl: proxyUrl ? String(proxyUrl) : undefined,
     headers,
   };
+  const weight = normalizeCredentialWeight(record?.weight);
+  if (weight !== undefined) result.weight = weight;
   if (authIndex) result.authIndex = authIndex;
   return result;
 };
@@ -195,6 +198,8 @@ const normalizeProviderKeyConfig = (item: unknown): ProviderKeyConfig | null => 
       config.priority = parsed;
     }
   }
+  const weight = normalizeCredentialWeight(record?.weight);
+  if (weight !== undefined) config.weight = weight;
   const prefix = normalizePrefix(record?.prefix ?? record?.['prefix']);
   if (prefix) config.prefix = prefix;
   const baseUrl = record ? (record['base-url'] ?? record.baseUrl) : undefined;
@@ -288,6 +293,8 @@ const normalizeGeminiKeyConfig = (item: unknown): GeminiKeyConfig | null => {
       config.priority = parsed;
     }
   }
+  const weight = normalizeCredentialWeight(record?.weight);
+  if (weight !== undefined) config.weight = weight;
   const prefix = normalizePrefix(record?.prefix ?? record?.['prefix']);
   if (prefix) config.prefix = prefix;
   const baseUrl = record ? (record['base-url'] ?? record.baseUrl ?? record['base_url']) : undefined;

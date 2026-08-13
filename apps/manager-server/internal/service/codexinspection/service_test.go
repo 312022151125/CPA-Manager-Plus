@@ -85,6 +85,24 @@ type failDisableOwnershipBatchRepository struct {
 	cancel context.CancelFunc
 }
 
+type failFirstQuotaSnapshotWriter struct {
+	delegate quotaSnapshotWriter
+	failed   bool
+	calls    int
+}
+
+func (w *failFirstQuotaSnapshotWriter) WriteCodexInspectionResult(
+	ctx context.Context,
+	result model.CodexInspectionResult,
+) error {
+	w.calls++
+	if !w.failed {
+		w.failed = true
+		return errors.New("forced quota snapshot write failure")
+	}
+	return w.delegate.WriteCodexInspectionResult(ctx, result)
+}
+
 func (r *failDisableOwnershipBatchRepository) UpsertDisableOwnerships(
 	context.Context,
 	[]model.CodexInspectionDisableOwnership,
@@ -104,6 +122,146 @@ func requireInspectionLog(t *testing.T, logs []model.CodexInspectionLog, message
 	}
 	t.Fatalf("inspection log %q not found in %#v", message, logs)
 	return model.CodexInspectionLog{}
+}
+
+func TestPersistInspectionResultsKeepsOneQuotaObservationStableAcrossLifecyclePhases(t *testing.T) {
+	db := newCodexInspectionTestStore(t)
+	svc := New(db, nil)
+	quotaService := quotasnapshotsvc.New(db)
+	statusOK := http.StatusOK
+	duration := float64(5 * 60 * 60)
+	usedPercent := 20.0
+	observedAtMS := time.Now().Add(-time.Minute).UnixMilli()
+	initial := model.CodexInspectionResult{
+		ID:              1,
+		RunID:           1,
+		AccountKey:      "codex.json::-::auth-1",
+		FileName:        "codex.json",
+		DisplayAccount:  "alice@example.com",
+		AccountSnapshot: "alice@example.com",
+		AuthIndex:       "auth-1",
+		Provider:        "codex",
+		Action:          "keep",
+		StatusCode:      &statusOK,
+		CreatedAtMS:     observedAtMS,
+		QuotaWindows: []model.CodexInspectionQuotaWindow{{
+			ID:                 "five-hour",
+			UsedPercent:        &usedPercent,
+			ResetAtMS:          observedAtMS + int64(duration)*1000,
+			ResetAccuracy:      "exact",
+			LimitWindowSeconds: &duration,
+		}},
+		QuotaInventoryObserved: true,
+	}
+	if err := quotaService.WriteCodexInspectionResult(context.Background(), initial); err != nil {
+		t.Fatalf("seed active quota window: %v", err)
+	}
+	run, err := db.CreateCodexInspectionRun(context.Background(), model.CodexInspectionRun{
+		TriggerType: "manual",
+		Status:      model.CodexInspectionStatusCompleted,
+		StartedAtMS: observedAtMS + 1,
+		Settings:    model.DefaultCodexInspectionConfig(),
+	})
+	if err != nil {
+		t.Fatalf("create inspection run: %v", err)
+	}
+	results := []model.CodexInspectionResult{{
+		AccountKey:             initial.AccountKey,
+		FileName:               initial.FileName,
+		DisplayAccount:         initial.DisplayAccount,
+		AccountSnapshot:        initial.AccountSnapshot,
+		AuthIndex:              initial.AuthIndex,
+		Provider:               "codex",
+		Action:                 "keep",
+		StatusCode:             &statusOK,
+		QuotaInventoryObserved: true,
+	}}
+
+	if failures := svc.persistInspectionResults(context.Background(), run.ID, results, runLogger{}); failures != 0 {
+		t.Fatalf("first persistence failures = %d", failures)
+	}
+	firstID, firstCreatedAtMS := results[0].ID, results[0].CreatedAtMS
+	if firstID <= 0 || firstCreatedAtMS <= 0 {
+		t.Fatalf("stored identity was not copied back: %#v", results[0])
+	}
+	time.Sleep(2 * time.Millisecond)
+	if failures := svc.persistInspectionResults(context.Background(), run.ID, results, runLogger{}); failures != 0 {
+		t.Fatalf("second persistence failures = %d", failures)
+	}
+	if results[0].ID != firstID || results[0].CreatedAtMS != firstCreatedAtMS {
+		t.Fatalf("stored observation identity changed: first=(%d,%d) second=(%d,%d)", firstID, firstCreatedAtMS, results[0].ID, results[0].CreatedAtMS)
+	}
+
+	query, err := quotaService.Query(context.Background(), quotasnapshotsvc.QueryRequest{
+		Accounts: []quotasnapshotsvc.QueryAccount{{
+			RowKey:   "row-1",
+			Provider: "codex",
+			Account: quotasnapshotsvc.AccountTarget{
+				AuthFileSnapshot:     initial.FileName,
+				AuthProviderSnapshot: "codex",
+				AuthIndex:            initial.AuthIndex,
+				AccountSnapshot:      initial.AccountSnapshot,
+			},
+		}},
+		IncludeInactive: true,
+	})
+	if err != nil {
+		t.Fatalf("query quota lifecycle: %v", err)
+	}
+	if len(query.Items) != 1 || len(query.Items[0].Windows) != 1 || query.Items[0].Windows[0].Availability != "pending_absent" {
+		t.Fatalf("one empty inspection observation retired quota window: %#v", query)
+	}
+}
+
+func TestPersistInspectionResultsCountsQuotaSnapshotFailuresForRetry(t *testing.T) {
+	db := newCodexInspectionTestStore(t)
+	svc := New(db, nil)
+	delegate := svc.quotaSnapshots
+	failing := &failFirstQuotaSnapshotWriter{delegate: delegate}
+	svc.quotaSnapshots = failing
+	statusOK := http.StatusOK
+	duration := float64(5 * 60 * 60)
+	usedPercent := 35.0
+	run, err := db.CreateCodexInspectionRun(context.Background(), model.CodexInspectionRun{
+		TriggerType: "manual",
+		Status:      model.CodexInspectionStatusCompleted,
+		StartedAtMS: time.Now().UnixMilli(),
+		Settings:    model.DefaultCodexInspectionConfig(),
+	})
+	if err != nil {
+		t.Fatalf("create inspection run: %v", err)
+	}
+	results := []model.CodexInspectionResult{{
+		AccountKey:      "codex.json::-::auth-1",
+		FileName:        "codex.json",
+		DisplayAccount:  "alice@example.com",
+		AccountSnapshot: "alice@example.com",
+		AuthIndex:       "auth-1",
+		Provider:        "codex",
+		Action:          "keep",
+		StatusCode:      &statusOK,
+		QuotaWindows: []model.CodexInspectionQuotaWindow{{
+			ID:                 "five-hour",
+			UsedPercent:        &usedPercent,
+			ResetAtMS:          time.Now().Add(5 * time.Hour).UnixMilli(),
+			ResetAccuracy:      "exact",
+			LimitWindowSeconds: &duration,
+		}},
+		QuotaInventoryObserved: true,
+	}}
+
+	if failures := svc.persistInspectionResults(context.Background(), run.ID, results, runLogger{}); failures != 1 {
+		t.Fatalf("first persistence failures = %d, want 1", failures)
+	}
+	if results[0].ID <= 0 || results[0].CreatedAtMS <= 0 {
+		t.Fatalf("result identity was not retained after snapshot failure: %#v", results[0])
+	}
+	if failures := svc.persistInspectionResults(context.Background(), run.ID, results, runLogger{}); failures != 0 {
+		t.Fatalf("retry persistence failures = %d", failures)
+	}
+	if failing.calls != 2 {
+		t.Fatalf("quota snapshot calls = %d, want 2", failing.calls)
+	}
 }
 
 func requireInspectionLogDetail(t *testing.T, entry model.CodexInspectionLog) map[string]any {

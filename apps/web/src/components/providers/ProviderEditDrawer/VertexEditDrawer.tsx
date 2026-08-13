@@ -11,7 +11,12 @@ import type { ProviderKeyConfig } from '@/types';
 import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/utils/headers';
 import { areKeyValueEntriesEqual, areModelEntriesEqual, areStringArraysEqual } from '@/utils/compare';
 import { excludedModelsToText, parseExcludedModels } from '@/components/providers/utils';
-import type { VertexFormState } from '@/components/providers';
+import { CredentialWeightInput, type VertexFormState } from '@/components/providers';
+import {
+  getCredentialWeightComparisonValue,
+  getCredentialWeightError,
+  normalizeCredentialWeight,
+} from '@/utils/credentialWeight';
 import styles from '@/features/aiProviders/AiProvidersPage.module.scss';
 
 interface VertexEditDrawerProps {
@@ -26,6 +31,7 @@ type VertexFormBaseline = ReturnType<typeof buildVertexBaseline>;
 
 const buildEmptyForm = (): VertexFormState => ({
   apiKey: '',
+  weight: undefined,
   prefix: '',
   baseUrl: '',
   proxyUrl: '',
@@ -48,6 +54,7 @@ const normalizeModelEntries = (entries: Array<{ name: string; alias: string }>) 
 const buildVertexBaseline = (form: VertexFormState) => ({
   apiKey: String(form.apiKey ?? '').trim(),
   priority: form.priority !== undefined && Number.isFinite(form.priority) ? Math.trunc(form.priority) : null,
+  weight: normalizeCredentialWeight(form.weight) ?? null,
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
   proxyUrl: String(form.proxyUrl ?? '').trim(),
@@ -129,13 +136,16 @@ export function VertexEditDrawer({ open, editIndex, disabled, onClose, onSaved }
     }
   }, [open, loaded, initialData]);
 
-  const canSave = !disabled && !saving && !loading && !invalidIndex;
+  const canSave =
+    !disabled && !saving && !loading && !invalidIndex && !getCredentialWeightError(form.weight);
 
   const isDirty = useMemo(() => {
     const normalizedPriority = form.priority !== undefined && Number.isFinite(form.priority) ? Math.trunc(form.priority) : null;
+    const comparableWeight = getCredentialWeightComparisonValue(form.weight);
     return (
       baseline.apiKey !== form.apiKey.trim() ||
       baseline.priority !== normalizedPriority ||
+      baseline.weight !== comparableWeight ||
       baseline.prefix !== String(form.prefix ?? '').trim() ||
       baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
       baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
@@ -163,6 +173,7 @@ export function VertexEditDrawer({ open, editIndex, disabled, onClose, onSaved }
       const payload: ProviderKeyConfig = {
         apiKey: form.apiKey.trim(),
         priority: form.priority !== undefined && Number.isFinite(form.priority) ? Math.trunc(form.priority) : undefined,
+        weight: normalizeCredentialWeight(form.weight),
         prefix: form.prefix?.trim() || undefined,
         baseUrl: (form.baseUrl ?? '').trim() || undefined,
         proxyUrl: form.proxyUrl?.trim() || undefined,
@@ -233,6 +244,11 @@ export function VertexEditDrawer({ open, editIndex, disabled, onClose, onSaved }
             <Input label={t('ai_providers.prefix_label')} placeholder={t('ai_providers.prefix_placeholder')}
               value={form.prefix ?? ''} onChange={(e) => setForm((prev) => ({ ...prev, prefix: e.target.value }))}
               hint={t('ai_providers.prefix_hint')} disabled={disabled || saving} />
+            <CredentialWeightInput
+              value={form.weight}
+              onChange={(weight) => setForm((prev) => ({ ...prev, weight }))}
+              disabled={disabled || saving}
+            />
             <Input label={t('ai_providers.vertex_add_modal_proxy_label')} placeholder={t('ai_providers.vertex_add_modal_proxy_placeholder')}
               value={form.proxyUrl ?? ''} onChange={(e) => setForm((prev) => ({ ...prev, proxyUrl: e.target.value }))}
               disabled={disabled || saving} />

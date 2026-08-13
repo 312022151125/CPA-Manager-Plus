@@ -22,7 +22,6 @@ import {
   IconSidebarOauth,
   IconSidebarPlugins,
   IconSidebarProviders,
-  IconSidebarQuota,
   IconSidebarSystem,
   IconSidebarUsage,
 } from '@/components/ui/icons';
@@ -59,7 +58,6 @@ const sidebarIcons: Record<string, ReactNode> = {
   aiProviders: <IconSidebarProviders size={SIDEBAR_ICON_SIZE} />,
   authFiles: <IconSidebarAuthFiles size={SIDEBAR_ICON_SIZE} />,
   oauth: <IconSidebarOauth size={SIDEBAR_ICON_SIZE} />,
-  quota: <IconSidebarQuota size={SIDEBAR_ICON_SIZE} />,
   usageAnalytics: <IconSidebarUsage size={SIDEBAR_ICON_SIZE} />,
   monitoring: <IconSidebarMonitor size={SIDEBAR_ICON_SIZE} />,
   plugins: <IconSidebarPlugins size={SIDEBAR_ICON_SIZE} />,

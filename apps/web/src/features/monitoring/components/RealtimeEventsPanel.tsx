@@ -1130,6 +1130,16 @@ export function RealtimeEventsPanel({
                       <div className={styles.primaryCell} title={sourceDisplay.title}>
                         <span>{sourceDisplay.primary}</span>
                         {sourceDisplay.meta ? <small>{sourceDisplay.meta}</small> : null}
+                        {sourceDisplay.requestMetadataTitle ? (
+                          <details className={styles.realtimeRequestMetadata}>
+                            <summary>{t('monitoring.request_metadata')}</summary>
+                            <small>
+                              {sourceDisplay.requestMetadataTitle.split('\n').map((line) => (
+                                <span key={line}>{line}</span>
+                              ))}
+                            </small>
+                          </details>
+                        ) : null}
                         {apiKeyDisplay ? (
                           <small className={styles.realtimeApiKeyLine} title={apiKeyDisplay.title}>
                             {`${t('monitoring.realtime_api_key_label')}: ${apiKeyDisplay.display}`}

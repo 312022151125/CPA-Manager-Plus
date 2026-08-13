@@ -772,6 +772,9 @@ type EventRow struct {
 	Endpoint               string                        `json:"endpoint"`
 	Method                 string                        `json:"method"`
 	Path                   string                        `json:"path"`
+	ClientIP               string                        `json:"client_ip,omitempty"`
+	XForwardedFor          string                        `json:"x_forwarded_for,omitempty"`
+	UserAgent              string                        `json:"user_agent,omitempty"`
 	AuthIndex              string                        `json:"auth_index"`
 	Source                 string                        `json:"source"`
 	SourceHash             string                        `json:"source_hash"`
@@ -3369,6 +3372,9 @@ func buildEvents(page store.EventsPage, totalCount int64) *EventsResponse {
 			Endpoint:               item.Endpoint,
 			Method:                 item.Method,
 			Path:                   item.Path,
+			ClientIP:               item.ClientIP,
+			XForwardedFor:          item.XForwardedFor,
+			UserAgent:              item.UserAgent,
 			AuthIndex:              item.AuthIndex,
 			Source:                 item.Source,
 			SourceHash:             item.SourceHash,

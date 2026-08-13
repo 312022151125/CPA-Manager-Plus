@@ -9,25 +9,31 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 type Event struct {
-	RequestID             string `json:"request_id,omitempty"`
-	EventHash             string `json:"event_hash"`
-	TimestampMS           int64  `json:"timestamp_ms"`
-	Timestamp             string `json:"timestamp"`
-	Provider              string `json:"provider,omitempty"`
-	ExecutorType          string `json:"executor_type,omitempty"`
-	Model                 string `json:"model"`
-	AnalyticsModel        string `json:"analytics_model,omitempty"`
-	RequestedModel        string `json:"requested_model,omitempty"`
-	ResolvedModel         string `json:"resolved_model,omitempty"`
-	Endpoint              string `json:"endpoint,omitempty"`
-	Method                string `json:"method,omitempty"`
-	Path                  string `json:"path,omitempty"`
+	RequestID      string `json:"request_id,omitempty"`
+	EventHash      string `json:"event_hash"`
+	TimestampMS    int64  `json:"timestamp_ms"`
+	Timestamp      string `json:"timestamp"`
+	Provider       string `json:"provider,omitempty"`
+	ExecutorType   string `json:"executor_type,omitempty"`
+	Model          string `json:"model"`
+	AnalyticsModel string `json:"analytics_model,omitempty"`
+	RequestedModel string `json:"requested_model,omitempty"`
+	ResolvedModel  string `json:"resolved_model,omitempty"`
+	Endpoint       string `json:"endpoint,omitempty"`
+	Method         string `json:"method,omitempty"`
+	Path           string `json:"path,omitempty"`
+	// Downstream request metadata is available only to authenticated monitoring
+	// APIs. Compatible usage payloads and JSONL exports intentionally omit it.
+	ClientIP              string `json:"-"`
+	XForwardedFor         string `json:"-"`
+	UserAgent             string `json:"-"`
 	AuthType              string `json:"auth_type,omitempty"`
 	AuthIndex             string `json:"auth_index,omitempty"`
 	Source                string `json:"source,omitempty"`
@@ -167,6 +173,9 @@ type Payload struct {
 
 const (
 	maxFailSummaryBytes            = 4096
+	maxClientIPBytes               = 64
+	maxXForwardedForBytes          = 2048
+	maxUserAgentBytes              = 1024
 	LongContextInputTokenThreshold = int64(272_000)
 	CacheInputModeIncluded         = "included_in_input"
 	CacheInputModeSeparate         = "separate_from_input"
@@ -543,6 +552,9 @@ func NormalizeRaw(raw []byte) (Event, error) {
 	provider := readString(record, "provider", "type", "auth_type", "authType")
 	executorType := readString(record, "executor_type", "executorType")
 	authType := readString(record, "auth_type", "authType")
+	clientIP := readString(record, "client_ip", "clientIp")
+	xForwardedFor := readString(record, "x_forwarded_for", "xForwardedFor")
+	userAgent := readString(record, "user_agent", "userAgent")
 	requestServiceTier := readString(record, "request_service_tier", "requestServiceTier", "service_tier", "serviceTier")
 	responseServiceTier := readString(record, "response_service_tier", "responseServiceTier")
 	authProviderSnapshot := readString(record, "auth_provider_snapshot", "authProviderSnapshot")
@@ -575,6 +587,9 @@ func NormalizeRaw(raw []byte) (Event, error) {
 		Endpoint:                      endpoint,
 		Method:                        method,
 		Path:                          path,
+		ClientIP:                      clientIP,
+		XForwardedFor:                 xForwardedFor,
+		UserAgent:                     userAgent,
 		AuthType:                      authType,
 		AuthIndex:                     authIndex,
 		Source:                        source,
@@ -616,6 +631,7 @@ func NormalizeRaw(raw []byte) (Event, error) {
 		event.Model = "-"
 	}
 	event.AnalyticsModel = usageidentity.AnalyticsModelForRequest(event.Model, event.RequestedModel)
+	NormalizeRequestMetadata(&event)
 	AttachResponseHeaderMetadata(&event, ResponseHeaderMetadataFromRecord(record, time.UnixMilli(timestampMS)))
 	event.EventHash = buildEventHash(event)
 	return event, nil
@@ -843,6 +859,35 @@ func readString(record map[string]any, keys ...string) string {
 	}
 }
 
+// NormalizeRequestMetadata applies the storage limits and character policy for
+// downstream request metadata. Callers that construct Event values directly
+// must normalize again at their persistence boundary.
+func NormalizeRequestMetadata(event *Event) {
+	if event == nil {
+		return
+	}
+	event.ClientIP = sanitizeRequestMetadata(event.ClientIP, maxClientIPBytes)
+	event.XForwardedFor = sanitizeRequestMetadata(event.XForwardedFor, maxXForwardedForBytes)
+	event.UserAgent = sanitizeRequestMetadata(event.UserAgent, maxUserAgentBytes)
+}
+
+func sanitizeRequestMetadata(value string, maxBytes int) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || !unicode.IsGraphic(r) {
+			return ' '
+		}
+		return r
+	}, value)
+	cleaned = strings.Join(strings.Fields(cleaned), " ")
+	if maxBytes <= 0 || len(cleaned) <= maxBytes {
+		return cleaned
+	}
+	if maxBytes <= 3 {
+		return truncateUTF8Bytes(cleaned, maxBytes)
+	}
+	return truncateUTF8Bytes(cleaned, maxBytes-3)
+}
+
 func readStringFromNested(record map[string]any, parent string, keys ...string) string {
 	nested, ok := record[parent].(map[string]any)
 	if !ok {
@@ -1022,6 +1067,10 @@ func redactValueWithParent(parentKey string, value any) any {
 				result[key] = "[redacted]"
 				continue
 			}
+			if maxBytes, ok := requestMetadataMaxBytes(normalizedKey); ok {
+				result[key] = sanitizeRequestMetadata(stringValue(child), maxBytes)
+				continue
+			}
 			if normalizedKey == "fail_body" || (parentKey == "fail" && normalizedKey == "body") {
 				result[key] = FailSummaryFromBody(stringValue(child))
 				continue
@@ -1037,6 +1086,19 @@ func redactValueWithParent(parentKey string, value any) any {
 		return result
 	default:
 		return value
+	}
+}
+
+func requestMetadataMaxBytes(normalizedKey string) (int, bool) {
+	switch normalizedKey {
+	case "client_ip", "clientip":
+		return maxClientIPBytes, true
+	case "x_forwarded_for", "xforwardedfor":
+		return maxXForwardedForBytes, true
+	case "user_agent", "useragent":
+		return maxUserAgentBytes, true
+	default:
+		return 0, false
 	}
 }
 

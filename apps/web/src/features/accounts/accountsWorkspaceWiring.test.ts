@@ -21,15 +21,12 @@ describe('accounts workspace wiring', () => {
     expect(layoutSource).not.toContain("label: t('nav.codex_inspection')");
   });
 
-  it('redirects legacy credential, quota, inspection and OAuth editor routes into Accounts', () => {
-    expect(routesSource).toContain("path: '/auth-files', element: <LegacyAccountsRedirect />");
-    expect(routesSource).toContain('<LegacyAccountsRedirect view="accounts" />');
-    expect(routesSource).not.toContain('<LegacyAccountsRedirect view="quota" />');
-    expect(routesSource).toContain('<LegacyAccountsRedirect view="oauth" editor="excluded" />');
-    expect(routesSource).toContain('<LegacyAccountsRedirect view="oauth" editor="alias" />');
+  it('removes legacy credential and quota routes while retaining inspection compatibility', () => {
+    expect(routesSource).not.toContain("path: '/auth-files'");
+    expect(routesSource).not.toContain("path: '/quota'");
     expect(routesSource).toContain("{ path: '/oauth', element: <OAuthPage /> }");
-    expect(routesSource).toContain('<LegacyAccountsRedirect view="health" healthMode="local" />');
-    expect(routesSource).toContain('<LegacyAccountsRedirect view="health" healthMode="server" />');
+    expect(routesSource).toContain('<LegacyAccountsRedirect healthMode="local" />');
+    expect(routesSource).toContain('<LegacyAccountsRedirect healthMode="server" />');
     expect(routesSource).not.toContain(`${legacyPagesRoot}/CodexInspectionPage`);
     expect(routesSource).not.toContain(`${legacyPagesRoot}/ServerCodexInspectionPage`);
   });
@@ -75,6 +72,12 @@ describe('accounts workspace wiring', () => {
     expect(locale.accounts.metric_attention).toBeTypeOf('string');
     expect(locale.accounts.metric_quota_risk).toBeTypeOf('string');
     expect(locale.accounts.metric_unconfirmed).toBeTypeOf('string');
+    expect(locale.accounts.account_display_masked).toBeTypeOf('string');
+    expect(locale.accounts.account_display_full).toBeTypeOf('string');
+    expect(locale.accounts.show_full_credentials_hint).toBeTypeOf('string');
+    expect(locale.accounts.show_masked_credentials_hint).toBeTypeOf('string');
+    expect(locale.monitoring.observed_from_usage_headers).toBeTypeOf('string');
+    expect(locale.monitoring.observed_from_usage_headers_at).toBeTypeOf('string');
     expect(locale.accounts).not.toHaveProperty('tab_inspection');
     expect(locale.accounts).not.toHaveProperty('tab_quota');
     expect(locale.accounts).not.toHaveProperty('tab_value');
@@ -84,6 +87,7 @@ describe('accounts workspace wiring', () => {
     expect(locale.nav).not.toHaveProperty('codex_inspection');
     expect(locale.nav).not.toHaveProperty('codex_inspection_short');
     expect(locale.nav).not.toHaveProperty('server_codex_inspection');
+    expect(locale).not.toHaveProperty('quota_management');
   });
 
   it.each([
