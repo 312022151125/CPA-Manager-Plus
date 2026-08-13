@@ -1543,14 +1543,17 @@ export function formatCompactNumber(value: number): string {
   return abs >= 1 ? num.toFixed(0) : num.toFixed(2);
 }
 
-export function formatUsd(value: number): string {
+export function formatUsd(value: number, fractionDigits = 2): string {
   const num = Number(value);
-  if (!Number.isFinite(num)) return '$0.000';
+  const digits = Number.isInteger(fractionDigits)
+    ? Math.max(0, Math.min(6, fractionDigits))
+    : 2;
+  if (!Number.isFinite(num)) return `$${(0).toFixed(digits)}`;
 
-  const fixed = num.toFixed(3);
+  const fixed = num.toFixed(digits);
   const parts = Number(fixed).toLocaleString(undefined, {
-    minimumFractionDigits: 3,
-    maximumFractionDigits: 3,
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
   });
   return `$${parts}`;
 }

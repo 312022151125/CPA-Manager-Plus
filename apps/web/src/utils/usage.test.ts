@@ -38,10 +38,16 @@ describe('formatCompactNumber', () => {
 });
 
 describe('formatUsd', () => {
-  it('formats costs globally to three decimal places', () => {
-    expect(formatUsd(19.99)).toBe('$19.990');
-    expect(formatUsd(0.0006)).toBe('$0.001');
-    expect(formatUsd(Number.NaN)).toBe('$0.000');
+  it('formats costs globally to two decimal places', () => {
+    expect(formatUsd(19.99)).toBe('$19.99');
+    expect(formatUsd(0.006)).toBe('$0.01');
+    expect(formatUsd(Number.NaN)).toBe('$0.00');
+  });
+
+  it('allows request-scoped precision overrides', () => {
+    expect(formatUsd(19.99, 3)).toBe('$19.990');
+    expect(formatUsd(0.0006, 3)).toBe('$0.001');
+    expect(formatUsd(Number.NaN, 3)).toBe('$0.000');
   });
 });
 

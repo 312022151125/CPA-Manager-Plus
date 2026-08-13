@@ -7328,7 +7328,7 @@ describe('AccountsPage replacement flows', () => {
       '1.5K'
     );
     expect(readText(renderer.root.findByProps({ 'data-overview-metric-key': 'cost' }))).toContain(
-      '$0.750'
+      '$0.75'
     );
   });
 
@@ -8746,7 +8746,7 @@ describe('AccountsPage replacement flows', () => {
     expect(accountHistoryRequest).not.toHaveProperty('catch_up');
     expect(cardText).toContain('1.2K');
     expect(cardText).toContain('5.7M');
-    expect(cardText).toContain('$12.340');
+    expect(cardText).toContain('$12.34');
     expect(cardText).toContain('98.7%');
     expect(cardText).not.toContain('accounts.history_requests');
     expect(cardText).not.toContain('accounts.history_tokens');
