@@ -278,7 +278,7 @@ jobs:
             exit 1
           fi
           artifact_name="$(jq -r '.name // empty' "${artifact_json}")"
-          artifact_expired="$(jq -r '.expired // empty' "${artifact_json}")"
+          artifact_expired="$(jq -r '.expired | if type == "boolean" then tostring else empty end' "${artifact_json}")"
           artifact_size="$(jq -r '.size_in_bytes // empty' "${artifact_json}")"
           artifact_head_sha="$(jq -r '.workflow_run.head_sha // empty' "${artifact_json}")"
           artifact_run_id="$(jq -r '.workflow_run.id // empty | tostring' "${artifact_json}")"
@@ -503,7 +503,7 @@ jobs:
                 echo "Existing GitHub Release has an invalid id." >&2
                 exit 1
               fi
-              is_draft="$(jq -r '.draft // empty' "${release_json}")"
+              is_draft="$(jq -r '.draft | if type == "boolean" then tostring else empty end' "${release_json}")"
               case "${is_draft}" in
                 true) verification_mode=draft; target_draft=true; needs_publish=true ;;
                 false) verification_mode=artifact; target_draft=false; needs_publish=false ;;
@@ -611,7 +611,7 @@ jobs:
           fi
 
           response_release_id="$(jq -r '.id // empty' "${release_json}")"
-          is_draft="$(jq -r '.draft // empty' "${release_json}")"
+          is_draft="$(jq -r '.draft | if type == "boolean" then tostring else empty end' "${release_json}")"
           if [ "${response_release_id}" != "${release_id}" ] ||
             { [ "${is_draft}" != "true" ] && [ "${is_draft}" != "false" ]; }; then
             echo "Prepared GitHub Release has invalid identity or draft state." >&2

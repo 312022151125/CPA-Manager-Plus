@@ -221,6 +221,15 @@ describe('GitHub Actions workflow integrity', () => {
     expect(telegramScript).not.toContain('--retry-all-errors');
   });
 
+  it('preserves false-valued GitHub API booleans during release recovery', () => {
+    const workflow = readWorkflow('release-publish-recovery.yml');
+    const booleanFilter = 'if type == "boolean" then tostring else empty end';
+
+    expect(workflow).toContain(`.expired | ${booleanFilter}`);
+    expect(workflow.match(new RegExp(`\\.draft \\| ${booleanFilter}`, 'g'))).toHaveLength(2);
+    expect(workflow).not.toMatch(/\.(?:expired|draft)\s*\/\/\s*empty/);
+  });
+
   it('provides a validated explicit Telegram recovery workflow', () => {
     const workflow = readWorkflow('release-telegram-recovery.yml');
     const notifyJob = jobBlock(workflow, 'notify');
