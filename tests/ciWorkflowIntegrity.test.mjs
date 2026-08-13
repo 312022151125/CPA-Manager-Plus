@@ -230,6 +230,22 @@ describe('GitHub Actions workflow integrity', () => {
     expect(workflow).not.toMatch(/\.(?:expired|draft)\s*\/\/\s*empty/);
   });
 
+  it('allows release recovery to revalidate its prepared draft before publishing images', () => {
+    const workflow = readWorkflow('release-publish-recovery.yml');
+    const dockerJob = jobBlock(workflow, 'build_and_push_docker');
+    const stepsOffset = dockerJob.indexOf('\n    steps:');
+    const jobConfiguration = dockerJob.slice(0, stepsOffset);
+
+    expect(jobConfiguration).toContain('contents: write');
+    expect(jobConfiguration).toContain('packages: write');
+    expect(dockerJob).toContain(
+      'name: Revalidate prepared GitHub Release before registry mutation'
+    );
+    expect(dockerJob).toContain(
+      '"${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"'
+    );
+  });
+
   it('provides a validated explicit Telegram recovery workflow', () => {
     const workflow = readWorkflow('release-telegram-recovery.yml');
     const notifyJob = jobBlock(workflow, 'notify');

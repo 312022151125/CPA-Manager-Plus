@@ -645,7 +645,7 @@ jobs:
     if: needs.prepare_release.result == 'success'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
