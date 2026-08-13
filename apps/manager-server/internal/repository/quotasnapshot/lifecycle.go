@@ -991,6 +991,9 @@ func confirmedResetTransitionMS(cycle model.AccountQuotaCycle, snapshot model.Ac
 	if sameBoundary {
 		transitionMS = snapshot.ObservedAtMS
 	}
+	if transitionMS > snapshot.ObservedAtMS {
+		transitionMS = snapshot.ObservedAtMS
+	}
 	if transitionMS < cycle.ActualStartMS {
 		transitionMS = cycle.ActualStartMS
 	}
@@ -1025,7 +1028,8 @@ func quotaCounterResetDetected(
 		return false, err
 	}
 	current := *snapshot.UsedPercent
-	return quotaCounterResetValues(previous, current), nil
+	return quotaCounterResetValues(previous, current) ||
+		quotaLowUsageBoundaryResetForSnapshot(cycle, snapshot, previous, current), nil
 }
 
 func quotaCounterResetValues(previous, current float64) bool {
@@ -1035,6 +1039,48 @@ func quotaCounterResetValues(previous, current float64) bool {
 	drop := previous - current
 	return current <= quotaResetNearZeroPercent ||
 		(drop >= quotaResetLargeDropPercent && current <= previous/2)
+}
+
+func quotaLowUsageBoundaryResetForSnapshot(
+	cycle model.AccountQuotaCycle,
+	snapshot model.AccountQuotaSnapshot,
+	previous, current float64,
+) bool {
+	return quotaLowUsageBoundaryResetValues(
+		previous,
+		current,
+		cycle.ScheduledStartMS,
+		cycle.ScheduledEndMS,
+		cycle.DurationSeconds,
+		cycle.BoundaryAccuracy,
+		snapshot.CycleStartMS,
+		snapshot.CycleEndMS,
+		snapshot.DurationSeconds,
+		snapshot.BoundaryAccuracy,
+	)
+}
+
+func quotaLowUsageBoundaryResetValues(
+	previous, current float64,
+	previousStartMS, previousEndMS, previousDurationSeconds *int64,
+	previousAccuracy string,
+	nextStartMS, nextEndMS, nextDurationSeconds *int64,
+	nextAccuracy string,
+) bool {
+	if previous >= quotaResetMinimumPriorPercent || previous <= current || current > quotaResetNearZeroPercent ||
+		previousStartMS == nil || previousEndMS == nil || previousDurationSeconds == nil ||
+		nextStartMS == nil || nextEndMS == nil || nextDurationSeconds == nil ||
+		boundaryAccuracyValue(previousAccuracy) < boundaryAccuracyValue("derived") ||
+		boundaryAccuracyValue(nextAccuracy) < boundaryAccuracyValue("derived") ||
+		boundaryAccuracyValue(nextAccuracy) > boundaryAccuracyValue(previousAccuracy) ||
+		*previousDurationSeconds != *nextDurationSeconds {
+		return false
+	}
+	startShiftMS := *nextStartMS - *previousStartMS
+	endShiftMS := *nextEndMS - *previousEndMS
+	return startShiftMS > quotaBoundaryJitterMS &&
+		absInt64(startShiftMS-endShiftMS) <= quotaBoundaryJitterMS &&
+		*nextStartMS < *previousEndMS-quotaBoundaryJitterMS
 }
 
 func boundaryAccuracyValue(value string) int {
@@ -1788,6 +1834,12 @@ func normalizeCycleView(
 		current.State = "provisional"
 		current.BoundaryAccuracy = "unknown"
 	}
+	if previousResult != nil && previousResult.EndReason == "early_reset" &&
+		canonicalEvidence.confirmedAtMS > 0 && canonicalEvidence.confirmedAtMS < current.ActualStartMS {
+		current.ActualStartMS = canonicalEvidence.confirmedAtMS
+		actualEndMS := canonicalEvidence.confirmedAtMS
+		previousResult.ActualEndMS = &actualEndMS
+	}
 	if collapsed && previousResult != nil && previousResult.ActualEndMS != nil {
 		actualEndMS := current.ActualStartMS
 		previousResult.ActualEndMS = &actualEndMS
@@ -1913,7 +1965,19 @@ func collapsibleEarlyResetFragment(
 		absInt64(startShiftMS-observationShiftMS) > quotaBoundaryJitterMS {
 		return false
 	}
-	return !quotaCounterResetValues(*previousEvidence.lastUsedPercent, *nextEvidence.firstUsedPercent)
+	return !quotaCounterResetValues(*previousEvidence.lastUsedPercent, *nextEvidence.firstUsedPercent) &&
+		!quotaLowUsageBoundaryResetValues(
+			*previousEvidence.lastUsedPercent,
+			*nextEvidence.firstUsedPercent,
+			previous.ScheduledStartMS,
+			previous.ScheduledEndMS,
+			previous.DurationSeconds,
+			previous.BoundaryAccuracy,
+			next.ScheduledStartMS,
+			next.ScheduledEndMS,
+			next.DurationSeconds,
+			next.BoundaryAccuracy,
+		)
 }
 
 func structurallyCollapsibleEarlyResetFragment(previous, next model.AccountQuotaCycle) bool {
