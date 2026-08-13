@@ -881,6 +881,16 @@
   }
 }
 
+.accountIconButtonSettings:global(.btn) {
+  background: color-mix(in srgb, var(--primary-color) 8%, var(--bg-primary));
+  color: color-mix(in srgb, var(--primary-color) 78%, var(--text-primary));
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--primary-color) 22%, transparent);
+    background: color-mix(in srgb, var(--primary-color) 14%, var(--bg-primary));
+  }
+}
+
 .accountIconButtonDownload:global(.btn) {
   background: color-mix(in srgb, var(--text-secondary) 8%, var(--bg-primary));
   color: color-mix(in srgb, var(--text-secondary) 84%, var(--text-primary));

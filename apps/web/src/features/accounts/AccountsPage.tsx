@@ -5190,7 +5190,7 @@ export function AccountsPage() {
 
   const refreshQuotaForRow = useCallback(
     async (row: AccountRow) => {
-      if (row.disabled || row.runtimeOnly) return false;
+      if (row.runtimeOnly) return false;
       const refreshWithConfig = <TState, TData>(
         config: QuotaConfig<TState, TData>,
         setQuota: QuotaSetter<TState>
@@ -5256,7 +5256,7 @@ export function AccountsPage() {
       if (currentBatch?.connectionFingerprint === connectionFingerprint) {
         return currentBatch.promise;
       }
-      const refreshable = targets.filter((row) => !row.disabled && !row.runtimeOnly);
+      const refreshable = targets.filter((row) => !row.runtimeOnly);
       if (refreshable.length === 0) {
         showNotification(t('accounts.no_refreshable_accounts'), 'warning');
         return Promise.resolve();
@@ -6159,7 +6159,7 @@ export function AccountsPage() {
               variant="secondary"
               size="sm"
               onClick={() => refreshQuotaRows(refreshTargets)}
-              disabled={quotaRefreshing || refreshTargets.length === 0}
+              disabled={disableControls || quotaRefreshing || refreshTargets.length === 0}
               loading={quotaRefreshing}
               title={t('accounts.refresh_quota')}
             >
@@ -6273,7 +6273,7 @@ export function AccountsPage() {
               variant="secondary"
               size="sm"
               onClick={() => refreshQuotaRows(selectedRows)}
-              disabled={quotaRefreshing || selectedRows.length === 0}
+              disabled={disableControls || quotaRefreshing || selectedRows.length === 0}
               loading={quotaRefreshing}
               title={t('accounts.refresh_quota')}
             >
@@ -6350,11 +6350,23 @@ export function AccountsPage() {
           iconOnly
           className={`${styles.accountIconButton} ${styles.accountIconButtonRefresh}`}
           onClick={() => void refreshAccountQuota(row)}
-          disabled={quotaRefreshing || row.disabled || row.runtimeOnly}
+          disabled={disableControls || quotaRefreshing || row.runtimeOnly}
           title={t('accounts.refresh_quota')}
           aria-label={t('accounts.refresh_quota')}
         >
           <IconRefreshCw size={15} />
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          iconOnly
+          className={`${styles.accountIconButton} ${styles.accountIconButtonSettings}`}
+          onClick={() => void openAccountDetail(row, 'config')}
+          disabled={row.runtimeOnly}
+          title={t('accounts.detail_tab_config')}
+          aria-label={t('accounts.detail_tab_config')}
+        >
+          <IconSettings size={15} />
         </Button>
         <Button
           variant="secondary"
@@ -7091,6 +7103,7 @@ export function AccountsPage() {
               variant="secondary"
               onClick={() => void refreshAccountQuota(selectedRow)}
               loading={quotaRefreshing}
+              disabled={disableControls || selectedRow.runtimeOnly}
             >
               {!quotaRefreshing ? <IconRefreshCw size={16} /> : null}
               {t('accounts.refresh_quota')}
@@ -7124,7 +7137,7 @@ export function AccountsPage() {
               <p>
                 {t('accounts.detail_disabled_notice_desc', {
                   defaultValue:
-                    '此账号当前不接收请求,各 Tab 仅展示只读摘要。点击底部"启用"按钮可恢复完整功能。',
+                    '此账号当前不接收业务请求，但仍可刷新额度和维护配置。点击底部“启用”按钮可恢复请求路由。',
                 })}
               </p>
             </div>

@@ -3729,6 +3729,31 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.showModels).toHaveBeenCalledWith(mocks.files[0]);
   });
 
+  it('opens the configuration tab from the row settings action', async () => {
+    const rowKey = getAuthFileSelectionKey(mocks.files[0]);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        rowKey,
+        'accounts.detail_tab_config'
+      ).props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(findHostButtonByText(renderer, 'accounts.detail_tab_config').props['aria-selected']).toBe(
+      true
+    );
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      {
+        pathname: '/accounts',
+        search: '?account=codex.json%00auth-1&tab=config',
+      },
+      { replace: true }
+    );
+  });
+
   it('falls the removed quota workspace back to the credential list', async () => {
     mocks.location = { pathname: '/accounts', search: '?view=quota' };
 
@@ -7574,6 +7599,30 @@ describe('AccountsPage replacement flows', () => {
 
     expect(quotaFetch).toHaveBeenCalledTimes(1);
     expect(mocks.getAccountHistory).not.toHaveBeenCalled();
+  });
+
+  it('allows a disabled credential to request its latest quota', async () => {
+    const file = {
+      ...makeCodexFile('codex-disabled.json', 'auth-disabled', 'disabled@example.com'),
+      disabled: true,
+    } as AuthFileItem;
+    mocks.files = [file];
+    const quotaFetch = vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
+
+    const renderer = await renderAccountsPage();
+    const refreshButton = findAccountCardButtonByAriaLabel(
+      renderer,
+      getAuthFileSelectionKey(file),
+      'accounts.refresh_quota'
+    );
+    expect(refreshButton.props.disabled).toBe(false);
+
+    await act(async () => {
+      await refreshButton.props.onClick();
+    });
+
+    expect(quotaFetch).toHaveBeenCalledTimes(1);
+    expect(quotaFetch).toHaveBeenCalledWith(file, expect.anything(), expect.anything());
   });
 
   it('clears stale single-account history when the refresh response cannot be correlated', async () => {
