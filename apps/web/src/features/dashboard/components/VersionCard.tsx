@@ -19,6 +19,7 @@ import type { UsageServiceStatus } from '@/services/api/usageService';
 import type { ConnectionStatus } from '@/types';
 import { compareVersions, type VersionComparison } from '@/utils/version';
 import { readApiLatestVersion, readManagerLatestTag } from '@/features/system/versionChecks';
+import { buildDashboardVersionReleaseURL } from '@/features/dashboard/versionReleaseLinks';
 import styles from './VersionCard.module.scss';
 
 interface VersionCardProps {
@@ -70,6 +71,19 @@ const renderBadge = (
     return { label: t('dashboard.version_is_latest'), className: styles.badgeLatest };
   }
   return null;
+};
+
+const renderVersionValue = (value: string, releaseUrl: string): ReactNode => {
+  if (!releaseUrl) {
+    return <span className={styles.value}>{value}</span>;
+  }
+
+  return (
+    <a className={styles.versionLink} href={releaseUrl} target="_blank" rel="noopener noreferrer">
+      <span className={styles.value}>{value}</span>
+      <IconExternalLink size={12} />
+    </a>
+  );
 };
 
 export function VersionCard({
@@ -205,6 +219,14 @@ export function VersionCard({
     () => renderBadge(compareVersions(latest.latestApi, apiVersion), latest.latestApi, t),
     [apiVersion, latest.latestApi, t]
   );
+  const appReleaseUrl = useMemo(
+    () => buildDashboardVersionReleaseURL('manager', appVersion),
+    [appVersion]
+  );
+  const apiReleaseUrl = useMemo(
+    () => buildDashboardVersionReleaseURL('core', apiVersion),
+    [apiVersion]
+  );
 
   const buildTimeDisplay = serverBuildDate
     ? new Date(serverBuildDate).toLocaleString(i18n.language)
@@ -321,8 +343,13 @@ export function VersionCard({
                 </Button>
               </div>
               <div className={styles.valueWrap}>
-                <span className={styles.value}>{appVersion || t('dashboard.version_unknown')}</span>
-                {appBadge && <span className={`${styles.badge} ${appBadge.className}`}>{appBadge.label}</span>}
+                {renderVersionValue(
+                  appVersion || t('dashboard.version_unknown'),
+                  appReleaseUrl
+                )}
+                {appBadge && (
+                  <span className={`${styles.badge} ${appBadge.className}`}>{appBadge.label}</span>
+                )}
               </div>
             </div>
           </div>
@@ -347,8 +374,13 @@ export function VersionCard({
                 </Button>
               </div>
               <div className={styles.valueWrap}>
-                <span className={styles.value}>{apiVersion || t('dashboard.version_unknown')}</span>
-                {apiBadge && <span className={`${styles.badge} ${apiBadge.className}`}>{apiBadge.label}</span>}
+                {renderVersionValue(
+                  apiVersion || t('dashboard.version_unknown'),
+                  apiReleaseUrl
+                )}
+                {apiBadge && (
+                  <span className={`${styles.badge} ${apiBadge.className}`}>{apiBadge.label}</span>
+                )}
               </div>
             </div>
           </div>
