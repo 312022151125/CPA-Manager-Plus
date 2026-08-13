@@ -14,6 +14,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 const (
@@ -24,21 +25,21 @@ const (
 	compatibleUsageDetailBatchSize = 1024
 )
 
-const compatibleUsageOrderedIDsQuery = `select id
+var compatibleUsageOrderedIDsQuery = `select id
 	from usage_events
 	where id <= ? and (
 		timestamp_ms > ? or (timestamp_ms = ? and id >= ?)
 	)
 	order by
 		coalesce(nullif(endpoint, ''), '-') asc,
-		coalesce(nullif(model, ''), '-') asc,
+			` + compatibleUsageAnalyticsModelExpression + ` asc,
 		timestamp_ms desc,
 		id desc`
 
-const compatibleUsageDetailQueryPrefix = `select
+var compatibleUsageDetailQueryPrefix = `select
 		id,
 		coalesce(nullif(endpoint, ''), '-') as group_endpoint,
-		coalesce(nullif(model, ''), '-') as group_model,
+			` + compatibleUsageAnalyticsModelExpression + ` as group_model,
 		timestamp,
 		coalesce(source, ''),
 		coalesce(auth_index, ''),
@@ -47,11 +48,12 @@ const compatibleUsageDetailQueryPrefix = `select
 		coalesce(auth_label_snapshot, ''),
 		coalesce(auth_file_snapshot, ''),
 		coalesce(auth_provider_snapshot, ''),
-		coalesce(auth_project_id_snapshot, ''),
-		auth_snapshot_at_ms,
-		latency_ms,
-		ttft_ms,
-		coalesce(resolved_model, ''),
+			coalesce(auth_project_id_snapshot, ''),
+			auth_snapshot_at_ms,
+			latency_ms,
+			ttft_ms,
+			coalesce(nullif(requested_model, ''), model, ''),
+			coalesce(resolved_model, ''),
 		coalesce(reasoning_effort, ''),
 		coalesce(service_tier, ''),
 		coalesce(request_service_tier, ''),
@@ -71,7 +73,9 @@ const compatibleUsageDetailQueryPrefix = `select
 		coalesce(fail_summary, ''),
 		coalesce(response_metadata_json, '')
 	from usage_events
-	where id in (`
+		where id in (`
+
+var compatibleUsageAnalyticsModelExpression = "coalesce(nullif(" + usageidentity.SQLRequestAnalyticsModelExpression("model", "requested_model") + ", ''), '-')"
 
 type usageSnapshot struct {
 	maxID             int64
@@ -538,6 +542,7 @@ func scanCompatibleDetail(rows *sql.Rows) (compatibleExportRow, error) {
 		&authSnapshotAt,
 		&latency,
 		&ttft,
+		&detail.RequestedModel,
 		&detail.ResolvedModel,
 		&detail.ReasoningEffort,
 		&detail.ServiceTier,
@@ -654,6 +659,7 @@ func scanExportRow(rows *sql.Rows) (exportRow, error) {
 		return exportRow{}, err
 	}
 	event.RequestID = requestID.String
+	event.AnalyticsModel = usageidentity.AnalyticsModelForRequest(event.Model, requestedModel.String)
 	event.Provider = provider.String
 	event.ExecutorType = executorType.String
 	event.Endpoint = endpoint.String

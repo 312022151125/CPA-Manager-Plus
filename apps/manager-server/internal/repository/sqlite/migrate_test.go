@@ -270,6 +270,169 @@ func TestMigrateRepairsUsageMonitoringWithoutDroppingQuotaOrUsageData(t *testing
 	}
 }
 
+func TestMigrateClearsDerivedUsageWhenSourceTableWasLost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lost-usage-events.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`insert into usage_events (
+			event_hash, timestamp_ms, timestamp, model, input_tokens,
+			output_tokens, total_tokens, created_at_ms
+		) values ('lost-source-event', 3600001, '1970-01-01T01:00:00.001Z',
+			'gpt-test', 10, 5, 15, 1)`,
+		`insert into usage_account_model_rollups (
+			account_key, model, billing_model, service_tier, calls,
+			first_seen_ms, last_seen_ms, updated_at_ms
+		) values ('account-1', 'gpt-test', 'gpt-test', '', 1, 1, 1, 1)`,
+		`insert into usage_dashboard_hourly_rollups (
+			bucket_ms, model, billing_model, service_tier, calls, updated_at_ms
+		) values (3600000, 'gpt-test', 'gpt-test', '', 1, 1)`,
+		`insert into usage_rollup_checkpoints (name, last_event_id, updated_at_ms)
+		values ('account_history', 1, 1), ('dashboard_hourly', 1, 1)`,
+		`insert into usage_hourly_aggregate_v1 (
+			bucket_ms, model, billing_model, service_tier, failed, calls, updated_at_ms
+		) values (3600000, 'gpt-test', 'gpt-test', '', 0, 1, 1)`,
+		`insert into usage_event_identity_ledger (
+			event_hash, raw_event_id, timestamp_ms, bucket_ms,
+			aggregate_schema_version, first_seen_at_ms, updated_at_ms
+		) select event_hash, id, timestamp_ms, 3600000, 2, created_at_ms, 1
+		from usage_events where event_hash = 'lost-source-event'`,
+		`update usage_hourly_aggregate_state set
+			status = 'ready', backfill_last_event_id = 1, coverage_event_id = 1,
+			target_event_id = 1, processed_events = 1
+		where aggregate_name = 'hourly_core'`,
+		`insert into usage_pricing_hourly_rollups_v1 (
+			structure_revision, bucket_ms, model, billing_model, pricing_model,
+			service_tier, context_threshold_tokens, failed, calls, updated_at_ms
+		) values ('revision-1', 3600000, 'gpt-test', 'gpt-test', 'gpt-test',
+			'', -1, 0, 1, 1)`,
+		`insert into usage_pricing_account_rollups_v1 (
+			structure_revision, account_key, model, billing_model, pricing_model,
+			service_tier, context_threshold_tokens, calls,
+			first_seen_ms, last_seen_ms, updated_at_ms
+		) values ('revision-1', 'account-1', 'gpt-test', 'gpt-test', 'gpt-test',
+			'', -1, 1, 1, 1, 1)`,
+		`update usage_pricing_rollup_state set
+			structure_revision = 'revision-1', status = 'ready',
+			backfill_last_event_id = 1, coverage_event_id = 1,
+			target_event_id = 1, processed_events = 1
+		where rollup_name = 'pricing_v1'`,
+		`insert into usage_monitoring_event_projection_v1 (
+			event_id, timestamp_ms, search_text, account_key, provider,
+			executor_type, model, requested_model, analytics_model,
+			resolved_model, auth_index, source, source_hash, api_key_hash,
+			account_snapshot, auth_label_snapshot, auth_file_snapshot,
+			auth_provider_snapshot, auth_project_id_snapshot,
+			reasoning_effort, service_tier, failed, input_tokens,
+			output_tokens, reasoning_tokens, cached_tokens, cache_tokens,
+			cache_read_tokens, cache_creation_tokens,
+			normalized_total_input_tokens, total_tokens,
+			header_quota_plan_type, header_error_kind, header_error_code,
+			header_trace_id, updated_at_ms
+		) values (1, 3600001, 'gpt-test', 'account-1', '', '', 'gpt-test',
+			'', 'gpt-test', '', '', '', '', '', '', '', '', '', '', '', '',
+			0, 10, 5, 0, 0, 0, 0, 0, 10, 15, '', '', '', '', 1)`,
+		`insert into usage_monitoring_account_daily_rollups_v1 (
+			structure_revision, bucket_ms, account_snapshot, auth_label_snapshot,
+			provider, auth_provider_snapshot, auth_index, source, source_hash,
+			auth_file_snapshot, api_key_hash, executor_type, model, billing_model,
+			pricing_model, service_tier, context_threshold_tokens, failed,
+			calls, last_seen_ms, updated_at_ms
+		) values ('revision-1', 0, '', '', '', '', '', '', '', '', '', '',
+			'gpt-test', 'gpt-test', 'gpt-test', '', -1, 0, 1, 1, 1)`,
+		`insert into usage_monitoring_api_key_daily_rollups_v1 (
+			structure_revision, bucket_ms, api_key_hash, account_snapshot,
+			auth_label_snapshot, provider, auth_provider_snapshot, auth_index,
+			source, source_hash, auth_file_snapshot, executor_type, model,
+			billing_model, pricing_model, service_tier, context_threshold_tokens,
+			failed, calls, last_seen_ms, updated_at_ms
+		) values ('revision-1', 0, '', '', '', '', '', '', '', '', '', '',
+			'gpt-test', 'gpt-test', 'gpt-test', '', -1, 0, 1, 1, 1)`,
+		`insert into usage_monitoring_selector_daily_rollups_v1 (
+			bucket_ms, model, api_key_hash, provider, auth_file_snapshot,
+			account_snapshot, auth_label_snapshot, auth_index, source,
+			source_hash, updated_at_ms
+		) values (0, 'gpt-test', '', '', '', '', '', '', '', '', 1)`,
+		`insert into usage_monitoring_header_latest_v1 (
+			snapshot_key, event_id, event_hash, timestamp_ms,
+			auth_file_snapshot, auth_index, account_snapshot,
+			auth_label_snapshot, auth_provider_snapshot,
+			auth_project_id_snapshot, source, source_hash,
+			response_metadata_json, header_quota_plan_type,
+			header_error_kind, header_error_code, header_trace_id,
+			updated_at_ms
+		) values ('snapshot-1', 1, 'lost-source-event', 3600001,
+			'', '', '', '', '', '', '', '', '{}', '', '', '', '', 1)`,
+		`update usage_monitoring_rollup_state set
+			structure_revision = 'revision-1', status = 'ready',
+			backfill_last_event_id = 1, coverage_event_id = 1,
+			target_event_id = 1, processed_events = 1`,
+		`update usage_monitoring_search_index_state set ready = 1, updated_at_ms = 1
+		where id = 1`,
+		`update usage_data_migrations set
+			status = 'completed', last_event_id = 1, target_event_id = 1,
+			processed_rows = 1, changed_rows = 1,
+			started_at_ms = 1, updated_at_ms = 1, finished_at_ms = 1
+		where name in ('usage_cache_accounting_v1', 'usage_cache_accounting_v2')`,
+		`insert into usage_cache_accounting_v2_changes (
+			event_id, cache_input_mode, normalized_uncached_input_tokens,
+			normalized_total_input_tokens, normalized_cache_read_tokens,
+			normalized_cache_creation_tokens, total_tokens
+		) values (1, 'included', 10, 10, 0, 0, 15)`,
+		`drop table usage_monitoring_event_search_v1`,
+		`drop table usage_events`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("prepare lost usage source fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close lost usage source fixture: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen lost usage source fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, table := range []string{
+		"usage_events",
+		"usage_account_model_rollups",
+		"usage_dashboard_hourly_rollups",
+		"usage_hourly_aggregate_v1",
+		"usage_pricing_hourly_rollups_v1",
+		"usage_pricing_account_rollups_v1",
+		"usage_monitoring_account_daily_rollups_v1",
+		"usage_monitoring_api_key_daily_rollups_v1",
+		"usage_monitoring_selector_daily_rollups_v1",
+		"usage_monitoring_event_projection_v1",
+		"usage_monitoring_event_search_v1",
+		"usage_monitoring_header_latest_v1",
+		"usage_cache_accounting_v2_changes",
+	} {
+		assertTableCount(t, db, table, 0)
+	}
+	assertTableCount(t, db, "usage_event_identity_ledger", 1)
+	var rawEventID sql.NullInt64
+	var aggregateVersion int
+	if err := db.QueryRow(`select raw_event_id, aggregate_schema_version
+		from usage_event_identity_ledger where event_hash = 'lost-source-event'`).Scan(
+		&rawEventID,
+		&aggregateVersion,
+	); err != nil {
+		t.Fatalf("read detached usage identity ledger: %v", err)
+	}
+	if rawEventID.Valid || aggregateVersion != 0 {
+		t.Fatalf("detached identity ledger = raw:%v aggregate_version:%d", rawEventID, aggregateVersion)
+	}
+	assertUsageHourlyAggregateState(t, db, "ready", 0)
+	assertEmptyUsageDerivedState(t, db)
+}
+
 func TestMigrateRebuildsProjectionForAccountKeyIndex(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-monitoring-projection.sqlite")
 	db, err := Open(path)
@@ -347,6 +510,463 @@ func TestMigrateRebuildsProjectionForAccountKeyIndex(t *testing.T) {
 	}
 	if status != "pending" || coverageEventID != 0 || targetEventID != 1 {
 		t.Fatalf("rebuilt projection state = status:%q coverage:%d target:%d", status, coverageEventID, targetEventID)
+	}
+}
+
+func TestUsageMonitoringModelFormatUpgradeRebuildsDerivedDataOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-monitoring-model-format.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`insert into usage_events (event_hash, timestamp_ms, timestamp, model, created_at_ms)
+		values ('preserved-monitoring-event', 1, '1', 'deepseek-v4-flash(max)', 1)`,
+		`insert into usage_monitoring_account_daily_rollups_v1 (
+			structure_revision, bucket_ms, account_snapshot, auth_label_snapshot,
+			provider, auth_provider_snapshot, auth_index, source, source_hash,
+			auth_file_snapshot, api_key_hash, executor_type, model, billing_model,
+			pricing_model, service_tier, context_threshold_tokens, failed,
+			last_seen_ms, updated_at_ms
+		) values ('legacy', 0, '', '', '', '', '', '', '', '', '', '',
+			'deepseek-v4-flash(max)', 'deepseek-v4-flash(max)',
+			'deepseek-v4-flash(max)', '', -1, 0, 1, 1)`,
+		`insert into usage_monitoring_api_key_daily_rollups_v1 (
+			structure_revision, bucket_ms, api_key_hash, account_snapshot,
+			auth_label_snapshot, provider, auth_provider_snapshot, auth_index,
+			source, source_hash, auth_file_snapshot, executor_type, model,
+			billing_model, pricing_model, service_tier, context_threshold_tokens,
+			failed, last_seen_ms, updated_at_ms
+		) values ('legacy', 0, '', '', '', '', '', '', '', '', '', '',
+			'deepseek-v4-flash(max)', 'deepseek-v4-flash(max)',
+			'deepseek-v4-flash(max)', '', -1, 0, 1, 1)`,
+		`insert into usage_monitoring_selector_daily_rollups_v1 (
+			bucket_ms, model, api_key_hash, provider, auth_file_snapshot,
+			account_snapshot, auth_label_snapshot, auth_index, source,
+			source_hash, updated_at_ms
+		) values (0, 'deepseek-v4-flash(max)', '', '', '', '', '', '', '', '', 1)`,
+		`insert into usage_monitoring_event_projection_v1 (
+			event_id, timestamp_ms, search_text, account_key, provider,
+			executor_type, model, analytics_model, resolved_model, auth_index,
+			source, source_hash, api_key_hash, account_snapshot,
+			auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot,
+			auth_project_id_snapshot, reasoning_effort, service_tier, failed,
+			latency_ms, input_tokens, output_tokens, reasoning_tokens,
+			cached_tokens, cache_tokens, cache_read_tokens,
+			cache_creation_tokens, normalized_total_input_tokens, total_tokens,
+			header_quota_plan_type, header_error_kind, header_error_code,
+			header_trace_id, updated_at_ms
+		) values (1, 1, 'legacy', '', '', '', 'deepseek-v4-flash(max)',
+			'deepseek-v4-flash(max)', '', '', '', '', '', '', '', '', '', '',
+			'', '', 0, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, '', '', '', '', 1)`,
+		`update usage_monitoring_rollup_state set
+			structure_revision = 'legacy', status = 'ready',
+			backfill_last_event_id = 1, coverage_event_id = 1,
+			target_event_id = 1, processed_events = 1, updated_at_ms = 1`,
+		`update usage_monitoring_search_index_state set ready = 1, updated_at_ms = 1 where id = 1`,
+		`delete from settings where key = 'usage_monitoring_model_format_version'`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup legacy monitoring model format: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("upgrade sqlite: %v", err)
+	}
+	assertTableCount(t, db, "usage_events", 1)
+	for _, table := range []string{
+		"usage_monitoring_account_daily_rollups_v1",
+		"usage_monitoring_api_key_daily_rollups_v1",
+		"usage_monitoring_selector_daily_rollups_v1",
+		"usage_monitoring_event_projection_v1",
+	} {
+		assertTableCount(t, db, table, 0)
+	}
+	var version string
+	if err := db.QueryRow(`select value from settings where key = ?`, usageMonitoringModelFormatVersionKey).Scan(&version); err != nil {
+		t.Fatalf("read monitoring model format version: %v", err)
+	}
+	if version != usageidentity.ModelFormatVersion {
+		t.Fatalf("monitoring model format version = %q, want %q", version, usageidentity.ModelFormatVersion)
+	}
+	rows, err := db.Query(`select rollup_name, structure_revision, status,
+		coverage_event_id, target_event_id, processed_events
+		from usage_monitoring_rollup_state order by rollup_name`)
+	if err != nil {
+		t.Fatalf("read rebuilt monitoring states: %v", err)
+	}
+	for rows.Next() {
+		var name, revision, status string
+		var coverage, target, processed int64
+		if err := rows.Scan(&name, &revision, &status, &coverage, &target, &processed); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan rebuilt monitoring state: %v", err)
+		}
+		if revision != "" || status != "pending" || coverage != 0 || target != 1 || processed != 0 {
+			_ = rows.Close()
+			t.Fatalf("rebuilt monitoring state %s = revision:%q status:%q coverage:%d target:%d processed:%d", name, revision, status, coverage, target, processed)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close rebuilt monitoring states: %v", err)
+	}
+	var searchReady int
+	if err := db.QueryRow(`select ready from usage_monitoring_search_index_state where id = 1`).Scan(&searchReady); err != nil {
+		t.Fatalf("read rebuilt search state: %v", err)
+	}
+	if searchReady != 1 {
+		t.Fatalf("rebuilt search ready = %d, want 1 after index rebuild", searchReady)
+	}
+	if _, err := db.Exec(`insert into usage_monitoring_selector_daily_rollups_v1 (
+		bucket_ms, model, api_key_hash, provider, auth_file_snapshot,
+		account_snapshot, auth_label_snapshot, auth_index, source,
+		source_hash, updated_at_ms
+	) values (0, 'rebuilt', '', '', '', '', '', '', '', '', 2)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("insert rebuilt selector: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close upgraded sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen upgraded sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "usage_monitoring_selector_daily_rollups_v1", 1)
+}
+
+func TestUsageMonitoringModelFormatUpgradeRollsBackAndRetries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-monitoring-model-format-retry.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, statement := range []string{
+		`insert into usage_events (event_hash, timestamp_ms, timestamp, model, created_at_ms)
+		values ('preserved-retry-event', 1, '1', 'deepseek-v4-flash(max)', 1)`,
+		`insert into usage_monitoring_selector_daily_rollups_v1 (
+			bucket_ms, model, api_key_hash, provider, auth_file_snapshot,
+			account_snapshot, auth_label_snapshot, auth_index, source,
+			source_hash, updated_at_ms
+		) values (0, 'legacy', '', '', '', '', '', '', '', '', 1)`,
+		`delete from settings where key = 'usage_monitoring_model_format_version'`,
+		`create trigger reject_monitoring_model_selector_delete
+		before delete on usage_monitoring_selector_daily_rollups_v1
+		begin select raise(abort, 'blocked'); end`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("setup monitoring model retry fixture: %v", err)
+		}
+	}
+
+	if err := ensureUsageMonitoringProjectionIdentity(db); err == nil {
+		t.Fatal("monitoring model migration error = nil, want trigger failure")
+	}
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "usage_monitoring_selector_daily_rollups_v1", 1)
+	var settingCount int
+	if err := db.QueryRow(`select count(*) from settings where key = ?`, usageMonitoringModelFormatVersionKey).Scan(&settingCount); err != nil {
+		t.Fatalf("read rolled-back monitoring model setting: %v", err)
+	}
+	if settingCount != 0 {
+		t.Fatalf("monitoring model setting count after rollback = %d, want 0", settingCount)
+	}
+
+	if _, err := db.Exec(`drop trigger reject_monitoring_model_selector_delete`); err != nil {
+		t.Fatalf("drop failure trigger: %v", err)
+	}
+	if err := ensureUsageMonitoringProjectionIdentity(db); err != nil {
+		t.Fatalf("retry monitoring model migration: %v", err)
+	}
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "usage_monitoring_selector_daily_rollups_v1", 0)
+	var version string
+	if err := db.QueryRow(`select value from settings where key = ?`, usageMonitoringModelFormatVersionKey).Scan(&version); err != nil {
+		t.Fatalf("read retried monitoring model version: %v", err)
+	}
+	if version != usageidentity.ModelFormatVersion {
+		t.Fatalf("retried monitoring model version = %q", version)
+	}
+}
+
+func TestUsageMonitoringModelFormatUpgradeRecoversMissingSearchIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-monitoring-model-format-missing-search.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`insert into usage_events (event_hash, timestamp_ms, timestamp, model, created_at_ms)
+		values ('missing-search-event', 1, '1', 'deepseek-v4-flash(max)', 1)`,
+		`insert into usage_monitoring_event_projection_v1 (
+			event_id, timestamp_ms, search_text, account_key, provider,
+			executor_type, model, analytics_model, resolved_model, auth_index,
+			source, source_hash, api_key_hash, account_snapshot,
+			auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot,
+			auth_project_id_snapshot, reasoning_effort, service_tier, failed,
+			input_tokens, output_tokens, reasoning_tokens, cached_tokens,
+			cache_tokens, cache_read_tokens, cache_creation_tokens,
+			normalized_total_input_tokens, total_tokens, header_quota_plan_type,
+			header_error_kind, header_error_code, header_trace_id, updated_at_ms
+		) values (
+			1, 1, 'legacy-search', '', '', '', 'deepseek-v4-flash(max)',
+			'deepseek-v4-flash(max)', '', '', '', '', '', '', '', '', '', '',
+			'', '', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '', '', '', '', 1
+		)`,
+		`delete from settings where key = 'usage_monitoring_model_format_version'`,
+		`drop table usage_monitoring_event_search_v1`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup missing search fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close damaged sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("recover missing search index: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "usage_monitoring_event_projection_v1", 0)
+	var searchIndexCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master
+		where type = 'table' and name = 'usage_monitoring_event_search_v1'`).Scan(&searchIndexCount); err != nil {
+		t.Fatalf("read recovered search index: %v", err)
+	}
+	if searchIndexCount != 1 {
+		t.Fatalf("recovered search index count = %d, want 1", searchIndexCount)
+	}
+}
+
+func TestUsageMonitoringSearchIndexRebuildRollsBackAndRetries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-monitoring-search-retry.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `insert into usage_events (
+		request_id, event_hash, timestamp_ms, timestamp, model, created_at_ms
+	) values ('searchretrymarker', 'search-retry-event', 1, '1', 'gpt-test', 1)`); err != nil {
+		t.Fatalf("insert search retry event: %v", err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin search retry projection: %v", err)
+	}
+	if err := usageprojection.UpsertEventRange(ctx, tx, 0, 1, 1); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("seed search retry projection: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit search retry projection: %v", err)
+	}
+	for _, statement := range []string{
+		`drop table usage_monitoring_event_search_v1`,
+		`create trigger reject_usage_monitoring_search_ready
+		before update of ready on usage_monitoring_search_index_state
+		when new.ready = 1
+		begin select raise(abort, 'blocked'); end`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("prepare search retry fixture: %v", err)
+		}
+	}
+
+	if err := ensureUsageMonitoringSearchIndex(db); err == nil {
+		t.Fatal("search index rebuild error = nil, want ready-state failure")
+	}
+	var searchIndexCount int
+	if err := db.QueryRowContext(ctx, `select count(*) from sqlite_master
+		where type = 'table' and name = 'usage_monitoring_event_search_v1'`).Scan(&searchIndexCount); err != nil {
+		t.Fatalf("inspect rolled-back search index: %v", err)
+	}
+	if searchIndexCount != 0 {
+		t.Fatalf("rolled-back search index count = %d, want 0", searchIndexCount)
+	}
+	var ready int
+	if err := db.QueryRowContext(ctx, `select ready from usage_monitoring_search_index_state where id = 1`).Scan(&ready); err != nil {
+		t.Fatalf("read rolled-back search state: %v", err)
+	}
+	if ready != 1 {
+		t.Fatalf("rolled-back search ready = %d, want 1", ready)
+	}
+
+	if _, err := db.ExecContext(ctx, `drop trigger reject_usage_monitoring_search_ready`); err != nil {
+		t.Fatalf("drop search retry failure trigger: %v", err)
+	}
+	if err := ensureUsageMonitoringSearchIndex(db); err != nil {
+		t.Fatalf("retry search index rebuild: %v", err)
+	}
+	var matched int
+	if err := db.QueryRowContext(ctx, `select count(*) from usage_monitoring_event_search_v1
+		where search_text like '%searchretrymarker%'`).Scan(&matched); err != nil {
+		t.Fatalf("query rebuilt search index: %v", err)
+	}
+	if matched != 1 {
+		t.Fatalf("rebuilt search matches = %d, want 1", matched)
+	}
+}
+
+func TestUsageMonitoringModelFormatUpgradeRejectsUnknownVersionWithoutMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-monitoring-model-format-future.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, statement := range []string{
+		`insert into usage_events (event_hash, timestamp_ms, timestamp, model, created_at_ms)
+		values ('preserved-future-event', 1, '1', 'deepseek-v4-flash(max)', 1)`,
+		`insert into usage_monitoring_selector_daily_rollups_v1 (
+			bucket_ms, model, api_key_hash, provider, auth_file_snapshot,
+			account_snapshot, auth_label_snapshot, auth_index, source,
+			source_hash, updated_at_ms
+		) values (0, 'legacy', '', '', '', '', '', '', '', '', 1)`,
+		`update settings set value = 'future' where key = 'usage_monitoring_model_format_version'`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("setup future monitoring model fixture: %v", err)
+		}
+	}
+
+	if err := ensureUsageMonitoringProjectionIdentity(db); err == nil {
+		t.Fatal("monitoring model migration error = nil, want unsupported version failure")
+	}
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "usage_monitoring_selector_daily_rollups_v1", 1)
+	var version string
+	if err := db.QueryRow(`select value from settings where key = ?`, usageMonitoringModelFormatVersionKey).Scan(&version); err != nil {
+		t.Fatalf("read preserved monitoring model version: %v", err)
+	}
+	if version != "future" {
+		t.Fatalf("monitoring model version after rejection = %q, want future", version)
+	}
+}
+
+func TestMigrateRejectsUnknownMonitoringModelFormatBeforeOtherSchemaChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-monitoring-model-format-preflight.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`drop index idx_usage_events_latest_request_auth_file`,
+		`update settings set value = 'future' where key = 'usage_monitoring_model_format_version'`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup future monitoring preflight fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close future monitoring preflight fixture: %v", err)
+	}
+
+	if _, err := Open(path); err == nil {
+		t.Fatal("reopen future monitoring model format error = nil, want unsupported version failure")
+	}
+	db, err = sql.Open("sqlite", dataSourceName(path))
+	if err != nil {
+		t.Fatalf("open rejected monitoring preflight sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var indexCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master
+		where type = 'index' and name = 'idx_usage_events_latest_request_auth_file'`).Scan(&indexCount); err != nil {
+		t.Fatalf("inspect unrelated index after monitoring preflight rejection: %v", err)
+	}
+	if indexCount != 0 {
+		t.Fatalf("unrelated index count after monitoring preflight rejection = %d, want 0", indexCount)
+	}
+}
+
+func TestMigrateRejectsUnknownAccountHistoryFormatBeforeOtherSchemaChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "account-history-format-preflight.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`drop index idx_usage_events_latest_request_auth_file`,
+		`update settings set value = 'future' where key = 'usage_account_history_identity_format_version'`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup future account history preflight fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close future account history preflight fixture: %v", err)
+	}
+
+	if _, err := Open(path); err == nil {
+		t.Fatal("reopen future account history format error = nil, want unsupported version failure")
+	}
+	db, err = sql.Open("sqlite", dataSourceName(path))
+	if err != nil {
+		t.Fatalf("open rejected account history preflight sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var indexCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master
+		where type = 'index' and name = 'idx_usage_events_latest_request_auth_file'`).Scan(&indexCount); err != nil {
+		t.Fatalf("inspect unrelated index after account history preflight rejection: %v", err)
+	}
+	if indexCount != 0 {
+		t.Fatalf("unrelated index count after account history preflight rejection = %d, want 0", indexCount)
+	}
+}
+
+func TestMigrateRejectsUnknownDashboardFormatBeforeOtherSchemaChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dashboard-format-preflight.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`drop index idx_usage_events_latest_request_auth_file`,
+		`update settings set value = 'future' where key = 'usage_dashboard_hourly_format_version'`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup future dashboard preflight fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close future dashboard preflight fixture: %v", err)
+	}
+
+	if _, err := Open(path); err == nil {
+		t.Fatal("reopen future dashboard format error = nil, want unsupported version failure")
+	}
+	db, err = sql.Open("sqlite", dataSourceName(path))
+	if err != nil {
+		t.Fatalf("open rejected dashboard preflight sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var indexCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master
+		where type = 'index' and name = 'idx_usage_events_latest_request_auth_file'`).Scan(&indexCount); err != nil {
+		t.Fatalf("inspect unrelated index after dashboard preflight rejection: %v", err)
+	}
+	if indexCount != 0 {
+		t.Fatalf("unrelated index count after dashboard preflight rejection = %d, want 0", indexCount)
 	}
 }
 
@@ -925,6 +1545,179 @@ func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
 	assertTableCount(t, db, "usage_rollup_checkpoints", 0)
 }
 
+func TestUsageAccountModelRollupPrimaryKeyUpgradeRebuildsDerivedData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-account-model-primary-key.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`insert into usage_events (event_hash, timestamp_ms, timestamp, model, created_at_ms)
+		values ('preserved-model-event', 1, '1', 'model-a', 1)`,
+		`drop table usage_account_model_rollups`,
+		`create table usage_account_model_rollups (
+			account_key text not null, auth_index text, model text not null, billing_model text not null,
+			service_tier text not null, calls integer not null default 0,
+			first_seen_ms integer not null, last_seen_ms integer not null,
+			updated_at_ms integer not null,
+			primary key (account_key, billing_model, service_tier)
+		)`,
+		`insert into usage_account_model_rollups (
+			account_key, auth_index, model, billing_model, service_tier, calls,
+			first_seen_ms, last_seen_ms, updated_at_ms
+		) values ('account-1', 'auth-a', 'model-a', 'resolved-x', '', 1, 1, 1, 1)`,
+		`insert or replace into usage_rollup_checkpoints (name, last_event_id, updated_at_ms)
+		values ('account_history', 1, 1)`,
+		`drop table usage_pricing_account_rollups_v1`,
+		`create table usage_pricing_account_rollups_v1 (
+			structure_revision text not null, account_key text not null,
+			model text not null, billing_model text not null, pricing_model text not null,
+			service_tier text not null, context_threshold_tokens integer not null,
+			calls integer not null default 0, first_seen_ms integer not null,
+			last_seen_ms integer not null, updated_at_ms integer not null,
+			primary key (structure_revision, account_key, billing_model, pricing_model,
+				service_tier, context_threshold_tokens)
+		)`,
+		`insert into usage_pricing_account_rollups_v1 (
+			structure_revision, account_key, model, billing_model, pricing_model,
+			service_tier, context_threshold_tokens, calls,
+			first_seen_ms, last_seen_ms, updated_at_ms
+		) values ('legacy', 'account-1', 'model-a', 'resolved-x', 'resolved-x', '', -1, 1, 1, 1, 1)`,
+		`insert into usage_pricing_hourly_rollups_v1 (
+			structure_revision, bucket_ms, model, billing_model, pricing_model,
+			service_tier, context_threshold_tokens, failed, calls, updated_at_ms
+		) values ('legacy', 0, 'model-a', 'resolved-x', 'resolved-x', '', -1, 0, 1, 1)`,
+		`update usage_pricing_rollup_state set
+			structure_revision = 'legacy', status = 'ready',
+			backfill_last_event_id = 1, coverage_event_id = 1,
+			target_event_id = 1, processed_events = 1
+		where rollup_name = 'pricing_v1'`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup legacy primary key fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy primary key fixture: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("upgrade primary keys: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if got := migrationTablePrimaryKey(t, db, usageAccountModelRollupsTable); got["model"] != 2 {
+		t.Fatalf("account model rollup primary key = %#v", got)
+	}
+	if got := migrationTablePrimaryKey(t, db, usagePricingAccountRollupsTable); got["model"] != 3 {
+		t.Fatalf("pricing account rollup primary key = %#v", got)
+	}
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, usageAccountModelRollupsTable, 0)
+	assertTableCount(t, db, usagePricingAccountRollupsTable, 0)
+	assertTableCount(t, db, "usage_pricing_hourly_rollups_v1", 0)
+	var accountCheckpoints int
+	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'account_history'`).Scan(&accountCheckpoints); err != nil {
+		t.Fatalf("read account checkpoint: %v", err)
+	}
+	if accountCheckpoints != 0 {
+		t.Fatalf("account checkpoint count = %d, want 0", accountCheckpoints)
+	}
+	var revision, status string
+	var backfillLastEventID, coverageEventID, targetEventID, processedEvents int64
+	if err := db.QueryRow(`select structure_revision, status, backfill_last_event_id,
+		coverage_event_id, target_event_id, processed_events
+		from usage_pricing_rollup_state where rollup_name = 'pricing_v1'`).Scan(
+		&revision, &status, &backfillLastEventID, &coverageEventID, &targetEventID, &processedEvents,
+	); err != nil {
+		t.Fatalf("read pricing state: %v", err)
+	}
+	if revision != "" || status != "pending" || backfillLastEventID != 0 || coverageEventID != 0 || targetEventID != 1 || processedEvents != 0 {
+		t.Fatalf("pricing state = revision:%q status:%q backfill:%d coverage:%d target:%d processed:%d",
+			revision, status, backfillLastEventID, coverageEventID, targetEventID, processedEvents)
+	}
+}
+
+func TestUsageAccountModelRollupPrimaryKeyUpgradeRollsBackAndRetries(t *testing.T) {
+	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "usage-account-model-primary-key-retry.sqlite")))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, statement := range []string{
+		`create table usage_events (id integer primary key)`,
+		`insert into usage_events (id) values (1)`,
+		`create table usage_rollup_checkpoints (name text primary key)`,
+		`insert into usage_rollup_checkpoints (name) values ('account_history')`,
+		`create table usage_account_model_rollups (
+			account_key text not null, model text not null, billing_model text not null,
+			service_tier text not null, first_seen_ms integer not null,
+			last_seen_ms integer not null, updated_at_ms integer not null,
+			primary key (account_key, billing_model, service_tier)
+		)`,
+		`insert into usage_account_model_rollups values ('account-1', 'model-a', 'resolved-x', '', 1, 1, 1)`,
+		`create table usage_pricing_hourly_rollups_v1 (id integer primary key)`,
+		`insert into usage_pricing_hourly_rollups_v1 (id) values (1)`,
+		`create table usage_pricing_account_rollups_v1 (
+			structure_revision text not null, account_key text not null,
+			model text not null, billing_model text not null, pricing_model text not null,
+			service_tier text not null, context_threshold_tokens integer not null,
+			first_seen_ms integer not null, last_seen_ms integer not null,
+			updated_at_ms integer not null,
+			primary key (structure_revision, account_key, billing_model, pricing_model,
+				service_tier, context_threshold_tokens)
+		)`,
+		`insert into usage_pricing_account_rollups_v1 values ('legacy', 'account-1', 'model-a', 'resolved-x', 'resolved-x', '', -1, 1, 1, 1)`,
+		`create table usage_pricing_rollup_state (
+			rollup_name text primary key, structure_revision text not null,
+			status text not null, backfill_last_event_id integer not null,
+			coverage_event_id integer not null, target_event_id integer not null,
+			processed_events integer not null, min_bucket_ms integer, max_bucket_ms integer,
+			last_run_started_at_ms integer, updated_at_ms integer not null,
+			finished_at_ms integer, last_error text
+		)`,
+		`insert into usage_pricing_rollup_state values ('pricing_v1', 'legacy', 'ready', 1, 1, 1, 1, null, null, null, 1, 1, null)`,
+		`create trigger reject_pricing_hourly_delete before delete on usage_pricing_hourly_rollups_v1
+		begin select raise(abort, 'blocked'); end`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("setup primary key retry fixture: %v", err)
+		}
+	}
+
+	if err := ensureUsageAccountModelRollupPrimaryKeys(db); err == nil {
+		t.Fatal("primary key migration error = nil, want trigger failure")
+	}
+	if got := migrationTablePrimaryKey(t, db, usageAccountModelRollupsTable); got["model"] != 0 {
+		t.Fatalf("account primary key committed after failure = %#v", got)
+	}
+	if got := migrationTablePrimaryKey(t, db, usagePricingAccountRollupsTable); got["model"] != 0 {
+		t.Fatalf("pricing primary key committed after failure = %#v", got)
+	}
+	assertTableCount(t, db, usageAccountModelRollupsTable, 1)
+	assertTableCount(t, db, usagePricingAccountRollupsTable, 1)
+	assertTableCount(t, db, "usage_pricing_hourly_rollups_v1", 1)
+	assertTableCount(t, db, "usage_rollup_checkpoints", 1)
+
+	if _, err := db.Exec(`drop trigger reject_pricing_hourly_delete`); err != nil {
+		t.Fatalf("drop failure trigger: %v", err)
+	}
+	if err := ensureUsageAccountModelRollupPrimaryKeys(db); err != nil {
+		t.Fatalf("retry primary key migration: %v", err)
+	}
+	if got := migrationTablePrimaryKey(t, db, usageAccountModelRollupsTable); got["model"] != 2 {
+		t.Fatalf("account primary key after retry = %#v", got)
+	}
+	if got := migrationTablePrimaryKey(t, db, usagePricingAccountRollupsTable); got["model"] != 3 {
+		t.Fatalf("pricing primary key after retry = %#v", got)
+	}
+	assertTableCount(t, db, usageAccountModelRollupsTable, 0)
+	assertTableCount(t, db, usagePricingAccountRollupsTable, 0)
+	assertTableCount(t, db, "usage_pricing_hourly_rollups_v1", 0)
+	assertTableCount(t, db, "usage_rollup_checkpoints", 0)
+}
+
 func TestAccountHistoryIdentityFormatUpgradeRebuildsDerivedDataOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "account-history-identity-format.sqlite")
 	db, err := Open(path)
@@ -974,8 +1767,8 @@ func TestAccountHistoryIdentityFormatUpgradeRebuildsDerivedDataOnce(t *testing.T
 	if err := db.QueryRow(`select value from settings where key = ?`, accountHistoryIdentityFormatVersionKey).Scan(&version); err != nil {
 		t.Fatalf("read account history identity version: %v", err)
 	}
-	if version != usageidentity.FormatVersion {
-		t.Fatalf("identity version = %q, want %q", version, usageidentity.FormatVersion)
+	if version != usageidentity.AccountHistoryStructureRevision() {
+		t.Fatalf("identity version = %q, want %q", version, usageidentity.AccountHistoryStructureRevision())
 	}
 	for _, statement := range []string{
 		`insert into usage_account_model_rollups (
@@ -1114,12 +1907,22 @@ func TestDashboardHourlyRollupFormatUpgradeRebuildsOnce(t *testing.T) {
 		) values (0, '-', '-', '', 1)`,
 		`insert into usage_rollup_checkpoints (name, last_event_id, updated_at_ms)
 		values ('dashboard_hourly', 1, 1), ('account_history', 1, 1)`,
-		`delete from settings where key = 'usage_dashboard_hourly_format_version'`,
+		`update settings set value = '2', updated_at_ms = 1
+		where key = 'usage_dashboard_hourly_format_version'`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			_ = db.Close()
 			t.Fatalf("setup legacy rollup: %v", err)
 		}
+	}
+	var legacyVersion string
+	if err := db.QueryRow(`select value from settings where key = ?`, dashboardHourlyRollupFormatVersionKey).Scan(&legacyVersion); err != nil {
+		_ = db.Close()
+		t.Fatalf("read legacy rollup format version: %v", err)
+	}
+	if legacyVersion != "2" {
+		_ = db.Close()
+		t.Fatalf("legacy rollup format version = %q, want 2", legacyVersion)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close legacy sqlite: %v", err)
@@ -1326,11 +2129,442 @@ func TestUsageHourlyAggregateMigrationIsAdditiveAndSeedsPendingState(t *testing.
 	); err != nil {
 		t.Fatalf("read aggregate state: %v", err)
 	}
-	if version != 1 || status != "pending" || checkpoint != 0 || coverage != 0 || target != 1 {
+	if version != 2 || status != "pending" || checkpoint != 0 || coverage != 0 || target != 1 {
 		t.Fatalf("aggregate state = version:%d status:%q checkpoint:%d coverage:%d target:%d", version, status, checkpoint, coverage, target)
 	}
 	assertTableCount(t, db, "usage_events", 1)
 	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 1)
+}
+
+func TestMigrateRejectsUnknownHourlyAggregateVersionBeforeOtherSchemaChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-hourly-aggregate-preflight.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`drop index idx_usage_events_latest_request_auth_file`,
+		`update usage_hourly_aggregate_state set schema_version = 99
+		where aggregate_name = 'hourly_core'`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup future hourly aggregate preflight fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close future hourly aggregate preflight fixture: %v", err)
+	}
+
+	if _, err := Open(path); err == nil {
+		t.Fatal("reopen future hourly aggregate error = nil, want unsupported version failure")
+	}
+	db, err = sql.Open("sqlite", dataSourceName(path))
+	if err != nil {
+		t.Fatalf("open rejected hourly aggregate preflight sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var indexCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master
+		where type = 'index' and name = 'idx_usage_events_latest_request_auth_file'`).Scan(&indexCount); err != nil {
+		t.Fatalf("inspect unrelated index after hourly preflight rejection: %v", err)
+	}
+	if indexCount != 0 {
+		t.Fatalf("unrelated index count after hourly preflight rejection = %d, want 0", indexCount)
+	}
+}
+
+func TestUsageHourlyAggregateMigrationResetsCoverageWhenAggregateTableWasLost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-hourly-aggregate-lost-table.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	seedReadyUsageHourlyAggregate(t, db)
+	if _, err := db.Exec(`drop table usage_hourly_aggregate_v1`); err != nil {
+		_ = db.Close()
+		t.Fatalf("drop aggregate table: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close damaged sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen damaged sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "usage_hourly_aggregate_v1", 0)
+	assertUsageHourlyAggregateReset(t, db, 1)
+	var ledgerVersion int
+	if err := db.QueryRow(`select aggregate_schema_version from usage_event_identity_ledger
+		where event_hash = 'aggregate-recovery-event'`).Scan(&ledgerVersion); err != nil {
+		t.Fatalf("read reset aggregate ledger: %v", err)
+	}
+	if ledgerVersion != 0 {
+		t.Fatalf("aggregate ledger version = %d, want 0", ledgerVersion)
+	}
+}
+
+func TestUsageHourlyAggregateMigrationResetsStoredRowsWhenLedgerTableWasLost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-hourly-aggregate-lost-ledger.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	seedReadyUsageHourlyAggregate(t, db)
+	if _, err := db.Exec(`drop table usage_event_identity_ledger`); err != nil {
+		_ = db.Close()
+		t.Fatalf("drop aggregate ledger: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close damaged sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen damaged sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "usage_hourly_aggregate_v1", 0)
+	assertTableCount(t, db, "usage_event_identity_ledger", 0)
+	assertUsageHourlyAggregateReset(t, db, 1)
+}
+
+func TestUsageHourlyAggregateMigrationResetsStoredRowsWhenStateTableWasLost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-hourly-aggregate-lost-state-table.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	seedReadyUsageHourlyAggregate(t, db)
+	for _, statement := range []string{
+		`update usage_event_identity_ledger set aggregate_schema_version = 1`,
+		`drop table usage_hourly_aggregate_state`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("prepare lost aggregate state table: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close damaged sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen damaged sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "usage_hourly_aggregate_v1", 0)
+	assertUsageHourlyAggregateReset(t, db, 1)
+}
+
+func TestUsageHourlyAggregateMigrationResetsStoredRowsWhenStateRowWasLost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-hourly-aggregate-lost-state-row.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	seedReadyUsageHourlyAggregate(t, db)
+	for _, statement := range []string{
+		`update usage_event_identity_ledger set aggregate_schema_version = 1`,
+		`delete from usage_hourly_aggregate_state where aggregate_name = 'hourly_core'`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("prepare lost aggregate state row: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close damaged sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen damaged sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, "usage_hourly_aggregate_v1", 0)
+	assertUsageHourlyAggregateReset(t, db, 1)
+}
+
+func TestUsageHourlyAggregateMigrationPreservesCompleteCoverageOnRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-hourly-aggregate-complete.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	seedReadyUsageHourlyAggregate(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close complete sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen complete sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, "usage_hourly_aggregate_v1", 1)
+	var ledgerVersion int
+	if err := db.QueryRow(`select aggregate_schema_version from usage_event_identity_ledger
+		where event_hash = 'aggregate-recovery-event'`).Scan(&ledgerVersion); err != nil {
+		t.Fatalf("read preserved aggregate ledger: %v", err)
+	}
+	if ledgerVersion != 2 {
+		t.Fatalf("aggregate ledger version = %d, want 2", ledgerVersion)
+	}
+	var status string
+	var checkpoint, coverage, target, processed int64
+	if err := db.QueryRow(`select status, backfill_last_event_id, coverage_event_id,
+		target_event_id, processed_events from usage_hourly_aggregate_state
+		where aggregate_name = 'hourly_core'`).Scan(
+		&status,
+		&checkpoint,
+		&coverage,
+		&target,
+		&processed,
+	); err != nil {
+		t.Fatalf("read preserved aggregate state: %v", err)
+	}
+	if status != "ready" || checkpoint != 1 || coverage != 1 || target != 1 || processed != 1 {
+		t.Fatalf("preserved aggregate state = status:%q checkpoint:%d coverage:%d target:%d processed:%d",
+			status, checkpoint, coverage, target, processed)
+	}
+}
+
+func TestUsageHourlyAggregateMigrationRecoveryRollsBackAndRetries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-hourly-aggregate-recovery-retry.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	seedReadyUsageHourlyAggregate(t, db)
+	for _, statement := range []string{
+		`drop table usage_event_identity_ledger`,
+		`create trigger reject_usage_hourly_aggregate_recovery
+		before delete on usage_hourly_aggregate_v1
+		begin select raise(abort, 'blocked'); end`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("prepare aggregate recovery retry fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close damaged sqlite: %v", err)
+	}
+
+	if _, err := Open(path); err == nil {
+		t.Fatal("reopen damaged sqlite error = nil, want recovery trigger failure")
+	}
+	db, err = sql.Open("sqlite", dataSourceName(path))
+	if err != nil {
+		t.Fatalf("open failed recovery sqlite: %v", err)
+	}
+	assertTableCount(t, db, "usage_hourly_aggregate_v1", 1)
+	var stateStatus string
+	var coverage int64
+	if err := db.QueryRow(`select status, coverage_event_id from usage_hourly_aggregate_state
+		where aggregate_name = 'hourly_core'`).Scan(&stateStatus, &coverage); err != nil {
+		_ = db.Close()
+		t.Fatalf("read rolled-back aggregate state: %v", err)
+	}
+	if stateStatus != "ready" || coverage != 1 {
+		_ = db.Close()
+		t.Fatalf("rolled-back aggregate state = status:%q coverage:%d", stateStatus, coverage)
+	}
+	if _, err := db.Exec(`drop trigger reject_usage_hourly_aggregate_recovery`); err != nil {
+		_ = db.Close()
+		t.Fatalf("drop aggregate recovery trigger: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close failed recovery sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("retry aggregate recovery: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, "usage_hourly_aggregate_v1", 0)
+	assertTableCount(t, db, "usage_event_identity_ledger", 0)
+	assertUsageHourlyAggregateReset(t, db, 1)
+}
+
+func seedReadyUsageHourlyAggregate(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, statement := range []string{
+		`insert into usage_events (
+			event_hash, timestamp_ms, timestamp, model, input_tokens,
+			output_tokens, total_tokens, created_at_ms
+		) values (
+			'aggregate-recovery-event', 3600001, '1970-01-01T01:00:00.001Z',
+			'gpt-test', 10, 5, 15, 1
+		)`,
+		`insert into usage_hourly_aggregate_v1 (
+			bucket_ms, model, billing_model, service_tier, failed, calls,
+			input_tokens, output_tokens, total_tokens, updated_at_ms
+		) values (3600000, 'gpt-test', 'gpt-test', '', 0, 1, 10, 5, 15, 1)`,
+		`insert into usage_event_identity_ledger (
+			event_hash, raw_event_id, timestamp_ms, bucket_ms,
+			aggregate_schema_version, first_seen_at_ms, updated_at_ms
+		) select event_hash, id, timestamp_ms, 3600000, 2, created_at_ms, 1
+		from usage_events where event_hash = 'aggregate-recovery-event'`,
+		`update usage_hourly_aggregate_state set
+			status = 'ready', backfill_last_event_id = 1, coverage_event_id = 1,
+			target_event_id = 1, processed_events = 1,
+			min_bucket_ms = 3600000, max_bucket_ms = 3600000,
+			last_run_started_at_ms = 1, updated_at_ms = 1,
+			finished_at_ms = 1, last_error = null
+		where aggregate_name = 'hourly_core' and schema_version = 2`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("seed ready usage hourly aggregate: %v", err)
+		}
+	}
+}
+
+func assertUsageHourlyAggregateReset(t *testing.T, db *sql.DB, wantTarget int64) {
+	t.Helper()
+	assertUsageHourlyAggregateState(t, db, "pending", wantTarget)
+}
+
+func assertUsageHourlyAggregateState(t *testing.T, db *sql.DB, wantStatus string, wantTarget int64) {
+	t.Helper()
+	var version int
+	var status string
+	var checkpoint, coverage, target, processed int64
+	var minBucket, maxBucket, lastRun, finished sql.NullInt64
+	if err := db.QueryRow(`select schema_version, status, backfill_last_event_id,
+		coverage_event_id, target_event_id, processed_events, min_bucket_ms,
+		max_bucket_ms, last_run_started_at_ms, finished_at_ms
+		from usage_hourly_aggregate_state where aggregate_name = 'hourly_core'`).Scan(
+		&version,
+		&status,
+		&checkpoint,
+		&coverage,
+		&target,
+		&processed,
+		&minBucket,
+		&maxBucket,
+		&lastRun,
+		&finished,
+	); err != nil {
+		t.Fatalf("read reset aggregate state: %v", err)
+	}
+	if version != 2 || status != wantStatus || checkpoint != 0 || coverage != 0 ||
+		target != wantTarget || processed != 0 || minBucket.Valid || maxBucket.Valid ||
+		lastRun.Valid || finished.Valid {
+		t.Fatalf("reset aggregate state = version:%d status:%q checkpoint:%d coverage:%d target:%d processed:%d min:%v max:%v last_run:%v finished:%v",
+			version, status, checkpoint, coverage, target, processed,
+			minBucket, maxBucket, lastRun, finished)
+	}
+}
+
+func assertEmptyUsageDerivedState(t *testing.T, db *sql.DB) {
+	t.Helper()
+	var rollupCheckpointCount int
+	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints
+		where name in ('account_history', 'dashboard_hourly')`).Scan(&rollupCheckpointCount); err != nil {
+		t.Fatalf("count reset usage rollup checkpoints: %v", err)
+	}
+	if rollupCheckpointCount != 0 {
+		t.Fatalf("reset usage rollup checkpoints = %d, want 0", rollupCheckpointCount)
+	}
+
+	var pricingStatus string
+	var pricingCheckpoint, pricingCoverage, pricingTarget, pricingProcessed int64
+	if err := db.QueryRow(`select status, backfill_last_event_id, coverage_event_id,
+		target_event_id, processed_events from usage_pricing_rollup_state
+		where rollup_name = 'pricing_v1'`).Scan(
+		&pricingStatus,
+		&pricingCheckpoint,
+		&pricingCoverage,
+		&pricingTarget,
+		&pricingProcessed,
+	); err != nil {
+		t.Fatalf("read reset pricing state: %v", err)
+	}
+	if pricingStatus != "ready" || pricingCheckpoint != 0 || pricingCoverage != 0 ||
+		pricingTarget != 0 || pricingProcessed != 0 {
+		t.Fatalf("reset pricing state = status:%q checkpoint:%d coverage:%d target:%d processed:%d",
+			pricingStatus, pricingCheckpoint, pricingCoverage, pricingTarget, pricingProcessed)
+	}
+
+	rows, err := db.Query(`select rollup_name, status, backfill_last_event_id,
+		coverage_event_id, target_event_id, processed_events
+		from usage_monitoring_rollup_state order by rollup_name`)
+	if err != nil {
+		t.Fatalf("read reset monitoring state: %v", err)
+	}
+	defer rows.Close()
+	monitoringStates := 0
+	for rows.Next() {
+		var rollupName, status string
+		var checkpoint, coverage, target, processed int64
+		if err := rows.Scan(&rollupName, &status, &checkpoint, &coverage, &target, &processed); err != nil {
+			t.Fatalf("scan reset monitoring state: %v", err)
+		}
+		monitoringStates++
+		if status != "ready" || checkpoint != 0 || coverage != 0 || target != 0 || processed != 0 {
+			t.Fatalf("reset monitoring state %s = status:%q checkpoint:%d coverage:%d target:%d processed:%d",
+				rollupName, status, checkpoint, coverage, target, processed)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate reset monitoring state: %v", err)
+	}
+	if monitoringStates != 3 {
+		t.Fatalf("reset monitoring state rows = %d, want 3", monitoringStates)
+	}
+	var searchReady int
+	if err := db.QueryRow(`select ready from usage_monitoring_search_index_state where id = 1`).Scan(&searchReady); err != nil {
+		t.Fatalf("read reset monitoring search state: %v", err)
+	}
+	if searchReady != 1 {
+		t.Fatalf("rebuilt empty monitoring search state = %d, want 1", searchReady)
+	}
+
+	rows, err = db.Query(`select name, status, last_event_id, target_event_id,
+		processed_rows, changed_rows from usage_data_migrations
+		where name in ('usage_cache_accounting_v1', 'usage_cache_accounting_v2')
+		order by name`)
+	if err != nil {
+		t.Fatalf("read reset usage data migrations: %v", err)
+	}
+	defer rows.Close()
+	migrationStates := 0
+	for rows.Next() {
+		var name, status string
+		var lastEventID, targetEventID, processedRows, changedRows int64
+		if err := rows.Scan(
+			&name,
+			&status,
+			&lastEventID,
+			&targetEventID,
+			&processedRows,
+			&changedRows,
+		); err != nil {
+			t.Fatalf("scan reset usage data migration: %v", err)
+		}
+		migrationStates++
+		if status != "completed" || lastEventID != 0 || targetEventID != 0 ||
+			processedRows != 0 || changedRows != 0 {
+			t.Fatalf("reset usage data migration %s = status:%q last:%d target:%d processed:%d changed:%d",
+				name, status, lastEventID, targetEventID, processedRows, changedRows)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate reset usage data migrations: %v", err)
+	}
+	if migrationStates != 2 {
+		t.Fatalf("reset usage data migration rows = %d, want 2", migrationStates)
+	}
 }
 
 func TestEnsureUsageEventSnapshotColumnsOnlyMigratesSchema(t *testing.T) {

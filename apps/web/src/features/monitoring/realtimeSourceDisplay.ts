@@ -61,15 +61,16 @@ export const buildRealtimeSourceDisplay = (
       channel,
       provider
     ) || '-';
-  const metaCandidate = [
-    { value: provider, label: t('monitoring.filter_provider') },
-    { value: host, label: t('monitoring.column_host') },
-    { value: account, label: '' },
-    { value: source, label: t('monitoring.source') },
-  ].find(
-    (candidate) =>
-      candidate.value && !isRedundantMonitoringLabel(candidate.value, primary)
-  );
+  const metaCandidate = provider
+    ? { value: provider, label: t('monitoring.filter_provider') }
+    : [
+        { value: host, label: t('monitoring.column_host') },
+        { value: account, label: '' },
+        { value: source, label: t('monitoring.source') },
+      ].find(
+        (candidate) =>
+          candidate.value && !isRedundantMonitoringLabel(candidate.value, primary)
+      );
   const meta =
     metaCandidate && metaCandidate.label
       ? `${metaCandidate.label}: ${metaCandidate.value}`

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 func upsertSelectorDailyBatch(ctx context.Context, tx *sql.Tx, afterID, throughID, nowMS int64) error {
@@ -14,7 +16,7 @@ func upsertSelectorDailyBatch(ctx context.Context, tx *sql.Tx, afterID, throughI
 	)
 	select
 		timestamp_ms - (timestamp_ms %% %d),
-		coalesce(model, ''),
+		`+usageidentity.SQLRequestAnalyticsModelExpression("model", "requested_model")+`,
 		coalesce(api_key_hash, ''),
 		coalesce(nullif(auth_provider_snapshot, ''), nullif(provider, ''), ''),
 		coalesce(auth_file_snapshot, ''),

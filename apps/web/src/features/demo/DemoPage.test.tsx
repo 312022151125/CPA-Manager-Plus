@@ -610,6 +610,55 @@ describe('DemoPage', () => {
     );
   });
 
+  it('keeps morning monitoring events inside the request clock and exposes model identities', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-29T10:00:00+08:00'));
+    const requestNow = Date.now();
+    const rangeEnd = requestNow - 2 * 60 * 1000;
+
+    const page = getDemoMonitoringAnalytics({
+      from_ms: rangeEnd - 24 * 60 * 60 * 1000,
+      to_ms: rangeEnd,
+      now_ms: requestNow,
+      include: { events_page: { limit: 20 } },
+    });
+    const events = page.events?.items ?? [];
+    const maxEvent = events.find(
+      (event) => event.event_hash === 'demo-event-deepseek-reasoning-max'
+    );
+    const lowEvent = events.find(
+      (event) => event.event_hash === 'demo-event-deepseek-reasoning-low'
+    );
+    const regionEvent = events.find(
+      (event) => event.event_hash === 'demo-event-deepseek-region-alias'
+    );
+
+    expect(page.generated_at_ms).toBe(rangeEnd);
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) => event.timestamp_ms <= requestNow)).toBe(true);
+    expect(events.every((event) => event.timestamp_ms <= rangeEnd)).toBe(true);
+    expect(maxEvent).toMatchObject({
+      model: 'deepseek-chat(max)',
+      analytics_model: 'deepseek-chat',
+      requested_model: 'deepseek-chat(max)',
+      resolved_model: 'deepseek-chat-202608',
+      reasoning_effort: 'max',
+    });
+    expect(lowEvent).toMatchObject({
+      model: 'deepseek-chat(low)',
+      analytics_model: 'deepseek-chat',
+      requested_model: 'deepseek-chat(low)',
+      resolved_model: 'deepseek-chat-202608',
+      reasoning_effort: 'low',
+    });
+    expect(regionEvent).toMatchObject({
+      model: 'deepseek-chat(region-us)',
+      analytics_model: 'deepseek-chat(region-us)',
+      requested_model: 'deepseek-chat(region-us)',
+      resolved_model: 'deepseek-chat(region-us)',
+    });
+  });
+
   it('provides stable reason codes for localized account diagnostics', () => {
     const candidates = getDemoAccountActionCandidates().items;
 

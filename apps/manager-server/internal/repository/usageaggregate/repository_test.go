@@ -363,7 +363,7 @@ func TestCatchUpRollsBackAggregateWhenLedgerCoverageFails(t *testing.T) {
 	}
 	if _, err := db.Exec(`create trigger reject_aggregate_ledger_coverage
 		before update of aggregate_schema_version on usage_event_identity_ledger
-		when new.aggregate_schema_version = 1
+		when new.aggregate_schema_version = 2
 		begin select raise(abort, 'blocked'); end`); err != nil {
 		t.Fatalf("create failure trigger: %v", err)
 	}
@@ -401,7 +401,7 @@ func TestRepositoryRejectsUnknownAggregateSchema(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	ctx := context.Background()
 	repo := New(db)
-	if _, err := db.Exec(`update usage_hourly_aggregate_state set schema_version = 2 where aggregate_name = ?`, AggregateName); err != nil {
+	if _, err := db.Exec(`update usage_hourly_aggregate_state set schema_version = 99 where aggregate_name = ?`, AggregateName); err != nil {
 		t.Fatalf("set future schema: %v", err)
 	}
 	if _, err := repo.CatchUp(ctx, 10, time.Now().UnixMilli()); !errors.Is(err, ErrUnsupportedSchema) {
@@ -415,7 +415,7 @@ func TestRepositoryRejectsUnknownAggregateSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load future schema rows: %v", err)
 	}
-	if available || state.SchemaVersion != 2 || rows != nil {
+	if available || state.SchemaVersion != 99 || rows != nil {
 		t.Fatalf("future schema load = available:%v state:%#v rows:%#v", available, state, rows)
 	}
 }
@@ -460,6 +460,52 @@ func TestLoadRowsAppliesModelOutcomeAndRawEdgeFilters(t *testing.T) {
 		if row.Model != "model-a" || row.Failed {
 			t.Fatalf("unexpected filtered row = %#v", row)
 		}
+	}
+}
+
+func TestLoadRowsCanonicalizesReasoningSuffixesAcrossStoredAndRawRows(t *testing.T) {
+	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	events := usageevent.New(db)
+	repo := New(db)
+	baseMS := int64(1_800_000_000_000)
+	baseMS -= baseMS % hourMS
+	low := aggregateTestEvent("canonical-low", baseMS+1_000, "deepseek-v4-flash(low)", false, 1, 2, nil)
+	low.ResolvedModel = ""
+	max := aggregateTestEvent("canonical-max", baseMS+2_000, "deepseek-v4-flash(max)", false, 3, 4, nil)
+	max.ResolvedModel = ""
+	unknown := aggregateTestEvent("canonical-unknown", baseMS+3_000, "deepseek-v4-flash(region-us)", false, 5, 6, nil)
+	unknown.ResolvedModel = ""
+	if _, err := events.InsertBatch(ctx, []usage.Event{low, max, unknown}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+	if _, err := repo.CatchUp(ctx, 1, baseMS+hourMS); err != nil {
+		t.Fatalf("partial catch-up: %v", err)
+	}
+	rows, _, available, err := repo.LoadRows(ctx, Filter{
+		FromMS:        baseMS,
+		ToMS:          baseMS + hourMS,
+		Models:        []string{"deepseek-v4-flash"},
+		IncludeFailed: true,
+	})
+	if err != nil || !available {
+		t.Fatalf("load canonical rows: available=%v err=%v", available, err)
+	}
+	if len(rows) != 1 || rows[0].Model != "deepseek-v4-flash" || rows[0].Calls != 2 {
+		t.Fatalf("canonical rows = %#v", rows)
+	}
+	suffixRows, _, available, err := repo.LoadRows(ctx, Filter{
+		FromMS:        baseMS,
+		ToMS:          baseMS + hourMS,
+		Models:        []string{"deepseek-v4-flash(max)"},
+		IncludeFailed: true,
+	})
+	if err != nil || !available || len(suffixRows) != 1 || suffixRows[0].Calls != 2 {
+		t.Fatalf("suffix-filtered rows: available=%v err=%v rows=%#v", available, err, suffixRows)
 	}
 }
 

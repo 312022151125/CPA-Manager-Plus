@@ -1776,6 +1776,8 @@ export interface MonitoringAnalyticsEventRow {
   event_hash: string;
   timestamp_ms: number;
   model: string;
+  analytics_model?: string;
+  requested_model?: string;
   endpoint: string;
   method: string;
   path: string;

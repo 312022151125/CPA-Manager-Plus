@@ -355,8 +355,8 @@ func eventsAfterCheckpoint(ctx context.Context, tx *sql.Tx, lastEventID int64, l
 		coalesce(auth_index, ''),
 	coalesce(source, ''),
 	coalesce(source_hash, ''),
-	model,
-	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	`+usageidentity.SQLRequestAnalyticsModelExpression("model", "requested_model")+` as model,
+	coalesce(nullif(resolved_model, ''), `+usageidentity.SQLRequestAnalyticsModelExpression("model", "requested_model")+`) as billing_model,
 	coalesce(service_tier, '') as service_tier,
 	failed,
 	coalesce(normalized_total_input_tokens, input_tokens, 0),
@@ -420,6 +420,7 @@ limit ?`, lastEventID, limit)
 
 type accountRollupKey struct {
 	AccountKey   string
+	Model        string
 	BillingModel string
 	ServiceTier  string
 }
@@ -439,25 +440,26 @@ func aggregateAccountHistory(events []eventRow, nowMS int64) []AccountHistoryRow
 		if !valid {
 			continue
 		}
-		billingModel := strings.TrimSpace(event.BillingModel)
+		billingModel := event.BillingModel
 		if billingModel == "" {
-			billingModel = strings.TrimSpace(event.Model)
+			billingModel = event.Model
 		}
 		if billingModel == "" {
 			billingModel = "-"
 		}
+		modelName := event.Model
+		if modelName == "" {
+			modelName = billingModel
+		}
 		serviceTier := strings.TrimSpace(event.ServiceTier)
 		key := accountRollupKey{
 			AccountKey:   accountKey,
+			Model:        modelName,
 			BillingModel: billingModel,
 			ServiceTier:  serviceTier,
 		}
 		row := grouped[key]
 		if row == nil {
-			modelName := strings.TrimSpace(event.Model)
-			if modelName == "" {
-				modelName = billingModel
-			}
 			row = &AccountHistoryRow{
 				AccountKey:           accountKey,
 				AccountSnapshot:      event.AccountSnapshot,
@@ -559,7 +561,7 @@ func upsertAccountRollups(ctx context.Context, tx *sql.Tx, rows []AccountHistory
 	last_seen_ms,
 	updated_at_ms
 ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-on conflict(account_key, billing_model, service_tier) do update set
+on conflict(account_key, model, billing_model, service_tier) do update set
 	account_snapshot = coalesce(nullif(excluded.account_snapshot, ''), usage_account_model_rollups.account_snapshot),
 	auth_label_snapshot = coalesce(nullif(excluded.auth_label_snapshot, ''), usage_account_model_rollups.auth_label_snapshot),
 	auth_provider_snapshot = coalesce(nullif(excluded.auth_provider_snapshot, ''), usage_account_model_rollups.auth_provider_snapshot),
