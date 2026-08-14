@@ -17,6 +17,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/command/adminreset"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/command/derivedmaintenance"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/httpapi"
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
@@ -33,6 +34,12 @@ func main() {
 		case "reset-admin-key", "reset-admin-password":
 			if err := adminreset.Run(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
 				log.Printf("reset admin key: %v", err)
+				os.Exit(1)
+			}
+			return
+		case "cleanup-derived":
+			if err := derivedmaintenance.Run(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
+				log.Printf("cleanup derived data: %v", err)
 				os.Exit(1)
 			}
 			return
