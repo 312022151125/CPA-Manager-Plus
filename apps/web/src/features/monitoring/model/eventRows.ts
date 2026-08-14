@@ -103,6 +103,7 @@ export const buildEventRows = (
       const endpoint = readString(detail.__endpoint) || '-';
       const endpointMethod = readString(detail.__endpointMethod) || '-';
       const endpointPath = readString(detail.__endpointPath) || endpoint;
+      const requestedModel = readString(detail.__requestedModel);
       const clientIp = readString(detail.client_ip ?? detail.clientIp);
       const xForwardedFor = readString(detail.x_forwarded_for ?? detail.xForwardedFor);
       const userAgent = readString(detail.user_agent ?? detail.userAgent);
@@ -193,6 +194,7 @@ export const buildEventRows = (
         dayKey,
         hourLabel,
         model: readString(detail.__modelName) || '-',
+        requestedModel: requestedModel || undefined,
         resolvedModel: resolvedModel || undefined,
         endpoint,
         endpointMethod,
@@ -263,6 +265,7 @@ export const buildEventRows = (
           userAgent,
           authMeta?.provider || snapshotProvider,
           authMeta?.planType,
+          requestedModel,
           resolvedModel,
           projectId,
           reasoningEffort,

@@ -45,8 +45,7 @@ export function AccountConfigurationTab({
   } = editor;
   const capabilities = getAuthFileConfigurationCapabilities(state?.providerKey || row.provider);
   const providerLabel = getProviderLabel(state?.providerKey || row.provider, t);
-  const disabled =
-    disableControls || row.disabled || sharedSourceReadOnly || state?.saving === true;
+  const disabled = disableControls || sharedSourceReadOnly || state?.saving === true;
   const reloadAndRestoreFocus = () => {
     void editor.reload().then(() => {
       if (typeof window === 'undefined') return;
@@ -149,7 +148,7 @@ export function AccountConfigurationTab({
             className={styles.configurationToolbarButton}
             onClick={() => void editor.save()}
             loading={state.saving}
-            disabled={!canSave || row.disabled}
+            disabled={!canSave}
           >
             {t('common.save')}
           </Button>
@@ -159,10 +158,6 @@ export function AccountConfigurationTab({
       {sharedSourceReadOnly ? (
         <div className={styles.configurationReadOnlyNotice} role="note">
           {t('accounts.config_shared_source_read_only', { count: sourceMemberCount })}
-        </div>
-      ) : row.disabled ? (
-        <div className={styles.configurationReadOnlyNotice} role="note">
-          {t('accounts.config_disabled_read_only')}
         </div>
       ) : null}
 

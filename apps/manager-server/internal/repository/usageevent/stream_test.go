@@ -78,6 +78,27 @@ func TestWriteCompatibleUsageMatchesBuildPayload(t *testing.T) {
 	}
 }
 
+func TestWriteCompatibleUsagePreservesExplicitRequestedModel(t *testing.T) {
+	_, repo := openCompatibleUsageStreamTestRepository(t)
+	ctx := context.Background()
+	event := streamTestEvent("explicit-requested-model", 100, "POST /v1/responses", "stored-display-model")
+	event.RequestedModel = "deepseek-v4-flash(max)"
+	event.ResolvedModel = "deepseek-v4-flash"
+	if _, err := repo.InsertBatch(ctx, []usage.Event{event}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+
+	payload := writeAndDecodeCompatibleUsage(t, ctx, repo, 1)
+	model := payload.APIs[event.Endpoint].Models["deepseek-v4-flash"]
+	if model == nil || len(model.Details) != 1 {
+		t.Fatalf("canonical model aggregate = %#v", payload.APIs[event.Endpoint].Models)
+	}
+	detail := model.Details[0]
+	if detail.RequestedModel != event.RequestedModel {
+		t.Fatalf("requested model = %q, want %q", detail.RequestedModel, event.RequestedModel)
+	}
+}
+
 func TestNormalizeCompatibleUsageStreamLimit(t *testing.T) {
 	maxInt := int(^uint(0) >> 1)
 	tests := []struct {

@@ -317,7 +317,8 @@ export function AiProvidersGeminiEditPage() {
         form.baseUrl ?? '',
         form.apiKey.trim() || undefined,
         headerObject,
-        normalizeAuthIndex(form.authIndex) ?? undefined
+        normalizeAuthIndex(form.authIndex) ?? undefined,
+        form.proxyUrl
       );
       if (modelDiscoveryRequestIdRef.current !== requestId) return;
       setDiscoveredModels(list);
@@ -343,7 +344,7 @@ export function AiProvidersGeminiEditPage() {
         setModelDiscoveryFetching(false);
       }
     }
-  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, t]);
+  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, form.proxyUrl, t]);
 
   useEffect(() => {
     if (!modelDiscoveryOpen) {
@@ -377,7 +378,7 @@ export function AiProvidersGeminiEditPage() {
       .sort(([a], [b]) => a.toLowerCase().localeCompare(b.toLowerCase()))
       .map(([key, value]) => `${key}:${value}`)
       .join('|');
-    const signature = `${nextEndpoint}||${form.apiKey.trim()}||${normalizeAuthIndex(form.authIndex) ?? ''}||${headerSignature}`;
+    const signature = `${nextEndpoint}||${form.apiKey.trim()}||${normalizeAuthIndex(form.authIndex) ?? ''}||${form.proxyUrl?.trim() ?? ''}||${headerSignature}`;
     if (autoFetchSignatureRef.current === signature) return;
     autoFetchSignatureRef.current = signature;
 
@@ -388,6 +389,7 @@ export function AiProvidersGeminiEditPage() {
     form.authIndex,
     form.baseUrl,
     form.headers,
+    form.proxyUrl,
     modelDiscoveryOpen,
   ]);
 
@@ -642,6 +644,7 @@ export function AiProvidersGeminiEditPage() {
               placeholder={t('ai_providers.gemini_add_modal_proxy_placeholder')}
               value={form.proxyUrl ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, proxyUrl: e.target.value }))}
+              hint={t('ai_providers.model_discovery_proxy_version_hint')}
               disabled={disableControls || saving}
             />
             <HeaderInputList

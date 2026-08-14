@@ -13,6 +13,7 @@ import type { MonitoringAccountQuotaTarget } from '@/features/monitoring/account
 import type {
   MonitoringAccountRow,
   MonitoringApiKeyRow,
+  MonitoringEventRow,
 } from '@/features/monitoring/hooks/useMonitoringData';
 import {
   buildAccountOptions,
@@ -22,6 +23,7 @@ import {
   buildMonitoringInitialStateFromQuery,
   buildModelOptionsFromValues,
   buildProviderOptionsFromValues,
+  buildSyncPriceModels,
   mergeObservedAccountQuotaEntry,
   mergeObservedAccountQuotaState,
   requestAccountQuota,
@@ -80,6 +82,24 @@ const t = ((key: string, options?: Record<string, unknown>) => {
   });
   return value;
 }) as TFunction;
+
+describe('monitoringCenterPageModel price sync', () => {
+  it('syncs canonical and resolved identities while preserving saved suffix prices', () => {
+    const rows = [
+      {
+        model: 'deepseek-v4-flash',
+        requestedModel: 'deepseek-v4-flash(max)',
+        resolvedModel: 'resolved-deepseek-v4-flash',
+      },
+    ] as MonitoringEventRow[];
+
+    expect(
+      buildSyncPriceModels(rows, {
+        'deepseek-v4-flash(low)': { prompt: 1, completion: 2, cache: 0.5 },
+      })
+    ).toEqual(['deepseek-v4-flash', 'deepseek-v4-flash(low)', 'resolved-deepseek-v4-flash']);
+  });
+});
 
 const createTarget = (
   overrides: Partial<MonitoringAccountQuotaTarget>
@@ -1076,6 +1096,79 @@ describe('monitoringCenterPageModel account quota', () => {
         },
       ],
     });
+  });
+
+  it('does not synthesize monthly credits from an on-demand reset timestamp', async () => {
+    vi.mocked(fetchXaiQuota).mockResolvedValue({
+      periodType: 'weekly',
+      usagePercent: 0,
+      periodStart: '2026-08-13T00:00:00Z',
+      periodEnd: '2026-08-20T00:00:00Z',
+      productUsage: [],
+      monthlyLimitCents: null,
+      usedCents: null,
+      includedUsedCents: null,
+      onDemandCapCents: 5_000,
+      onDemandUsedCents: 0,
+      onDemandUsedPercent: 0,
+      billingPeriodEnd: '2026-09-01T00:00:00Z',
+      usedPercent: null,
+    });
+
+    const entry = await requestAccountQuota(
+      createTarget({ provider: 'xai', authIndex: '3', fileName: 'xai.json' }),
+      t
+    );
+
+    expect(entry.windows?.map((window) => window.id)).toEqual(['weekly-limit', 'pay-as-you-go']);
+  });
+
+  it('does not synthesize monthly credits from weekly protobuf zero placeholders', async () => {
+    vi.mocked(fetchXaiQuota).mockResolvedValue({
+      periodType: 'weekly',
+      usagePercent: 0,
+      periodStart: '2026-08-13T00:00:00Z',
+      periodEnd: '2026-08-20T00:00:00Z',
+      productUsage: [],
+      monthlyLimitCents: null,
+      usedCents: 0,
+      includedUsedCents: 0,
+      onDemandCapCents: 0,
+      onDemandUsedCents: 0,
+      onDemandUsedPercent: null,
+      billingPeriodEnd: '2026-09-01T00:00:00Z',
+      usedPercent: null,
+    });
+
+    const entry = await requestAccountQuota(
+      createTarget({ provider: 'xai', authIndex: '3', fileName: 'xai.json' }),
+      t
+    );
+
+    expect(entry.windows?.map((window) => window.id)).toEqual(['weekly-limit']);
+  });
+
+  it('does not synthesize monthly credits from usage without limit evidence', async () => {
+    vi.mocked(fetchXaiQuota).mockResolvedValue({
+      periodType: 'monthly',
+      usagePercent: null,
+      productUsage: [],
+      monthlyLimitCents: null,
+      usedCents: 500,
+      includedUsedCents: 500,
+      onDemandCapCents: null,
+      onDemandUsedCents: null,
+      onDemandUsedPercent: null,
+      billingPeriodEnd: '2026-09-01T00:00:00Z',
+      usedPercent: null,
+    });
+
+    const entry = await requestAccountQuota(
+      createTarget({ provider: 'xai', authIndex: '3', fileName: 'xai.json' }),
+      t
+    );
+
+    expect(entry.windows).toEqual([]);
   });
 
   it('maps official API health without synthesizing quota windows', async () => {
