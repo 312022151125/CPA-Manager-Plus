@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,5 +64,43 @@ func TestStopCodexInspectionWorkerDoesNotDrainAfterCleanStop(t *testing.T) {
 	stopCodexInspectionWorker(stopper, time.Millisecond)
 	if stopper.calls != 1 {
 		t.Fatalf("stop calls = %d, want 1", stopper.calls)
+	}
+}
+
+func TestDerivedMigrationsStartAfterHTTPListenerIsBound(t *testing.T) {
+	content, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(content)
+	listenAt := strings.Index(source, `net.Listen("tcp", cfg.HTTPAddr)`)
+	listeningLogAt := strings.Index(source, `log.Printf("cpa-manager-plus listening on %s", listener.Addr())`)
+	serveAt := strings.Index(source, "server.Serve(listener)")
+	if listenAt < 0 || listeningLogAt < listenAt || serveAt < listeningLogAt {
+		t.Fatalf("HTTP listener ordering not found: listen=%d log=%d serve=%d", listenAt, listeningLogAt, serveAt)
+	}
+	for _, startCall := range []string{
+		"db.RunDerivedStartupMaintenance(ctx)",
+		"automationRuntime.Start(ctx)",
+		"codexInspectionWorker.Start(ctx)",
+		"accountHistoryRollupWorker.Start(ctx)",
+		"usageDerivedRollupWorker.Start(ctx)",
+		"usageHourlyAggregateWorker.Start(ctx)",
+		"db.StartDerivedMaintenance(ctx)",
+		"collectorWorker.Start(ctx)",
+		"NewLegacyQuotaSnapshotMigrationWorker(db).Start(ctx)",
+	} {
+		startAt := strings.Index(source, startCall)
+		if startAt < serveAt {
+			t.Fatalf("%s starts before HTTP Serve is launched: start=%d serve=%d", startCall, startAt, serveAt)
+		}
+	}
+	maintenanceAt := strings.Index(source, "db.RunDerivedStartupMaintenance(ctx)")
+	collectorAt := strings.Index(source, "collectorWorker.Start(ctx)")
+	if maintenanceAt < serveAt || collectorAt < maintenanceAt {
+		t.Fatalf("startup maintenance/collector ordering invalid: serve=%d maintenance=%d collector=%d", serveAt, maintenanceAt, collectorAt)
+	}
+	if !strings.Contains(source, "continuing without blocking background workers") {
+		t.Fatal("post-listen index failure does not explicitly preserve background worker startup")
 	}
 }
