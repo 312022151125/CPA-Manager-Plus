@@ -252,6 +252,16 @@ USAGE_DASHBOARD_HOURLY_ROLLUP_ENABLED=false
 
 迁移完成后，response metadata backfill 和两个 rollup worker 会自动继续。不要为了缩短迁移时间同时启动第二个 Manager Server 连接同一 SQLite 或消费同一 CPA 队列。
 
+派生数据索引创建、历史 rollup 重建和过期行清理只会在 HTTP 监听可用后执行。重建期间，查询使用当前完整 revision，尚未完成时回退到原始 `usage_events`；批次中断后，进程重启会从已提交 checkpoint 继续。这些任务不得修改或删除 `usage_events`。
+
+数据库升级后，旧的请求监控 FTS generation 可能在配对投影行完成分批在线清理后继续保留。删除 FTS 虚拟表需要独占 SQLite 的离线操作。日志出现 `cleanup requires offline finalization` 时，先停止所有使用该数据库的 Manager Server 进程，再使用同版本二进制执行一次命令，完成后重启服务：
+
+```bash
+cpa-manager-plus cleanup-derived --db-path /data/usage.sqlite
+```
+
+原生安装若使用默认数据库路径，可直接运行 `cpa-manager-plus cleanup-derived`。不要在 Manager Server 运行期间执行该命令；离线维护前应备份 SQLite 和 `data.key`。该命令只删除已过期的派生 FTS/投影 generation，不会修改 `usage_events`。
+
 完整的优化原因、实现阶段和 100k benchmark 数据见 [2026-07-10 性能优化报告](./performance-optimization-2026-07-10.md)。
 
 如果 `USAGE_QUOTA_COOLDOWN_ENABLED`、`USAGE_ACCOUNT_ACTIONS_ENABLED` 或 `USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE` 由环境变量设置，面板中的对应开关会显示为环境变量来源并被锁定。要改成面板可编辑，需要移除环境变量并重启 Manager Server。

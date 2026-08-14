@@ -254,6 +254,16 @@ While the migration is running:
 
 After completion, the response-metadata backfill and both rollup workers continue automatically. Do not start a second Manager Server against the same SQLite database or CPA queue to accelerate the migration.
 
+Derived-data index creation, historical rollup rebuilding, and stale-row cleanup run only after the HTTP listener is available. During a rebuild, queries use the current complete revision or fall back to raw `usage_events`; an interrupted batch resumes from its committed checkpoint after restart. These tasks must not modify or delete `usage_events`.
+
+An upgraded database can retain an old request-monitoring FTS generation after its paired projection rows have been removed in bounded online batches. Dropping that FTS virtual table requires an exclusive offline SQLite operation. When the log reports `cleanup requires offline finalization`, stop every Manager Server process using the database, run the same-version binary once, and then restart the service:
+
+```bash
+cpa-manager-plus cleanup-derived --db-path /data/usage.sqlite
+```
+
+For a native installation using the default database path, `cpa-manager-plus cleanup-derived` is sufficient. Do not run this command while Manager Server is active, and back up the SQLite database plus `data.key` before offline maintenance. The command removes only obsolete derived FTS/projection generations and leaves `usage_events` intact.
+
 See the [July 10, 2026 Performance Optimization Report](./performance-optimization-2026-07-10.md) for the causes, delivery stages, and complete 100k benchmark evidence.
 
 When `USAGE_QUOTA_COOLDOWN_ENABLED`, `USAGE_ACCOUNT_ACTIONS_ENABLED`, or `USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE` is set through the environment, the matching panel switch is shown as environment-sourced and locked. Remove the environment variable and restart Manager Server if you want the setting to be editable from the panel.
