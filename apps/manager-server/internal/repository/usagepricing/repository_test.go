@@ -2,6 +2,7 @@ package usagepricing_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
@@ -185,6 +186,93 @@ func TestPricingRollupRateUpdatesKeepRevisionAndThresholdUpdatesRebuild(t *testi
 	if rows[0].ContextThresholdTokens != model.ModelPriceBaseContextThreshold {
 		t.Fatalf("rebuilt threshold = %d", rows[0].ContextThresholdTokens)
 	}
+}
+
+// TestPricingRollupRevisionRollbackDoesNotDoubleCount covers a deterministic
+// A-to-B-to-A rollback. Target-revision rows are cleared in bounded batches,
+// readers use raw events while clearing, and the restored revision is rebuilt
+// exactly once.
+func TestPricingRollupRevisionRollbackDoesNotDoubleCount(t *testing.T) {
+	ctx := context.Background()
+	cfg := testutil.NewConfig(t)
+	st := testutil.NewStore(t, cfg)
+	threshold := func(value int64) store.ModelPrice {
+		return store.ModelPrice{
+			Prompt:       1,
+			ContextTiers: []store.ModelPriceContextTier{{ThresholdTokens: value, Prompt: 2, PromptConfigured: true}},
+		}
+	}
+	accountKey := pricingAccountKey("team-a.json", "auth-team-a")
+	hourlyFilter := store.UsagePricingHourlyFilter{FromMS: 3_600_000, ToMS: 7_200_000, IncludeFailed: true}
+	assertSingleCall := func() {
+		t.Helper()
+		hourlyRows, _, available, err := st.UsagePricingHourlyRows(ctx, hourlyFilter)
+		if err != nil || !available || len(hourlyRows) != 1 || hourlyRows[0].Calls != 1 {
+			t.Fatalf("pricing hourly rows after rollback = available:%v err:%v %#v", available, err, hourlyRows)
+		}
+		accountRows, _, accountAvailable, err := st.UsagePricingAccountRows(ctx, []string{accountKey})
+		if err != nil || !accountAvailable || len(accountRows) != 1 || accountRows[0].Calls != 1 {
+			t.Fatalf("pricing account rows after rollback = available:%v err:%v %#v", accountAvailable, err, accountRows)
+		}
+	}
+
+	// Build revision A (threshold 100).
+	if err := st.SaveModelPrices(ctx, map[string]store.ModelPrice{"resolved-model": threshold(100)}); err != nil {
+		t.Fatalf("save prices A: %v", err)
+	}
+	if _, err := st.UsageEvents.InsertBatch(ctx, []usage.Event{pricingEvent("rollback", 3_600_001, 150)}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+	if _, err := st.CatchUpUsagePricing(ctx, 10, 10_000); err != nil {
+		t.Fatalf("initial catch up: %v", err)
+	}
+	assertSingleCall()
+	// Switch to revision B.
+	if err := st.SaveModelPrices(ctx, map[string]store.ModelPrice{"resolved-model": threshold(200)}); err != nil {
+		t.Fatalf("save prices B: %v", err)
+	}
+	if _, err := st.CatchUpUsagePricing(ctx, 10, 20_000); err != nil {
+		t.Fatalf("catch up threshold update: %v", err)
+	}
+	assertSingleCall()
+	// Restore revision A. A limit of one clears only the hourly row in the first
+	// transaction, leaving the account row for the resumed transaction.
+	if err := st.SaveModelPrices(ctx, map[string]store.ModelPrice{"resolved-model": threshold(100)}); err != nil {
+		t.Fatalf("rollback to prices A: %v", err)
+	}
+	result, err := st.CatchUpUsagePricing(ctx, 1, 30_000)
+	if err != nil {
+		t.Fatalf("start bounded rollback clearing: %v", err)
+	}
+	if !result.Pending || !result.Rebuilt || result.Processed != 0 {
+		t.Fatalf("first bounded rollback result = %#v", result)
+	}
+	state, err := st.UsagePricingState(ctx)
+	if err != nil {
+		t.Fatalf("read clearing state: %v", err)
+	}
+	if state.Status != "clearing" || state.CoverageEventID != 0 {
+		t.Fatalf("bounded clearing state = %#v", state)
+	}
+	assertSingleCall()
+	if err := st.RecordUsagePricingFailure(ctx, errors.New("interrupted clearing"), 31_000); err != nil {
+		t.Fatalf("record clearing interruption: %v", err)
+	}
+	state, err = st.UsagePricingState(ctx)
+	if err != nil {
+		t.Fatalf("read interrupted clearing state: %v", err)
+	}
+	if state.Status != "clearing" || state.LastError != "interrupted clearing" {
+		t.Fatalf("interrupted clearing state = %#v", state)
+	}
+	result, err = st.CatchUpUsagePricing(ctx, 1, 32_000)
+	if err != nil {
+		t.Fatalf("resume bounded rollback clearing: %v", err)
+	}
+	if result.Pending || result.Processed != 1 {
+		t.Fatalf("resumed bounded rollback result = %#v", result)
+	}
+	assertSingleCall()
 }
 
 func TestPricingRollupUsesResolvedThenAnalyticsThenRawModelPrices(t *testing.T) {

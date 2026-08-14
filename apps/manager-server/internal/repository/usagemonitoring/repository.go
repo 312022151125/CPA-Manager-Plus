@@ -140,7 +140,8 @@ func (r *repository) catchUp(
 	revision := state.StructureRevision
 	rebuilt := state.CoverageEventID < state.TargetEventID &&
 		(state.Status == "pending" || state.Status == "rebuilding" ||
-			state.Status == "catching_up" || state.Status == "failed")
+			state.Status == "catching_up" || state.Status == "clearing" ||
+			state.Status == "failed")
 	if rollupName == StatsRollupName {
 		revision, err = currentStructureRevision(ctx, tx)
 	} else {
@@ -157,11 +158,34 @@ func (r *repository) catchUp(
 			RollupName:        rollupName,
 			SchemaVersion:     SchemaVersion,
 			StructureRevision: revision,
-			Status:            "rebuilding",
+			Status:            revisionResetStatus(rollupName),
 			TargetEventID:     latestID,
 			UpdatedAtMS:       nowMS,
 		}
 		rebuilt = true
+	}
+	if state.Status == "clearing" {
+		pending, err := clearStatsRevisionRowsBatch(ctx, tx, revision, limit)
+		if err != nil {
+			return CatchUpResult{}, err
+		}
+		if pending {
+			if err := tx.Commit(); err != nil {
+				return CatchUpResult{}, err
+			}
+			return CatchUpResult{
+				TargetEventID: state.TargetEventID,
+				Pending:       true,
+				Rebuilt:       true,
+			}, nil
+		}
+		if _, err := tx.ExecContext(ctx, `update usage_monitoring_rollup_state set
+			status = 'rebuilding', updated_at_ms = ?, last_error = null
+			where rollup_name = ? and structure_revision = ?`,
+			nowMS, rollupName, revision); err != nil {
+			return CatchUpResult{}, err
+		}
+		state.Status = "rebuilding"
 	}
 
 	targetID := state.TargetEventID
@@ -261,7 +285,8 @@ func (r *repository) RecordFailure(ctx context.Context, rollupName string, rollu
 		return fmt.Errorf("unknown usage monitoring rollup %q", rollupName)
 	}
 	_, err := r.db.ExecContext(ctx, `update usage_monitoring_rollup_state set
-		status = 'failed', updated_at_ms = ?, finished_at_ms = ?, last_error = ?
+		status = case when status = 'clearing' then status else 'failed' end,
+		updated_at_ms = ?, finished_at_ms = ?, last_error = ?
 		where rollup_name = ?`, nowMS, nowMS, rollupErr.Error(), rollupName)
 	return err
 }
@@ -349,18 +374,59 @@ func eventIDsThrough(ctx context.Context, tx *sql.Tx, afterID, throughID int64, 
 }
 
 func resetForRevision(ctx context.Context, tx *sql.Tx, rollupName, revision string, latestID, nowMS int64) error {
-	_, err := tx.ExecContext(ctx, `update usage_monitoring_rollup_state set
-		structure_revision = ?, status = 'rebuilding',
+	if _, err := tx.ExecContext(ctx, `update usage_monitoring_rollup_state set
+		structure_revision = ?, status = ?,
 		backfill_last_event_id = 0, coverage_event_id = 0,
 		target_event_id = ?, processed_events = 0,
 		last_run_started_at_ms = ?, updated_at_ms = ?, finished_at_ms = null,
 		last_error = null where rollup_name = ?`,
-		revision, latestID, nowMS, nowMS, rollupName,
-	)
-	if err != nil {
+		revision, revisionResetStatus(rollupName), latestID, nowMS, nowMS, rollupName,
+	); err != nil {
 		return err
 	}
+	if rollupName != ProjectionRollupName {
+		return nil
+	}
 	return setSearchIndexReady(ctx, tx, rollupName, false, nowMS)
+}
+
+func revisionResetStatus(rollupName string) string {
+	if rollupName == StatsRollupName {
+		return "clearing"
+	}
+	return "rebuilding"
+}
+
+func clearStatsRevisionRowsBatch(ctx context.Context, tx *sql.Tx, revision string, limit int) (bool, error) {
+	remaining := limit
+	for _, tableName := range []string{
+		"usage_monitoring_account_daily_rollups_v1",
+		"usage_monitoring_api_key_daily_rollups_v1",
+	} {
+		if remaining > 0 {
+			result, err := tx.ExecContext(ctx, `delete from `+tableName+` where rowid in (
+				select rowid from `+tableName+` where structure_revision = ? limit ?
+			)`, revision, remaining)
+			if err != nil {
+				return false, fmt.Errorf("clear stats revision rows %s: %w", tableName, err)
+			}
+			deleted, err := result.RowsAffected()
+			if err != nil {
+				return false, fmt.Errorf("count cleared stats revision rows %s: %w", tableName, err)
+			}
+			remaining -= int(deleted)
+		}
+		var pending int
+		if err := tx.QueryRowContext(ctx, `select exists(
+			select 1 from `+tableName+` where structure_revision = ? limit 1
+		)`, revision).Scan(&pending); err != nil {
+			return false, fmt.Errorf("inspect remaining stats revision rows %s: %w", tableName, err)
+		}
+		if pending != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func setSearchIndexReady(ctx context.Context, tx *sql.Tx, rollupName string, ready bool, nowMS int64) error {

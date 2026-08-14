@@ -826,6 +826,80 @@ func TestUsageMonitoringStatsRevisionMismatchUsesEventProjectionUntilRebuilt(t *
 	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
 }
 
+// TestUsageMonitoringStatsRevisionRollbackDoesNotDoubleCount covers a
+// deterministic A-to-B-to-A revision rollback. The target revision is cleared
+// in bounded batches, readers use raw events while clearing, and rebuilding the
+// restored revision must not add to its retained rows.
+func TestUsageMonitoringStatsRevisionRollbackDoesNotDoubleCount(t *testing.T) {
+	_, db := newMonitoringRepositoryStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_800_057_600_000)
+	pricesA := map[string]store.ModelPrice{"gpt-a": {Prompt: 1}}
+	pricesB := map[string]store.ModelPrice{
+		"gpt-a": {Prompt: 1, ContextTiers: []store.ModelPriceContextTier{{ThresholdTokens: 100, Prompt: 2, PromptConfigured: true}}},
+	}
+	if err := db.SaveModelPrices(ctx, pricesA); err != nil {
+		t.Fatalf("save prices A: %v", err)
+	}
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		monitoringRepositoryEvent("rollback", baseMS+testDayMS, "gpt-a", "key-a", "alice@example.com", "auth-a", "source-a", false, 150, 10, 10),
+	}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+	filter := store.AnalyticsFilter{FromMS: baseMS, ToMS: baseMS + 3*testDayMS, IncludeFailed: true}
+
+	// Build revision A.
+	catchUpMonitoringRepository(t, ctx, db)
+	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
+	// Switch to revision B and rebuild it.
+	if err := db.SaveModelPrices(ctx, pricesB); err != nil {
+		t.Fatalf("save prices B: %v", err)
+	}
+	catchUpMonitoringRepository(t, ctx, db)
+	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
+	// Restore revision A. A limit of one can clear only the account row in the
+	// first transaction, leaving the API-key row for a later transaction.
+	if err := db.SaveModelPrices(ctx, pricesA); err != nil {
+		t.Fatalf("rollback to prices A: %v", err)
+	}
+	result, err := db.CatchUpUsageMonitoringStats(ctx, 1, 30_000)
+	if err != nil {
+		t.Fatalf("start bounded rollback clearing: %v", err)
+	}
+	if !result.Pending || !result.Rebuilt || result.Processed != 0 {
+		t.Fatalf("first bounded rollback result = %#v", result)
+	}
+	state, err := db.UsageMonitoringState(ctx, monitoringrepo.StatsRollupName)
+	if err != nil {
+		t.Fatalf("read clearing state: %v", err)
+	}
+	if state.Status != "clearing" || state.CoverageEventID != 0 {
+		t.Fatalf("bounded clearing state = %#v", state)
+	}
+	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
+	if err := db.RecordUsageMonitoringFailure(ctx, monitoringrepo.StatsRollupName, errors.New("interrupted clearing"), 31_000); err != nil {
+		t.Fatalf("record clearing interruption: %v", err)
+	}
+	state, err = db.UsageMonitoringState(ctx, monitoringrepo.StatsRollupName)
+	if err != nil {
+		t.Fatalf("read interrupted clearing state: %v", err)
+	}
+	if state.Status != "clearing" || state.LastError != "interrupted clearing" {
+		t.Fatalf("interrupted clearing state = %#v", state)
+	}
+	for {
+		result, err = db.CatchUpUsageMonitoringStats(ctx, 1, 32_000)
+		if err != nil {
+			t.Fatalf("resume bounded rollback clearing: %v", err)
+		}
+		if !result.Pending {
+			break
+		}
+	}
+	// Revision A has been rebuilt exactly once.
+	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
+}
+
 func TestUsageMonitoringStatsFailureDoesNotAdvanceCheckpoint(t *testing.T) {
 	sqlDB, db := newMonitoringRepositoryStore(t)
 	ctx := context.Background()

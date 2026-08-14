@@ -182,7 +182,7 @@ func (r *repository) CatchUp(ctx context.Context, limit int, nowMS int64) (Catch
 	if err != nil {
 		return CatchUpResult{}, err
 	}
-	rebuilt := (state.Status == "rebuilding" || state.Status == "failed") &&
+	rebuilt := (state.Status == "rebuilding" || state.Status == "clearing" || state.Status == "failed") &&
 		state.CoverageEventID < state.TargetEventID
 	if state.StructureRevision != revision {
 		if err := resetForRevision(ctx, tx, revision, latestID, nowMS); err != nil {
@@ -192,11 +192,34 @@ func (r *repository) CatchUp(ctx context.Context, limit int, nowMS int64) (Catch
 			RollupName:        RollupName,
 			SchemaVersion:     SchemaVersion,
 			StructureRevision: revision,
-			Status:            "rebuilding",
+			Status:            "clearing",
 			TargetEventID:     latestID,
 			UpdatedAtMS:       nowMS,
 		}
 		rebuilt = true
+	}
+	if state.Status == "clearing" {
+		pending, err := clearRevisionRowsBatch(ctx, tx, revision, limit)
+		if err != nil {
+			return CatchUpResult{}, err
+		}
+		if pending {
+			if err := tx.Commit(); err != nil {
+				return CatchUpResult{}, err
+			}
+			return CatchUpResult{
+				TargetEventID: state.TargetEventID,
+				Pending:       true,
+				Rebuilt:       true,
+			}, nil
+		}
+		if _, err := tx.ExecContext(ctx, `update usage_pricing_rollup_state set
+			status = 'rebuilding', updated_at_ms = ?, last_error = null
+			where rollup_name = ? and structure_revision = ?`,
+			nowMS, RollupName, revision); err != nil {
+			return CatchUpResult{}, err
+		}
+		state.Status = "rebuilding"
 	}
 
 	ids, err := eventIDsAfter(ctx, tx, state.BackfillLastEventID, limit)
@@ -298,7 +321,8 @@ func (r *repository) RecordFailure(ctx context.Context, rollupErr error, nowMS i
 		return nil
 	}
 	_, err := r.db.ExecContext(ctx, `update usage_pricing_rollup_state set
-		status = 'failed', updated_at_ms = ?, finished_at_ms = ?, last_error = ?
+		status = case when status = 'clearing' then status else 'failed' end,
+		updated_at_ms = ?, finished_at_ms = ?, last_error = ?
 		where rollup_name = ?`, nowMS, nowMS, rollupErr.Error(), RollupName)
 	return err
 }
@@ -308,9 +332,9 @@ func (r *repository) State(ctx context.Context) (State, error) {
 }
 
 func resetForRevision(ctx context.Context, tx *sql.Tx, revision string, latestID, nowMS int64) error {
-	_, err := tx.ExecContext(ctx, `update usage_pricing_rollup_state set
+	if _, err := tx.ExecContext(ctx, `update usage_pricing_rollup_state set
 		structure_revision = ?,
-		status = 'rebuilding',
+		status = 'clearing',
 		backfill_last_event_id = 0,
 		coverage_event_id = 0,
 		target_event_id = ?,
@@ -321,8 +345,42 @@ func resetForRevision(ctx context.Context, tx *sql.Tx, revision string, latestID
 		updated_at_ms = ?,
 		finished_at_ms = null,
 		last_error = null
-		where rollup_name = ?`, revision, latestID, nowMS, nowMS, RollupName)
-	return err
+		where rollup_name = ?`, revision, latestID, nowMS, nowMS, RollupName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func clearRevisionRowsBatch(ctx context.Context, tx *sql.Tx, revision string, limit int) (bool, error) {
+	remaining := limit
+	for _, tableName := range []string{
+		"usage_pricing_hourly_rollups_v1",
+		"usage_pricing_account_rollups_v1",
+	} {
+		if remaining > 0 {
+			result, err := tx.ExecContext(ctx, `delete from `+tableName+` where rowid in (
+				select rowid from `+tableName+` where structure_revision = ? limit ?
+			)`, revision, remaining)
+			if err != nil {
+				return false, fmt.Errorf("clear pricing revision rows %s: %w", tableName, err)
+			}
+			deleted, err := result.RowsAffected()
+			if err != nil {
+				return false, fmt.Errorf("count cleared pricing revision rows %s: %w", tableName, err)
+			}
+			remaining -= int(deleted)
+		}
+		var pending int
+		if err := tx.QueryRowContext(ctx, `select exists(
+			select 1 from `+tableName+` where structure_revision = ? limit 1
+		)`, revision).Scan(&pending); err != nil {
+			return false, fmt.Errorf("inspect remaining pricing revision rows %s: %w", tableName, err)
+		}
+		if pending != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type stateQuerier interface {
@@ -662,7 +720,7 @@ func (r *repository) LoadHourlyRowsTx(ctx context.Context, tx *sql.Tx, filter Ho
 	if err != nil {
 		return nil, State{}, false, err
 	}
-	if state.StructureRevision != revision {
+	if state.StructureRevision != revision || state.Status == "clearing" {
 		grouped := map[hourlyKey]*HourlyRow{}
 		if err := mergeRawHourlyRows(ctx, tx, filter, filter.FromMS, filter.ToMS, 0, false, grouped); err != nil {
 			return nil, State{}, false, err
@@ -938,7 +996,7 @@ func (r *repository) LoadAccountRowsTx(ctx context.Context, tx *sql.Tx, accountK
 	if err != nil {
 		return nil, State{}, false, err
 	}
-	if state.StructureRevision != revision {
+	if state.StructureRevision != revision || state.Status == "clearing" {
 		grouped := map[accountKey]*AccountRow{}
 		if err := mergeRawAccountRows(ctx, tx, 0, keys, grouped); err != nil {
 			return nil, State{}, false, err

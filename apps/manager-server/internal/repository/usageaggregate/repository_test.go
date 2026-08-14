@@ -2,6 +2,7 @@ package usageaggregate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -195,6 +196,85 @@ func TestCatchUpIsIdempotentWhenCheckpointIsReplayed(t *testing.T) {
 	if state.ProcessedEvents != 1 {
 		t.Fatalf("processed events after replay = %d, want 1", state.ProcessedEvents)
 	}
+}
+
+// TestCatchUpReaggregatesAcrossRevisionWithoutDoubleCount covers a
+// migration-driven structure_revision switch. The migration parks the old
+// aggregate table and recreates an empty one, so rebuilding must produce one
+// call, update the ledger revision, and remain idempotent on replay.
+func TestCatchUpReaggregatesAcrossRevisionWithoutDoubleCount(t *testing.T) {
+	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	events := usageevent.New(db)
+	repo := New(db)
+	baseMS := int64(1_800_000_000_000)
+	baseMS -= baseMS % hourMS
+	if _, err := events.InsertBatch(ctx, []usage.Event{
+		aggregateTestEvent("revision-event", baseMS+1000, "model-a", false, 1, 2, nil),
+	}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+	if _, err := repo.CatchUp(ctx, 10, baseMS+hourMS); err != nil {
+		t.Fatalf("initial catch-up: %v", err)
+	}
+
+	// Simulate a migration-driven revision switch: the aggregate table has been
+	// recreated empty, state points at the new revision with a zero checkpoint,
+	// and the preserved ledger row still carries the prior revision.
+	if _, err := db.Exec(`delete from usage_hourly_aggregate_v1`); err != nil {
+		t.Fatalf("clear aggregate for revision switch: %v", err)
+	}
+	if _, err := db.Exec(`update usage_hourly_aggregate_state set
+		structure_revision = 'schema-3:model-1:rebuild-test',
+		status = 'pending', backfill_last_event_id = 0,
+		coverage_event_id = 0, processed_events = 0
+		where aggregate_name = ?`, AggregateName); err != nil {
+		t.Fatalf("switch revision fixture: %v", err)
+	}
+
+	if _, err := repo.CatchUp(ctx, 10, baseMS+2*hourMS); err != nil {
+		t.Fatalf("cross-revision catch-up: %v", err)
+	}
+	if err := assertAggregateCallsAndLedgerRevision(db, 1, "schema-3:model-1:rebuild-test"); err != nil {
+		t.Fatalf("after cross-revision catch-up: %v", err)
+	}
+
+	// Replaying the same new revision after rewinding the checkpoint remains
+	// idempotent instead of doubling the aggregate.
+	if _, err := db.Exec(`update usage_hourly_aggregate_state set
+		status = 'pending', backfill_last_event_id = 0, coverage_event_id = 0
+		where aggregate_name = ?`, AggregateName); err != nil {
+		t.Fatalf("rewind checkpoint for replay: %v", err)
+	}
+	if _, err := repo.CatchUp(ctx, 10, baseMS+3*hourMS); err != nil {
+		t.Fatalf("same-revision replay catch-up: %v", err)
+	}
+	if err := assertAggregateCallsAndLedgerRevision(db, 1, "schema-3:model-1:rebuild-test"); err != nil {
+		t.Fatalf("after same-revision replay: %v", err)
+	}
+}
+
+func assertAggregateCallsAndLedgerRevision(db *sql.DB, wantCalls int64, wantRevision string) error {
+	var calls int64
+	if err := db.QueryRow(`select calls from usage_hourly_aggregate_v1`).Scan(&calls); err != nil {
+		return fmt.Errorf("read aggregate calls: %w", err)
+	}
+	if calls != wantCalls {
+		return fmt.Errorf("aggregate calls = %d, want %d", calls, wantCalls)
+	}
+	var revision string
+	if err := db.QueryRow(`select aggregate_structure_revision
+		from usage_event_identity_ledger where event_hash = 'revision-event'`).Scan(&revision); err != nil {
+		return fmt.Errorf("read ledger revision: %w", err)
+	}
+	if revision != wantRevision {
+		return fmt.Errorf("ledger aggregate_structure_revision = %q, want %q", revision, wantRevision)
+	}
+	return nil
 }
 
 func TestCatchUpSerializesConcurrentCalls(t *testing.T) {
