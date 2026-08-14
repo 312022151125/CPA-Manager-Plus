@@ -1,7 +1,6 @@
 package sqlite
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -18,6 +17,8 @@ const (
 	dashboardHourlyRollupFormatVersionKey  = "usage_dashboard_hourly_format_version"
 	dashboardHourlyRollupFormatVersion     = "3"
 	usageMonitoringModelFormatVersionKey   = "usage_monitoring_model_format_version"
+	usageHourlyAggregateSchemaVersion      = 3
+	usageHourlyAggregateStructureRevision  = "schema-3:model-1"
 
 	usageMonitoringAccountDailyTable  = "usage_monitoring_account_daily_rollups_v1"
 	usageMonitoringAPIKeyDailyTable   = "usage_monitoring_api_key_daily_rollups_v1"
@@ -34,8 +35,23 @@ const (
 	usageHourlyAggregateState = "usage_hourly_aggregate_state"
 	usageEventIdentityLedger  = "usage_event_identity_ledger"
 
-	usageAccountModelRollupsTable   = "usage_account_model_rollups"
-	usagePricingAccountRollupsTable = "usage_pricing_account_rollups_v1"
+	usageAccountModelRollupsTable    = "usage_account_model_rollups"
+	usagePricingAccountRollupsTable  = "usage_pricing_account_rollups_v1"
+	usageAccountModelRollupsLegacy   = "usage_account_model_rollups_legacy_v1120_rc2"
+	usagePricingAccountLegacy        = "usage_pricing_account_rollups_v1_legacy_v1120_rc2"
+	usageDashboardHourlyLegacy       = "usage_dashboard_hourly_rollups_legacy_v1120_rc2"
+	usageHourlyAggregateLegacy       = "usage_hourly_aggregate_v1_legacy_v1120_rc2"
+	usageMonitoringSearchLegacy      = "usage_monitoring_event_search_v1_legacy_v1120_rc2"
+	usageMonitoringAccountLegacy     = "usage_monitoring_account_daily_rollups_v1_legacy_recovery"
+	usageMonitoringAPIKeyLegacy      = "usage_monitoring_api_key_daily_rollups_v1_legacy_recovery"
+	usageMonitoringSelectorLegacy    = "usage_monitoring_selector_daily_rollups_v1_legacy_recovery"
+	usageMonitoringHeaderLegacy      = "usage_monitoring_header_latest_v1_legacy_recovery"
+	usageMonitoringProjectionLegacy  = "usage_monitoring_event_projection_v1_legacy_recovery"
+	usageDashboardHourlySourceLegacy = "usage_dashboard_hourly_rollups_legacy_source_recovery"
+	usagePricingHourlySourceLegacy   = "usage_pricing_hourly_rollups_v1_legacy_source_recovery"
+	usageCacheChangesSourceLegacy    = "usage_cache_accounting_v2_changes_legacy_source_recovery"
+	usageAccountModelSourceLegacy    = "usage_account_model_rollups_legacy_source_recovery"
+	usagePricingAccountSourceLegacy  = "usage_pricing_account_rollups_v1_legacy_source_recovery"
 
 	createUsageAccountModelRollupsTable = `create table if not exists usage_account_model_rollups (
 		account_key text not null,
@@ -105,6 +121,59 @@ const (
 			structure_revision, account_key, model, billing_model, pricing_model,
 			service_tier, context_threshold_tokens
 		)
+		)`
+
+	createUsageDashboardHourlyRollupsTable = `create table if not exists usage_dashboard_hourly_rollups (
+		bucket_ms integer not null,
+		model text not null,
+		billing_model text not null,
+		service_tier text not null,
+		calls integer not null default 0,
+		success_calls integer not null default 0,
+		failure_calls integer not null default 0,
+		input_tokens integer not null default 0,
+		output_tokens integer not null default 0,
+		reasoning_tokens integer not null default 0,
+		cached_tokens integer not null default 0,
+		cache_read_tokens integer not null default 0,
+		cache_creation_tokens integer not null default 0,
+		long_input_tokens integer not null default 0,
+		long_output_tokens integer not null default 0,
+		long_cached_tokens integer not null default 0,
+		long_cache_read_tokens integer not null default 0,
+		long_cache_creation_tokens integer not null default 0,
+		total_tokens integer not null default 0,
+		latency_sum_ms integer not null default 0,
+		latency_samples integer not null default 0,
+		zero_token_calls integer not null default 0,
+		updated_at_ms integer not null,
+		primary key (bucket_ms, model, billing_model, service_tier)
+	)`
+
+	createUsageHourlyAggregateTable = `create table if not exists usage_hourly_aggregate_v1 (
+		bucket_ms integer not null,
+		model text not null,
+		billing_model text not null,
+		service_tier text not null,
+		failed integer not null,
+		calls integer not null default 0,
+		input_tokens integer not null default 0,
+		output_tokens integer not null default 0,
+		reasoning_tokens integer not null default 0,
+		cached_tokens integer not null default 0,
+		cache_read_tokens integer not null default 0,
+		cache_creation_tokens integer not null default 0,
+		long_input_tokens integer not null default 0,
+		long_output_tokens integer not null default 0,
+		long_cached_tokens integer not null default 0,
+		long_cache_read_tokens integer not null default 0,
+		long_cache_creation_tokens integer not null default 0,
+		total_tokens integer not null default 0,
+		latency_sum_ms integer not null default 0,
+		latency_samples integer not null default 0,
+		zero_token_calls integer not null default 0,
+		updated_at_ms integer not null,
+		primary key (bucket_ms, model, billing_model, service_tier, failed)
 	)`
 )
 
@@ -121,14 +190,6 @@ func Migrate(db *sql.DB) error {
 		return err
 	}
 	if err := resetDamagedUsageMonitoringDerivations(db, monitoringSnapshot); err != nil {
-		return err
-	}
-	if err := resetDamagedUsageHourlyAggregate(
-		db,
-		usageHourlyAggregateSnapshot,
-		monitoringSnapshot.latestEventID,
-		monitoringSnapshot.sourceTableMissing(),
-	); err != nil {
 		return err
 	}
 	if err := resetUsageDerivedDataWithoutSource(db, monitoringSnapshot); err != nil {
@@ -215,62 +276,12 @@ func Migrate(db *sql.DB) error {
 			last_run_finished_at_ms integer
 		)`,
 		createUsageAccountModelRollupsTable,
-		`create index if not exists idx_usage_account_model_rollups_last_seen on usage_account_model_rollups(last_seen_ms)`,
-		`create index if not exists idx_usage_account_model_rollups_auth_index on usage_account_model_rollups(auth_index)`,
-		`create table if not exists usage_dashboard_hourly_rollups (
-			bucket_ms integer not null,
-			model text not null,
-			billing_model text not null,
-			service_tier text not null,
-			calls integer not null default 0,
-			success_calls integer not null default 0,
-			failure_calls integer not null default 0,
-			input_tokens integer not null default 0,
-			output_tokens integer not null default 0,
-			reasoning_tokens integer not null default 0,
-			cached_tokens integer not null default 0,
-			cache_read_tokens integer not null default 0,
-			cache_creation_tokens integer not null default 0,
-			long_input_tokens integer not null default 0,
-			long_output_tokens integer not null default 0,
-			long_cached_tokens integer not null default 0,
-			long_cache_read_tokens integer not null default 0,
-			long_cache_creation_tokens integer not null default 0,
-			total_tokens integer not null default 0,
-			latency_sum_ms integer not null default 0,
-			latency_samples integer not null default 0,
-			zero_token_calls integer not null default 0,
-			updated_at_ms integer not null,
-			primary key (bucket_ms, model, billing_model, service_tier)
-		)`,
-		`create table if not exists usage_hourly_aggregate_v1 (
-			bucket_ms integer not null,
-			model text not null,
-			billing_model text not null,
-			service_tier text not null,
-			failed integer not null,
-			calls integer not null default 0,
-			input_tokens integer not null default 0,
-			output_tokens integer not null default 0,
-			reasoning_tokens integer not null default 0,
-			cached_tokens integer not null default 0,
-			cache_read_tokens integer not null default 0,
-			cache_creation_tokens integer not null default 0,
-			long_input_tokens integer not null default 0,
-			long_output_tokens integer not null default 0,
-			long_cached_tokens integer not null default 0,
-			long_cache_read_tokens integer not null default 0,
-			long_cache_creation_tokens integer not null default 0,
-			total_tokens integer not null default 0,
-			latency_sum_ms integer not null default 0,
-			latency_samples integer not null default 0,
-			zero_token_calls integer not null default 0,
-			updated_at_ms integer not null,
-			primary key (bucket_ms, model, billing_model, service_tier, failed)
-		)`,
+		createUsageDashboardHourlyRollupsTable,
+		createUsageHourlyAggregateTable,
 		`create table if not exists usage_hourly_aggregate_state (
 			aggregate_name text primary key,
 			schema_version integer not null,
+			structure_revision text not null default '',
 			status text not null,
 			backfill_last_event_id integer not null default 0,
 			coverage_event_id integer not null default 0,
@@ -283,24 +294,6 @@ func Migrate(db *sql.DB) error {
 			finished_at_ms integer,
 			last_error text
 		)`,
-		`insert or ignore into usage_hourly_aggregate_state (
-			aggregate_name,
-			schema_version,
-			status,
-			backfill_last_event_id,
-			coverage_event_id,
-			target_event_id,
-			processed_events,
-			updated_at_ms
-		) select
-			'hourly_core',
-			2,
-			case when exists (select 1 from usage_events limit 1) then 'pending' else 'ready' end,
-			0,
-			0,
-			coalesce((select max(id) from usage_events), 0),
-			0,
-			0`,
 		`create table if not exists usage_pricing_hourly_rollups_v1 (
 			structure_revision text not null,
 			bucket_ms integer not null,
@@ -332,11 +325,7 @@ func Migrate(db *sql.DB) error {
 				service_tier, context_threshold_tokens, failed
 			)
 		)`,
-		`create index if not exists idx_usage_pricing_hourly_bucket
-			on usage_pricing_hourly_rollups_v1(structure_revision, bucket_ms)`,
 		createUsagePricingAccountRollupsTable,
-		`create index if not exists idx_usage_pricing_account_key
-			on usage_pricing_account_rollups_v1(structure_revision, account_key)`,
 		`create table if not exists usage_pricing_rollup_state (
 			rollup_name text primary key,
 			schema_version integer not null,
@@ -402,16 +391,6 @@ func Migrate(db *sql.DB) error {
 				pricing_model, service_tier, context_threshold_tokens, failed
 			)
 		)`,
-		`create index if not exists idx_usage_monitoring_account_daily_bucket
-			on usage_monitoring_account_daily_rollups_v1(structure_revision, bucket_ms)`,
-		`create index if not exists idx_usage_monitoring_account_daily_credential_window
-			on usage_monitoring_account_daily_rollups_v1(
-				structure_revision, trim(auth_file_snapshot), trim(auth_index), bucket_ms
-			)`,
-		`create index if not exists idx_usage_monitoring_account_daily_legacy_window
-			on usage_monitoring_account_daily_rollups_v1(
-				structure_revision, trim(source), trim(auth_index), bucket_ms
-			)`,
 		`create table if not exists usage_monitoring_api_key_daily_rollups_v1 (
 			structure_revision text not null,
 			bucket_ms integer not null,
@@ -457,9 +436,8 @@ func Migrate(db *sql.DB) error {
 				context_threshold_tokens, failed
 			)
 		)`,
-		`create index if not exists idx_usage_monitoring_api_key_daily_bucket
-			on usage_monitoring_api_key_daily_rollups_v1(structure_revision, bucket_ms)`,
 		`create table if not exists usage_monitoring_selector_daily_rollups_v1 (
+			model_format_revision text not null default '',
 			bucket_ms integer not null,
 			model text not null,
 			api_key_hash text not null,
@@ -476,8 +454,6 @@ func Migrate(db *sql.DB) error {
 				account_snapshot, auth_label_snapshot, auth_index, source_hash
 			)
 		)`,
-		`create index if not exists idx_usage_monitoring_selector_daily_bucket
-			on usage_monitoring_selector_daily_rollups_v1(bucket_ms)`,
 		`create table if not exists usage_monitoring_event_projection_v1 (
 			event_id integer primary key,
 			timestamp_ms integer not null,
@@ -517,8 +493,6 @@ func Migrate(db *sql.DB) error {
 			header_trace_id text not null,
 			updated_at_ms integer not null
 		)`,
-		`create index if not exists idx_usage_monitoring_event_projection_timestamp
-			on usage_monitoring_event_projection_v1(timestamp_ms desc, event_id desc)`,
 		`create table if not exists usage_monitoring_header_latest_v1 (
 			snapshot_key text primary key,
 			event_id integer not null,
@@ -541,8 +515,6 @@ func Migrate(db *sql.DB) error {
 			header_trace_id text not null,
 			updated_at_ms integer not null
 		)`,
-		`create index if not exists idx_usage_monitoring_header_latest_timestamp
-			on usage_monitoring_header_latest_v1(timestamp_ms desc, event_id desc)`,
 		`create table if not exists usage_monitoring_rollup_state (
 			rollup_name text primary key,
 			schema_version integer not null,
@@ -578,11 +550,10 @@ func Migrate(db *sql.DB) error {
 			timestamp_ms integer not null,
 			bucket_ms integer not null,
 			aggregate_schema_version integer not null default 0,
+			aggregate_structure_revision text not null default '',
 			first_seen_at_ms integer not null,
 			updated_at_ms integer not null
 		)`,
-		`create index if not exists idx_usage_event_identity_ledger_raw_event_id on usage_event_identity_ledger(raw_event_id)`,
-		`create index if not exists idx_usage_event_identity_ledger_bucket on usage_event_identity_ledger(bucket_ms)`,
 		`create table if not exists usage_data_migrations (
 			name text primary key,
 			status text not null,
@@ -970,9 +941,6 @@ func Migrate(db *sql.DB) error {
 	if err := ensureUsageEventSnapshotColumns(db); err != nil {
 		return err
 	}
-	if err := ensureLatestAccountRequestIndexes(db); err != nil {
-		return err
-	}
 	if err := ensureCodexInspectionRunColumns(db); err != nil {
 		return err
 	}
@@ -991,7 +959,7 @@ func Migrate(db *sql.DB) error {
 	if err := ensureQuotaSnapshotLifecycleColumns(db); err != nil {
 		return err
 	}
-	if err := quotasnapshotrepo.BackfillLegacySnapshots(context.Background(), db); err != nil {
+	if err := ensureLegacyQuotaSnapshotMigrationState(db); err != nil {
 		return err
 	}
 	if err := ensureQuotaCooldownIdentityIndex(db); err != nil {
@@ -1000,7 +968,10 @@ func Migrate(db *sql.DB) error {
 	if err := ensureUsageRollupLongContextColumns(db); err != nil {
 		return err
 	}
-	if err := ensureUsageHourlyAggregateSchemaVersion(db); err != nil {
+	if err := ensureUsageHourlyAggregateRevisionColumns(db); err != nil {
+		return err
+	}
+	if err := ensureUsageHourlyAggregateSchemaVersion(db, usageHourlyAggregateSnapshot, monitoringSnapshot.sourceTableMissing()); err != nil {
 		return err
 	}
 	if err := ensureAccountHistoryIdentityFormatVersion(db); err != nil {
@@ -1010,6 +981,17 @@ func Migrate(db *sql.DB) error {
 		return err
 	}
 	return ensureModelPriceColumns(db)
+}
+
+func ensureLegacyQuotaSnapshotMigrationState(db *sql.DB) error {
+	_, err := db.Exec(`insert or ignore into usage_data_migrations (
+		name, status, last_event_id, target_event_id, processed_rows,
+		changed_rows, updated_at_ms
+	) values (?, 'pending', 0, 0, 0, 0, 0)`, quotasnapshotrepo.LegacySnapshotMigrationName)
+	if err != nil {
+		return fmt.Errorf("initialize legacy quota snapshot migration state: %w", err)
+	}
+	return nil
 }
 
 func validateUsageDerivedSchemaVersions(db *sql.DB, hourlySnapshot usageHourlyAggregateMigrationSnapshot) error {
@@ -1044,7 +1026,7 @@ func validateUsageDerivedSchemaVersions(db *sql.DB, hourlySnapshot usageHourlyAg
 		}
 	}
 
-	if hourlySnapshot.stateRowExists && hourlySnapshot.stateSchemaVersion != 1 && hourlySnapshot.stateSchemaVersion != 2 {
+	if hourlySnapshot.stateRowExists && hourlySnapshot.stateSchemaVersion != 1 && hourlySnapshot.stateSchemaVersion != 2 && hourlySnapshot.stateSchemaVersion != usageHourlyAggregateSchemaVersion {
 		return fmt.Errorf("unsupported usage hourly aggregate schema version %d", hourlySnapshot.stateSchemaVersion)
 	}
 	return nil
@@ -1075,11 +1057,11 @@ func ensureUsageAccountModelRollupPrimaryKeys(db *sql.DB) error {
 	}
 
 	if !accountMatches {
+		if err := parkDerivedTable(tx, usageAccountModelRollupsTable, usageAccountModelRollupsLegacy); err != nil {
+			return err
+		}
 		for _, statement := range []string{
-			`drop table ` + usageAccountModelRollupsTable,
 			createUsageAccountModelRollupsTable,
-			`create index if not exists idx_usage_account_model_rollups_last_seen on usage_account_model_rollups(last_seen_ms)`,
-			`create index if not exists idx_usage_account_model_rollups_auth_index on usage_account_model_rollups(auth_index)`,
 			`delete from usage_rollup_checkpoints where name = 'account_history'`,
 		} {
 			if _, err := tx.Exec(statement); err != nil {
@@ -1089,11 +1071,11 @@ func ensureUsageAccountModelRollupPrimaryKeys(db *sql.DB) error {
 	}
 
 	if !pricingMatches {
+		if err := parkDerivedTable(tx, usagePricingAccountRollupsTable, usagePricingAccountLegacy); err != nil {
+			return err
+		}
 		for _, statement := range []string{
-			`drop table ` + usagePricingAccountRollupsTable,
 			createUsagePricingAccountRollupsTable,
-			`create index if not exists idx_usage_pricing_account_key on usage_pricing_account_rollups_v1(structure_revision, account_key)`,
-			`delete from usage_pricing_hourly_rollups_v1`,
 			`update usage_pricing_rollup_state set
 				structure_revision = '',
 				status = case when exists (select 1 from usage_events limit 1) then 'pending' else 'ready' end,
@@ -1117,6 +1099,20 @@ func ensureUsageAccountModelRollupPrimaryKeys(db *sql.DB) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit usage account model rollup primary key migration: %w", err)
+	}
+	return nil
+}
+
+func parkDerivedTable(tx *sql.Tx, tableName, legacyTableName string) error {
+	var legacyExists int
+	if err := tx.QueryRow(`select count(*) from sqlite_master where type = 'table' and name = ?`, legacyTableName).Scan(&legacyExists); err != nil {
+		return fmt.Errorf("inspect legacy derived table %s: %w", legacyTableName, err)
+	}
+	if legacyExists != 0 {
+		return fmt.Errorf("legacy derived table %s already exists", legacyTableName)
+	}
+	if _, err := tx.Exec(`alter table ` + tableName + ` rename to ` + legacyTableName); err != nil {
+		return fmt.Errorf("park derived table %s as %s: %w", tableName, legacyTableName, err)
 	}
 	return nil
 }
@@ -1268,11 +1264,19 @@ func resetDamagedUsageMonitoringDerivations(db *sql.DB, snapshot usageMonitoring
 		return fmt.Errorf("begin usage monitoring derivation recovery: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if !snapshot.tables[usageprojection.SearchIndexTable] {
+		if err := dropUsageMonitoringSearchTriggers(tx); err != nil {
+			return err
+		}
+	}
 	if statsDamaged {
-		for _, tableName := range []string{usageMonitoringAccountDailyTable, usageMonitoringAPIKeyDailyTable} {
+		for tableName, legacyName := range map[string]string{
+			usageMonitoringAccountDailyTable: usageMonitoringAccountLegacy,
+			usageMonitoringAPIKeyDailyTable:  usageMonitoringAPIKeyLegacy,
+		} {
 			if snapshot.tables[tableName] {
-				if _, err := tx.Exec(`delete from ` + tableName); err != nil {
-					return fmt.Errorf("clear damaged usage monitoring stats table %s: %w", tableName, err)
+				if err := parkDerivedTable(tx, tableName, legacyName); err != nil {
+					return err
 				}
 			}
 		}
@@ -1281,10 +1285,13 @@ func resetDamagedUsageMonitoringDerivations(db *sql.DB, snapshot usageMonitoring
 		}
 	}
 	if metadataDamaged {
-		for _, tableName := range []string{usageMonitoringSelectorDailyTable, usageMonitoringHeaderLatestTable} {
+		for tableName, legacyName := range map[string]string{
+			usageMonitoringSelectorDailyTable: usageMonitoringSelectorLegacy,
+			usageMonitoringHeaderLatestTable:  usageMonitoringHeaderLegacy,
+		} {
 			if snapshot.tables[tableName] {
-				if _, err := tx.Exec(`delete from ` + tableName); err != nil {
-					return fmt.Errorf("clear damaged usage monitoring metadata table %s: %w", tableName, err)
+				if err := parkDerivedTable(tx, tableName, legacyName); err != nil {
+					return err
 				}
 			}
 		}
@@ -1293,19 +1300,24 @@ func resetDamagedUsageMonitoringDerivations(db *sql.DB, snapshot usageMonitoring
 		}
 	}
 	if projectionDamaged {
+		parkProjection := snapshot.tables[usageprojection.EventTable] &&
+			(snapshot.sourceTableMissing() || !snapshot.rollupStates[usageMonitoringProjectionRollupName])
+		if (!snapshot.tables[usageprojection.EventTable] || parkProjection) && snapshot.tables[usageprojection.SearchIndexTable] {
+			if err := dropUsageMonitoringSearchTriggers(tx); err != nil {
+				return err
+			}
+			if err := parkDerivedTable(tx, usageprojection.SearchIndexTable, usageMonitoringSearchLegacy); err != nil {
+				return err
+			}
+		}
 		if snapshot.tables[usageprojection.EventTable] && !snapshot.tables[usageprojection.SearchIndexTable] {
 			if err := dropUsageMonitoringSearchTriggers(tx); err != nil {
 				return err
 			}
 		}
-		if snapshot.tables[usageprojection.EventTable] {
-			if _, err := tx.Exec(`delete from ` + usageprojection.EventTable); err != nil {
-				return fmt.Errorf("clear damaged usage monitoring projection: %w", err)
-			}
-		}
-		if snapshot.sourceTableMissing() && snapshot.tables[usageMonitoringHeaderLatestTable] {
-			if _, err := tx.Exec(`delete from ` + usageMonitoringHeaderLatestTable); err != nil {
-				return fmt.Errorf("clear usage monitoring header projection without source: %w", err)
+		if parkProjection {
+			if err := parkDerivedTable(tx, usageprojection.EventTable, usageMonitoringProjectionLegacy); err != nil {
+				return err
 			}
 		}
 		if err := resetUsageMonitoringRollupState(tx, snapshot, usageMonitoringProjectionRollupName); err != nil {
@@ -1400,18 +1412,20 @@ func resetUsageDerivedDataWithoutSource(db *sql.DB, snapshot usageMonitoringMigr
 		return fmt.Errorf("begin usage source recovery: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	statements := make([]string, 0, len(existingTables))
-	for _, tableName := range []string{
-		"usage_account_model_rollups",
-		"usage_dashboard_hourly_rollups",
-		"usage_pricing_hourly_rollups_v1",
-		"usage_pricing_account_rollups_v1",
-		"usage_cache_accounting_v2_changes",
+	for tableName, legacyName := range map[string]string{
+		usageAccountModelRollupsTable:       usageAccountModelSourceLegacy,
+		"usage_dashboard_hourly_rollups":    usageDashboardHourlySourceLegacy,
+		"usage_pricing_hourly_rollups_v1":   usagePricingHourlySourceLegacy,
+		usagePricingAccountRollupsTable:     usagePricingAccountSourceLegacy,
+		"usage_cache_accounting_v2_changes": usageCacheChangesSourceLegacy,
 	} {
 		if present[tableName] {
-			statements = append(statements, `delete from `+tableName)
+			if err := parkDerivedTable(tx, tableName, legacyName); err != nil {
+				return err
+			}
 		}
 	}
+	statements := make([]string, 0, len(existingTables))
 	if present["usage_rollup_checkpoints"] {
 		statements = append(statements, `delete from usage_rollup_checkpoints
 			where name in ('account_history', 'dashboard_hourly')`)
@@ -1492,6 +1506,10 @@ func ensureUsageMonitoringProjectionIdentity(db *sql.DB) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("inspect usage monitoring projection columns: %w", err)
 	}
+	selectorHasRevision, err := tableHasColumn(tx, usageMonitoringSelectorDailyTable, "model_format_revision")
+	if err != nil {
+		return err
+	}
 
 	if !hasAccountKey {
 		if _, err := tx.Exec(`alter table ` + usageprojection.EventTable + ` add column account_key text not null default ''`); err != nil {
@@ -1508,26 +1526,42 @@ func ensureUsageMonitoringProjectionIdentity(db *sql.DB) error {
 			return fmt.Errorf("add usage monitoring projection analytics model: %w", err)
 		}
 	}
+	if !selectorHasRevision {
+		if _, err := tx.Exec(`alter table ` + usageMonitoringSelectorDailyTable + ` add column model_format_revision text not null default ''`); err != nil {
+			return fmt.Errorf("add usage monitoring selector model format revision: %w", err)
+		}
+	}
 
-	needsRebuild := versionErr != nil || !hasAccountKey || !hasRequestedModel || !hasAnalyticsModel
+	needsRebuild := versionErr != nil || !hasAccountKey || !hasRequestedModel || !hasAnalyticsModel || !selectorHasRevision
 	if needsRebuild {
+		if err := dropUsageMonitoringSearchTriggers(tx); err != nil {
+			return err
+		}
 		var searchIndexExists int
 		if err := tx.QueryRow(`select count(*) from sqlite_master where type = 'table' and name = ?`, usageprojection.SearchIndexTable).Scan(&searchIndexExists); err != nil {
-			return fmt.Errorf("inspect usage monitoring model search index: %w", err)
+			return fmt.Errorf("inspect usage monitoring search index for model rebuild: %w", err)
 		}
-		if searchIndexExists == 0 {
-			if err := dropUsageMonitoringSearchTriggers(tx); err != nil {
+		if searchIndexExists != 0 {
+			if err := parkDerivedTable(tx, usageprojection.SearchIndexTable, usageMonitoringSearchLegacy); err != nil {
 				return err
 			}
 		}
-		for _, tableName := range []string{
-			usageMonitoringAccountDailyTable,
-			usageMonitoringAPIKeyDailyTable,
-			usageMonitoringSelectorDailyTable,
-			usageprojection.EventTable,
+		for tableName, legacyName := range map[string]string{
+			usageMonitoringAccountDailyTable:  usageMonitoringAccountLegacy,
+			usageMonitoringAPIKeyDailyTable:   usageMonitoringAPIKeyLegacy,
+			usageMonitoringSelectorDailyTable: usageMonitoringSelectorLegacy,
+			usageMonitoringHeaderLatestTable:  usageMonitoringHeaderLegacy,
+			usageprojection.EventTable:        usageMonitoringProjectionLegacy,
 		} {
-			if _, err := tx.Exec(`delete from ` + tableName); err != nil {
-				return fmt.Errorf("clear usage monitoring model derivation %s: %w", tableName, err)
+			hasRows, err := tableHasRows(tx, tableName)
+			if err != nil {
+				return err
+			}
+			if !hasRows {
+				continue
+			}
+			if err := parkAndRecreateDerivedTable(tx, tableName, legacyName); err != nil {
+				return err
 			}
 		}
 		var latestEventID int64
@@ -1543,10 +1577,22 @@ func ensureUsageMonitoringProjectionIdentity(db *sql.DB) error {
 			coverage_event_id = 0, target_event_id = ?, processed_events = 0,
 			last_run_started_at_ms = null, updated_at_ms = 0,
 			finished_at_ms = null, last_error = null
-			where rollup_name in (?, ?, ?)`,
+			where rollup_name = ?`,
 			status,
 			latestEventID,
 			usageMonitoringStatsRollupName,
+		); err != nil {
+			return fmt.Errorf("reset usage monitoring stats state: %w", err)
+		}
+		if _, err := tx.Exec(`update usage_monitoring_rollup_state set
+			structure_revision = ?, status = ?, backfill_last_event_id = 0,
+			coverage_event_id = 0, target_event_id = ?, processed_events = 0,
+			last_run_started_at_ms = null, updated_at_ms = 0,
+			finished_at_ms = null, last_error = null
+			where rollup_name in (?, ?)`,
+			usageidentity.ModelFormatVersion,
+			status,
+			latestEventID,
 			usageMonitoringMetadataRollupName,
 			usageMonitoringProjectionRollupName,
 		); err != nil {
@@ -1574,16 +1620,48 @@ func ensureUsageMonitoringProjectionIdentity(db *sql.DB) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit usage monitoring projection identity migration: %w", err)
 	}
+	return nil
+}
 
-	if _, err := db.Exec(`create index if not exists idx_usage_monitoring_event_projection_account_window
-		on ` + usageprojection.EventTable + `(account_key, timestamp_ms, event_id)`); err != nil {
-		return fmt.Errorf("create usage monitoring account window index: %w", err)
+func parkAndRecreateDerivedTable(tx *sql.Tx, tableName, legacyTableName string) error {
+	var createSQL string
+	if err := tx.QueryRow(`select sql from sqlite_master where type = 'table' and name = ?`, tableName).Scan(&createSQL); err != nil {
+		return fmt.Errorf("read derived table schema %s: %w", tableName, err)
 	}
-	if _, err := db.Exec(`create index if not exists idx_usage_monitoring_event_projection_model_timestamp
-		on ` + usageprojection.EventTable + `(analytics_model, timestamp_ms desc, event_id desc)`); err != nil {
-		return fmt.Errorf("create usage monitoring analytics model index: %w", err)
+	if strings.TrimSpace(createSQL) == "" {
+		return fmt.Errorf("derived table %s has no reusable schema", tableName)
+	}
+	if err := parkDerivedTable(tx, tableName, legacyTableName); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(createSQL); err != nil {
+		return fmt.Errorf("recreate derived table %s: %w", tableName, err)
 	}
 	return nil
+}
+
+func tableHasColumn(tx *sql.Tx, tableName, columnName string) (bool, error) {
+	rows, err := tx.Query(`pragma table_info(` + tableName + `)`)
+	if err != nil {
+		return false, fmt.Errorf("inspect %s columns: %w", tableName, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, fmt.Errorf("scan %s columns: %w", tableName, err)
+		}
+		if name == columnName {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("inspect %s columns: %w", tableName, err)
+	}
+	return false, nil
 }
 
 func ensureUsageMonitoringSearchIndex(db *sql.DB) error {
@@ -1631,23 +1709,30 @@ func ensureUsageMonitoringSearchIndex(db *sql.DB) error {
 		}
 	}
 	if indexExists == 0 {
-		if _, err := tx.Exec(`update usage_monitoring_search_index_state set ready = 0 where id = 1`); err != nil {
+		if _, err := tx.Exec(`update usage_monitoring_search_index_state set ready = 0, updated_at_ms = 0 where id = 1`); err != nil {
 			return fmt.Errorf("mark recreated usage monitoring search index pending: %w", err)
 		}
-	}
-	var ready int
-	if err := tx.QueryRow(`select ready from usage_monitoring_search_index_state where id = 1`).Scan(&ready); err != nil {
-		return err
-	}
-	if ready != 0 {
-		return tx.Commit()
-	}
-	if _, err := tx.Exec(fmt.Sprintf(`insert into %s(%s) values ('rebuild')`, usageprojection.SearchIndexTable, usageprojection.SearchIndexTable)); err != nil {
-		return fmt.Errorf("reset usage monitoring search index: %w", err)
-	}
-	if _, err := tx.Exec(`update usage_monitoring_search_index_state set
-		ready = 1, updated_at_ms = ? where id = 1`, time.Now().UnixMilli()); err != nil {
-		return err
+		var latestEventID int64
+		if err := tx.QueryRow(`select coalesce(max(id), 0) from usage_events`).Scan(&latestEventID); err != nil {
+			return fmt.Errorf("read latest event for usage monitoring search catch-up: %w", err)
+		}
+		status := "pending"
+		if latestEventID == 0 {
+			status = "ready"
+		}
+		if _, err := tx.Exec(`update usage_monitoring_rollup_state set
+			structure_revision = ?, status = ?, backfill_last_event_id = 0,
+			coverage_event_id = 0, target_event_id = ?, processed_events = 0,
+			last_run_started_at_ms = null, updated_at_ms = 0,
+			finished_at_ms = null, last_error = null
+			where rollup_name = ?`,
+			usageidentity.ModelFormatVersion,
+			status,
+			latestEventID,
+			usageMonitoringProjectionRollupName,
+		); err != nil {
+			return fmt.Errorf("schedule usage monitoring search catch-up: %w", err)
+		}
 	}
 	return tx.Commit()
 }
@@ -1670,13 +1755,20 @@ func ensureAccountHistoryIdentityFormatVersion(db *sql.DB) error {
 		return err
 	}
 
-	for _, statement := range []string{
-		`delete from usage_account_model_rollups`,
-		`delete from usage_rollup_checkpoints where name = 'account_history'`,
-	} {
-		if _, err := tx.Exec(statement); err != nil {
+	hasRows, err := tableHasRows(tx, usageAccountModelRollupsTable)
+	if err != nil {
+		return err
+	}
+	if hasRows {
+		if err := parkDerivedTable(tx, usageAccountModelRollupsTable, usageAccountModelRollupsLegacy); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(createUsageAccountModelRollupsTable); err != nil {
+			return fmt.Errorf("create current account history rollup: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`delete from usage_rollup_checkpoints where name = 'account_history'`); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(`insert into settings (key, value, updated_at_ms) values (?, ?, ?)
 		on conflict(key) do update set value = excluded.value, updated_at_ms = excluded.updated_at_ms`,
@@ -1707,13 +1799,20 @@ func ensureDashboardHourlyRollupFormatVersion(db *sql.DB) error {
 		return err
 	}
 
-	for _, statement := range []string{
-		`delete from usage_dashboard_hourly_rollups`,
-		`delete from usage_rollup_checkpoints where name = 'dashboard_hourly'`,
-	} {
-		if _, err := tx.Exec(statement); err != nil {
+	hasRows, err := tableHasRows(tx, "usage_dashboard_hourly_rollups")
+	if err != nil {
+		return err
+	}
+	if hasRows {
+		if err := parkDerivedTable(tx, "usage_dashboard_hourly_rollups", usageDashboardHourlyLegacy); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(createUsageDashboardHourlyRollupsTable); err != nil {
+			return fmt.Errorf("create current dashboard hourly rollup: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`delete from usage_rollup_checkpoints where name = 'dashboard_hourly'`); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(`insert into settings (key, value, updated_at_ms) values (?, ?, ?)
 		on conflict(key) do update set value = excluded.value, updated_at_ms = excluded.updated_at_ms`,
@@ -1724,6 +1823,19 @@ func ensureDashboardHourlyRollupFormatVersion(db *sql.DB) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func tableHasRows(tx *sql.Tx, tableName string) (bool, error) {
+	var value int
+	err := tx.QueryRow(`select 1 from ` + tableName + ` limit 1`).Scan(&value)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	default:
+		return false, fmt.Errorf("inspect derived table %s rows: %w", tableName, err)
+	}
 }
 
 type usageHourlyAggregateMigrationSnapshot struct {
@@ -1779,75 +1891,39 @@ func inspectUsageHourlyAggregateMigrationSnapshot(db *sql.DB) (usageHourlyAggreg
 	return snapshot, nil
 }
 
-func resetDamagedUsageHourlyAggregate(
-	db *sql.DB,
-	snapshot usageHourlyAggregateMigrationSnapshot,
-	latestEventID int64,
-	sourceTableMissing bool,
-) error {
-	damaged := sourceTableMissing && snapshot.aggregateTableExists ||
-		snapshot.aggregateTableExists != snapshot.ledgerTableExists ||
-		(snapshot.stateRowExists && !snapshot.aggregateTableExists) ||
-		(snapshot.aggregateTableExists && !snapshot.stateRowExists)
-	if !damaged {
-		return nil
-	}
-	if snapshot.stateRowExists && snapshot.stateSchemaVersion != 1 && snapshot.stateSchemaVersion != 2 {
-		return fmt.Errorf("unsupported usage hourly aggregate schema version %d", snapshot.stateSchemaVersion)
-	}
-
+func ensureUsageHourlyAggregateRevisionColumns(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
-		return fmt.Errorf("begin usage hourly aggregate recovery: %w", err)
+		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if snapshot.aggregateTableExists {
-		if _, err := tx.Exec(`delete from usage_hourly_aggregate_v1`); err != nil {
-			return fmt.Errorf("clear damaged usage hourly aggregate: %w", err)
+	for _, column := range []struct {
+		tableName string
+		name      string
+		ddl       string
+	}{
+		{usageHourlyAggregateState, "structure_revision", "structure_revision text not null default ''"},
+		{usageEventIdentityLedger, "aggregate_structure_revision", "aggregate_structure_revision text not null default ''"},
+	} {
+		hasColumn, err := tableHasColumn(tx, column.tableName, column.name)
+		if err != nil {
+			return err
+		}
+		if hasColumn {
+			continue
+		}
+		if _, err := tx.Exec(`alter table ` + column.tableName + ` add column ` + column.ddl); err != nil {
+			return fmt.Errorf("add %s.%s: %w", column.tableName, column.name, err)
 		}
 	}
-	if snapshot.ledgerTableExists {
-		if sourceTableMissing {
-			if _, err := tx.Exec(`update usage_event_identity_ledger set
-				raw_event_id = null,
-				aggregate_schema_version = 0,
-				updated_at_ms = 0`); err != nil {
-				return fmt.Errorf("detach usage identity ledger from missing source: %w", err)
-			}
-		} else if _, err := tx.Exec(`update usage_event_identity_ledger set aggregate_schema_version = 0
-			where aggregate_schema_version >= 2`); err != nil {
-			return fmt.Errorf("reset damaged usage hourly aggregate ledger: %w", err)
-		}
-	}
-	if snapshot.stateRowExists {
-		status := "pending"
-		if latestEventID == 0 {
-			status = "ready"
-		}
-		if _, err := tx.Exec(`update usage_hourly_aggregate_state set
-			schema_version = 2,
-			status = ?,
-			backfill_last_event_id = 0,
-			coverage_event_id = 0,
-			target_event_id = ?,
-			processed_events = 0,
-			min_bucket_ms = null,
-			max_bucket_ms = null,
-			last_run_started_at_ms = null,
-			updated_at_ms = 0,
-			finished_at_ms = null,
-			last_error = null
-			where aggregate_name = 'hourly_core'`, status, latestEventID); err != nil {
-			return fmt.Errorf("reset damaged usage hourly aggregate state: %w", err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit usage hourly aggregate recovery: %w", err)
-	}
-	return nil
+	return tx.Commit()
 }
 
-func ensureUsageHourlyAggregateSchemaVersion(db *sql.DB) error {
+func ensureUsageHourlyAggregateSchemaVersion(
+	db *sql.DB,
+	snapshot usageHourlyAggregateMigrationSnapshot,
+	sourceTableMissing bool,
+) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -1855,11 +1931,16 @@ func ensureUsageHourlyAggregateSchemaVersion(db *sql.DB) error {
 	defer func() { _ = tx.Rollback() }()
 
 	var version int
-	err = tx.QueryRow(`select schema_version from usage_hourly_aggregate_state where aggregate_name = 'hourly_core'`).Scan(&version)
+	var currentRevision string
+	err = tx.QueryRow(`select schema_version, structure_revision from usage_hourly_aggregate_state where aggregate_name = 'hourly_core'`).Scan(&version, &currentRevision)
+	damaged := sourceTableMissing && snapshot.aggregateTableExists ||
+		snapshot.aggregateTableExists != snapshot.ledgerTableExists ||
+		(snapshot.stateRowExists && !snapshot.aggregateTableExists) ||
+		(snapshot.aggregateTableExists && !snapshot.stateRowExists)
 	switch {
-	case err == nil && version == 2:
+	case err == nil && version == usageHourlyAggregateSchemaVersion && currentRevision != "" && !damaged:
 		return tx.Commit()
-	case err == nil && version != 1:
+	case err == nil && version != 1 && version != 2 && version != usageHourlyAggregateSchemaVersion:
 		return fmt.Errorf("unsupported usage hourly aggregate schema version %d", version)
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return err
@@ -1873,19 +1954,29 @@ func ensureUsageHourlyAggregateSchemaVersion(db *sql.DB) error {
 	if latestEventID == 0 {
 		status = "ready"
 	}
-	if _, err := tx.Exec(`delete from usage_hourly_aggregate_v1`); err != nil {
+	revision := usageHourlyAggregateStructureRevision
+	if damaged || version == usageHourlyAggregateSchemaVersion {
+		revision = fmt.Sprintf("%s:rebuild-%d", usageHourlyAggregateStructureRevision, time.Now().UnixNano())
+	}
+	hasRows, err := tableHasRows(tx, usageHourlyAggregateTable)
+	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`update usage_event_identity_ledger set aggregate_schema_version = 0
-		where aggregate_schema_version >= 2`); err != nil {
-		return err
+	if hasRows {
+		if err := parkDerivedTable(tx, usageHourlyAggregateTable, usageHourlyAggregateLegacy); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(createUsageHourlyAggregateTable); err != nil {
+			return fmt.Errorf("create current usage hourly aggregate: %w", err)
+		}
 	}
 	if _, err := tx.Exec(`insert into usage_hourly_aggregate_state (
-		aggregate_name, schema_version, status, backfill_last_event_id,
+		aggregate_name, schema_version, structure_revision, status, backfill_last_event_id,
 		coverage_event_id, target_event_id, processed_events, updated_at_ms
-	) values ('hourly_core', 2, ?, 0, 0, ?, 0, 0)
+	) values ('hourly_core', ?, ?, ?, 0, 0, ?, 0, 0)
 	on conflict(aggregate_name) do update set
 		schema_version = excluded.schema_version,
+		structure_revision = excluded.structure_revision,
 		status = excluded.status,
 		backfill_last_event_id = 0,
 		coverage_event_id = 0,
@@ -1896,7 +1987,7 @@ func ensureUsageHourlyAggregateSchemaVersion(db *sql.DB) error {
 		last_run_started_at_ms = null,
 		updated_at_ms = 0,
 		finished_at_ms = null,
-		last_error = null`, status, latestEventID); err != nil {
+		last_error = null`, usageHourlyAggregateSchemaVersion, revision, status, latestEventID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -2535,20 +2626,6 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return err
-	}
-	return nil
-}
-
-func ensureLatestAccountRequestIndexes(db *sql.DB) error {
-	for _, statement := range []string{
-		`create index if not exists idx_usage_events_latest_request_auth_file
-			on usage_events(auth_file_snapshot collate nocase, auth_index collate nocase, timestamp_ms desc, id desc)`,
-		`create index if not exists idx_usage_events_latest_request_source
-			on usage_events(source collate nocase, auth_index collate nocase, timestamp_ms desc, id desc)`,
-	} {
-		if _, err := db.Exec(statement); err != nil {
-			return err
-		}
 	}
 	return nil
 }
