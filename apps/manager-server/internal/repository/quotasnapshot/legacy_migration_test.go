@@ -3,6 +3,7 @@ package quotasnapshot_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -174,6 +175,46 @@ func TestBackfillLegacySnapshotsBatchUsesLifecycleOrderInsteadOfInsertionOrder(t
 	}
 	if appliedRows != 2 {
 		t.Fatalf("lifecycle-applied observations = %d, want 2", appliedRows)
+	}
+}
+
+func TestListCandidatesKeepsDistinctLegacyModelScopes(t *testing.T) {
+	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for index := 0; index < 9; index++ {
+		modelIDs := fmt.Sprintf(`["model-%d"]`, index)
+		if _, err := db.Exec(`insert into account_quota_snapshots (
+			account_key, provider, provider_window_id, window_kind, window_mode,
+			model_scope_kind, model_scope_key, model_ids_json, source,
+			source_observation_id, observed_at_ms, boundary_accuracy,
+			duration_seconds, used_percent, remaining_percent, created_at_ms
+		) values ('account-1', 'codex', 'model-window', 'model_quota', 'fixed',
+			'models', 'shared', ?, 'inspection', ?, ?, 'exact', 3600, 25, 75, ?)`,
+			modelIDs,
+			fmt.Sprintf("legacy-model-%d", index),
+			1000+index,
+			1000+index,
+		); err != nil {
+			t.Fatalf("seed legacy model scope %d: %v", index, err)
+		}
+	}
+
+	candidates, err := quotasnapshotrepo.New(db).ListCandidates(context.Background(), "account-1", "codex", 100)
+	if err != nil {
+		t.Fatalf("list legacy model scopes: %v", err)
+	}
+	if len(candidates) != 9 {
+		t.Fatalf("legacy model-scope candidates = %d, want 9: %#v", len(candidates), candidates)
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		seen[candidate.ModelIDsJSON] = struct{}{}
+	}
+	if len(seen) != 9 {
+		t.Fatalf("distinct legacy model identities = %d, want 9", len(seen))
 	}
 }
 

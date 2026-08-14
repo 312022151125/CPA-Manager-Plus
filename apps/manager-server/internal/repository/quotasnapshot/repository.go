@@ -470,7 +470,8 @@ func (r *repository) ListCandidates(ctx context.Context, accountKey, provider st
 			partition by coalesce(
 				cast(logical_window_id as text),
 				'legacy:' || provider_window_id || char(0) || model_scope_kind ||
-				char(0) || coalesce(model_scope_key, '')
+				char(0) || coalesce(model_scope_key, '') || char(0) ||
+				coalesce(model_ids_json, '')
 			), source
 			order by observed_at_ms desc, id desc
 		) as source_rank
