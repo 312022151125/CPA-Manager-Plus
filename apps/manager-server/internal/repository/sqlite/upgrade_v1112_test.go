@@ -42,8 +42,12 @@ func TestUpgradeFromV1112LargeUsageFixtureIsMetadataBounded(t *testing.T) {
 				t.Fatalf("SQLite quick_check after upgrade = %q", integrity)
 			}
 			assertTableCount(t, db, usageprojection.EventTable, 0)
-			assertTableCount(t, db, usageMonitoringProjectionLegacy, rowCount)
-			searchExists, err := derivedTableExists(t.Context(), db, usageMonitoringSearchLegacy)
+			ftsLegacy, projectionLegacy, cleanupStatus := latestMonitoringCleanupJob(t, db)
+			if cleanupStatus != "online_cleanup" || projectionLegacy == "" {
+				t.Fatalf("v1.11.12 monitoring cleanup job = projection:%q status:%q", projectionLegacy, cleanupStatus)
+			}
+			assertTableCount(t, db, projectionLegacy, rowCount)
+			searchExists, err := derivedTableExists(t.Context(), db, ftsLegacy)
 			if err != nil {
 				t.Fatalf("inspect parked v1.11.12 search index: %v", err)
 			}
@@ -51,7 +55,7 @@ func TestUpgradeFromV1112LargeUsageFixtureIsMetadataBounded(t *testing.T) {
 				t.Fatal("populated v1.11.12 search index was not parked")
 			}
 			var searchDataRows int
-			if err := db.QueryRow(`select count(*) from ` + usageMonitoringSearchLegacy + `_data`).Scan(&searchDataRows); err != nil {
+			if err := db.QueryRow(`select count(*) from ` + ftsLegacy + `_data`).Scan(&searchDataRows); err != nil {
 				t.Fatalf("inspect parked v1.11.12 search data: %v", err)
 			}
 			if searchDataRows <= 1 {
@@ -77,19 +81,12 @@ func TestUpgradeFromV1112LargeUsageFixtureIsMetadataBounded(t *testing.T) {
 				}
 			}
 
-			processed, err := deleteDerivedRows(
-				t.Context(),
-				db,
-				usageMonitoringProjectionLegacy,
-				"",
-				nil,
-				1000,
-			)
+			processed, handled, err := cleanupMonitoringFTSJobBatch(t.Context(), db, 1000)
 			if err != nil {
 				t.Fatalf("run one bounded legacy cleanup batch: %v", err)
 			}
-			if processed != 1000 {
-				t.Fatalf("bounded legacy cleanup processed = %d, want 1000", processed)
+			if !handled || processed != 1000 {
+				t.Fatalf("bounded legacy cleanup handled=%v processed=%d, want true/1000", handled, processed)
 			}
 			assertTableCount(t, db, "usage_events", rowCount)
 		})

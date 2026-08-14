@@ -161,6 +161,23 @@ func TestMigrateCreatesAccountQuotaSnapshotSchema(t *testing.T) {
 			t.Fatalf("account quota snapshot columns = %#v, missing %s", columns, column)
 		}
 	}
+	for _, name := range []string{
+		"idx_quota_snapshots_latest",
+		"idx_quota_snapshots_observation",
+		"idx_quota_snapshots_window_cycle",
+		"idx_quota_snapshots_cycle_evidence",
+	} {
+		var count int
+		if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = ?`, name).Scan(&count); err != nil {
+			t.Fatalf("inspect deferred account quota snapshot index %s: %v", name, err)
+		}
+		if count != 0 {
+			t.Fatalf("account quota snapshot index %s exists before post-listen maintenance", name)
+		}
+	}
+	if err := RunDerivedStartupMaintenance(context.Background(), db); err != nil {
+		t.Fatalf("run post-listen quota index preparation: %v", err)
+	}
 
 	rows, err := db.Query(`pragma index_list(account_quota_snapshots)`)
 	if err != nil {
@@ -521,7 +538,11 @@ func TestMigrateRebuildsProjectionForAccountKeyIndex(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	assertTableCount(t, db, "usage_events", 1)
 	assertTableCount(t, db, usageprojection.EventTable, 0)
-	assertTableCount(t, db, usageMonitoringProjectionLegacy, 1)
+	_, projectionLegacy, cleanupStatus := latestMonitoringCleanupJob(t, db)
+	if cleanupStatus != "online_cleanup" || projectionLegacy == "" {
+		t.Fatalf("monitoring cleanup job = projection:%q status:%q", projectionLegacy, cleanupStatus)
+	}
+	assertTableCount(t, db, projectionLegacy, 1)
 	columns := migrationTableColumns(t, db, "usage_monitoring_event_projection_v1")
 	if !columns["account_key"] {
 		t.Fatalf("projection columns = %#v, missing account_key", columns)
@@ -615,11 +636,16 @@ func TestUsageMonitoringModelFormatUpgradeRebuildsDerivedDataOnce(t *testing.T) 
 		usageMonitoringAccountDailyTable:  usageMonitoringAccountLegacy,
 		usageMonitoringAPIKeyDailyTable:   usageMonitoringAPIKeyLegacy,
 		usageMonitoringSelectorDailyTable: usageMonitoringSelectorLegacy,
-		usageprojection.EventTable:        usageMonitoringProjectionLegacy,
 	} {
 		assertTableCount(t, db, activeTable, 0)
 		assertTableCount(t, db, legacyTable, 1)
 	}
+	_, projectionLegacy, status := latestMonitoringCleanupJob(t, db)
+	if status != "online_cleanup" || projectionLegacy == "" {
+		t.Fatalf("monitoring cleanup job = projection:%q status:%q", projectionLegacy, status)
+	}
+	assertTableCount(t, db, usageprojection.EventTable, 0)
+	assertTableCount(t, db, projectionLegacy, 1)
 	var version string
 	if err := db.QueryRow(`select value from settings where key = ?`, usageMonitoringModelFormatVersionKey).Scan(&version); err != nil {
 		t.Fatalf("read monitoring model format version: %v", err)
@@ -798,7 +824,11 @@ func TestUsageMonitoringModelFormatUpgradeIsBoundedAt150KRows(t *testing.T) {
 	}
 	assertTableCount(t, db, "usage_events", 150000)
 	assertTableCount(t, db, usageprojection.EventTable, 0)
-	assertTableCount(t, db, usageMonitoringProjectionLegacy, 150000)
+	_, projectionLegacy, status := latestMonitoringCleanupJob(t, db)
+	if status != "online_cleanup" || projectionLegacy == "" {
+		t.Fatalf("150k monitoring cleanup job = projection:%q status:%q", projectionLegacy, status)
+	}
+	assertTableCount(t, db, projectionLegacy, 150000)
 	var coverage, target int64
 	if err := db.QueryRow(`select coverage_event_id, target_event_id from usage_monitoring_rollup_state where rollup_name = ?`, usageMonitoringProjectionRollupName).Scan(&coverage, &target); err != nil {
 		t.Fatalf("read scheduled projection rebuild: %v", err)
@@ -806,6 +836,17 @@ func TestUsageMonitoringModelFormatUpgradeIsBoundedAt150KRows(t *testing.T) {
 	if coverage != 0 || target != 150000 {
 		t.Fatalf("scheduled projection rebuild = coverage:%d target:%d", coverage, target)
 	}
+}
+
+func latestMonitoringCleanupJob(t testing.TB, db *sql.DB) (string, string, string) {
+	t.Helper()
+	var ftsTable, projectionTable, status string
+	if err := db.QueryRow(`select fts_table, coalesce(projection_table, ''), status
+		from usage_derived_cleanup_jobs where kind = 'monitoring_fts'
+		order by generation desc limit 1`).Scan(&ftsTable, &projectionTable, &status); err != nil {
+		t.Fatalf("read latest monitoring cleanup job: %v", err)
+	}
+	return ftsTable, projectionTable, status
 }
 
 func TestUsageMonitoringModelFormatUpgradeRecoversMissingSearchIndex(t *testing.T) {
@@ -1441,6 +1482,10 @@ func TestMigrateReplacesLegacyQuotaCooldownOwnerIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	if err := RunDerivedStartupMaintenance(context.Background(), db); err != nil {
+		_ = db.Close()
+		t.Fatalf("prepare current indexes: %v", err)
+	}
 	for _, statement := range []string{
 		`drop index idx_quota_cooldowns_active_identity`,
 		`create unique index idx_quota_cooldowns_active_owner on quota_cooldowns(auth_file_name, owner) where status = 'active'`,
@@ -1463,8 +1508,17 @@ func TestMigrateReplacesLegacyQuotaCooldownOwnerIndex(t *testing.T) {
 	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_quota_cooldowns_active_owner'`).Scan(&legacyIndexCount); err != nil {
 		t.Fatalf("read legacy index state: %v", err)
 	}
+	if legacyIndexCount != 1 {
+		t.Fatalf("legacy quota cooldown index changed before post-listen maintenance")
+	}
+	if err := RunDerivedStartupMaintenance(context.Background(), db); err != nil {
+		t.Fatalf("replace legacy quota cooldown index after listener start: %v", err)
+	}
+	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_quota_cooldowns_active_owner'`).Scan(&legacyIndexCount); err != nil {
+		t.Fatalf("read post-listen legacy index state: %v", err)
+	}
 	if legacyIndexCount != 0 {
-		t.Fatalf("legacy quota cooldown index still exists")
+		t.Fatalf("legacy quota cooldown index still exists after post-listen maintenance")
 	}
 
 	for index, account := range []string{"alice@example.com", "bob@example.com"} {
@@ -2304,6 +2358,42 @@ func TestMigrateRejectsUnknownHourlyAggregateVersionBeforeOtherSchemaChanges(t *
 	}
 	if indexCount != 0 {
 		t.Fatalf("unrelated index count after hourly preflight rejection = %d, want 0", indexCount)
+	}
+}
+
+func TestNextUsageHourlyAggregateRebuildRevisionAdvancesPastLedgerHistory(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "usage-hourly-aggregate-revision.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, statement := range []string{
+		`insert into usage_events (
+			event_hash, timestamp_ms, timestamp, model, created_at_ms
+		) values ('historical-rebuild', 1, '1', 'model', 1)`,
+		`insert into usage_event_identity_ledger (
+			event_hash, raw_event_id, timestamp_ms, bucket_ms,
+			aggregate_schema_version, aggregate_structure_revision,
+			first_seen_at_ms, updated_at_ms
+		) select event_hash, id, timestamp_ms, 0, 3,
+			'schema-3:model-1:rebuild-7', 1, 1
+		from usage_events where event_hash = 'historical-rebuild'`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("seed rebuild revision history: %v", err)
+		}
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin rebuild revision allocation: %v", err)
+	}
+	defer tx.Rollback()
+	revision, err := nextUsageHourlyAggregateRebuildRevision(tx, "schema-3:model-1:rebuild-3")
+	if err != nil {
+		t.Fatalf("allocate rebuild revision: %v", err)
+	}
+	if revision != "schema-3:model-1:rebuild-8" {
+		t.Fatalf("next rebuild revision = %q, want rebuild-8", revision)
 	}
 }
 
