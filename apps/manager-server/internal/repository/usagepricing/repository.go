@@ -182,7 +182,8 @@ func (r *repository) CatchUp(ctx context.Context, limit int, nowMS int64) (Catch
 	if err != nil {
 		return CatchUpResult{}, err
 	}
-	rebuilt := false
+	rebuilt := (state.Status == "rebuilding" || state.Status == "failed") &&
+		state.CoverageEventID < state.TargetEventID
 	if state.StructureRevision != revision {
 		if err := resetForRevision(ctx, tx, revision, latestID, nowMS); err != nil {
 			return CatchUpResult{}, err
@@ -307,14 +308,6 @@ func (r *repository) State(ctx context.Context) (State, error) {
 }
 
 func resetForRevision(ctx context.Context, tx *sql.Tx, revision string, latestID, nowMS int64) error {
-	for _, statement := range []string{
-		`delete from usage_pricing_hourly_rollups_v1`,
-		`delete from usage_pricing_account_rollups_v1`,
-	} {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return err
-		}
-	}
 	_, err := tx.ExecContext(ctx, `update usage_pricing_rollup_state set
 		structure_revision = ?,
 		status = 'rebuilding',

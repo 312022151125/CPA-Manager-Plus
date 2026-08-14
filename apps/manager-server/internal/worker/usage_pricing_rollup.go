@@ -27,6 +27,8 @@ type UsagePricingRollupWorker struct {
 	checkInterval     time.Duration
 	continuationDelay time.Duration
 	nextTask          int
+	reportedStarted   [usageDerivedTaskCount]bool
+	lastReported      [usageDerivedTaskCount]int64
 }
 
 const (
@@ -105,6 +107,7 @@ func (w *UsagePricingRollupWorker) catchUp(ctx context.Context) bool {
 			pendingByTask[task] = false
 			continue
 		}
+		w.logTaskProgress(task, result)
 		pendingByTask[task] = result.Pending && result.Processed > 0
 		if result.Processed == 0 || !result.Pending {
 			idleByTask[task] = true
@@ -119,8 +122,11 @@ func (w *UsagePricingRollupWorker) catchUp(ctx context.Context) bool {
 }
 
 type usageDerivedCatchUpResult struct {
-	Processed int
-	Pending   bool
+	Processed       int
+	CoverageEventID int64
+	TargetEventID   int64
+	Pending         bool
+	Rebuilt         bool
 }
 
 func (w *UsagePricingRollupWorker) nextRunnableTask(idle [usageDerivedTaskCount]bool) int {
@@ -146,16 +152,32 @@ func (w *UsagePricingRollupWorker) catchUpTask(ctx context.Context, task int, no
 	switch task {
 	case usageDerivedMonitoringProjectionTask:
 		result, err := w.store.CatchUpUsageMonitoringProjection(ctx, w.batchLimit, nowMS)
-		return usageDerivedCatchUpResult{Processed: result.Processed, Pending: result.Pending}, err
+		return usageDerivedCatchUpResult{Processed: result.Processed, CoverageEventID: result.CoverageEventID, TargetEventID: result.TargetEventID, Pending: result.Pending, Rebuilt: result.Rebuilt}, err
 	case usageDerivedMonitoringMetadataTask:
 		result, err := w.store.CatchUpUsageMonitoringMetadata(ctx, w.batchLimit, nowMS)
-		return usageDerivedCatchUpResult{Processed: result.Processed, Pending: result.Pending}, err
+		return usageDerivedCatchUpResult{Processed: result.Processed, CoverageEventID: result.CoverageEventID, TargetEventID: result.TargetEventID, Pending: result.Pending, Rebuilt: result.Rebuilt}, err
 	case usageDerivedMonitoringStatsTask:
 		result, err := w.store.CatchUpUsageMonitoringStats(ctx, w.batchLimit, nowMS)
-		return usageDerivedCatchUpResult{Processed: result.Processed, Pending: result.Pending}, err
+		return usageDerivedCatchUpResult{Processed: result.Processed, CoverageEventID: result.CoverageEventID, TargetEventID: result.TargetEventID, Pending: result.Pending, Rebuilt: result.Rebuilt}, err
 	default:
 		result, err := w.store.CatchUpUsagePricing(ctx, w.batchLimit, nowMS)
-		return usageDerivedCatchUpResult{Processed: result.Processed, Pending: result.Pending}, err
+		return usageDerivedCatchUpResult{Processed: result.Processed, CoverageEventID: result.CoverageEventID, TargetEventID: result.TargetEventID, Pending: result.Pending, Rebuilt: result.Rebuilt}, err
+	}
+}
+
+func (w *UsagePricingRollupWorker) logTaskProgress(task int, result usageDerivedCatchUpResult) {
+	if result.Rebuilt && !w.reportedStarted[task] {
+		log.Printf("[usage-derived] %s rebuild started targetEventID=%d batchSize=%d", usageDerivedTaskName(task), result.TargetEventID, w.batchLimit)
+		w.reportedStarted[task] = true
+	}
+	shouldReport := result.Processed > 0 && (result.CoverageEventID-w.lastReported[task] >= 10000 || !result.Pending)
+	if shouldReport {
+		log.Printf("[usage-derived] %s rebuild progress coverageEventID=%d targetEventID=%d pending=%t", usageDerivedTaskName(task), result.CoverageEventID, result.TargetEventID, result.Pending)
+		w.lastReported[task] = result.CoverageEventID
+	}
+	if w.reportedStarted[task] && !result.Pending {
+		log.Printf("[usage-derived] %s rebuild completed coverageEventID=%d", usageDerivedTaskName(task), result.CoverageEventID)
+		w.reportedStarted[task] = false
 	}
 }
 

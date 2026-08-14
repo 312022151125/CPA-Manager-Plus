@@ -15,7 +15,7 @@ import (
 
 const (
 	AggregateName = "hourly_core"
-	SchemaVersion = 2
+	SchemaVersion = 3
 	hourMS        = int64(time.Hour / time.Millisecond)
 )
 
@@ -34,6 +34,7 @@ type Repository interface {
 type State struct {
 	AggregateName       string
 	SchemaVersion       int
+	StructureRevision   string
 	Status              string
 	BackfillLastEventID int64
 	CoverageEventID     int64
@@ -167,10 +168,10 @@ func (r *repository) CatchUp(ctx context.Context, limit int, nowMS int64) (Catch
 	}
 
 	lastEventID := ids[len(ids)-1]
-	if err := upsertAggregateBatch(ctx, tx, state.BackfillLastEventID, lastEventID, nowMS); err != nil {
+	if err := upsertAggregateBatch(ctx, tx, state.StructureRevision, state.BackfillLastEventID, lastEventID, nowMS); err != nil {
 		return CatchUpResult{}, err
 	}
-	newlyCoveredEvents, err := upsertIdentityLedgerBatch(ctx, tx, state.BackfillLastEventID, lastEventID, nowMS)
+	newlyCoveredEvents, err := upsertIdentityLedgerBatch(ctx, tx, state.StructureRevision, state.BackfillLastEventID, lastEventID, nowMS)
 	if err != nil {
 		return CatchUpResult{}, err
 	}
@@ -319,6 +320,7 @@ func stateQuery(ctx context.Context, db stateQuerier, name string) (State, error
 	err := db.QueryRowContext(ctx, `select
 		aggregate_name,
 		schema_version,
+		structure_revision,
 		status,
 		backfill_last_event_id,
 		coverage_event_id,
@@ -334,6 +336,7 @@ func stateQuery(ctx context.Context, db stateQuerier, name string) (State, error
 	where aggregate_name = ?`, name).Scan(
 		&state.AggregateName,
 		&state.SchemaVersion,
+		&state.StructureRevision,
 		&state.Status,
 		&state.BackfillLastEventID,
 		&state.CoverageEventID,
@@ -378,7 +381,7 @@ func eventIDsAfter(ctx context.Context, tx *sql.Tx, lastEventID int64, limit int
 	return ids, rows.Err()
 }
 
-func upsertAggregateBatch(ctx context.Context, tx *sql.Tx, afterID, throughID, nowMS int64) error {
+func upsertAggregateBatch(ctx context.Context, tx *sql.Tx, structureRevision string, afterID, throughID, nowMS int64) error {
 	_, err := tx.ExecContext(ctx, fmt.Sprintf(`insert into usage_hourly_aggregate_v1 (
 		bucket_ms,
 		model,
@@ -431,6 +434,7 @@ func upsertAggregateBatch(ctx context.Context, tx *sql.Tx, afterID, throughID, n
 		and not exists (
 			select 1 from usage_event_identity_ledger ledger
 			where ledger.event_hash = e.event_hash and ledger.aggregate_schema_version >= %d
+				and ledger.aggregate_structure_revision = ?
 		)
 	group by 1, 2, 3, 4, 5
 	on conflict(bucket_ms, model, billing_model, service_tier, failed) do update set
@@ -460,25 +464,26 @@ func upsertAggregateBatch(ctx context.Context, tx *sql.Tx, afterID, throughID, n
 		usage.LongContextInputTokenThreshold,
 		usage.LongContextInputTokenThreshold,
 		SchemaVersion,
-	), nowMS, afterID, throughID)
+	), nowMS, afterID, throughID, structureRevision)
 	return err
 }
 
-func upsertIdentityLedgerBatch(ctx context.Context, tx *sql.Tx, afterID, throughID, nowMS int64) (int64, error) {
+func upsertIdentityLedgerBatch(ctx context.Context, tx *sql.Tx, structureRevision string, afterID, throughID, nowMS int64) (int64, error) {
 	insertResult, err := tx.ExecContext(ctx, fmt.Sprintf(`insert or ignore into usage_event_identity_ledger (
 		event_hash,
 		raw_event_id,
 		timestamp_ms,
 		bucket_ms,
 		aggregate_schema_version,
+		aggregate_structure_revision,
 		first_seen_at_ms,
 		updated_at_ms
 	)
-	select event_hash, id, timestamp_ms, timestamp_ms - (timestamp_ms %% %d), ?,
+	select event_hash, id, timestamp_ms, timestamp_ms - (timestamp_ms %% %d), ?, ?,
 		case when created_at_ms > 0 then created_at_ms else ? end,
 		?
 	from usage_events
-	where id > ? and id <= ?`, hourMS), SchemaVersion, nowMS, nowMS, afterID, throughID)
+	where id > ? and id <= ?`, hourMS), SchemaVersion, structureRevision, nowMS, nowMS, afterID, throughID)
 	if err != nil {
 		return 0, err
 	}
@@ -491,15 +496,18 @@ func upsertIdentityLedgerBatch(ctx context.Context, tx *sql.Tx, afterID, through
 		timestamp_ms = e.timestamp_ms,
 		bucket_ms = e.timestamp_ms - (e.timestamp_ms %% %d),
 		aggregate_schema_version = ?,
+		aggregate_structure_revision = ?,
 		updated_at_ms = ?
 	from usage_events as e
 	where ledger.event_hash = e.event_hash
 		and e.id > ? and e.id <= ?
-		and ledger.aggregate_schema_version < ?`, hourMS),
+		and (ledger.aggregate_schema_version < ? or ledger.aggregate_structure_revision <> ?)`, hourMS),
 		SchemaVersion,
+		structureRevision,
 		nowMS,
 		afterID, throughID,
 		SchemaVersion,
+		structureRevision,
 	)
 	if err != nil {
 		return 0, err

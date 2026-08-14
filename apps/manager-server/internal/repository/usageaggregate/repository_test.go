@@ -363,7 +363,7 @@ func TestCatchUpRollsBackAggregateWhenLedgerCoverageFails(t *testing.T) {
 	}
 	if _, err := db.Exec(`create trigger reject_aggregate_ledger_coverage
 		before update of aggregate_schema_version on usage_event_identity_ledger
-		when new.aggregate_schema_version = 2
+		when new.aggregate_schema_version = 3
 		begin select raise(abort, 'blocked'); end`); err != nil {
 		t.Fatalf("create failure trigger: %v", err)
 	}
