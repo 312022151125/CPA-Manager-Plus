@@ -188,9 +188,9 @@ func mergeStoredSelectorRows(
 		model, api_key_hash, provider, auth_file_snapshot, account_snapshot,
 		auth_label_snapshot, auth_index, max(source), source_hash
 	from usage_monitoring_selector_daily_rollups_v1
-	where bucket_ms >= ? and bucket_ms < ?
+	where model_format_revision = ? and bucket_ms >= ? and bucket_ms < ?
 	group by model, api_key_hash, provider, auth_file_snapshot,
-		account_snapshot, auth_label_snapshot, auth_index, source_hash`, fromMS, toMS)
+		account_snapshot, auth_label_snapshot, auth_index, source_hash`, usageidentity.ModelFormatVersion, fromMS, toMS)
 	if err != nil {
 		return err
 	}
