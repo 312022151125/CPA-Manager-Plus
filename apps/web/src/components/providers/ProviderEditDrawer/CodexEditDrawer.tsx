@@ -369,7 +369,8 @@ export function CodexEditDrawer({
         form.baseUrl ?? '',
         hasCustomAuthorization ? undefined : apiKey,
         headerObject,
-        normalizeAuthIndex(form.authIndex) ?? undefined
+        normalizeAuthIndex(form.authIndex) ?? undefined,
+        form.proxyUrl
       );
       setDiscoveredModels(list);
     } catch (err: unknown) {
@@ -380,7 +381,7 @@ export function CodexEditDrawer({
     } finally {
       setModelDiscoveryFetching(false);
     }
-  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, t]);
+  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, form.proxyUrl, t]);
 
   const runCodexConnectivityTest = useCallback(async () => {
     if (isTesting) return;
@@ -697,6 +698,7 @@ export function CodexEditDrawer({
               label={t('ai_providers.codex_add_modal_proxy_label')}
               value={form.proxyUrl ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, proxyUrl: e.target.value }))}
+              hint={t('ai_providers.model_discovery_proxy_version_hint')}
               disabled={disabled || saving}
             />
             <HeaderInputList

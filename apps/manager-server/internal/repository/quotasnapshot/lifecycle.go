@@ -47,7 +47,13 @@ func (r *repository) InsertObservationWrites(ctx context.Context, writes []model
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := insertObservationWrites(ctx, tx, writes); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
+func insertObservationWrites(ctx context.Context, tx *sql.Tx, writes []model.AccountQuotaObservationWrite) error {
 	for writeIndex := range writes {
 		write := &writes[writeIndex]
 		write.InsertedSnapshotCount = 0
@@ -61,95 +67,115 @@ func (r *repository) InsertObservationWrites(ctx context.Context, writes []model
 			return err
 		}
 		if !inserted {
-			continue
+			legacySnapshots := make([]model.AccountQuotaSnapshot, 0, len(write.Snapshots))
+			for _, snapshot := range write.Snapshots {
+				if snapshot.ID > 0 {
+					legacySnapshots = append(legacySnapshots, snapshot)
+				}
+			}
+			if len(legacySnapshots) == 0 {
+				continue
+			}
+			write.Snapshots = legacySnapshots
+			var storedLifecycleApplied int
+			if err := tx.QueryRowContext(ctx, `select lifecycle_applied
+				from account_quota_observations where id = ?`, observationID).Scan(&storedLifecycleApplied); err != nil {
+				return err
+			}
+			write.Observation.LifecycleApplied = storedLifecycleApplied != 0
 		}
 		write.Observation.ID = observationID
-		if !lifecycleApplied {
-			for snapshotIndex := range write.Snapshots {
-				snapshot := &write.Snapshots[snapshotIndex]
-				snapshot.ObservationID = observationID
-				snapshot.LogicalWindowID = 0
-				snapshot.ActivationID = 0
-				snapshot.CycleID = 0
-				if err := persistSnapshot(ctx, tx, *snapshot); err != nil {
-					return err
-				}
-				write.InsertedSnapshotCount++
-			}
-			continue
-		}
-		_, err = restoreSameTimestampDeltaRemovalsForCompleteObservation(
-			ctx,
-			tx,
-			write.Observation,
-		)
-		if err != nil {
+		if err := persistObservationSnapshots(ctx, tx, write); err != nil {
 			return err
 		}
-		reported := make(map[string]struct{}, len(write.Snapshots))
-		earlyClosedCycleIDs := make([]int64, 0, len(write.Snapshots))
+	}
+	return nil
+}
+
+func persistObservationSnapshots(ctx context.Context, tx *sql.Tx, write *model.AccountQuotaObservationWrite) error {
+	observationID := write.Observation.ID
+	if !write.Observation.LifecycleApplied {
 		for snapshotIndex := range write.Snapshots {
 			snapshot := &write.Snapshots[snapshotIndex]
 			snapshot.ObservationID = observationID
-			window, activationID, lifecycleOwned, err := reconcileReportedWindow(ctx, tx, write.Observation, snapshot)
-			if err != nil {
-				return err
-			}
-			if !lifecycleOwned {
-				snapshot.LogicalWindowID = 0
-				snapshot.ActivationID = 0
-				snapshot.CycleID = 0
-				if err := persistSnapshot(ctx, tx, *snapshot); err != nil {
-					return err
-				}
-				write.InsertedSnapshotCount++
-				continue
-			}
-			snapshot.LogicalWindowID = window.id
-			snapshot.ActivationID = activationID
-			cycleID, closedCycleID, closedEarly, err := reconcileCycle(ctx, tx, activationID, observationID, snapshot)
-			if err != nil {
-				return err
-			}
-			snapshot.CycleID = cycleID
-			if closedEarly && closedCycleID > 0 {
-				earlyClosedCycleIDs = append(earlyClosedCycleIDs, closedCycleID)
-			}
+			snapshot.LogicalWindowID = 0
+			snapshot.ActivationID = 0
+			snapshot.CycleID = 0
 			if err := persistSnapshot(ctx, tx, *snapshot); err != nil {
 				return err
 			}
 			write.InsertedSnapshotCount++
-			reported[windowIdentity(snapshot.ProviderWindowID, snapshot.ScopeFingerprint)] = struct{}{}
 		}
-		if len(earlyClosedCycleIDs) > 1 {
-			for _, cycleID := range earlyClosedCycleIDs {
-				if _, err := tx.ExecContext(ctx, `update account_quota_cycles
-					set end_reason = 'provider_reset', updated_at_ms = ? where id = ?`,
-					write.Observation.ObservedAtMS, cycleID); err != nil {
-					return err
-				}
+		return nil
+	}
+	_, err := restoreSameTimestampDeltaRemovalsForCompleteObservation(
+		ctx,
+		tx,
+		write.Observation,
+	)
+	if err != nil {
+		return err
+	}
+	reported := make(map[string]struct{}, len(write.Snapshots))
+	earlyClosedCycleIDs := make([]int64, 0, len(write.Snapshots))
+	for snapshotIndex := range write.Snapshots {
+		snapshot := &write.Snapshots[snapshotIndex]
+		snapshot.ObservationID = observationID
+		window, activationID, lifecycleOwned, err := reconcileReportedWindow(ctx, tx, write.Observation, snapshot)
+		if err != nil {
+			return err
+		}
+		if !lifecycleOwned {
+			snapshot.LogicalWindowID = 0
+			snapshot.ActivationID = 0
+			snapshot.CycleID = 0
+			if err := persistSnapshot(ctx, tx, *snapshot); err != nil {
+				return err
+			}
+			write.InsertedSnapshotCount++
+			continue
+		}
+		snapshot.LogicalWindowID = window.id
+		snapshot.ActivationID = activationID
+		cycleID, closedCycleID, closedEarly, err := reconcileCycle(ctx, tx, activationID, observationID, snapshot)
+		if err != nil {
+			return err
+		}
+		snapshot.CycleID = cycleID
+		if closedEarly && closedCycleID > 0 {
+			earlyClosedCycleIDs = append(earlyClosedCycleIDs, closedCycleID)
+		}
+		if err := persistSnapshot(ctx, tx, *snapshot); err != nil {
+			return err
+		}
+		write.InsertedSnapshotCount++
+		reported[windowIdentity(snapshot.ProviderWindowID, snapshot.ScopeFingerprint)] = struct{}{}
+	}
+	if len(earlyClosedCycleIDs) > 1 {
+		for _, cycleID := range earlyClosedCycleIDs {
+			if _, err := tx.ExecContext(ctx, `update account_quota_cycles
+				set end_reason = 'provider_reset', updated_at_ms = ? where id = ?`,
+				write.Observation.ObservedAtMS, cycleID); err != nil {
+				return err
 			}
 		}
-		if err := restoreCodexRelationships(ctx, tx, write.Observation); err != nil {
-			return err
-		}
-		if err := reconcileAbsentWindows(ctx, tx, observationID, write.Observation, reported, write.Removed); err != nil {
-			return err
-		}
-		if err := clearInactiveContainerRelationships(
-			ctx,
-			tx,
-			write.Observation.AccountKey,
-			write.Observation.Provider,
-			write.Observation.CreatedAtMS,
-		); err != nil {
-			return err
-		}
-		if err := linkContainerCycles(ctx, tx, write.Observation.AccountKey, write.Observation.Provider); err != nil {
-			return err
-		}
 	}
-	return tx.Commit()
+	if err := restoreCodexRelationships(ctx, tx, write.Observation); err != nil {
+		return err
+	}
+	if err := reconcileAbsentWindows(ctx, tx, observationID, write.Observation, reported, write.Removed); err != nil {
+		return err
+	}
+	if err := clearInactiveContainerRelationships(
+		ctx,
+		tx,
+		write.Observation.AccountKey,
+		write.Observation.Provider,
+		write.Observation.CreatedAtMS,
+	); err != nil {
+		return err
+	}
+	return linkContainerCycles(ctx, tx, write.Observation.AccountKey, write.Observation.Provider)
 }
 
 func sortObservationWrites(writes []model.AccountQuotaObservationWrite) {
@@ -991,6 +1017,9 @@ func confirmedResetTransitionMS(cycle model.AccountQuotaCycle, snapshot model.Ac
 	if sameBoundary {
 		transitionMS = snapshot.ObservedAtMS
 	}
+	if transitionMS > snapshot.ObservedAtMS {
+		transitionMS = snapshot.ObservedAtMS
+	}
 	if transitionMS < cycle.ActualStartMS {
 		transitionMS = cycle.ActualStartMS
 	}
@@ -1025,7 +1054,8 @@ func quotaCounterResetDetected(
 		return false, err
 	}
 	current := *snapshot.UsedPercent
-	return quotaCounterResetValues(previous, current), nil
+	return quotaCounterResetValues(previous, current) ||
+		quotaLowUsageBoundaryResetForSnapshot(cycle, snapshot, previous, current), nil
 }
 
 func quotaCounterResetValues(previous, current float64) bool {
@@ -1035,6 +1065,48 @@ func quotaCounterResetValues(previous, current float64) bool {
 	drop := previous - current
 	return current <= quotaResetNearZeroPercent ||
 		(drop >= quotaResetLargeDropPercent && current <= previous/2)
+}
+
+func quotaLowUsageBoundaryResetForSnapshot(
+	cycle model.AccountQuotaCycle,
+	snapshot model.AccountQuotaSnapshot,
+	previous, current float64,
+) bool {
+	return quotaLowUsageBoundaryResetValues(
+		previous,
+		current,
+		cycle.ScheduledStartMS,
+		cycle.ScheduledEndMS,
+		cycle.DurationSeconds,
+		cycle.BoundaryAccuracy,
+		snapshot.CycleStartMS,
+		snapshot.CycleEndMS,
+		snapshot.DurationSeconds,
+		snapshot.BoundaryAccuracy,
+	)
+}
+
+func quotaLowUsageBoundaryResetValues(
+	previous, current float64,
+	previousStartMS, previousEndMS, previousDurationSeconds *int64,
+	previousAccuracy string,
+	nextStartMS, nextEndMS, nextDurationSeconds *int64,
+	nextAccuracy string,
+) bool {
+	if previous >= quotaResetMinimumPriorPercent || previous <= current || current > quotaResetNearZeroPercent ||
+		previousStartMS == nil || previousEndMS == nil || previousDurationSeconds == nil ||
+		nextStartMS == nil || nextEndMS == nil || nextDurationSeconds == nil ||
+		boundaryAccuracyValue(previousAccuracy) < boundaryAccuracyValue("derived") ||
+		boundaryAccuracyValue(nextAccuracy) < boundaryAccuracyValue("derived") ||
+		boundaryAccuracyValue(nextAccuracy) > boundaryAccuracyValue(previousAccuracy) ||
+		*previousDurationSeconds != *nextDurationSeconds {
+		return false
+	}
+	startShiftMS := *nextStartMS - *previousStartMS
+	endShiftMS := *nextEndMS - *previousEndMS
+	return startShiftMS > quotaBoundaryJitterMS &&
+		absInt64(startShiftMS-endShiftMS) <= quotaBoundaryJitterMS &&
+		*nextStartMS < *previousEndMS-quotaBoundaryJitterMS
 }
 
 func boundaryAccuracyValue(value string) int {
@@ -1788,6 +1860,12 @@ func normalizeCycleView(
 		current.State = "provisional"
 		current.BoundaryAccuracy = "unknown"
 	}
+	if previousResult != nil && previousResult.EndReason == "early_reset" &&
+		canonicalEvidence.confirmedAtMS > 0 && canonicalEvidence.confirmedAtMS < current.ActualStartMS {
+		current.ActualStartMS = canonicalEvidence.confirmedAtMS
+		actualEndMS := canonicalEvidence.confirmedAtMS
+		previousResult.ActualEndMS = &actualEndMS
+	}
 	if collapsed && previousResult != nil && previousResult.ActualEndMS != nil {
 		actualEndMS := current.ActualStartMS
 		previousResult.ActualEndMS = &actualEndMS
@@ -1913,7 +1991,19 @@ func collapsibleEarlyResetFragment(
 		absInt64(startShiftMS-observationShiftMS) > quotaBoundaryJitterMS {
 		return false
 	}
-	return !quotaCounterResetValues(*previousEvidence.lastUsedPercent, *nextEvidence.firstUsedPercent)
+	return !quotaCounterResetValues(*previousEvidence.lastUsedPercent, *nextEvidence.firstUsedPercent) &&
+		!quotaLowUsageBoundaryResetValues(
+			*previousEvidence.lastUsedPercent,
+			*nextEvidence.firstUsedPercent,
+			previous.ScheduledStartMS,
+			previous.ScheduledEndMS,
+			previous.DurationSeconds,
+			previous.BoundaryAccuracy,
+			next.ScheduledStartMS,
+			next.ScheduledEndMS,
+			next.DurationSeconds,
+			next.BoundaryAccuracy,
+		)
 }
 
 func structurallyCollapsibleEarlyResetFragment(previous, next model.AccountQuotaCycle) bool {

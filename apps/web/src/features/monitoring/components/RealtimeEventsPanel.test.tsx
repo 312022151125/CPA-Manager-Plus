@@ -107,6 +107,7 @@ type PanelOverrides = {
   eventsRetentionLimited?: boolean;
   eventsTotalCount?: number;
   eventsLoadedCount?: number;
+  hasPrices?: boolean;
 };
 
 const baseRow = (overrides: Partial<PanelRow> = {}): PanelRow => ({
@@ -180,7 +181,7 @@ const renderPanel = (row: PanelRow, overrides: PanelOverrides = {}) =>
       eventsTotalCount={overrides.eventsTotalCount ?? 1}
       eventsLoadedCount={overrides.eventsLoadedCount ?? 1}
       overallLoading={false}
-      hasPrices={false}
+      hasPrices={overrides.hasPrices ?? false}
       accountDisplayMode={overrides.accountDisplayMode ?? 'masked'}
       locale="en-US"
       emptyState={<span>empty</span>}
@@ -372,6 +373,12 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).not.toContain('HTTP');
   });
 
+  it('keeps realtime request estimated cost at three decimal places', () => {
+    const markup = renderPanel(baseRow({ totalCost: 0.1264 }), { hasPrices: true });
+
+    expect(markup).toContain('$0.126');
+  });
+
   it('renders API key alias inside the source cell without adding another column', () => {
     const markup = renderPanel(
       baseRow({
@@ -401,6 +408,39 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain(longModel);
     expect(markup).toMatch(/class="[^"]*realtimeModelCell[^"]*"/);
     expect(markup).toMatch(/class="[^"]*realtimeModelText[^"]*"/);
+  });
+
+  it('renders the requested model first and the upstream resolved model second', () => {
+    const markup = renderPanel(
+      baseRow({
+        model: 'deepseek-v4-flash',
+        requestedModel: 'deepseek-v4-flash(max)',
+        resolvedModel: 'resolved-deepseek-v4-flash',
+      })
+    );
+
+    expect(markup).toContain(
+      'title="deepseek-v4-flash(max)\nresolved-deepseek-v4-flash"'
+    );
+    expect(markup.indexOf('>deepseek-v4-flash(max)</span>')).toBeLessThan(
+      markup.indexOf('>resolved-deepseek-v4-flash</small>')
+    );
+    expect(markup).not.toContain('>deepseek-v4-flash</span>');
+  });
+
+  it('does not duplicate an unchanged requested and resolved model', () => {
+    const model = 'deepseek-chat(region-us)';
+    const markup = renderPanel(
+      baseRow({
+        model,
+        requestedModel: model,
+        resolvedModel: model,
+      })
+    );
+
+    expect(markup).toContain(`title="${model}"`);
+    expect(markup).toContain(`>${model}</span>`);
+    expect(markup).not.toContain(`>${model}</small>`);
   });
 
   it('switches realtime source labels between masked and full display', () => {

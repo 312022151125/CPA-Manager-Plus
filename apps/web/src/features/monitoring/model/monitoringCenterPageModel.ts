@@ -1088,9 +1088,7 @@ const buildXaiAccountQuotaWindows = (
       Boolean(billing.periodEnd) ||
       billing.productUsage.length > 0);
   const hasMonthlyData =
-    billing.monthlyLimitCents !== null ||
-    billing.usedCents !== null ||
-    Boolean(billing.billingPeriodEnd);
+    billing.usedPercent !== null || billing.monthlyLimitCents !== null;
 
   if (hasWeeklyData) {
     windows.push({

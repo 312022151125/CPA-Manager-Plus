@@ -194,6 +194,26 @@ describe('AccountConfigurationTab', () => {
     expect(editor.save).toHaveBeenCalledTimes(1);
   });
 
+  it('allows an administratively disabled credential to edit and save configuration', () => {
+    const editor = makeEditor('codex');
+    editor.dirty = true;
+    editor.canSave = true;
+    const renderer = renderTab(makeRow('codex', { disabled: true }), editor);
+    const saveButton = renderer.root
+      .findAllByType('button')
+      .find((button) => readText(button).includes('common.save'));
+    if (!saveButton) throw new Error('configuration save action missing');
+
+    expect(renderer.root.findAllByType(Input).every((input) => input.props.disabled !== true)).toBe(
+      true
+    );
+    expect(saveButton.props.disabled).toBe(false);
+    expect(readText(renderer.toJSON())).not.toContain('accounts.config_disabled_read_only');
+
+    act(() => saveButton.props.onClick());
+    expect(editor.save).toHaveBeenCalledTimes(1);
+  });
+
   it('uses a compact hierarchy while keeping field-level guidance', () => {
     const renderer = renderTab(makeRow('codex'), makeEditor('codex'));
     const text = readText(renderer.toJSON());

@@ -314,13 +314,16 @@ export function OpenAIEditDrawer({
     setModelDiscoveryError('');
     const headerObject = buildHeaderObject(form.headers);
     try {
-      const firstKey = form.apiKeyEntries[0];
+      const firstKey = form.apiKeyEntries.find(
+        (entry) => entry.apiKey?.trim() || normalizeAuthIndex(entry.authIndex)
+      );
       const keyAuthIndex = normalizeAuthIndex(firstKey?.authIndex) ?? undefined;
       const list = await modelsApi.fetchModelsViaApiCall(
         form.baseUrl.trim(),
         firstKey?.apiKey?.trim() || undefined,
         headerObject,
-        keyAuthIndex
+        keyAuthIndex,
+        firstKey?.proxyUrl
       );
       setDiscoveredModels(list);
     } catch (err: unknown) {
@@ -770,6 +773,7 @@ export function OpenAIEditDrawer({
             <div className={styles.keyTableColProxy}>{t('common.proxy_url')}</div>
             <div className={styles.keyTableColAction}>{t('common.action')}</div>
           </div>
+          <div className="hint">{t('ai_providers.model_discovery_proxy_version_hint')}</div>
           {list.map((entry, index) => {
             const keyStatus = keyTestStatuses[index]?.status ?? 'idle';
             const weightError = getCredentialWeightError(entry.weight);

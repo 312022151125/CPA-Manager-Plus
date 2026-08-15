@@ -2212,19 +2212,20 @@ func TestQuotaLifecycleRestoresClosedProviderCycleWithoutDuplicateInsert(t *test
 }
 
 func TestQuotaLifecycleExactEvidenceReplacesDerivedCycleBoundary(t *testing.T) {
-	service := newQuotaSnapshotTestService(t, quotaLifecycleBaseMS+2*quotaLifecycleDayMS)
+	service, path := newQuotaSnapshotTestServiceWithPath(t, quotaLifecycleBaseMS+2*quotaLifecycleDayMS)
 	durationSeconds := int64(7 * 24 * 60 * 60)
 	derivedStartMS := quotaLifecycleBaseMS
 	derivedEndMS := derivedStartMS + durationSeconds*1000
-	exactStartMS := derivedStartMS + 30_000
-	exactEndMS := derivedEndMS + 30_000
-	usedPercent := 20.0
+	exactStartMS := derivedStartMS + 2*60*1000
+	exactEndMS := derivedEndMS + 2*60*1000
+	derivedUsedPercent := 4.0
+	exactUsedPercent := 0.0
 
 	derived := WindowInput{
 		ProviderWindowID: "weekly", WindowKind: "weekly", WindowMode: "fixed",
 		ModelScopeKind: "all", Source: "response_header", BoundaryAccuracy: "derived",
 		CycleStartMS: &derivedStartMS, CycleEndMS: &derivedEndMS,
-		DurationSeconds: &durationSeconds, UsedPercent: &usedPercent,
+		DurationSeconds: &durationSeconds, UsedPercent: &derivedUsedPercent,
 	}
 	writeQuotaLifecycleObservation(t, service, "partial", quotaLifecycleBaseMS+quotaLifecycleHourMS, []WindowInput{derived})
 
@@ -2233,6 +2234,7 @@ func TestQuotaLifecycleExactEvidenceReplacesDerivedCycleBoundary(t *testing.T) {
 	exact.BoundaryAccuracy = "exact"
 	exact.CycleStartMS = &exactStartMS
 	exact.CycleEndMS = &exactEndMS
+	exact.UsedPercent = &exactUsedPercent
 	writeQuotaLifecycleObservation(t, service, "partial", quotaLifecycleBaseMS+2*quotaLifecycleHourMS, []WindowInput{exact})
 
 	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
@@ -2242,6 +2244,22 @@ func TestQuotaLifecycleExactEvidenceReplacesDerivedCycleBoundary(t *testing.T) {
 		window.CurrentCycle.BoundaryAccuracy != "exact" || window.CycleStartMS == nil ||
 		*window.CycleStartMS != exactStartMS || window.CycleEndMS == nil || *window.CycleEndMS != exactEndMS {
 		t.Fatalf("exact cycle boundary = %#v", window)
+	}
+	if window.PreviousCycle != nil {
+		t.Fatalf("precision upgrade created previous cycle = %#v", window.PreviousCycle)
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open precision-upgrade database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var cycleCount int
+	if err := db.QueryRow(`select count(*) from account_quota_cycles`).Scan(&cycleCount); err != nil {
+		t.Fatalf("count precision-upgrade cycles: %v", err)
+	}
+	if cycleCount != 1 {
+		t.Fatalf("precision-upgrade cycle count = %d, want 1", cycleCount)
 	}
 }
 
@@ -2497,6 +2515,59 @@ func TestQuotaLifecycleResetsWeeklyWithoutSplittingFiveHour(t *testing.T) {
 	}
 }
 
+func TestQuotaLifecycleUsesFirstObservedRequestForEarlyResetBoundary(t *testing.T) {
+	const durationSeconds = int64(7 * 24 * 60 * 60)
+	firstRequestAtMS := quotaLifecycleBaseMS + 3*quotaLifecycleDayMS
+	providerStartMS := firstRequestAtMS + 30_000
+	service := newQuotaSnapshotTestService(t, firstRequestAtMS+quotaLifecycleDayMS)
+	oldCycle := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, durationSeconds, 4)
+	writeQuotaLifecycleObservation(t, service, "complete", firstRequestAtMS-quotaLifecycleHourMS, []WindowInput{oldCycle})
+
+	reset := quotaLifecycleFixedWindow("weekly", "weekly", providerStartMS, durationSeconds, 0)
+	writeQuotaLifecycleObservation(t, service, "complete", firstRequestAtMS, []WindowInput{reset})
+
+	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
+	if window.CurrentCycle == nil || window.CurrentCycle.ActualStartMS != firstRequestAtMS ||
+		window.CurrentCycle.ScheduledStartMS == nil || *window.CurrentCycle.ScheduledStartMS != providerStartMS ||
+		window.PreviousCycle == nil || window.PreviousCycle.ActualEndMS == nil ||
+		*window.PreviousCycle.ActualEndMS != firstRequestAtMS || window.PreviousCycle.EndReason != "early_reset" {
+		t.Fatalf("early reset request boundary = %#v", window)
+	}
+}
+
+func TestQuotaLifecycleNormalizesStoredEarlyResetBoundaryToFirstConfirmedObservation(t *testing.T) {
+	const durationSeconds = int64(7 * 24 * 60 * 60)
+	firstRequestAtMS := quotaLifecycleBaseMS + 3*quotaLifecycleDayMS
+	providerStartMS := firstRequestAtMS + 30_000
+	service, path := newQuotaSnapshotTestServiceWithPath(t, firstRequestAtMS+quotaLifecycleDayMS)
+	oldCycle := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, durationSeconds, 40)
+	writeQuotaLifecycleObservation(t, service, "complete", firstRequestAtMS-quotaLifecycleHourMS, []WindowInput{oldCycle})
+
+	reset := quotaLifecycleFixedWindow("weekly", "weekly", providerStartMS, durationSeconds, 1)
+	writeQuotaLifecycleObservation(t, service, "complete", firstRequestAtMS, []WindowInput{reset})
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open lifecycle database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`update account_quota_cycles set actual_end_ms = ?
+		where end_reason = 'early_reset'`, providerStartMS); err != nil {
+		t.Fatalf("restore legacy previous boundary: %v", err)
+	}
+	if _, err := db.Exec(`update account_quota_cycles set actual_start_ms = ?
+		where actual_end_ms is null`, providerStartMS); err != nil {
+		t.Fatalf("restore legacy current boundary: %v", err)
+	}
+
+	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
+	if window.CurrentCycle == nil || window.CurrentCycle.ActualStartMS != firstRequestAtMS ||
+		window.PreviousCycle == nil || window.PreviousCycle.ActualEndMS == nil ||
+		*window.PreviousCycle.ActualEndMS != firstRequestAtMS {
+		t.Fatalf("normalized stored early reset boundary = %#v", window)
+	}
+}
+
 func TestQuotaLifecycleMarksConcurrentFiveHourAndWeeklyResetAsProviderReset(t *testing.T) {
 	resetAtMS := quotaLifecycleBaseMS + 3*quotaLifecycleDayMS
 	service := newQuotaSnapshotTestService(t, resetAtMS+2*quotaLifecycleDayMS)
@@ -2616,6 +2687,21 @@ func TestQuotaLifecycleDoesNotSplitCycleForSmallQuotaCorrection(t *testing.T) {
 	if window.CurrentCycle == nil || window.CurrentCycle.ActualStartMS != quotaLifecycleBaseMS ||
 		window.PreviousCycle != nil {
 		t.Fatalf("small quota correction split lifecycle = %#v", window)
+	}
+}
+
+func TestQuotaLifecycleDoesNotSplitLowUsageCycleWithoutBoundaryShift(t *testing.T) {
+	service := newQuotaSnapshotTestService(t, quotaLifecycleBaseMS+quotaLifecycleDayMS)
+	first := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, 7*24*60*60, 4)
+	writeQuotaLifecycleObservation(t, service, "complete", quotaLifecycleBaseMS+quotaLifecycleHourMS, []WindowInput{first})
+
+	nearZero := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, 7*24*60*60, 0)
+	writeQuotaLifecycleObservation(t, service, "complete", quotaLifecycleBaseMS+2*quotaLifecycleHourMS, []WindowInput{nearZero})
+
+	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
+	if window.CurrentCycle == nil || window.CurrentCycle.ActualStartMS != quotaLifecycleBaseMS ||
+		window.PreviousCycle != nil {
+		t.Fatalf("same-boundary low usage split lifecycle = %#v", window)
 	}
 }
 
@@ -2917,6 +3003,93 @@ func TestQuotaLifecycleRequiresConfirmedAbsenceAndReopensNewGeneration(t *testin
 	}
 }
 
+func TestQueryPrefersNewerLegacySnapshotDuringPartialLifecycleMigration(t *testing.T) {
+	nowMS := quotaLifecycleBaseMS + 2*quotaLifecycleDayMS
+	service, path := newQuotaSnapshotTestServiceWithPath(t, nowMS)
+	olderObservedAtMS := quotaLifecycleBaseMS + quotaLifecycleHourMS
+	newerObservedAtMS := olderObservedAtMS + quotaLifecycleHourMS
+	older := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, 7*24*60*60, 20)
+	writeQuotaLifecycleObservation(t, service, "partial", olderObservedAtMS, []WindowInput{older})
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open partial migration database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var accountKey string
+	if err := db.QueryRow(`select account_key from account_quota_snapshots limit 1`).Scan(&accountKey); err != nil {
+		t.Fatalf("read quota account key: %v", err)
+	}
+	newCycleStartMS := quotaLifecycleBaseMS + quotaLifecycleDayMS
+	newCycleEndMS := newCycleStartMS + 7*quotaLifecycleDayMS
+	if _, err := db.Exec(`insert into account_quota_snapshots (
+		account_key, provider, provider_window_id, window_kind, window_mode,
+		model_scope_kind, model_ids_json, source, source_observation_id,
+		observed_at_ms, boundary_accuracy, cycle_start_ms, cycle_end_ms,
+		duration_seconds, used_percent, remaining_percent, created_at_ms
+	) values (?, 'codex', 'weekly', 'weekly', 'fixed', 'all', '[]',
+		'inspection', 'legacy-newer', ?, 'exact', ?, ?, ?, 80, 20, ?)`,
+		accountKey,
+		newerObservedAtMS,
+		newCycleStartMS,
+		newCycleEndMS,
+		int64(7*24*60*60),
+		newerObservedAtMS,
+	); err != nil {
+		t.Fatalf("insert newer unmigrated snapshot: %v", err)
+	}
+
+	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
+	if window.ObservedAtMS != newerObservedAtMS || window.SourceObservationID != "legacy-newer" ||
+		window.UsedPercent == nil || *window.UsedPercent != 80 {
+		t.Fatalf("partially migrated quota selection = %#v", window)
+	}
+}
+
+func TestQueryKeepsNewerLifecycleSnapshotAheadOfOlderLegacyEvidence(t *testing.T) {
+	nowMS := quotaLifecycleBaseMS + 2*quotaLifecycleDayMS
+	service, path := newQuotaSnapshotTestServiceWithPath(t, nowMS)
+	olderObservedAtMS := quotaLifecycleBaseMS + quotaLifecycleHourMS
+	newerObservedAtMS := olderObservedAtMS + quotaLifecycleHourMS
+	current := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, 7*24*60*60, 20)
+	current.BoundaryAccuracy = "estimated"
+	writeQuotaLifecycleObservation(t, service, "partial", newerObservedAtMS, []WindowInput{current})
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open partial migration database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var accountKey string
+	if err := db.QueryRow(`select account_key from account_quota_snapshots limit 1`).Scan(&accountKey); err != nil {
+		t.Fatalf("read quota account key: %v", err)
+	}
+	legacyCycleStartMS := quotaLifecycleBaseMS + quotaLifecycleDayMS
+	legacyCycleEndMS := legacyCycleStartMS + 7*quotaLifecycleDayMS
+	if _, err := db.Exec(`insert into account_quota_snapshots (
+		account_key, provider, provider_window_id, window_kind, window_mode,
+		model_scope_kind, model_ids_json, source, source_observation_id,
+		observed_at_ms, boundary_accuracy, cycle_start_ms, cycle_end_ms,
+		duration_seconds, used_percent, remaining_percent, created_at_ms
+	) values (?, 'codex', 'weekly', 'weekly', 'fixed', 'all', '[]',
+		'inspection', 'legacy-older', ?, 'exact', ?, ?, ?, 80, 20, ?)`,
+		accountKey,
+		olderObservedAtMS,
+		legacyCycleStartMS,
+		legacyCycleEndMS,
+		int64(7*24*60*60),
+		olderObservedAtMS,
+	); err != nil {
+		t.Fatalf("insert older unmigrated snapshot: %v", err)
+	}
+
+	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
+	if window.ObservedAtMS != newerObservedAtMS || window.SourceObservationID == "legacy-older" ||
+		window.UsedPercent == nil || *window.UsedPercent != 20 {
+		t.Fatalf("partially migrated quota selection = %#v", window)
+	}
+}
+
 func TestQuotaLifecyclePreservesSubwindowRelationshipUntilContainerAbsenceIsConfirmed(t *testing.T) {
 	service := newQuotaSnapshotTestService(t, quotaLifecycleBaseMS+2*quotaLifecycleDayMS)
 	weekly := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, 7*24*60*60, 10)
@@ -3010,19 +3183,21 @@ func TestQuotaCycleResponseRequiresReliableCurrentBoundaryForForecast(t *testing
 	}
 }
 
-func TestQuotaLifecycleScheduledPreviousCycleRemainsForecastEligible(t *testing.T) {
+func TestQuotaLifecycleScheduledRolloverUsesScheduledBoundaryAfterIdleGap(t *testing.T) {
 	rolloverAtMS := quotaLifecycleBaseMS + 7*quotaLifecycleDayMS
+	firstUseAtMS := rolloverAtMS + 2*quotaLifecycleHourMS
 	service := newQuotaSnapshotTestService(t, rolloverAtMS+quotaLifecycleDayMS)
 	first := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, 7*24*60*60, 80)
 	writeQuotaLifecycleObservation(t, service, "complete", rolloverAtMS-quotaLifecycleHourMS, []WindowInput{first})
 	second := quotaLifecycleFixedWindow("weekly", "weekly", rolloverAtMS, 7*24*60*60, 1)
-	writeQuotaLifecycleObservation(t, service, "complete", rolloverAtMS+1_000, []WindowInput{second})
+	writeQuotaLifecycleObservation(t, service, "complete", firstUseAtMS, []WindowInput{second})
 
 	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
-	if window.PreviousCycle == nil || window.PreviousCycle.EndReason != "scheduled" ||
+	if window.CurrentCycle == nil || window.CurrentCycle.ActualStartMS != rolloverAtMS ||
+		window.PreviousCycle == nil || window.PreviousCycle.EndReason != "scheduled" ||
 		!window.PreviousCycle.ForecastEligible || window.PreviousCycle.ActualEndMS == nil ||
 		*window.PreviousCycle.ActualEndMS != rolloverAtMS {
-		t.Fatalf("scheduled previous cycle = %#v", window)
+		t.Fatalf("scheduled rollover after idle gap = %#v", window)
 	}
 }
 
