@@ -60,6 +60,7 @@ type CatchUpResult struct {
 	TargetEventID   int64
 	Pending         bool
 	Rebuilt         bool
+	ContinueSoon    bool
 }
 
 type repository struct {
@@ -139,9 +140,7 @@ func (r *repository) catchUp(
 
 	revision := state.StructureRevision
 	rebuilt := state.CoverageEventID < state.TargetEventID &&
-		(state.Status == "pending" || state.Status == "rebuilding" ||
-			state.Status == "catching_up" || state.Status == "clearing" ||
-			state.Status == "failed")
+		(state.Status == "pending" || state.Status == "rebuilding" || state.Status == "clearing")
 	if rollupName == StatsRollupName {
 		revision, err = currentStructureRevision(ctx, tx)
 	} else {
@@ -177,6 +176,7 @@ func (r *repository) catchUp(
 				TargetEventID: state.TargetEventID,
 				Pending:       true,
 				Rebuilt:       true,
+				ContinueSoon:  true,
 			}, nil
 		}
 		if _, err := tx.ExecContext(ctx, `update usage_monitoring_rollup_state set
@@ -192,7 +192,7 @@ func (r *repository) catchUp(
 	if targetID < state.CoverageEventID {
 		targetID = state.CoverageEventID
 	}
-	if state.CoverageEventID >= targetID && latestID > state.CoverageEventID {
+	if !rebuilt && state.CoverageEventID >= targetID && latestID > state.CoverageEventID {
 		targetID = latestID
 		if _, err := tx.ExecContext(ctx, `update usage_monitoring_rollup_state set
 			status = 'catching_up', target_event_id = ?, finished_at_ms = null
@@ -248,7 +248,10 @@ func (r *repository) catchUp(
 	pending := lastEventID < targetID || latestID > lastEventID
 	status := "ready"
 	finishedAt := any(nowMS)
-	if pending {
+	if lastEventID < targetID && rebuilt {
+		status = "rebuilding"
+		finishedAt = nil
+	} else if pending {
 		status = "catching_up"
 		finishedAt = nil
 	}
@@ -285,7 +288,11 @@ func (r *repository) RecordFailure(ctx context.Context, rollupName string, rollu
 		return fmt.Errorf("unknown usage monitoring rollup %q", rollupName)
 	}
 	_, err := r.db.ExecContext(ctx, `update usage_monitoring_rollup_state set
-		status = case when status = 'clearing' then status else 'failed' end,
+		status = case
+			when status in ('clearing', 'rebuilding') then status
+			when status = 'pending' and target_event_id > coverage_event_id then status
+			else 'failed'
+		end,
 		updated_at_ms = ?, finished_at_ms = ?, last_error = ?
 		where rollup_name = ?`, nowMS, nowMS, rollupErr.Error(), rollupName)
 	return err

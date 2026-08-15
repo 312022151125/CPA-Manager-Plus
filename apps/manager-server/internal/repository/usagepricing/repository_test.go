@@ -75,6 +75,94 @@ func TestPricingRollupBandsStrictThresholdsAndMergesRawDelta(t *testing.T) {
 	}
 }
 
+func TestPricingRollupDoesNotClassifyIncrementalBacklogAsRebuild(t *testing.T) {
+	ctx := context.Background()
+	cfg := testutil.NewConfig(t)
+	st := testutil.NewStore(t, cfg)
+	if err := st.SaveModelPrices(ctx, map[string]store.ModelPrice{"resolved-model": {Prompt: 1}}); err != nil {
+		t.Fatalf("save prices: %v", err)
+	}
+	if _, err := st.UsageEvents.InsertBatch(ctx, []usage.Event{pricingEvent("pricing-prime", 3_600_001, 10)}); err != nil {
+		t.Fatalf("insert prime event: %v", err)
+	}
+	if _, err := st.CatchUpUsagePricing(ctx, 10, 10_000); err != nil {
+		t.Fatalf("prime pricing revision: %v", err)
+	}
+	if _, err := st.UsageEvents.InsertBatch(ctx, []usage.Event{
+		pricingEvent("pricing-incremental-1", 3_600_002, 20),
+		pricingEvent("pricing-incremental-2", 3_600_003, 30),
+	}); err != nil {
+		t.Fatalf("insert incremental backlog: %v", err)
+	}
+	first, err := st.CatchUpUsagePricing(ctx, 1, 20_000)
+	if err != nil {
+		t.Fatalf("first incremental batch: %v", err)
+	}
+	if first.Rebuilt || !first.Pending || first.CoverageEventID != 2 {
+		t.Fatalf("first incremental batch = %#v", first)
+	}
+	second, err := st.CatchUpUsagePricing(ctx, 1, 21_000)
+	if err != nil {
+		t.Fatalf("second incremental batch: %v", err)
+	}
+	if second.Rebuilt || second.Pending || second.CoverageEventID != 3 {
+		t.Fatalf("second incremental batch = %#v", second)
+	}
+}
+
+func TestPricingRollupPreservesRebuildingStatusAcrossFailure(t *testing.T) {
+	ctx := context.Background()
+	cfg := testutil.NewConfig(t)
+	st := testutil.NewStore(t, cfg)
+	if err := st.SaveModelPrices(ctx, map[string]store.ModelPrice{"resolved-model": {Prompt: 1}}); err != nil {
+		t.Fatalf("save prices: %v", err)
+	}
+	if _, err := st.UsageEvents.InsertBatch(ctx, []usage.Event{
+		pricingEvent("pricing-rebuild-resume-1", 3_600_001, 10),
+		pricingEvent("pricing-rebuild-resume-2", 3_600_002, 20),
+	}); err != nil {
+		t.Fatalf("insert rebuild events: %v", err)
+	}
+
+	first, err := st.CatchUpUsagePricing(ctx, 1, 10_000)
+	if err != nil {
+		t.Fatalf("run partial pricing rebuild: %v", err)
+	}
+	if !first.Rebuilt || !first.Pending || first.CoverageEventID != 1 {
+		t.Fatalf("partial pricing rebuild = %#v", first)
+	}
+	if err := st.RecordUsagePricingFailure(ctx, errors.New("interrupted pricing rebuild"), 11_000); err != nil {
+		t.Fatalf("record pricing rebuild failure: %v", err)
+	}
+	state, err := st.UsagePricingState(ctx)
+	if err != nil {
+		t.Fatalf("read interrupted pricing state: %v", err)
+	}
+	if state.Status != "rebuilding" || state.LastError != "interrupted pricing rebuild" {
+		t.Fatalf("interrupted pricing state = %#v", state)
+	}
+	hourlyRows, _, available, err := st.UsagePricingHourlyRows(ctx, store.UsagePricingHourlyFilter{
+		FromMS:        3_600_000,
+		ToMS:          7_200_000,
+		IncludeFailed: true,
+	})
+	if err != nil || !available || len(hourlyRows) != 1 || hourlyRows[0].Calls != 2 {
+		t.Fatalf("interrupted pricing hourly rows = available:%v err:%v rows:%#v", available, err, hourlyRows)
+	}
+	accountRows, _, available, err := st.UsagePricingAccountRows(ctx, []string{pricingAccountKey("team-a.json", "auth-team-a")})
+	if err != nil || !available || len(accountRows) != 1 || accountRows[0].Calls != 2 {
+		t.Fatalf("interrupted pricing account rows = available:%v err:%v rows:%#v", available, err, accountRows)
+	}
+
+	completed, err := st.CatchUpUsagePricing(ctx, 10, 12_000)
+	if err != nil {
+		t.Fatalf("resume pricing rebuild: %v", err)
+	}
+	if !completed.Rebuilt || completed.Pending || completed.CoverageEventID != 2 {
+		t.Fatalf("resumed pricing rebuild = %#v", completed)
+	}
+}
+
 func TestPricingAccountRollupSeparatesSharedAccountByAuthIndex(t *testing.T) {
 	ctx := context.Background()
 	cfg := testutil.NewConfig(t)
@@ -244,7 +332,7 @@ func TestPricingRollupRevisionRollbackDoesNotDoubleCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start bounded rollback clearing: %v", err)
 	}
-	if !result.Pending || !result.Rebuilt || result.Processed != 0 {
+	if !result.Pending || !result.Rebuilt || result.Processed != 0 || !result.ContinueSoon {
 		t.Fatalf("first bounded rollback result = %#v", result)
 	}
 	state, err := st.UsagePricingState(ctx)
@@ -269,7 +357,7 @@ func TestPricingRollupRevisionRollbackDoesNotDoubleCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume bounded rollback clearing: %v", err)
 	}
-	if result.Pending || result.Processed != 1 {
+	if result.Pending || result.Processed != 1 || result.ContinueSoon {
 		t.Fatalf("resumed bounded rollback result = %#v", result)
 	}
 	assertSingleCall()

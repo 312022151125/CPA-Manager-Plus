@@ -89,17 +89,21 @@ func (w *UsageHourlyAggregateWorker) catchUp(ctx context.Context) bool {
 			}
 			return false
 		}
-		if result.Processed > 0 && !w.reportedStarted {
+		if result.Rebuilt && result.Processed > 0 && !w.reportedStarted {
 			log.Printf("[usage-aggregate] hourly rebuild started targetEventID=%d batchSize=%d", result.TargetEventID, w.batchLimit)
 			w.reportedStarted = true
+			w.lastReported = 0
 		}
-		if result.Processed > 0 && (result.CoverageEventID-w.lastReported >= 10000 || !result.Pending) {
+		rebuildCompleted := result.Rebuilt && result.TargetEventID > 0 && result.CoverageEventID >= result.TargetEventID
+		if w.reportedStarted && result.Rebuilt && result.Processed > 0 &&
+			(result.CoverageEventID-w.lastReported >= 10000 || rebuildCompleted) {
 			log.Printf("[usage-aggregate] hourly rebuild progress coverageEventID=%d targetEventID=%d pending=%t", result.CoverageEventID, result.TargetEventID, result.Pending)
 			w.lastReported = result.CoverageEventID
 		}
-		if w.reportedStarted && !result.Pending {
+		if w.reportedStarted && rebuildCompleted {
 			log.Printf("[usage-aggregate] hourly rebuild completed coverageEventID=%d", result.CoverageEventID)
 			w.reportedStarted = false
+			w.lastReported = 0
 		}
 		pending = result.Pending
 		if result.Processed == 0 || !result.Pending {

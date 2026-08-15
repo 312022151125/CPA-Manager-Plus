@@ -2,8 +2,11 @@ package usagerollup
 
 import (
 	"context"
+	"path/filepath"
+	"reflect"
 	"testing"
 
+	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageevent"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
@@ -97,6 +100,95 @@ func TestCatchUpDashboardHourlyAggregatesByCheckpoint(t *testing.T) {
 	if checkpoint.LastEventID != 4 {
 		t.Fatalf("checkpoint = %#v", checkpoint)
 	}
+}
+
+func TestDashboardRowsRemainCompleteDuringRebuildAndRestart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "dashboard-rebuild.sqlite")
+	db, err := sqliterepo.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	events := usageevent.New(db)
+	repo := New(db)
+	baseMS := int64(1_700_000_000_000)
+	firstHour := baseMS - baseMS%dashboardHourMS
+	latency100 := int64(100)
+	latency200 := int64(200)
+
+	first := rollupTestEvent("dashboard-fallback-1", firstHour+1_000, "model-a", "resolved-a", "alice@example.com", "", "auth-a", false, 272_001, 30, 5, 100, 20, 10, 272_036)
+	first.LatencyMS = &latency100
+	second := rollupTestEvent("dashboard-fallback-2", firstHour+2_000, "model-a", "resolved-a", "alice@example.com", "", "auth-a", true, 10, 20, 3, 0, 0, 0, 33)
+	second.LatencyMS = &latency200
+	third := rollupTestEvent("dashboard-fallback-3", firstHour+dashboardHourMS+1_000, "model-a", "resolved-a", "alice@example.com", "", "auth-a", false, 0, 0, 0, 0, 0, 0, 0)
+	fourth := rollupTestEvent("dashboard-fallback-4", firstHour+dashboardHourMS+2_000, "model-b", "resolved-b", "alice@example.com", "", "auth-a", false, 7, 8, 1, 0, 0, 0, 16)
+	fourth.ServiceTier = "priority"
+	if _, err := events.InsertBatch(ctx, []usage.Event{first, second, third, fourth}); err != nil {
+		t.Fatalf("insert rebuild fixtures: %v", err)
+	}
+	if _, err := db.Exec(`delete from usage_dashboard_hourly_rollups`); err != nil {
+		t.Fatalf("clear dashboard rollups: %v", err)
+	}
+	scheduleRollupRebuildForTest(t, db, DashboardHourlyCheckpointName, 4)
+
+	toMS := firstHour + 2*dashboardHourMS
+	expectedHourly, err := repo.DashboardHourlyRows(ctx, firstHour, toMS)
+	if err != nil {
+		t.Fatalf("read raw-backed hourly rows: %v", err)
+	}
+	expectedModel, err := repo.DashboardHourlyModelRows(ctx, firstHour, toMS)
+	if err != nil {
+		t.Fatalf("read raw-backed model rows: %v", err)
+	}
+	expectedDaily, err := repo.DashboardDailyRows(ctx, firstHour, toMS)
+	if err != nil {
+		t.Fatalf("read raw-backed daily rows: %v", err)
+	}
+	if len(expectedHourly) != 3 || len(expectedModel) != 2 || len(expectedDaily) != 2 {
+		t.Fatalf("raw-backed projection sizes = hourly:%#v model:%#v daily:%#v", expectedHourly, expectedModel, expectedDaily)
+	}
+	firstHourRow := expectedHourly[0]
+	if firstHourRow.Model != "model-a" || firstHourRow.Calls != 2 || firstHourRow.SuccessCalls != 1 || firstHourRow.FailureCalls != 1 ||
+		firstHourRow.CachedTokens != 70 || firstHourRow.LongInputTokens != 272_001 || firstHourRow.LongCachedTokens != 70 ||
+		firstHourRow.LatencySumMS != 300 || firstHourRow.LatencySamples != 2 || firstHourRow.ZeroTokenCalls != 0 {
+		t.Fatalf("raw-backed first-hour row = %#v", firstHourRow)
+	}
+	modelA := expectedModel[0]
+	if modelA.Model != "model-a" || modelA.BucketMS != firstHour || modelA.Calls != 3 || modelA.ZeroTokenCalls != 1 ||
+		modelA.LatencySumMS != 300 || modelA.LatencySamples != 2 {
+		t.Fatalf("raw-backed model projection = %#v", modelA)
+	}
+
+	firstBatch, err := repo.CatchUpDashboardHourly(ctx, 1, baseMS+10_000)
+	if err != nil {
+		t.Fatalf("first rebuild batch: %v", err)
+	}
+	if !firstBatch.Rebuilt || !firstBatch.Pending || firstBatch.LastEventID != 1 {
+		t.Fatalf("first rebuild batch = %#v", firstBatch)
+	}
+	assertDashboardProjectionsEquivalent(t, repo, ctx, firstHour, toMS, expectedHourly, expectedModel, expectedDaily)
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close interrupted database: %v", err)
+	}
+	db, err = sqliterepo.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen interrupted database: %v", err)
+	}
+	repo = New(db)
+	assertDashboardProjectionsEquivalent(t, repo, ctx, firstHour, toMS, expectedHourly, expectedModel, expectedDaily)
+
+	for attempt := 0; attempt < 5; attempt++ {
+		result, err := repo.CatchUpDashboardHourly(ctx, 1, baseMS+20_000+int64(attempt))
+		if err != nil {
+			t.Fatalf("resume rebuild batch %d: %v", attempt, err)
+		}
+		if !result.Pending {
+			break
+		}
+	}
+	assertDashboardProjectionsEquivalent(t, repo, ctx, firstHour, toMS, expectedHourly, expectedModel, expectedDaily)
 }
 
 func TestCatchUpDashboardHourlyPreservesDimensionStrings(t *testing.T) {
@@ -198,5 +290,48 @@ func TestCatchUpDashboardHourlyFailureDoesNotAdvanceCheckpoint(t *testing.T) {
 	}
 	if checkpoint.LastEventID != 0 {
 		t.Fatalf("checkpoint advanced after failure: %#v", checkpoint)
+	}
+}
+
+func assertDashboardProjectionsEquivalent(
+	t *testing.T,
+	repo Repository,
+	ctx context.Context,
+	fromMS int64,
+	toMS int64,
+	wantHourly []DashboardHourlyRow,
+	wantModel []DashboardHourlyRow,
+	wantDaily []DashboardHourlyRow,
+) {
+	t.Helper()
+	hourly, err := repo.DashboardHourlyRows(ctx, fromMS, toMS)
+	if err != nil {
+		t.Fatalf("read hourly projection: %v", err)
+	}
+	modelRows, err := repo.DashboardHourlyModelRows(ctx, fromMS, toMS)
+	if err != nil {
+		t.Fatalf("read model projection: %v", err)
+	}
+	daily, err := repo.DashboardDailyRows(ctx, fromMS, toMS)
+	if err != nil {
+		t.Fatalf("read daily projection: %v", err)
+	}
+	assertEquivalentDashboardRows(t, hourly, wantHourly)
+	assertEquivalentDashboardRows(t, modelRows, wantModel)
+	assertEquivalentDashboardRows(t, daily, wantDaily)
+}
+
+func assertEquivalentDashboardRows(t *testing.T, got, want []DashboardHourlyRow) {
+	t.Helper()
+	got = append([]DashboardHourlyRow(nil), got...)
+	want = append([]DashboardHourlyRow(nil), want...)
+	for index := range got {
+		got[index].UpdatedAtMS = 0
+	}
+	for index := range want {
+		want[index].UpdatedAtMS = 0
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dashboard rows = %#v, want %#v", got, want)
 	}
 }

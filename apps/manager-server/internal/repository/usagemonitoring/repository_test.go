@@ -184,9 +184,75 @@ func TestUsageMonitoringProjectionCatchUpResumesAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run resumed projection batch: %v", err)
 	}
-	if second.CoverageEventID != 2 || !second.Pending || !second.Rebuilt {
+	if second.CoverageEventID != 2 || !second.Pending || second.Rebuilt {
 		t.Fatalf("resumed projection batch = %#v", second)
 	}
+}
+
+func TestUsageMonitoringProjectionPreservesRebuildStateAcrossFailure(t *testing.T) {
+	sqlDB, db := newMonitoringRepositoryStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_800_000_000_000)
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		monitoringRepositoryEvent("projection-rebuild-resume-1", baseMS+1_000, "model-a", "key-a", "account-a", "auth-a", "source-a", false, 10, 5, 1),
+		monitoringRepositoryEvent("projection-rebuild-resume-2", baseMS+2_000, "model-a", "key-a", "account-a", "auth-a", "source-a", false, 20, 7, 1),
+	}); err != nil {
+		t.Fatalf("insert projection rebuild events: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `delete from usage_monitoring_event_projection_v1`); err != nil {
+		t.Fatalf("clear projection rows: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `update usage_monitoring_rollup_state set
+		status = 'pending', backfill_last_event_id = 0, coverage_event_id = 0,
+		target_event_id = 2, processed_events = 0, last_error = null
+		where rollup_name = ?`, monitoringrepo.ProjectionRollupName); err != nil {
+		t.Fatalf("schedule projection rebuild: %v", err)
+	}
+	filter := store.AnalyticsFilter{
+		FromMS:        baseMS,
+		ToMS:          baseMS + 10_000,
+		IncludeFailed: true,
+	}
+
+	if err := db.RecordUsageMonitoringFailure(ctx, monitoringrepo.ProjectionRollupName, errors.New("interrupted pending projection rebuild"), baseMS+20_000); err != nil {
+		t.Fatalf("record pending projection rebuild failure: %v", err)
+	}
+	state, err := db.UsageMonitoringState(ctx, monitoringrepo.ProjectionRollupName)
+	if err != nil {
+		t.Fatalf("read pending projection rebuild state: %v", err)
+	}
+	if state.Status != "pending" || state.LastError != "interrupted pending projection rebuild" {
+		t.Fatalf("pending projection rebuild state = %#v", state)
+	}
+	assertProjectionCoreReadersMatchRaw(t, ctx, db, filter)
+
+	first, err := db.CatchUpUsageMonitoringProjection(ctx, 1, baseMS+30_000)
+	if err != nil {
+		t.Fatalf("run partial projection rebuild: %v", err)
+	}
+	if !first.Rebuilt || !first.Pending || first.CoverageEventID != 1 {
+		t.Fatalf("partial projection rebuild = %#v", first)
+	}
+	if err := db.RecordUsageMonitoringFailure(ctx, monitoringrepo.ProjectionRollupName, errors.New("interrupted active projection rebuild"), baseMS+40_000); err != nil {
+		t.Fatalf("record active projection rebuild failure: %v", err)
+	}
+	state, err = db.UsageMonitoringState(ctx, monitoringrepo.ProjectionRollupName)
+	if err != nil {
+		t.Fatalf("read active projection rebuild state: %v", err)
+	}
+	if state.Status != "rebuilding" || state.LastError != "interrupted active projection rebuild" {
+		t.Fatalf("active projection rebuild state = %#v", state)
+	}
+	assertProjectionCoreReadersMatchRaw(t, ctx, db, filter)
+
+	completed, err := db.CatchUpUsageMonitoringProjection(ctx, 10, baseMS+50_000)
+	if err != nil {
+		t.Fatalf("resume projection rebuild: %v", err)
+	}
+	if !completed.Rebuilt || completed.Pending || completed.CoverageEventID != 2 {
+		t.Fatalf("resumed projection rebuild = %#v", completed)
+	}
+	assertProjectionCoreReadersMatchRaw(t, ctx, db, filter)
 }
 
 func TestAccountWindowProjectionMatchesRawAcrossCoverageTailAndIdentity(t *testing.T) {
@@ -866,7 +932,7 @@ func TestUsageMonitoringStatsRevisionRollbackDoesNotDoubleCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start bounded rollback clearing: %v", err)
 	}
-	if !result.Pending || !result.Rebuilt || result.Processed != 0 {
+	if !result.Pending || !result.Rebuilt || result.Processed != 0 || !result.ContinueSoon {
 		t.Fatalf("first bounded rollback result = %#v", result)
 	}
 	state, err := db.UsageMonitoringState(ctx, monitoringrepo.StatsRollupName)

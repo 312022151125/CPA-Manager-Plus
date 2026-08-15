@@ -85,17 +85,21 @@ func (w *AccountHistoryRollupWorker) catchUp(ctx context.Context) bool {
 			log.Printf("[usage-rollup] account history catch-up failed: %v", err)
 			return false
 		}
-		if result.Processed > 0 && !w.reportedStarted {
+		if result.Rebuilt && result.Processed > 0 && !w.reportedStarted {
 			log.Printf("[usage-rollup] account history rebuild started batchSize=%d", w.batchLimit)
 			w.reportedStarted = true
+			w.lastReported = 0
 		}
-		if result.Processed > 0 && (result.LastEventID-w.lastReported >= 10000 || !result.Pending) {
+		rebuildCompleted := result.Rebuilt && result.RebuildTargetEventID > 0 && result.LastEventID >= result.RebuildTargetEventID
+		if w.reportedStarted && result.Rebuilt && result.Processed > 0 &&
+			(result.LastEventID-w.lastReported >= 10000 || rebuildCompleted) {
 			log.Printf("[usage-rollup] account history rebuild progress lastEventID=%d pending=%t", result.LastEventID, result.Pending)
 			w.lastReported = result.LastEventID
 		}
-		if w.reportedStarted && !result.Pending {
+		if w.reportedStarted && rebuildCompleted {
 			log.Printf("[usage-rollup] account history rebuild completed lastEventID=%d", result.LastEventID)
 			w.reportedStarted = false
+			w.lastReported = 0
 		}
 		pending = result.Pending
 		if result.Processed == 0 || !result.Pending {

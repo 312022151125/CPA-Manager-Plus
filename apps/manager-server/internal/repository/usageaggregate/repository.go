@@ -54,6 +54,7 @@ type CatchUpResult struct {
 	CoverageEventID int64
 	TargetEventID   int64
 	Pending         bool
+	Rebuilt         bool
 }
 
 type Filter struct {
@@ -138,32 +139,72 @@ func (r *repository) CatchUp(ctx context.Context, limit int, nowMS int64) (Catch
 	if state.SchemaVersion != SchemaVersion {
 		return CatchUpResult{}, fmt.Errorf("%w: got %d, want %d", ErrUnsupportedSchema, state.SchemaVersion, SchemaVersion)
 	}
+	if state.Status == "clearing" {
+		return CatchUpResult{
+			LastEventID:     state.BackfillLastEventID,
+			CoverageEventID: state.CoverageEventID,
+			TargetEventID:   state.TargetEventID,
+			Pending:         true,
+			Rebuilt:         true,
+		}, nil
+	}
 	latestID, err := latestEventID(ctx, tx)
 	if err != nil {
 		return CatchUpResult{}, err
 	}
-	ids, err := eventIDsAfter(ctx, tx, state.BackfillLastEventID, limit)
+	rebuilt := state.CoverageEventID < state.TargetEventID &&
+		(state.Status == "pending" || state.Status == "backfilling")
+	targetEventID := state.TargetEventID
+	if targetEventID < state.CoverageEventID {
+		targetEventID = state.CoverageEventID
+	}
+	if !rebuilt && state.CoverageEventID >= targetEventID && latestID > state.CoverageEventID {
+		targetEventID = latestID
+		if _, err := tx.ExecContext(ctx, `update usage_hourly_aggregate_state set
+			status = 'catching_up', target_event_id = ?, finished_at_ms = null
+			where aggregate_name = ? and schema_version = ?`, targetEventID, AggregateName, SchemaVersion); err != nil {
+			return CatchUpResult{}, err
+		}
+	}
+	ids, err := eventIDsThrough(ctx, tx, state.BackfillLastEventID, targetEventID, limit)
 	if err != nil {
 		return CatchUpResult{}, err
 	}
 	if len(ids) == 0 {
+		coverageEventID := state.CoverageEventID
+		if targetEventID > coverageEventID {
+			coverageEventID = targetEventID
+		}
+		pending := latestID > coverageEventID
+		status := "ready"
+		finishedAt := any(nowMS)
+		if pending {
+			status = "catching_up"
+			finishedAt = nil
+		}
 		if _, err := tx.ExecContext(ctx, `update usage_hourly_aggregate_state set
-			status = 'ready',
-			target_event_id = max(target_event_id, ?),
+			status = ?,
+			backfill_last_event_id = ?,
+			coverage_event_id = ?,
+			target_event_id = ?,
 			last_run_started_at_ms = ?,
 			updated_at_ms = ?,
 			finished_at_ms = ?,
 			last_error = null
-		where aggregate_name = ? and schema_version = ?`, latestID, nowMS, nowMS, nowMS, AggregateName, SchemaVersion); err != nil {
+		where aggregate_name = ? and schema_version = ?`,
+			status, coverageEventID, coverageEventID, targetEventID,
+			nowMS, nowMS, finishedAt, AggregateName, SchemaVersion); err != nil {
 			return CatchUpResult{}, err
 		}
 		if err := tx.Commit(); err != nil {
 			return CatchUpResult{}, err
 		}
 		return CatchUpResult{
-			LastEventID:     state.BackfillLastEventID,
-			CoverageEventID: state.CoverageEventID,
-			TargetEventID:   max(state.TargetEventID, latestID),
+			LastEventID:     coverageEventID,
+			CoverageEventID: coverageEventID,
+			TargetEventID:   targetEventID,
+			Pending:         pending,
+			Rebuilt:         rebuilt,
 		}, nil
 	}
 
@@ -179,16 +220,18 @@ func (r *repository) CatchUp(ctx context.Context, limit int, nowMS int64) (Catch
 	if err != nil {
 		return CatchUpResult{}, err
 	}
-	pending := latestID > lastEventID
+	pending := lastEventID < targetEventID || latestID > lastEventID
 	status := "ready"
-	if pending {
+	if lastEventID < targetEventID && rebuilt {
 		status = "backfilling"
+	} else if pending {
+		status = "catching_up"
 	}
 	if _, err := tx.ExecContext(ctx, `update usage_hourly_aggregate_state set
 		status = ?,
 		backfill_last_event_id = ?,
 		coverage_event_id = ?,
-		target_event_id = max(target_event_id, ?),
+		target_event_id = ?,
 		processed_events = processed_events + ?,
 		min_bucket_ms = case
 			when ? is null then min_bucket_ms
@@ -208,7 +251,7 @@ func (r *repository) CatchUp(ctx context.Context, limit int, nowMS int64) (Catch
 		status,
 		lastEventID,
 		lastEventID,
-		latestID,
+		targetEventID,
 		newlyCoveredEvents,
 		nullInt64(minBucket),
 		nullInt64(minBucket),
@@ -232,8 +275,9 @@ func (r *repository) CatchUp(ctx context.Context, limit int, nowMS int64) (Catch
 		Processed:       len(ids),
 		LastEventID:     lastEventID,
 		CoverageEventID: lastEventID,
-		TargetEventID:   max(state.TargetEventID, latestID),
+		TargetEventID:   targetEventID,
 		Pending:         pending,
+		Rebuilt:         rebuilt,
 	}, nil
 }
 
@@ -242,7 +286,11 @@ func (r *repository) RecordFailure(ctx context.Context, aggregateErr error, nowM
 		return nil
 	}
 	_, err := r.db.ExecContext(ctx, `update usage_hourly_aggregate_state set
-		status = 'failed',
+		status = case
+			when status in ('clearing', 'backfilling') then status
+			when status = 'pending' and target_event_id > coverage_event_id then status
+			else 'failed'
+		end,
 		updated_at_ms = ?,
 		finished_at_ms = ?,
 		last_error = ?
@@ -290,20 +338,30 @@ func (r *repository) LoadRowsTx(ctx context.Context, tx *sql.Tx, filter Filter) 
 	}
 
 	grouped := make(map[rowKey]*Row)
-	if err := mergeStoredRows(ctx, tx, filter, fullStartMS, fullEndMS, grouped); err != nil {
-		return nil, State{}, false, err
-	}
+	coverageEventID := state.CoverageEventID
+	structureRevision := state.StructureRevision
+	excludeAggregated := true
 	preferDeltaIDScan := state.CoverageEventID > 0 && state.CoverageEventID >= state.TargetEventID
-	if err := mergeRawRows(ctx, tx, filter, fullStartMS, fullEndMS, state.CoverageEventID, true, preferDeltaIDScan, grouped); err != nil {
+	if state.Status == "clearing" {
+		coverageEventID = 0
+		structureRevision = ""
+		excludeAggregated = false
+		preferDeltaIDScan = false
+	} else {
+		if err := mergeStoredRows(ctx, tx, filter, fullStartMS, fullEndMS, grouped); err != nil {
+			return nil, State{}, false, err
+		}
+	}
+	if err := mergeRawRows(ctx, tx, filter, fullStartMS, fullEndMS, coverageEventID, structureRevision, excludeAggregated, preferDeltaIDScan, grouped); err != nil {
 		return nil, State{}, false, err
 	}
 	if filter.FromMS < fullStartMS {
-		if err := mergeRawRows(ctx, tx, filter, filter.FromMS, min(fullStartMS, filter.ToMS), 0, false, false, grouped); err != nil {
+		if err := mergeRawRows(ctx, tx, filter, filter.FromMS, min(fullStartMS, filter.ToMS), 0, "", false, false, grouped); err != nil {
 			return nil, State{}, false, err
 		}
 	}
 	if fullEndMS < filter.ToMS {
-		if err := mergeRawRows(ctx, tx, filter, max(fullEndMS, filter.FromMS), filter.ToMS, 0, false, false, grouped); err != nil {
+		if err := mergeRawRows(ctx, tx, filter, max(fullEndMS, filter.FromMS), filter.ToMS, 0, "", false, false, grouped); err != nil {
 			return nil, State{}, false, err
 		}
 	}
@@ -364,8 +422,11 @@ func latestEventID(ctx context.Context, tx *sql.Tx) (int64, error) {
 	return id, nil
 }
 
-func eventIDsAfter(ctx context.Context, tx *sql.Tx, lastEventID int64, limit int) ([]int64, error) {
-	rows, err := tx.QueryContext(ctx, `select id from usage_events where id > ? order by id limit ?`, lastEventID, limit)
+func eventIDsThrough(ctx context.Context, tx *sql.Tx, lastEventID, targetEventID int64, limit int) ([]int64, error) {
+	if targetEventID <= lastEventID {
+		return []int64{}, nil
+	}
+	rows, err := tx.QueryContext(ctx, `select id from usage_events where id > ? and id <= ? order by id limit ?`, lastEventID, targetEventID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -568,8 +629,8 @@ func mergeStoredRows(ctx context.Context, tx *sql.Tx, filter Filter, fromMS, toM
 	return scanAndMergeRows(rows, grouped)
 }
 
-func mergeRawRows(ctx context.Context, tx *sql.Tx, filter Filter, fromMS, toMS, afterID int64, excludeAggregated bool, preferEventIDScan bool, grouped map[rowKey]*Row) error {
-	query, args := rawRowsStatement(filter, fromMS, toMS, afterID, excludeAggregated, preferEventIDScan)
+func mergeRawRows(ctx context.Context, tx *sql.Tx, filter Filter, fromMS, toMS, afterID int64, structureRevision string, excludeAggregated bool, preferEventIDScan bool, grouped map[rowKey]*Row) error {
+	query, args := rawRowsStatement(filter, fromMS, toMS, afterID, structureRevision, excludeAggregated, preferEventIDScan)
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -578,8 +639,8 @@ func mergeRawRows(ctx context.Context, tx *sql.Tx, filter Filter, fromMS, toMS, 
 	return scanAndMergeRows(rows, grouped)
 }
 
-func rawRowsStatement(filter Filter, fromMS, toMS, afterID int64, excludeAggregated bool, preferEventIDScan bool) (string, []any) {
-	conditions, args := rawConditions(filter, fromMS, toMS, afterID, excludeAggregated)
+func rawRowsStatement(filter Filter, fromMS, toMS, afterID int64, structureRevision string, excludeAggregated bool, preferEventIDScan bool) (string, []any) {
+	conditions, args := rawConditions(filter, fromMS, toMS, afterID, structureRevision, excludeAggregated)
 	tableExpr := "usage_events"
 	if afterID > 0 && preferEventIDScan {
 		tableExpr = "usage_events not indexed"
@@ -668,7 +729,7 @@ func aggregateConditions(filter Filter, fromMS, toMS int64) ([]string, []any) {
 	return appendFilterConditions(conditions, args, filter, "model")
 }
 
-func rawConditions(filter Filter, fromMS, toMS, afterID int64, excludeAggregated bool) ([]string, []any) {
+func rawConditions(filter Filter, fromMS, toMS, afterID int64, structureRevision string, excludeAggregated bool) ([]string, []any) {
 	conditions := []string{"timestamp_ms >= ?", "timestamp_ms < ?"}
 	args := []any{fromMS, toMS}
 	if afterID > 0 {
@@ -680,8 +741,9 @@ func rawConditions(filter Filter, fromMS, toMS, afterID int64, excludeAggregated
 			select 1 from usage_event_identity_ledger ledger
 			where ledger.event_hash = usage_events.event_hash
 				and ledger.aggregate_schema_version >= ?
+				and ledger.aggregate_structure_revision = ?
 		)`)
-		args = append(args, SchemaVersion)
+		args = append(args, SchemaVersion, structureRevision)
 	}
 	return appendFilterConditions(conditions, args, filter, analyticsModelExpression)
 }
