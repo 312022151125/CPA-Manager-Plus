@@ -3,7 +3,9 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -428,6 +430,8 @@ func TestMigrateClearsDerivedUsageWhenSourceTableWasLost(t *testing.T) {
 			normalized_total_input_tokens, normalized_cache_read_tokens,
 			normalized_cache_creation_tokens, total_tokens
 		) values (1, 'included', 10, 10, 0, 0, 15)`,
+		`alter table usage_data_migrations drop column applied_rows`,
+		`alter table usage_data_migrations drop column changed_rows`,
 		`drop table usage_monitoring_event_search_v1`,
 		`drop table usage_events`,
 	} {
@@ -1015,6 +1019,8 @@ func TestMigrateRejectsUnknownMonitoringModelFormatBeforeOtherSchemaChanges(t *t
 	}
 	for _, statement := range []string{
 		`drop index if exists idx_usage_events_latest_request_auth_file`,
+		`drop table usage_derived_cleanup_cursors`,
+		`drop table usage_derived_cleanup_jobs`,
 		`update settings set value = 'future' where key = 'usage_monitoring_model_format_version'`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
@@ -1041,6 +1047,14 @@ func TestMigrateRejectsUnknownMonitoringModelFormatBeforeOtherSchemaChanges(t *t
 	}
 	if indexCount != 0 {
 		t.Fatalf("unrelated index count after monitoring preflight rejection = %d, want 0", indexCount)
+	}
+	var cleanupTableCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master
+		where type = 'table' and name in ('usage_derived_cleanup_jobs', 'usage_derived_cleanup_cursors')`).Scan(&cleanupTableCount); err != nil {
+		t.Fatalf("inspect cleanup schema after monitoring preflight rejection: %v", err)
+	}
+	if cleanupTableCount != 0 {
+		t.Fatalf("cleanup table count after monitoring preflight rejection = %d, want 0", cleanupTableCount)
 	}
 }
 
@@ -1377,7 +1391,7 @@ func TestMigrateAddsQuotaObservationLifecycleAppliedColumn(t *testing.T) {
 	}
 }
 
-func TestUsageDataMigrationUpgradeAddsChangedRowsAndPreservesV1(t *testing.T) {
+func TestUsageDataMigrationUpgradeAddsProgressColumnsAndPreservesV1(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage-data-migration-upgrade.sqlite")
 	db, err := Open(path)
 	if err != nil {
@@ -1403,8 +1417,8 @@ func TestUsageDataMigrationUpgradeAddsChangedRowsAndPreservesV1(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	columns := migrationTableColumns(t, db, "usage_data_migrations")
-	if !columns["changed_rows"] {
-		t.Fatalf("migration columns = %#v, missing changed_rows", columns)
+	if !columns["changed_rows"] || !columns["applied_rows"] {
+		t.Fatalf("migration columns = %#v, missing progress columns", columns)
 	}
 	var v1Status, v2Status string
 	if err := db.QueryRow(`select status from usage_data_migrations where name = 'usage_cache_accounting_v1'`).Scan(&v1Status); err != nil {
@@ -1459,6 +1473,14 @@ func TestCodexInspectionAutoRecoverySchema(t *testing.T) {
 			t.Fatalf("quota cooldown columns = %#v, missing %s", cooldownColumns, column)
 		}
 	}
+	var identityIndexCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index'
+		and name = 'idx_account_action_candidates_pending_identity_action'`).Scan(&identityIndexCount); err != nil {
+		t.Fatalf("inspect deferred account action identity index: %v", err)
+	}
+	if identityIndexCount != 0 {
+		t.Fatalf("account action identity index count before post-listen maintenance = %d, want 0", identityIndexCount)
+	}
 	for index, account := range []string{"alice@example.com", "bob@example.com"} {
 		if _, err := db.Exec(`insert into quota_cooldowns (
 			auth_file_name, account_snapshot, provider, recover_at_ms, owner,
@@ -1489,6 +1511,11 @@ func TestMigrateReplacesLegacyQuotaCooldownOwnerIndex(t *testing.T) {
 	for _, statement := range []string{
 		`drop index idx_quota_cooldowns_active_identity`,
 		`create unique index idx_quota_cooldowns_active_owner on quota_cooldowns(auth_file_name, owner) where status = 'active'`,
+		`insert into quota_cooldowns (
+			auth_file_name, account_snapshot, provider, recover_at_ms, owner,
+			pre_disabled_state, status, disabled_at_ms, created_at_ms, updated_at_ms
+		) values ('shared.json', 'seed@example.com', 'codex', 900,
+			'cpamp_usage_429', 0, 'active', 1, 1, 1)`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			_ = db.Close()
@@ -1512,13 +1539,33 @@ func TestMigrateReplacesLegacyQuotaCooldownOwnerIndex(t *testing.T) {
 		t.Fatalf("legacy quota cooldown index changed before post-listen maintenance")
 	}
 	if err := RunDerivedStartupMaintenance(context.Background(), db); err != nil {
-		t.Fatalf("replace legacy quota cooldown index after listener start: %v", err)
+		t.Fatalf("run bounded quota cooldown index preparation: %v", err)
 	}
 	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_quota_cooldowns_active_owner'`).Scan(&legacyIndexCount); err != nil {
 		t.Fatalf("read post-listen legacy index state: %v", err)
 	}
+	if legacyIndexCount != 1 {
+		t.Fatalf("legacy quota cooldown index changed on non-empty startup")
+	}
+	var replacementIndexCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_quota_cooldowns_active_identity'`).Scan(&replacementIndexCount); err != nil {
+		t.Fatalf("read deferred replacement index state: %v", err)
+	}
+	if replacementIndexCount != 0 {
+		t.Fatalf("replacement quota cooldown index exists before offline cleanup")
+	}
+	result, err := CleanupDerivedOffline(context.Background(), db)
+	if err != nil {
+		t.Fatalf("replace legacy quota cooldown index offline: %v", err)
+	}
+	if result.PreparedIndexes == 0 {
+		t.Fatalf("offline cleanup result = %+v, want index changes", result)
+	}
+	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_quota_cooldowns_active_owner'`).Scan(&legacyIndexCount); err != nil {
+		t.Fatalf("read offline legacy index state: %v", err)
+	}
 	if legacyIndexCount != 0 {
-		t.Fatalf("legacy quota cooldown index still exists after post-listen maintenance")
+		t.Fatalf("legacy quota cooldown index still exists after offline cleanup")
 	}
 
 	for index, account := range []string{"alice@example.com", "bob@example.com"} {
@@ -1662,7 +1709,7 @@ func TestEnsureCodexInspectionResultColumnsAddsIdentityAndAutoRecoveryColumns(t 
 	}
 }
 
-func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
+func TestEnsureUsageRollupLongContextColumnsParksPopulatedTablesAtomically(t *testing.T) {
 	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "rollup-migration.sqlite")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -1676,8 +1723,7 @@ func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
 		`insert into usage_account_model_rollups (id) values (1)`,
 		`insert into usage_dashboard_hourly_rollups (id) values (1)`,
 		`insert into usage_rollup_checkpoints (name) values ('account_history'), ('dashboard_hourly')`,
-		`create trigger reject_account_rollup_delete before delete on usage_account_model_rollups
-		begin select raise(abort, 'blocked'); end`,
+		`create table ` + usageDashboardHourlyLegacy + ` (id integer primary key)`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatalf("setup migration fixture: %v", err)
@@ -1685,7 +1731,7 @@ func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
 	}
 
 	if err := ensureUsageRollupLongContextColumns(db); err == nil {
-		t.Fatal("migration error = nil, want trigger failure")
+		t.Fatal("migration error = nil, want parked-table name conflict")
 	}
 	for _, table := range []string{"usage_account_model_rollups", "usage_dashboard_hourly_rollups"} {
 		columns := migrationTableColumns(t, db, table)
@@ -1696,9 +1742,16 @@ func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
 	assertTableCount(t, db, "usage_account_model_rollups", 1)
 	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 1)
 	assertTableCount(t, db, "usage_rollup_checkpoints", 2)
+	var accountLegacyCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'table' and name = ?`, usageAccountModelRollupsLegacy).Scan(&accountLegacyCount); err != nil {
+		t.Fatalf("inspect rolled-back account legacy table: %v", err)
+	}
+	if accountLegacyCount != 0 {
+		t.Fatalf("account legacy table count after rollback = %d, want 0", accountLegacyCount)
+	}
 
-	if _, err := db.Exec(`drop trigger reject_account_rollup_delete`); err != nil {
-		t.Fatalf("drop failure trigger: %v", err)
+	if _, err := db.Exec(`drop table ` + usageDashboardHourlyLegacy); err != nil {
+		t.Fatalf("drop conflicting legacy table: %v", err)
 	}
 	if err := ensureUsageRollupLongContextColumns(db); err != nil {
 		t.Fatalf("retry migration: %v", err)
@@ -1719,6 +1772,8 @@ func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
 	}
 	assertTableCount(t, db, "usage_account_model_rollups", 0)
 	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 0)
+	assertTableCount(t, db, usageAccountModelRollupsLegacy, 1)
+	assertTableCount(t, db, usageDashboardHourlyLegacy, 1)
 	assertTableCount(t, db, "usage_rollup_checkpoints", 0)
 }
 
@@ -2361,39 +2416,26 @@ func TestMigrateRejectsUnknownHourlyAggregateVersionBeforeOtherSchemaChanges(t *
 	}
 }
 
-func TestNextUsageHourlyAggregateRebuildRevisionAdvancesPastLedgerHistory(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "usage-hourly-aggregate-revision.sqlite"))
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	for _, statement := range []string{
-		`insert into usage_events (
-			event_hash, timestamp_ms, timestamp, model, created_at_ms
-		) values ('historical-rebuild', 1, '1', 'model', 1)`,
-		`insert into usage_event_identity_ledger (
-			event_hash, raw_event_id, timestamp_ms, bucket_ms,
-			aggregate_schema_version, aggregate_structure_revision,
-			first_seen_at_ms, updated_at_ms
-		) select event_hash, id, timestamp_ms, 0, 3,
-			'schema-3:model-1:rebuild-7', 1, 1
-		from usage_events where event_hash = 'historical-rebuild'`,
-	} {
-		if _, err := db.Exec(statement); err != nil {
-			t.Fatalf("seed rebuild revision history: %v", err)
+func TestNewUsageHourlyAggregateRebuildRevisionIsRandomAndUnique(t *testing.T) {
+	prefix := usageHourlyAggregateStructureRevision + ":rebuild-"
+	revisions := make(map[string]struct{}, 2)
+	for index := 0; index < 2; index++ {
+		revision, err := newUsageHourlyAggregateRebuildRevision()
+		if err != nil {
+			t.Fatalf("generate rebuild revision: %v", err)
 		}
-	}
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatalf("begin rebuild revision allocation: %v", err)
-	}
-	defer tx.Rollback()
-	revision, err := nextUsageHourlyAggregateRebuildRevision(tx, "schema-3:model-1:rebuild-3")
-	if err != nil {
-		t.Fatalf("allocate rebuild revision: %v", err)
-	}
-	if revision != "schema-3:model-1:rebuild-8" {
-		t.Fatalf("next rebuild revision = %q, want rebuild-8", revision)
+		if !strings.HasPrefix(revision, prefix) {
+			t.Fatalf("rebuild revision = %q, want prefix %q", revision, prefix)
+		}
+		suffix := strings.TrimPrefix(revision, prefix)
+		decoded, err := hex.DecodeString(suffix)
+		if err != nil || len(decoded) != 16 {
+			t.Fatalf("rebuild revision suffix = %q, decoded=%d err=%v", suffix, len(decoded), err)
+		}
+		if _, exists := revisions[revision]; exists {
+			t.Fatalf("duplicate rebuild revision = %q", revision)
+		}
+		revisions[revision] = struct{}{}
 	}
 }
 
@@ -2730,7 +2772,7 @@ func assertEmptyUsageDerivedState(t *testing.T, db *sql.DB) {
 	}
 
 	rows, err = db.Query(`select name, status, last_event_id, target_event_id,
-		processed_rows, changed_rows from usage_data_migrations
+		processed_rows, changed_rows, applied_rows from usage_data_migrations
 		where name in ('usage_cache_accounting_v1', 'usage_cache_accounting_v2')
 		order by name`)
 	if err != nil {
@@ -2740,7 +2782,7 @@ func assertEmptyUsageDerivedState(t *testing.T, db *sql.DB) {
 	migrationStates := 0
 	for rows.Next() {
 		var name, status string
-		var lastEventID, targetEventID, processedRows, changedRows int64
+		var lastEventID, targetEventID, processedRows, changedRows, appliedRows int64
 		if err := rows.Scan(
 			&name,
 			&status,
@@ -2748,14 +2790,15 @@ func assertEmptyUsageDerivedState(t *testing.T, db *sql.DB) {
 			&targetEventID,
 			&processedRows,
 			&changedRows,
+			&appliedRows,
 		); err != nil {
 			t.Fatalf("scan reset usage data migration: %v", err)
 		}
 		migrationStates++
 		if status != "completed" || lastEventID != 0 || targetEventID != 0 ||
-			processedRows != 0 || changedRows != 0 {
-			t.Fatalf("reset usage data migration %s = status:%q last:%d target:%d processed:%d changed:%d",
-				name, status, lastEventID, targetEventID, processedRows, changedRows)
+			processedRows != 0 || changedRows != 0 || appliedRows != 0 {
+			t.Fatalf("reset usage data migration %s = status:%q last:%d target:%d processed:%d changed:%d applied:%d",
+				name, status, lastEventID, targetEventID, processedRows, changedRows, appliedRows)
 		}
 	}
 	if err := rows.Err(); err != nil {

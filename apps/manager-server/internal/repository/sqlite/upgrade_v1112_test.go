@@ -65,6 +65,34 @@ func TestUpgradeFromV1112LargeUsageFixtureIsMetadataBounded(t *testing.T) {
 			if err := RunDerivedStartupMaintenance(t.Context(), db); err != nil {
 				t.Fatalf("prepare post-listen indexes for v1.11.12 fixture: %v", err)
 			}
+			for _, indexName := range []string{
+				"idx_usage_events_latest_request_auth_file",
+				"idx_usage_events_latest_request_source",
+			} {
+				var count int
+				if err := db.QueryRow(`select count(*) from sqlite_master
+					where type = 'index' and name = ?`, indexName).Scan(&count); err != nil {
+					t.Fatalf("inspect deferred upgraded index %s: %v", indexName, err)
+				}
+				if count != 0 {
+					t.Fatalf("non-empty usage index %s was created during startup", indexName)
+				}
+			}
+			var parkedSelectorIndexTable string
+			if err := db.QueryRow(`select tbl_name from sqlite_master
+				where type = 'index' and name = 'idx_usage_monitoring_selector_daily_bucket'`).Scan(&parkedSelectorIndexTable); err != nil {
+				t.Fatalf("inspect parked selector index after startup: %v", err)
+			}
+			if parkedSelectorIndexTable == usageMonitoringSelectorDailyTable {
+				t.Fatalf("startup reclaimed selector index from parked table")
+			}
+			indexResult, err := prepareDerivedIndexes(t.Context(), db, true)
+			if err != nil {
+				t.Fatalf("prepare deferred v1.11.12 indexes offline: %v", err)
+			}
+			if indexResult.Created == 0 {
+				t.Fatalf("offline index preparation result = %+v", indexResult)
+			}
 			for indexName, tableName := range map[string]string{
 				"idx_usage_events_latest_request_auth_file":       "usage_events",
 				"idx_usage_events_latest_request_source":          "usage_events",
@@ -90,6 +118,115 @@ func TestUpgradeFromV1112LargeUsageFixtureIsMetadataBounded(t *testing.T) {
 			}
 			assertTableCount(t, db, "usage_events", rowCount)
 		})
+	}
+}
+
+func TestDamagedUsageHourlyAggregateWithLargeSchema3LedgerIsMetadataBounded(t *testing.T) {
+	const rowCount = 100_000
+	path := filepath.Join(t.TempDir(), "usage-hourly-aggregate-large-ledger.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open large-ledger fixture: %v", err)
+	}
+	if _, err := db.Exec(`with recursive ids(id) as (
+		select 1 union all select id + 1 from ids where id < ?
+	) insert into usage_events (
+		event_hash, timestamp_ms, timestamp, model, requested_model, created_at_ms
+	) select 'aggregate-ledger-event-' || id, id, cast(id as text),
+		'gpt-test', 'gpt-test', id from ids`, rowCount); err != nil {
+		_ = db.Close()
+		t.Fatalf("seed large usage event fixture: %v", err)
+	}
+	if _, err := db.Exec(`insert into usage_event_identity_ledger (
+		event_hash, raw_event_id, timestamp_ms, bucket_ms,
+		aggregate_schema_version, aggregate_structure_revision,
+		first_seen_at_ms, updated_at_ms
+	) select event_hash, id, timestamp_ms, 0, 3,
+		printf('schema-3:model-1:rebuild-%d', id), created_at_ms, created_at_ms
+	from usage_events`); err != nil {
+		_ = db.Close()
+		t.Fatalf("seed large schema-3 ledger fixture: %v", err)
+	}
+	if _, err := db.Exec(`update usage_hourly_aggregate_state set
+		structure_revision = 'schema-3:model-1:rebuild-100000', status = 'ready',
+		backfill_last_event_id = ?, coverage_event_id = ?, target_event_id = ?,
+		processed_events = ? where aggregate_name = 'hourly_core'`,
+		rowCount, rowCount, rowCount, rowCount); err != nil {
+		_ = db.Close()
+		t.Fatalf("seed large aggregate state fixture: %v", err)
+	}
+	if _, err := db.Exec(`drop table usage_hourly_aggregate_v1`); err != nil {
+		_ = db.Close()
+		t.Fatalf("damage aggregate table fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close large-ledger fixture: %v", err)
+	}
+
+	started := time.Now()
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("recover large-ledger fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("large schema-3 ledger metadata recovery took %s", elapsed)
+	}
+	assertTableCount(t, db, "usage_events", rowCount)
+	assertTableCount(t, db, "usage_event_identity_ledger", rowCount)
+	assertTableCount(t, db, "usage_hourly_aggregate_v1", 0)
+	assertUsageHourlyAggregateReset(t, db, rowCount)
+}
+
+func TestUsageRollupLongContextUpgradeParksLargeTables(t *testing.T) {
+	const rowCount = 100_000
+	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "large-rollup-columns.sqlite")))
+	if err != nil {
+		t.Fatalf("open large rollup fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, statement := range []string{
+		`create table usage_account_model_rollups (id integer primary key)`,
+		`create table usage_dashboard_hourly_rollups (id integer primary key)`,
+		`create table usage_rollup_checkpoints (name text primary key)`,
+		`insert into usage_rollup_checkpoints (name) values ('account_history'), ('dashboard_hourly')`,
+		`with recursive ids(id) as (
+			select 1 union all select id + 1 from ids where id < 100000
+		) insert into usage_account_model_rollups (id) select id from ids`,
+		`with recursive ids(id) as (
+			select 1 union all select id + 1 from ids where id < 100000
+		) insert into usage_dashboard_hourly_rollups (id) select id from ids`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("prepare large rollup fixture: %v", err)
+		}
+	}
+
+	started := time.Now()
+	if err := ensureUsageRollupLongContextColumns(db); err != nil {
+		t.Fatalf("upgrade large rollup columns: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("large rollup metadata migration took %s", elapsed)
+	}
+	assertTableCount(t, db, "usage_account_model_rollups", 0)
+	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 0)
+	assertTableCount(t, db, usageAccountModelRollupsLegacy, rowCount)
+	assertTableCount(t, db, usageDashboardHourlyLegacy, rowCount)
+	assertTableCount(t, db, "usage_rollup_checkpoints", 0)
+	for _, tableName := range []string{"usage_account_model_rollups", "usage_dashboard_hourly_rollups"} {
+		columns := migrationTableColumns(t, db, tableName)
+		for _, columnName := range []string{
+			"long_input_tokens",
+			"long_output_tokens",
+			"long_cached_tokens",
+			"long_cache_read_tokens",
+			"long_cache_creation_tokens",
+		} {
+			if !columns[columnName] {
+				t.Fatalf("%s missing %s after large metadata migration", tableName, columnName)
+			}
+		}
 	}
 }
 

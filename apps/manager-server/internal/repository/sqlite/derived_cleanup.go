@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	quotasnapshotrepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/quotasnapshot"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
@@ -37,8 +38,14 @@ var derivedLegacyTables = []string{
 }
 
 type OfflineCleanupResult struct {
-	CompletedJobs int
-	ProcessedRows int64
+	CompletedJobs   int
+	ProcessedRows   int64
+	PreparedIndexes int
+}
+
+type derivedIndexPreparationResult struct {
+	Created  int
+	Deferred int
 }
 
 func ensureDerivedCleanupJobSchema(db *sql.DB) error {
@@ -56,6 +63,15 @@ func ensureDerivedCleanupJobSchema(db *sql.DB) error {
 		last_error text
 	)`); err != nil {
 		return fmt.Errorf("create derived cleanup job schema: %w", err)
+	}
+	if _, err := db.Exec(`create table if not exists usage_derived_cleanup_cursors (
+		target_name text primary key,
+		table_name text not null,
+		revision_token text not null,
+		last_rowid integer not null default 0,
+		updated_at_ms integer not null default 0
+	)`); err != nil {
+		return fmt.Errorf("create derived cleanup cursor schema: %w", err)
 	}
 	var ftsExists, projectionExists int
 	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'table' and name = ?`, usageMonitoringSearchLegacy).Scan(&ftsExists); err != nil {
@@ -104,6 +120,24 @@ var derivedIndexStatements = []struct {
 	{"idx_usage_events_header_trace_id", "usage_events", `create index if not exists idx_usage_events_header_trace_id on usage_events(header_trace_id)`},
 	{"idx_usage_events_latest_request_auth_file", "usage_events", `create index if not exists idx_usage_events_latest_request_auth_file on usage_events(auth_file_snapshot collate nocase, auth_index collate nocase, timestamp_ms desc, id desc)`},
 	{"idx_usage_events_latest_request_source", "usage_events", `create index if not exists idx_usage_events_latest_request_source on usage_events(source collate nocase, auth_index collate nocase, timestamp_ms desc, id desc)`},
+	{"idx_account_action_candidates_pending_identity_action", "account_action_candidates", `create unique index if not exists idx_account_action_candidates_pending_identity_action
+		on account_action_candidates(
+			auth_file_name,
+			action_type,
+			coalesce(trim(reason_code), ''),
+			coalesce(trim(auth_index), ''),
+			case when coalesce(trim(auth_index), '') <> '' then '' else coalesce(trim(account_id_snapshot), '') end,
+			case when coalesce(trim(auth_index), '') <> '' then ''
+				else case coalesce(lower(replace(trim(provider), '_', '-')), '')
+					when 'x-ai' then 'xai'
+					when 'grok' then 'xai'
+					else coalesce(lower(replace(trim(provider), '_', '-')), '')
+				end
+			end,
+			case when coalesce(trim(auth_index), '') <> '' or coalesce(trim(account_id_snapshot), '') <> '' then ''
+				else coalesce(trim(account_snapshot), '')
+			end
+		) where status = 'pending'`},
 	{"idx_account_action_candidates_status_seen", "account_action_candidates", `create index if not exists idx_account_action_candidates_status_seen on account_action_candidates(status, last_seen_at_ms)`},
 	{"idx_codex_inspection_runs_started_at", "codex_inspection_runs", `create index if not exists idx_codex_inspection_runs_started_at on codex_inspection_runs(started_at_ms)`},
 	{"idx_codex_inspection_runs_status", "codex_inspection_runs", `create index if not exists idx_codex_inspection_runs_status on codex_inspection_runs(status)`},
@@ -171,19 +205,25 @@ var derivedIndexStatements = []struct {
 	{"idx_usage_event_identity_ledger_bucket", usageEventIdentityLedger, `create index if not exists idx_usage_event_identity_ledger_bucket on usage_event_identity_ledger(bucket_ms)`},
 }
 
-// RunDerivedStartupMaintenance creates indexes only after the listener is
-// available and before background writers are started. Legacy-row cleanup is
-// deliberately left to StartDerivedMaintenance so its cost cannot delay the
-// rest of the service from becoming operational.
+// RunDerivedStartupMaintenance creates only indexes whose target tables are
+// empty and whose names are not retained by parked tables. Any index that can
+// grow with stored data is deferred to the offline cleanup command so collector
+// startup cannot be delayed by unbounded DDL.
 func RunDerivedStartupMaintenance(ctx context.Context, db *sql.DB) error {
 	if db == nil {
 		return nil
 	}
 	log.Printf("[derived-migration] post-listen index preparation started")
-	if err := createDerivedIndexes(ctx, db); err != nil {
+	indexResult, err := prepareDerivedIndexes(ctx, db, false)
+	if err != nil {
 		return err
 	}
-	if err := ensureQuotaCooldownIdentityIndex(db); err != nil {
+	actionIndexRemoved, actionIndexDeferred, err := ensureAccountActionCandidateIdentityIndex(ctx, db, false)
+	if err != nil {
+		return fmt.Errorf("prepare account action candidate identity index: %w", err)
+	}
+	quotaIndexRemoved, quotaIndexDeferred, err := ensureQuotaCooldownIdentityIndex(ctx, db, false)
+	if err != nil {
 		return fmt.Errorf("prepare quota cooldown identity index: %w", err)
 	}
 	var offlineJobs int
@@ -194,7 +234,10 @@ func RunDerivedStartupMaintenance(ctx context.Context, db *sql.DB) error {
 	if offlineJobs > 0 {
 		log.Printf("[derived-migration] cleanup requires offline finalization jobs=%d command=cleanup-derived", offlineJobs)
 	}
-	log.Printf("[derived-migration] post-listen index preparation completed")
+	if indexResult.Deferred > 0 || actionIndexDeferred || quotaIndexDeferred {
+		log.Printf("[derived-migration] deferred index preparation indexes=%d accountActionLegacy=%t quotaLegacy=%t command=cleanup-derived", indexResult.Deferred, actionIndexDeferred, quotaIndexDeferred)
+	}
+	log.Printf("[derived-migration] post-listen index preparation completed created=%d removedAccountActionLegacy=%t removedQuotaLegacy=%t", indexResult.Created, actionIndexRemoved, quotaIndexRemoved)
 	return nil
 }
 
@@ -252,7 +295,8 @@ func cleanupDerivedUntilIdle(ctx context.Context, db *sql.DB) (int64, error) {
 	}
 }
 
-func createDerivedIndexes(ctx context.Context, db *sql.DB) error {
+func prepareDerivedIndexes(ctx context.Context, db *sql.DB, allowNonEmpty bool) (derivedIndexPreparationResult, error) {
+	var result derivedIndexPreparationResult
 	for _, index := range derivedIndexStatements {
 		var indexedTable string
 		err := db.QueryRowContext(ctx, `select tbl_name from sqlite_master
@@ -261,20 +305,114 @@ func createDerivedIndexes(ctx context.Context, db *sql.DB) error {
 			continue
 		}
 		if err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf("inspect derived index %s: %w", index.name, err)
+			return result, fmt.Errorf("inspect derived index %s: %w", index.name, err)
+		}
+		tableExists, tableErr := derivedTableExists(ctx, db, index.tableName)
+		if tableErr != nil {
+			return result, fmt.Errorf("inspect derived index target %s for %s: %w", index.tableName, index.name, tableErr)
+		}
+		if !tableExists {
+			result.Deferred++
+			log.Printf("[derived-migration] deferring index %s because target table %s is missing", index.name, index.tableName)
+			continue
 		}
 		if err == nil {
+			if !allowNonEmpty {
+				result.Deferred++
+				log.Printf("[derived-migration] deferring index %s because its name is retained by %s", index.name, indexedTable)
+				continue
+			}
 			log.Printf("[derived-migration] removing stale index %s from %s", index.name, indexedTable)
 			if _, err := db.ExecContext(ctx, `drop index `+index.name); err != nil {
-				return fmt.Errorf("remove stale derived index %s from %s: %w", index.name, indexedTable, err)
+				return result, fmt.Errorf("remove stale derived index %s from %s: %w", index.name, indexedTable, err)
+			}
+		}
+		if !allowNonEmpty {
+			hasRows, err := derivedIndexTableHasRows(ctx, db, index.tableName)
+			if err != nil {
+				return result, fmt.Errorf("inspect derived index target %s for %s: %w", index.tableName, index.name, err)
+			}
+			if hasRows {
+				result.Deferred++
+				log.Printf("[derived-migration] deferring index %s because %s is non-empty", index.name, index.tableName)
+				continue
 			}
 		}
 		log.Printf("[derived-migration] creating index %s", index.name)
 		if _, err := db.ExecContext(ctx, index.sql); err != nil {
-			return fmt.Errorf("create derived index %s: %w", index.name, err)
+			return result, fmt.Errorf("create derived index %s: %w", index.name, err)
 		}
+		result.Created++
 	}
-	return nil
+	return result, nil
+}
+
+func derivedIndexTableHasRows(ctx context.Context, db *sql.DB, tableName string) (bool, error) {
+	var hasRows int
+	if err := db.QueryRowContext(ctx, `select exists(select 1 from `+tableName+` limit 1)`).Scan(&hasRows); err != nil {
+		return false, err
+	}
+	return hasRows != 0, nil
+}
+
+func ensureQuotaCooldownIdentityIndex(ctx context.Context, db *sql.DB, allowNonEmpty bool) (removed bool, deferred bool, err error) {
+	return ensureLegacyDerivedIndexReplaced(
+		ctx,
+		db,
+		"quota_cooldowns",
+		"idx_quota_cooldowns_active_owner",
+		"idx_quota_cooldowns_active_identity",
+		allowNonEmpty,
+	)
+}
+
+func ensureAccountActionCandidateIdentityIndex(ctx context.Context, db *sql.DB, allowNonEmpty bool) (removed bool, deferred bool, err error) {
+	return ensureLegacyDerivedIndexReplaced(
+		ctx,
+		db,
+		"account_action_candidates",
+		"idx_account_action_candidates_pending_file_action",
+		"idx_account_action_candidates_pending_identity_action",
+		allowNonEmpty,
+	)
+}
+
+func ensureLegacyDerivedIndexReplaced(
+	ctx context.Context,
+	db *sql.DB,
+	tableName string,
+	legacyIndexName string,
+	replacementIndexName string,
+	allowNonEmpty bool,
+) (removed bool, deferred bool, err error) {
+	var legacyTable string
+	err = db.QueryRowContext(ctx, `select tbl_name from sqlite_master
+		where type = 'index' and name = ?`, legacyIndexName).Scan(&legacyTable)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if legacyTable != tableName {
+		return false, false, fmt.Errorf("legacy index %s belongs to unexpected table %s", legacyIndexName, legacyTable)
+	}
+	var replacementTable string
+	err = db.QueryRowContext(ctx, `select tbl_name from sqlite_master
+		where type = 'index' and name = ?`, replacementIndexName).Scan(&replacementTable)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && replacementTable != tableName) {
+		if allowNonEmpty {
+			return false, false, fmt.Errorf("replacement index %s is not ready", replacementIndexName)
+		}
+		return false, true, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if _, err := db.ExecContext(ctx, `drop index `+legacyIndexName); err != nil {
+		return false, false, err
+	}
+	return true, false, nil
 }
 
 func cleanupDerivedBatch(ctx context.Context, db *sql.DB, limit int) (int64, bool, error) {
@@ -310,12 +448,16 @@ func cleanupDerivedBatch(ctx context.Context, db *sql.DB, limit int) (int64, boo
 		return 0, true, nil
 	}
 
-	for _, target := range staleDerivedCleanupTargets() {
-		processed, err := deleteDerivedRows(ctx, db, target.tableName, target.condition, target.args, limit)
+	targets, err := staleDerivedCleanupTargets(ctx, db)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, target := range targets {
+		processed, advanced, err := cleanupStaleDerivedTargetBatch(ctx, db, target, limit)
 		if err != nil {
 			return 0, false, fmt.Errorf("clean stale derived rows in %s: %w", target.tableName, err)
 		}
-		if processed > 0 {
+		if advanced {
 			return processed, true, nil
 		}
 	}
@@ -472,18 +614,48 @@ func validMonitoringCleanupTable(tableName, generatedPrefix, fixedName string) b
 
 func CleanupDerivedOffline(ctx context.Context, db *sql.DB) (OfflineCleanupResult, error) {
 	var result OfflineCleanupResult
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if err := ensureDerivedCleanupJobSchema(db); err != nil {
 		return result, err
 	}
+	indexResult, err := prepareDerivedIndexes(ctx, db, true)
+	if err != nil {
+		return result, err
+	}
+	result.PreparedIndexes += indexResult.Created
+	actionIndexRemoved, _, err := ensureAccountActionCandidateIdentityIndex(ctx, db, true)
+	if err != nil {
+		return result, fmt.Errorf("replace legacy account action candidate identity index: %w", err)
+	}
+	if actionIndexRemoved {
+		result.PreparedIndexes++
+	}
+	quotaIndexRemoved, _, err := ensureQuotaCooldownIdentityIndex(ctx, db, true)
+	if err != nil {
+		return result, fmt.Errorf("replace legacy quota cooldown identity index: %w", err)
+	}
+	if quotaIndexRemoved {
+		result.PreparedIndexes++
+	}
 	for {
-		processed, handled, err := cleanupMonitoringFTSJobBatch(ctx, db, derivedCleanupBatchLimit)
+		migrationResult, err := quotasnapshotrepo.BackfillLegacySnapshotsBatch(ctx, db, offlineLegacyQuotaSnapshotGroupLimit())
 		if err != nil {
-			return result, err
+			return result, fmt.Errorf("migrate legacy quota snapshots offline: %w", err)
 		}
-		result.ProcessedRows += processed
-		if !handled {
+		result.ProcessedRows += int64(migrationResult.Processed)
+		if migrationResult.Completed {
 			break
 		}
+		if migrationResult.Processed == 0 {
+			return result, errors.New("legacy quota snapshot offline migration made no progress")
+		}
+	}
+	processed, err := cleanupDerivedUntilIdle(ctx, db)
+	result.ProcessedRows += processed
+	if err != nil {
+		return result, fmt.Errorf("drain derived cleanup batches offline: %w", err)
 	}
 	rows, err := db.QueryContext(ctx, `select id, projection_table, fts_table
 		from usage_derived_cleanup_jobs
@@ -518,6 +690,10 @@ func CleanupDerivedOffline(ctx context.Context, db *sql.DB) (OfflineCleanupResul
 		result.CompletedJobs++
 	}
 	return result, nil
+}
+
+func offlineLegacyQuotaSnapshotGroupLimit() int {
+	return int(^uint(0)>>1) - 1
 }
 
 type monitoringOfflineCleanupJob struct {
@@ -575,39 +751,161 @@ func finalizeMonitoringCleanupJob(ctx context.Context, db *sql.DB, job monitorin
 }
 
 type derivedCleanupTarget struct {
-	tableName string
-	condition string
-	args      []any
+	name           string
+	tableName      string
+	revisionColumn string
+	activeRevision string
+	stateTable     string
+	stateName      string
 }
 
-func staleDerivedCleanupTargets() []derivedCleanupTarget {
+func staleDerivedCleanupTargets(ctx context.Context, db *sql.DB) ([]derivedCleanupTarget, error) {
 	targets := []derivedCleanupTarget{{
-		tableName: usageMonitoringSelectorDailyTable,
-		condition: "target.model_format_revision <> ?",
-		args:      []any{usageidentity.ModelFormatVersion},
+		name:           "monitoring_selector_model_format",
+		tableName:      usageMonitoringSelectorDailyTable,
+		revisionColumn: "model_format_revision",
+		activeRevision: usageidentity.ModelFormatVersion,
 	}}
 	for _, state := range []struct {
-		tableNames []string
-		stateTable string
-		stateName  string
+		tableNames     []string
+		stateTable     string
+		stateName      string
+		revisionColumn string
 	}{
-		{[]string{"usage_pricing_hourly_rollups_v1", usagePricingAccountRollupsTable}, "usage_pricing_rollup_state", "pricing_v1"},
-		{[]string{usageMonitoringAccountDailyTable, usageMonitoringAPIKeyDailyTable}, usageMonitoringRollupStateTable, usageMonitoringStatsRollupName},
+		{[]string{"usage_pricing_hourly_rollups_v1", usagePricingAccountRollupsTable}, "usage_pricing_rollup_state", "pricing_v1", "structure_revision"},
+		{[]string{usageMonitoringAccountDailyTable, usageMonitoringAPIKeyDailyTable}, usageMonitoringRollupStateTable, usageMonitoringStatsRollupName, "structure_revision"},
 	} {
+		var activeRevision string
+		err := db.QueryRowContext(ctx, `select trim(structure_revision) from `+state.stateTable+`
+			where rollup_name = ?`, state.stateName).Scan(&activeRevision)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read active derived revision %s from %s: %w", state.stateName, state.stateTable, err)
+		}
+		if activeRevision == "" {
+			continue
+		}
 		for _, tableName := range state.tableNames {
 			targets = append(targets, derivedCleanupTarget{
-				tableName: tableName,
-				condition: `exists (
-					select 1 from ` + state.stateTable + ` as state
-					where state.rollup_name = ?
-						and trim(state.structure_revision) <> ''
-						and target.structure_revision <> state.structure_revision
-				)`,
-				args: []any{state.stateName},
+				name:           tableName + "_revision",
+				tableName:      tableName,
+				revisionColumn: state.revisionColumn,
+				activeRevision: activeRevision,
+				stateTable:     state.stateTable,
+				stateName:      state.stateName,
 			})
 		}
 	}
-	return targets
+	return targets, nil
+}
+
+func cleanupStaleDerivedTargetBatch(
+	ctx context.Context,
+	db *sql.DB,
+	target derivedCleanupTarget,
+	limit int,
+) (int64, bool, error) {
+	if limit <= 0 {
+		limit = derivedCleanupBatchLimit
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	activeRevision := target.activeRevision
+	if target.stateTable != "" {
+		err := tx.QueryRowContext(ctx, `select trim(structure_revision) from `+target.stateTable+`
+			where rollup_name = ?`, target.stateName).Scan(&activeRevision)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		if err != nil {
+			return 0, false, err
+		}
+		if activeRevision == "" {
+			return 0, false, nil
+		}
+	}
+
+	var rootPage int64
+	if err := tx.QueryRowContext(ctx, `select rootpage from sqlite_master
+		where type = 'table' and name = ?`, target.tableName).Scan(&rootPage); err != nil {
+		return 0, false, err
+	}
+	revisionToken := fmt.Sprintf("%s\x00%d", activeRevision, rootPage)
+	lastRowID := int64(0)
+	var storedToken string
+	err = tx.QueryRowContext(ctx, `select revision_token, last_rowid
+		from usage_derived_cleanup_cursors where target_name = ?`, target.name).Scan(&storedToken, &lastRowID)
+	if errors.Is(err, sql.ErrNoRows) {
+		lastRowID = 0
+	} else if err != nil {
+		return 0, false, err
+	} else if storedToken != revisionToken {
+		lastRowID = 0
+	}
+
+	rows, err := tx.QueryContext(ctx, `select rowid from `+target.tableName+`
+		where rowid > ? order by rowid limit ?`, lastRowID, limit)
+	if err != nil {
+		return 0, false, err
+	}
+	scanned := 0
+	throughRowID := lastRowID
+	for rows.Next() {
+		if err := rows.Scan(&throughRowID); err != nil {
+			_ = rows.Close()
+			return 0, false, err
+		}
+		scanned++
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, false, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, false, err
+	}
+
+	processed := int64(0)
+	if scanned > 0 {
+		result, err := tx.ExecContext(ctx, `delete from `+target.tableName+`
+			where rowid > ? and rowid <= ? and `+target.revisionColumn+` <> ?`,
+			lastRowID,
+			throughRowID,
+			activeRevision,
+		)
+		if err != nil {
+			return 0, false, err
+		}
+		processed, err = result.RowsAffected()
+		if err != nil {
+			return 0, false, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `insert into usage_derived_cleanup_cursors (
+		target_name, table_name, revision_token, last_rowid, updated_at_ms
+	) values (?, ?, ?, ?, ?)
+		on conflict(target_name) do update set
+			table_name = excluded.table_name,
+			revision_token = excluded.revision_token,
+			last_rowid = excluded.last_rowid,
+			updated_at_ms = excluded.updated_at_ms`,
+		target.name,
+		target.tableName,
+		revisionToken,
+		throughRowID,
+		time.Now().UnixMilli(),
+	); err != nil {
+		return 0, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, false, err
+	}
+	return processed, scanned > 0, nil
 }
 
 func deleteDerivedRows(ctx context.Context, db *sql.DB, tableName, condition string, args []any, limit int) (int64, error) {
