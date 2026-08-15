@@ -162,7 +162,7 @@ func statsReadState(ctx context.Context, tx *sql.Tx) (State, string, bool, error
 	if err != nil {
 		return State{}, "", false, err
 	}
-	if state.StructureRevision != revision {
+	if state.StructureRevision != revision || state.Status == "clearing" {
 		return state, revision, false, nil
 	}
 	return state, revision, true, nil

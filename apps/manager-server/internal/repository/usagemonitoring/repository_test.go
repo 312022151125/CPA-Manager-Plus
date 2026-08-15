@@ -21,7 +21,7 @@ import (
 const testDayMS = int64(24 * time.Hour / time.Millisecond)
 
 func TestMigrationCreatesUsageMonitoringRollupSchema(t *testing.T) {
-	sqlDB, _ := newMonitoringRepositoryStore(t)
+	sqlDB, db := newMonitoringRepositoryStore(t)
 	for _, table := range []string{
 		"usage_monitoring_account_daily_rollups_v1",
 		"usage_monitoring_api_key_daily_rollups_v1",
@@ -61,15 +61,31 @@ func TestMigrationCreatesUsageMonitoringRollupSchema(t *testing.T) {
 	if err := sqlDB.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_usage_monitoring_event_projection_account_window'`).Scan(&accountWindowIndexes); err != nil {
 		t.Fatalf("inspect projection account window index: %v", err)
 	}
-	if accountWindowIndexes != 1 {
-		t.Fatalf("projection account window indexes = %d, want 1", accountWindowIndexes)
+	if accountWindowIndexes != 0 {
+		t.Fatalf("projection account window indexes before post-listen maintenance = %d, want 0", accountWindowIndexes)
 	}
 	var modelIndexes int
 	if err := sqlDB.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_usage_monitoring_event_projection_model_timestamp'`).Scan(&modelIndexes); err != nil {
 		t.Fatalf("inspect projection analytics model index: %v", err)
 	}
-	if modelIndexes != 1 {
-		t.Fatalf("projection analytics model indexes = %d, want 1", modelIndexes)
+	if modelIndexes != 0 {
+		t.Fatalf("projection analytics model indexes before post-listen maintenance = %d, want 0", modelIndexes)
+	}
+	if err := db.RunDerivedStartupMaintenance(context.Background()); err != nil {
+		t.Fatalf("run post-listen startup maintenance: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for accountWindowIndexes != 1 || modelIndexes != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("post-listen indexes not ready: account=%d model=%d", accountWindowIndexes, modelIndexes)
+		}
+		time.Sleep(10 * time.Millisecond)
+		if err := sqlDB.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_usage_monitoring_event_projection_account_window'`).Scan(&accountWindowIndexes); err != nil {
+			t.Fatalf("inspect post-listen account window index: %v", err)
+		}
+		if err := sqlDB.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_usage_monitoring_event_projection_model_timestamp'`).Scan(&modelIndexes); err != nil {
+			t.Fatalf("inspect post-listen analytics model index: %v", err)
+		}
 	}
 	planRows, err := sqlDB.Query(`explain query plan select event_id
 		from usage_monitoring_event_projection_v1
@@ -116,6 +132,127 @@ func TestMigrationCreatesUsageMonitoringRollupSchema(t *testing.T) {
 			t.Fatalf("account daily window index %s definition = %q", indexName, definition)
 		}
 	}
+}
+
+func TestUsageMonitoringProjectionCatchUpResumesAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.sqlite")
+	sqlDB, db := openMonitoringRepositoryStore(t, path)
+	ctx := context.Background()
+	baseMS := int64(1_800_000_000_000)
+	for index := 1; index <= 3; index++ {
+		event := monitoringRepositoryEvent(
+			fmt.Sprintf("resume-%d", index),
+			baseMS+int64(index),
+			"model-a",
+			"key-a",
+			"account-a",
+			"auth-a",
+			"source-a",
+			false,
+			1,
+			1,
+			1,
+		)
+		if _, err := db.InsertEvents(ctx, []usage.Event{event}); err != nil {
+			_ = sqlDB.Close()
+			t.Fatalf("insert resumable projection event %d: %v", index, err)
+		}
+	}
+	first, err := db.CatchUpUsageMonitoringProjection(ctx, 1, baseMS+100)
+	if err != nil {
+		_ = sqlDB.Close()
+		t.Fatalf("run first projection batch: %v", err)
+	}
+	if first.CoverageEventID != 1 || !first.Pending {
+		_ = sqlDB.Close()
+		t.Fatalf("first projection batch = %#v", first)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close partial projection database: %v", err)
+	}
+
+	sqlDB, db = openMonitoringRepositoryStore(t, path)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	state, err := db.UsageMonitoringState(ctx, monitoringrepo.ProjectionRollupName)
+	if err != nil {
+		t.Fatalf("read resumed projection state: %v", err)
+	}
+	if state.CoverageEventID != 1 {
+		t.Fatalf("projection coverage after restart = %d, want 1", state.CoverageEventID)
+	}
+	second, err := db.CatchUpUsageMonitoringProjection(ctx, 1, baseMS+200)
+	if err != nil {
+		t.Fatalf("run resumed projection batch: %v", err)
+	}
+	if second.CoverageEventID != 2 || !second.Pending || second.Rebuilt {
+		t.Fatalf("resumed projection batch = %#v", second)
+	}
+}
+
+func TestUsageMonitoringProjectionPreservesRebuildStateAcrossFailure(t *testing.T) {
+	sqlDB, db := newMonitoringRepositoryStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_800_000_000_000)
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		monitoringRepositoryEvent("projection-rebuild-resume-1", baseMS+1_000, "model-a", "key-a", "account-a", "auth-a", "source-a", false, 10, 5, 1),
+		monitoringRepositoryEvent("projection-rebuild-resume-2", baseMS+2_000, "model-a", "key-a", "account-a", "auth-a", "source-a", false, 20, 7, 1),
+	}); err != nil {
+		t.Fatalf("insert projection rebuild events: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `delete from usage_monitoring_event_projection_v1`); err != nil {
+		t.Fatalf("clear projection rows: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `update usage_monitoring_rollup_state set
+		status = 'pending', backfill_last_event_id = 0, coverage_event_id = 0,
+		target_event_id = 2, processed_events = 0, last_error = null
+		where rollup_name = ?`, monitoringrepo.ProjectionRollupName); err != nil {
+		t.Fatalf("schedule projection rebuild: %v", err)
+	}
+	filter := store.AnalyticsFilter{
+		FromMS:        baseMS,
+		ToMS:          baseMS + 10_000,
+		IncludeFailed: true,
+	}
+
+	if err := db.RecordUsageMonitoringFailure(ctx, monitoringrepo.ProjectionRollupName, errors.New("interrupted pending projection rebuild"), baseMS+20_000); err != nil {
+		t.Fatalf("record pending projection rebuild failure: %v", err)
+	}
+	state, err := db.UsageMonitoringState(ctx, monitoringrepo.ProjectionRollupName)
+	if err != nil {
+		t.Fatalf("read pending projection rebuild state: %v", err)
+	}
+	if state.Status != "pending" || state.LastError != "interrupted pending projection rebuild" {
+		t.Fatalf("pending projection rebuild state = %#v", state)
+	}
+	assertProjectionCoreReadersMatchRaw(t, ctx, db, filter)
+
+	first, err := db.CatchUpUsageMonitoringProjection(ctx, 1, baseMS+30_000)
+	if err != nil {
+		t.Fatalf("run partial projection rebuild: %v", err)
+	}
+	if !first.Rebuilt || !first.Pending || first.CoverageEventID != 1 {
+		t.Fatalf("partial projection rebuild = %#v", first)
+	}
+	if err := db.RecordUsageMonitoringFailure(ctx, monitoringrepo.ProjectionRollupName, errors.New("interrupted active projection rebuild"), baseMS+40_000); err != nil {
+		t.Fatalf("record active projection rebuild failure: %v", err)
+	}
+	state, err = db.UsageMonitoringState(ctx, monitoringrepo.ProjectionRollupName)
+	if err != nil {
+		t.Fatalf("read active projection rebuild state: %v", err)
+	}
+	if state.Status != "rebuilding" || state.LastError != "interrupted active projection rebuild" {
+		t.Fatalf("active projection rebuild state = %#v", state)
+	}
+	assertProjectionCoreReadersMatchRaw(t, ctx, db, filter)
+
+	completed, err := db.CatchUpUsageMonitoringProjection(ctx, 10, baseMS+50_000)
+	if err != nil {
+		t.Fatalf("resume projection rebuild: %v", err)
+	}
+	if !completed.Rebuilt || completed.Pending || completed.CoverageEventID != 2 {
+		t.Fatalf("resumed projection rebuild = %#v", completed)
+	}
+	assertProjectionCoreReadersMatchRaw(t, ctx, db, filter)
 }
 
 func TestAccountWindowProjectionMatchesRawAcrossCoverageTailAndIdentity(t *testing.T) {
@@ -752,6 +889,80 @@ func TestUsageMonitoringStatsRevisionMismatchUsesEventProjectionUntilRebuilt(t *
 	filter := store.AnalyticsFilter{FromMS: baseMS, ToMS: baseMS + 3*testDayMS, IncludeFailed: true}
 	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
 	catchUpMonitoringRepository(t, ctx, db)
+	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
+}
+
+// TestUsageMonitoringStatsRevisionRollbackDoesNotDoubleCount covers a
+// deterministic A-to-B-to-A revision rollback. The target revision is cleared
+// in bounded batches, readers use raw events while clearing, and rebuilding the
+// restored revision must not add to its retained rows.
+func TestUsageMonitoringStatsRevisionRollbackDoesNotDoubleCount(t *testing.T) {
+	_, db := newMonitoringRepositoryStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_800_057_600_000)
+	pricesA := map[string]store.ModelPrice{"gpt-a": {Prompt: 1}}
+	pricesB := map[string]store.ModelPrice{
+		"gpt-a": {Prompt: 1, ContextTiers: []store.ModelPriceContextTier{{ThresholdTokens: 100, Prompt: 2, PromptConfigured: true}}},
+	}
+	if err := db.SaveModelPrices(ctx, pricesA); err != nil {
+		t.Fatalf("save prices A: %v", err)
+	}
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		monitoringRepositoryEvent("rollback", baseMS+testDayMS, "gpt-a", "key-a", "alice@example.com", "auth-a", "source-a", false, 150, 10, 10),
+	}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+	filter := store.AnalyticsFilter{FromMS: baseMS, ToMS: baseMS + 3*testDayMS, IncludeFailed: true}
+
+	// Build revision A.
+	catchUpMonitoringRepository(t, ctx, db)
+	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
+	// Switch to revision B and rebuild it.
+	if err := db.SaveModelPrices(ctx, pricesB); err != nil {
+		t.Fatalf("save prices B: %v", err)
+	}
+	catchUpMonitoringRepository(t, ctx, db)
+	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
+	// Restore revision A. A limit of one can clear only the account row in the
+	// first transaction, leaving the API-key row for a later transaction.
+	if err := db.SaveModelPrices(ctx, pricesA); err != nil {
+		t.Fatalf("rollback to prices A: %v", err)
+	}
+	result, err := db.CatchUpUsageMonitoringStats(ctx, 1, 30_000)
+	if err != nil {
+		t.Fatalf("start bounded rollback clearing: %v", err)
+	}
+	if !result.Pending || !result.Rebuilt || result.Processed != 0 || !result.ContinueSoon {
+		t.Fatalf("first bounded rollback result = %#v", result)
+	}
+	state, err := db.UsageMonitoringState(ctx, monitoringrepo.StatsRollupName)
+	if err != nil {
+		t.Fatalf("read clearing state: %v", err)
+	}
+	if state.Status != "clearing" || state.CoverageEventID != 0 {
+		t.Fatalf("bounded clearing state = %#v", state)
+	}
+	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
+	if err := db.RecordUsageMonitoringFailure(ctx, monitoringrepo.StatsRollupName, errors.New("interrupted clearing"), 31_000); err != nil {
+		t.Fatalf("record clearing interruption: %v", err)
+	}
+	state, err = db.UsageMonitoringState(ctx, monitoringrepo.StatsRollupName)
+	if err != nil {
+		t.Fatalf("read interrupted clearing state: %v", err)
+	}
+	if state.Status != "clearing" || state.LastError != "interrupted clearing" {
+		t.Fatalf("interrupted clearing state = %#v", state)
+	}
+	for {
+		result, err = db.CatchUpUsageMonitoringStats(ctx, 1, 32_000)
+		if err != nil {
+			t.Fatalf("resume bounded rollback clearing: %v", err)
+		}
+		if !result.Pending {
+			break
+		}
+	}
+	// Revision A has been rebuilt exactly once.
 	assertMonitoringReadersMatchRaw(t, ctx, db, filter)
 }
 

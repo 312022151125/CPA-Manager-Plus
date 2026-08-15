@@ -3,8 +3,11 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	quotasnapshotrepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/quotasnapshot"
@@ -70,6 +73,21 @@ func TestMigrateCreatesLatestAccountRequestIndexes(t *testing.T) {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	for _, name := range []string{
+		"idx_usage_events_latest_request_auth_file",
+		"idx_usage_events_latest_request_source",
+	} {
+		var count int
+		if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = ?`, name).Scan(&count); err != nil {
+			t.Fatalf("inspect deferred usage event index %s: %v", name, err)
+		}
+		if count != 0 {
+			t.Fatalf("usage event index %s exists before post-listen maintenance", name)
+		}
+	}
+	if err := RunDerivedStartupMaintenance(context.Background(), db); err != nil {
+		t.Fatalf("run post-listen index preparation: %v", err)
+	}
 
 	rows, err := db.Query(`pragma index_list(usage_events)`)
 	if err != nil {
@@ -144,6 +162,23 @@ func TestMigrateCreatesAccountQuotaSnapshotSchema(t *testing.T) {
 		if !columns[column] {
 			t.Fatalf("account quota snapshot columns = %#v, missing %s", columns, column)
 		}
+	}
+	for _, name := range []string{
+		"idx_quota_snapshots_latest",
+		"idx_quota_snapshots_observation",
+		"idx_quota_snapshots_window_cycle",
+		"idx_quota_snapshots_cycle_evidence",
+	} {
+		var count int
+		if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = ?`, name).Scan(&count); err != nil {
+			t.Fatalf("inspect deferred account quota snapshot index %s: %v", name, err)
+		}
+		if count != 0 {
+			t.Fatalf("account quota snapshot index %s exists before post-listen maintenance", name)
+		}
+	}
+	if err := RunDerivedStartupMaintenance(context.Background(), db); err != nil {
+		t.Fatalf("run post-listen quota index preparation: %v", err)
 	}
 
 	rows, err := db.Query(`pragma index_list(account_quota_snapshots)`)
@@ -249,8 +284,22 @@ func TestMigrateRepairsUsageMonitoringWithoutDroppingQuotaOrUsageData(t *testing
 		where account_key = 'preserved-account'`).Scan(&logicalWindowID); err != nil {
 		t.Fatalf("read preserved quota lifecycle: %v", err)
 	}
+	if logicalWindowID.Valid {
+		t.Fatal("startup migration synchronously backfilled preserved quota snapshot")
+	}
+	result, err := quotasnapshotrepo.BackfillLegacySnapshotsBatch(context.Background(), db, 1000)
+	if err != nil {
+		t.Fatalf("run deferred quota lifecycle backfill: %v", err)
+	}
+	if result.Processed != 1 || !result.Completed {
+		t.Fatalf("deferred quota lifecycle backfill = %#v, want one completed snapshot", result)
+	}
+	if err := db.QueryRow(`select logical_window_id from account_quota_snapshots
+		where account_key = 'preserved-account'`).Scan(&logicalWindowID); err != nil {
+		t.Fatalf("read deferred quota lifecycle result: %v", err)
+	}
 	if !logicalWindowID.Valid {
-		t.Fatal("preserved quota snapshot was not backfilled into lifecycle")
+		t.Fatal("deferred quota snapshot was not attached to lifecycle")
 	}
 	var projectionTables int
 	if err := db.QueryRow(`select count(*) from sqlite_master
@@ -381,6 +430,8 @@ func TestMigrateClearsDerivedUsageWhenSourceTableWasLost(t *testing.T) {
 			normalized_total_input_tokens, normalized_cache_read_tokens,
 			normalized_cache_creation_tokens, total_tokens
 		) values (1, 'included', 10, 10, 0, 0, 15)`,
+		`alter table usage_data_migrations drop column applied_rows`,
+		`alter table usage_data_migrations drop column changed_rows`,
 		`drop table usage_monitoring_event_search_v1`,
 		`drop table usage_events`,
 	} {
@@ -426,8 +477,8 @@ func TestMigrateClearsDerivedUsageWhenSourceTableWasLost(t *testing.T) {
 	); err != nil {
 		t.Fatalf("read detached usage identity ledger: %v", err)
 	}
-	if rawEventID.Valid || aggregateVersion != 0 {
-		t.Fatalf("detached identity ledger = raw:%v aggregate_version:%d", rawEventID, aggregateVersion)
+	if !rawEventID.Valid || rawEventID.Int64 != 1 || aggregateVersion != 2 {
+		t.Fatalf("preserved legacy identity ledger = raw:%v aggregate_version:%d", rawEventID, aggregateVersion)
 	}
 	assertUsageHourlyAggregateState(t, db, "ready", 0)
 	assertEmptyUsageDerivedState(t, db)
@@ -472,7 +523,7 @@ func TestMigrateRebuildsProjectionForAccountKeyIndex(t *testing.T) {
 		t.Fatalf("commit projection fixture: %v", err)
 	}
 	for _, statement := range []string{
-		`drop index idx_usage_monitoring_event_projection_account_window`,
+		`drop index if exists idx_usage_monitoring_event_projection_account_window`,
 		`alter table usage_monitoring_event_projection_v1 drop column account_key`,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -490,7 +541,12 @@ func TestMigrateRebuildsProjectionForAccountKeyIndex(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	assertTableCount(t, db, "usage_events", 1)
-	assertTableCount(t, db, "usage_monitoring_event_projection_v1", 0)
+	assertTableCount(t, db, usageprojection.EventTable, 0)
+	_, projectionLegacy, cleanupStatus := latestMonitoringCleanupJob(t, db)
+	if cleanupStatus != "online_cleanup" || projectionLegacy == "" {
+		t.Fatalf("monitoring cleanup job = projection:%q status:%q", projectionLegacy, cleanupStatus)
+	}
+	assertTableCount(t, db, projectionLegacy, 1)
 	columns := migrationTableColumns(t, db, "usage_monitoring_event_projection_v1")
 	if !columns["account_key"] {
 		t.Fatalf("projection columns = %#v, missing account_key", columns)
@@ -499,8 +555,8 @@ func TestMigrateRebuildsProjectionForAccountKeyIndex(t *testing.T) {
 	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_usage_monitoring_event_projection_account_window'`).Scan(&accountWindowIndexes); err != nil {
 		t.Fatalf("inspect account window index: %v", err)
 	}
-	if accountWindowIndexes != 1 {
-		t.Fatalf("account window indexes = %d, want 1", accountWindowIndexes)
+	if accountWindowIndexes != 0 {
+		t.Fatalf("account window indexes before post-listen maintenance = %d, want 0", accountWindowIndexes)
 	}
 	var status string
 	var coverageEventID, targetEventID int64
@@ -580,14 +636,20 @@ func TestUsageMonitoringModelFormatUpgradeRebuildsDerivedDataOnce(t *testing.T) 
 		t.Fatalf("upgrade sqlite: %v", err)
 	}
 	assertTableCount(t, db, "usage_events", 1)
-	for _, table := range []string{
-		"usage_monitoring_account_daily_rollups_v1",
-		"usage_monitoring_api_key_daily_rollups_v1",
-		"usage_monitoring_selector_daily_rollups_v1",
-		"usage_monitoring_event_projection_v1",
+	for activeTable, legacyTable := range map[string]string{
+		usageMonitoringAccountDailyTable:  usageMonitoringAccountLegacy,
+		usageMonitoringAPIKeyDailyTable:   usageMonitoringAPIKeyLegacy,
+		usageMonitoringSelectorDailyTable: usageMonitoringSelectorLegacy,
 	} {
-		assertTableCount(t, db, table, 0)
+		assertTableCount(t, db, activeTable, 0)
+		assertTableCount(t, db, legacyTable, 1)
 	}
+	_, projectionLegacy, status := latestMonitoringCleanupJob(t, db)
+	if status != "online_cleanup" || projectionLegacy == "" {
+		t.Fatalf("monitoring cleanup job = projection:%q status:%q", projectionLegacy, status)
+	}
+	assertTableCount(t, db, usageprojection.EventTable, 0)
+	assertTableCount(t, db, projectionLegacy, 1)
 	var version string
 	if err := db.QueryRow(`select value from settings where key = ?`, usageMonitoringModelFormatVersionKey).Scan(&version); err != nil {
 		t.Fatalf("read monitoring model format version: %v", err)
@@ -608,7 +670,11 @@ func TestUsageMonitoringModelFormatUpgradeRebuildsDerivedDataOnce(t *testing.T) 
 			_ = rows.Close()
 			t.Fatalf("scan rebuilt monitoring state: %v", err)
 		}
-		if revision != "" || status != "pending" || coverage != 0 || target != 1 || processed != 0 {
+		wantRevision := usageidentity.ModelFormatVersion
+		if name == usageMonitoringStatsRollupName {
+			wantRevision = ""
+		}
+		if revision != wantRevision || status != "pending" || coverage != 0 || target != 1 || processed != 0 {
 			_ = rows.Close()
 			t.Fatalf("rebuilt monitoring state %s = revision:%q status:%q coverage:%d target:%d processed:%d", name, revision, status, coverage, target, processed)
 		}
@@ -620,14 +686,14 @@ func TestUsageMonitoringModelFormatUpgradeRebuildsDerivedDataOnce(t *testing.T) 
 	if err := db.QueryRow(`select ready from usage_monitoring_search_index_state where id = 1`).Scan(&searchReady); err != nil {
 		t.Fatalf("read rebuilt search state: %v", err)
 	}
-	if searchReady != 1 {
-		t.Fatalf("rebuilt search ready = %d, want 1 after index rebuild", searchReady)
+	if searchReady != 0 {
+		t.Fatalf("rebuilding search ready = %d, want 0 before background catch-up", searchReady)
 	}
 	if _, err := db.Exec(`insert into usage_monitoring_selector_daily_rollups_v1 (
-		bucket_ms, model, api_key_hash, provider, auth_file_snapshot,
+		model_format_revision, bucket_ms, model, api_key_hash, provider, auth_file_snapshot,
 		account_snapshot, auth_label_snapshot, auth_index, source,
 		source_hash, updated_at_ms
-	) values (0, 'rebuilt', '', '', '', '', '', '', '', '', 2)`); err != nil {
+	) values ('1', 0, 'rebuilt', '', '', '', '', '', '', '', '', 2)`); err != nil {
 		_ = db.Close()
 		t.Fatalf("insert rebuilt selector: %v", err)
 	}
@@ -641,10 +707,18 @@ func TestUsageMonitoringModelFormatUpgradeRebuildsDerivedDataOnce(t *testing.T) 
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	assertTableCount(t, db, "usage_events", 1)
-	assertTableCount(t, db, "usage_monitoring_selector_daily_rollups_v1", 1)
+	assertTableCount(t, db, usageMonitoringSelectorDailyTable, 1)
+	assertTableCount(t, db, usageMonitoringSelectorLegacy, 1)
+	var currentSelectorRows int
+	if err := db.QueryRow(`select count(*) from usage_monitoring_selector_daily_rollups_v1 where model_format_revision = ?`, usageidentity.ModelFormatVersion).Scan(&currentSelectorRows); err != nil {
+		t.Fatalf("count current selector rows: %v", err)
+	}
+	if currentSelectorRows != 1 {
+		t.Fatalf("current selector rows = %d, want 1", currentSelectorRows)
+	}
 }
 
-func TestUsageMonitoringModelFormatUpgradeRollsBackAndRetries(t *testing.T) {
+func TestUsageMonitoringModelFormatUpgradeParksDerivedRowsWithoutDeletingThem(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage-monitoring-model-format-retry.sqlite")
 	db, err := Open(path)
 	if err != nil {
@@ -669,27 +743,29 @@ func TestUsageMonitoringModelFormatUpgradeRollsBackAndRetries(t *testing.T) {
 		}
 	}
 
-	if err := ensureUsageMonitoringProjectionIdentity(db); err == nil {
-		t.Fatal("monitoring model migration error = nil, want trigger failure")
+	if err := ensureUsageMonitoringProjectionIdentity(db); err != nil {
+		t.Fatalf("monitoring model migration: %v", err)
 	}
 	assertTableCount(t, db, "usage_events", 1)
-	assertTableCount(t, db, "usage_monitoring_selector_daily_rollups_v1", 1)
+	assertTableCount(t, db, usageMonitoringSelectorDailyTable, 0)
+	assertTableCount(t, db, usageMonitoringSelectorLegacy, 1)
 	var settingCount int
 	if err := db.QueryRow(`select count(*) from settings where key = ?`, usageMonitoringModelFormatVersionKey).Scan(&settingCount); err != nil {
 		t.Fatalf("read rolled-back monitoring model setting: %v", err)
 	}
-	if settingCount != 0 {
-		t.Fatalf("monitoring model setting count after rollback = %d, want 0", settingCount)
+	if settingCount != 1 {
+		t.Fatalf("monitoring model setting count = %d, want 1", settingCount)
 	}
 
 	if _, err := db.Exec(`drop trigger reject_monitoring_model_selector_delete`); err != nil {
 		t.Fatalf("drop failure trigger: %v", err)
 	}
 	if err := ensureUsageMonitoringProjectionIdentity(db); err != nil {
-		t.Fatalf("retry monitoring model migration: %v", err)
+		t.Fatalf("repeat monitoring model migration: %v", err)
 	}
 	assertTableCount(t, db, "usage_events", 1)
-	assertTableCount(t, db, "usage_monitoring_selector_daily_rollups_v1", 0)
+	assertTableCount(t, db, usageMonitoringSelectorDailyTable, 0)
+	assertTableCount(t, db, usageMonitoringSelectorLegacy, 1)
 	var version string
 	if err := db.QueryRow(`select value from settings where key = ?`, usageMonitoringModelFormatVersionKey).Scan(&version); err != nil {
 		t.Fatalf("read retried monitoring model version: %v", err)
@@ -697,6 +773,84 @@ func TestUsageMonitoringModelFormatUpgradeRollsBackAndRetries(t *testing.T) {
 	if version != usageidentity.ModelFormatVersion {
 		t.Fatalf("retried monitoring model version = %q", version)
 	}
+}
+
+func TestUsageMonitoringModelFormatUpgradeIsBoundedAt150KRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-monitoring-model-format-150k.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, triggerName := range []string{
+		"usage_monitoring_event_search_v1_insert",
+		"usage_monitoring_event_search_v1_update",
+		"usage_monitoring_event_search_v1_delete",
+	} {
+		if _, err := db.Exec(`drop trigger if exists ` + triggerName); err != nil {
+			t.Fatalf("drop search trigger %s: %v", triggerName, err)
+		}
+	}
+	if _, err := db.Exec(`with recursive ids(id) as (
+		select 1 union all select id + 1 from ids where id < 150000
+	) insert into usage_events (
+		event_hash, timestamp_ms, timestamp, model, requested_model, created_at_ms
+	) select 'event-' || id, id, cast(id as text), 'model(max)', 'model(max)', id from ids`); err != nil {
+		t.Fatalf("seed 150k usage events: %v", err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin 150k projection seed: %v", err)
+	}
+	if err := usageprojection.UpsertEventRange(context.Background(), tx, 0, 150000, 1); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("seed 150k projection rows: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit 150k projection seed: %v", err)
+	}
+	for _, statement := range []string{
+		`delete from settings where key = 'usage_monitoring_model_format_version'`,
+		`create trigger reject_projection_delete before delete on usage_monitoring_event_projection_v1
+		begin select raise(abort, 'startup migration must not delete projection rows'); end`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("prepare bounded migration fixture: %v", err)
+		}
+	}
+
+	started := time.Now()
+	if err := ensureUsageMonitoringProjectionIdentity(db); err != nil {
+		t.Fatalf("run bounded monitoring migration: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("150k startup migration took %s, want bounded metadata-only work", elapsed)
+	}
+	assertTableCount(t, db, "usage_events", 150000)
+	assertTableCount(t, db, usageprojection.EventTable, 0)
+	_, projectionLegacy, status := latestMonitoringCleanupJob(t, db)
+	if status != "online_cleanup" || projectionLegacy == "" {
+		t.Fatalf("150k monitoring cleanup job = projection:%q status:%q", projectionLegacy, status)
+	}
+	assertTableCount(t, db, projectionLegacy, 150000)
+	var coverage, target int64
+	if err := db.QueryRow(`select coverage_event_id, target_event_id from usage_monitoring_rollup_state where rollup_name = ?`, usageMonitoringProjectionRollupName).Scan(&coverage, &target); err != nil {
+		t.Fatalf("read scheduled projection rebuild: %v", err)
+	}
+	if coverage != 0 || target != 150000 {
+		t.Fatalf("scheduled projection rebuild = coverage:%d target:%d", coverage, target)
+	}
+}
+
+func latestMonitoringCleanupJob(t testing.TB, db *sql.DB) (string, string, string) {
+	t.Helper()
+	var ftsTable, projectionTable, status string
+	if err := db.QueryRow(`select fts_table, coalesce(projection_table, ''), status
+		from usage_derived_cleanup_jobs where kind = 'monitoring_fts'
+		order by generation desc limit 1`).Scan(&ftsTable, &projectionTable, &status); err != nil {
+		t.Fatalf("read latest monitoring cleanup job: %v", err)
+	}
+	return ftsTable, projectionTable, status
 }
 
 func TestUsageMonitoringModelFormatUpgradeRecoversMissingSearchIndex(t *testing.T) {
@@ -741,7 +895,8 @@ func TestUsageMonitoringModelFormatUpgradeRecoversMissingSearchIndex(t *testing.
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	assertTableCount(t, db, "usage_events", 1)
-	assertTableCount(t, db, "usage_monitoring_event_projection_v1", 0)
+	assertTableCount(t, db, usageprojection.EventTable, 0)
+	assertTableCount(t, db, usageMonitoringProjectionLegacy, 1)
 	var searchIndexCount int
 	if err := db.QueryRow(`select count(*) from sqlite_master
 		where type = 'table' and name = 'usage_monitoring_event_search_v1'`).Scan(&searchIndexCount); err != nil {
@@ -752,7 +907,7 @@ func TestUsageMonitoringModelFormatUpgradeRecoversMissingSearchIndex(t *testing.
 	}
 }
 
-func TestUsageMonitoringSearchIndexRebuildRollsBackAndRetries(t *testing.T) {
+func TestUsageMonitoringSearchIndexCreationDefersBackfill(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage-monitoring-search-retry.sqlite")
 	db, err := Open(path)
 	if err != nil {
@@ -788,38 +943,35 @@ func TestUsageMonitoringSearchIndexRebuildRollsBackAndRetries(t *testing.T) {
 		}
 	}
 
-	if err := ensureUsageMonitoringSearchIndex(db); err == nil {
-		t.Fatal("search index rebuild error = nil, want ready-state failure")
+	if err := ensureUsageMonitoringSearchIndex(db); err != nil {
+		t.Fatalf("create deferred search index: %v", err)
 	}
 	var searchIndexCount int
 	if err := db.QueryRowContext(ctx, `select count(*) from sqlite_master
 		where type = 'table' and name = 'usage_monitoring_event_search_v1'`).Scan(&searchIndexCount); err != nil {
 		t.Fatalf("inspect rolled-back search index: %v", err)
 	}
-	if searchIndexCount != 0 {
-		t.Fatalf("rolled-back search index count = %d, want 0", searchIndexCount)
+	if searchIndexCount != 1 {
+		t.Fatalf("deferred search index count = %d, want 1", searchIndexCount)
 	}
 	var ready int
 	if err := db.QueryRowContext(ctx, `select ready from usage_monitoring_search_index_state where id = 1`).Scan(&ready); err != nil {
 		t.Fatalf("read rolled-back search state: %v", err)
 	}
-	if ready != 1 {
-		t.Fatalf("rolled-back search ready = %d, want 1", ready)
+	if ready != 0 {
+		t.Fatalf("deferred search ready = %d, want 0", ready)
 	}
 
 	if _, err := db.ExecContext(ctx, `drop trigger reject_usage_monitoring_search_ready`); err != nil {
 		t.Fatalf("drop search retry failure trigger: %v", err)
-	}
-	if err := ensureUsageMonitoringSearchIndex(db); err != nil {
-		t.Fatalf("retry search index rebuild: %v", err)
 	}
 	var matched int
 	if err := db.QueryRowContext(ctx, `select count(*) from usage_monitoring_event_search_v1
 		where search_text like '%searchretrymarker%'`).Scan(&matched); err != nil {
 		t.Fatalf("query rebuilt search index: %v", err)
 	}
-	if matched != 1 {
-		t.Fatalf("rebuilt search matches = %d, want 1", matched)
+	if matched != 0 {
+		t.Fatalf("search matches before background catch-up = %d, want 0", matched)
 	}
 }
 
@@ -866,7 +1018,9 @@ func TestMigrateRejectsUnknownMonitoringModelFormatBeforeOtherSchemaChanges(t *t
 		t.Fatalf("open sqlite: %v", err)
 	}
 	for _, statement := range []string{
-		`drop index idx_usage_events_latest_request_auth_file`,
+		`drop index if exists idx_usage_events_latest_request_auth_file`,
+		`drop table usage_derived_cleanup_cursors`,
+		`drop table usage_derived_cleanup_jobs`,
 		`update settings set value = 'future' where key = 'usage_monitoring_model_format_version'`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
@@ -894,6 +1048,14 @@ func TestMigrateRejectsUnknownMonitoringModelFormatBeforeOtherSchemaChanges(t *t
 	if indexCount != 0 {
 		t.Fatalf("unrelated index count after monitoring preflight rejection = %d, want 0", indexCount)
 	}
+	var cleanupTableCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master
+		where type = 'table' and name in ('usage_derived_cleanup_jobs', 'usage_derived_cleanup_cursors')`).Scan(&cleanupTableCount); err != nil {
+		t.Fatalf("inspect cleanup schema after monitoring preflight rejection: %v", err)
+	}
+	if cleanupTableCount != 0 {
+		t.Fatalf("cleanup table count after monitoring preflight rejection = %d, want 0", cleanupTableCount)
+	}
 }
 
 func TestMigrateRejectsUnknownAccountHistoryFormatBeforeOtherSchemaChanges(t *testing.T) {
@@ -903,7 +1065,7 @@ func TestMigrateRejectsUnknownAccountHistoryFormatBeforeOtherSchemaChanges(t *te
 		t.Fatalf("open sqlite: %v", err)
 	}
 	for _, statement := range []string{
-		`drop index idx_usage_events_latest_request_auth_file`,
+		`drop index if exists idx_usage_events_latest_request_auth_file`,
 		`update settings set value = 'future' where key = 'usage_account_history_identity_format_version'`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
@@ -940,7 +1102,7 @@ func TestMigrateRejectsUnknownDashboardFormatBeforeOtherSchemaChanges(t *testing
 		t.Fatalf("open sqlite: %v", err)
 	}
 	for _, statement := range []string{
-		`drop index idx_usage_events_latest_request_auth_file`,
+		`drop index if exists idx_usage_events_latest_request_auth_file`,
 		`update settings set value = 'future' where key = 'usage_dashboard_hourly_format_version'`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
@@ -970,7 +1132,7 @@ func TestMigrateRejectsUnknownDashboardFormatBeforeOtherSchemaChanges(t *testing
 	}
 }
 
-func TestMigrateBackfillsLegacyQuotaSnapshotsIntoLifecycle(t *testing.T) {
+func TestMigrateDefersLegacyQuotaSnapshotLifecycleBackfill(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-account-quota-snapshots.sqlite")
 	db, err := sql.Open("sqlite", dataSourceName(path))
 	if err != nil {
@@ -1036,8 +1198,24 @@ func TestMigrateBackfillsLegacyQuotaSnapshotsIntoLifecycle(t *testing.T) {
 	if err := Migrate(db); err != nil {
 		t.Fatalf("migrate legacy quota snapshots: %v", err)
 	}
+	var pendingBeforeWorker int
+	if err := db.QueryRow(`select count(*) from account_quota_snapshots where observation_id is null`).Scan(&pendingBeforeWorker); err != nil {
+		t.Fatalf("count deferred legacy quota snapshots: %v", err)
+	}
+	if pendingBeforeWorker != 2 {
+		t.Fatalf("deferred legacy quota snapshots = %d, want 2", pendingBeforeWorker)
+	}
 	if err := Migrate(db); err != nil {
 		t.Fatalf("repeat legacy quota snapshot migration: %v", err)
+	}
+	for {
+		result, err := quotasnapshotrepo.BackfillLegacySnapshotsBatch(context.Background(), db, 1000)
+		if err != nil {
+			t.Fatalf("run deferred legacy quota snapshot batch: %v", err)
+		}
+		if result.Completed {
+			break
+		}
 	}
 
 	var observationID, logicalWindowID, activationID, cycleID sql.NullInt64
@@ -1213,7 +1391,7 @@ func TestMigrateAddsQuotaObservationLifecycleAppliedColumn(t *testing.T) {
 	}
 }
 
-func TestUsageDataMigrationUpgradeAddsChangedRowsAndPreservesV1(t *testing.T) {
+func TestUsageDataMigrationUpgradeAddsProgressColumnsAndPreservesV1(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage-data-migration-upgrade.sqlite")
 	db, err := Open(path)
 	if err != nil {
@@ -1239,8 +1417,8 @@ func TestUsageDataMigrationUpgradeAddsChangedRowsAndPreservesV1(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	columns := migrationTableColumns(t, db, "usage_data_migrations")
-	if !columns["changed_rows"] {
-		t.Fatalf("migration columns = %#v, missing changed_rows", columns)
+	if !columns["changed_rows"] || !columns["applied_rows"] {
+		t.Fatalf("migration columns = %#v, missing progress columns", columns)
 	}
 	var v1Status, v2Status string
 	if err := db.QueryRow(`select status from usage_data_migrations where name = 'usage_cache_accounting_v1'`).Scan(&v1Status); err != nil {
@@ -1295,6 +1473,14 @@ func TestCodexInspectionAutoRecoverySchema(t *testing.T) {
 			t.Fatalf("quota cooldown columns = %#v, missing %s", cooldownColumns, column)
 		}
 	}
+	var identityIndexCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index'
+		and name = 'idx_account_action_candidates_pending_identity_action'`).Scan(&identityIndexCount); err != nil {
+		t.Fatalf("inspect deferred account action identity index: %v", err)
+	}
+	if identityIndexCount != 0 {
+		t.Fatalf("account action identity index count before post-listen maintenance = %d, want 0", identityIndexCount)
+	}
 	for index, account := range []string{"alice@example.com", "bob@example.com"} {
 		if _, err := db.Exec(`insert into quota_cooldowns (
 			auth_file_name, account_snapshot, provider, recover_at_ms, owner,
@@ -1318,9 +1504,18 @@ func TestMigrateReplacesLegacyQuotaCooldownOwnerIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	if err := RunDerivedStartupMaintenance(context.Background(), db); err != nil {
+		_ = db.Close()
+		t.Fatalf("prepare current indexes: %v", err)
+	}
 	for _, statement := range []string{
 		`drop index idx_quota_cooldowns_active_identity`,
 		`create unique index idx_quota_cooldowns_active_owner on quota_cooldowns(auth_file_name, owner) where status = 'active'`,
+		`insert into quota_cooldowns (
+			auth_file_name, account_snapshot, provider, recover_at_ms, owner,
+			pre_disabled_state, status, disabled_at_ms, created_at_ms, updated_at_ms
+		) values ('shared.json', 'seed@example.com', 'codex', 900,
+			'cpamp_usage_429', 0, 'active', 1, 1, 1)`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			_ = db.Close()
@@ -1340,8 +1535,37 @@ func TestMigrateReplacesLegacyQuotaCooldownOwnerIndex(t *testing.T) {
 	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_quota_cooldowns_active_owner'`).Scan(&legacyIndexCount); err != nil {
 		t.Fatalf("read legacy index state: %v", err)
 	}
+	if legacyIndexCount != 1 {
+		t.Fatalf("legacy quota cooldown index changed before post-listen maintenance")
+	}
+	if err := RunDerivedStartupMaintenance(context.Background(), db); err != nil {
+		t.Fatalf("run bounded quota cooldown index preparation: %v", err)
+	}
+	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_quota_cooldowns_active_owner'`).Scan(&legacyIndexCount); err != nil {
+		t.Fatalf("read post-listen legacy index state: %v", err)
+	}
+	if legacyIndexCount != 1 {
+		t.Fatalf("legacy quota cooldown index changed on non-empty startup")
+	}
+	var replacementIndexCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_quota_cooldowns_active_identity'`).Scan(&replacementIndexCount); err != nil {
+		t.Fatalf("read deferred replacement index state: %v", err)
+	}
+	if replacementIndexCount != 0 {
+		t.Fatalf("replacement quota cooldown index exists before offline cleanup")
+	}
+	result, err := CleanupDerivedOffline(context.Background(), db)
+	if err != nil {
+		t.Fatalf("replace legacy quota cooldown index offline: %v", err)
+	}
+	if result.PreparedIndexes == 0 {
+		t.Fatalf("offline cleanup result = %+v, want index changes", result)
+	}
+	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'index' and name = 'idx_quota_cooldowns_active_owner'`).Scan(&legacyIndexCount); err != nil {
+		t.Fatalf("read offline legacy index state: %v", err)
+	}
 	if legacyIndexCount != 0 {
-		t.Fatalf("legacy quota cooldown index still exists")
+		t.Fatalf("legacy quota cooldown index still exists after offline cleanup")
 	}
 
 	for index, account := range []string{"alice@example.com", "bob@example.com"} {
@@ -1485,7 +1709,7 @@ func TestEnsureCodexInspectionResultColumnsAddsIdentityAndAutoRecoveryColumns(t 
 	}
 }
 
-func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
+func TestEnsureUsageRollupLongContextColumnsParksPopulatedTablesAtomically(t *testing.T) {
 	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "rollup-migration.sqlite")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -1499,8 +1723,7 @@ func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
 		`insert into usage_account_model_rollups (id) values (1)`,
 		`insert into usage_dashboard_hourly_rollups (id) values (1)`,
 		`insert into usage_rollup_checkpoints (name) values ('account_history'), ('dashboard_hourly')`,
-		`create trigger reject_account_rollup_delete before delete on usage_account_model_rollups
-		begin select raise(abort, 'blocked'); end`,
+		`create table ` + usageDashboardHourlyLegacy + ` (id integer primary key)`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatalf("setup migration fixture: %v", err)
@@ -1508,7 +1731,7 @@ func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
 	}
 
 	if err := ensureUsageRollupLongContextColumns(db); err == nil {
-		t.Fatal("migration error = nil, want trigger failure")
+		t.Fatal("migration error = nil, want parked-table name conflict")
 	}
 	for _, table := range []string{"usage_account_model_rollups", "usage_dashboard_hourly_rollups"} {
 		columns := migrationTableColumns(t, db, table)
@@ -1519,9 +1742,16 @@ func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
 	assertTableCount(t, db, "usage_account_model_rollups", 1)
 	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 1)
 	assertTableCount(t, db, "usage_rollup_checkpoints", 2)
+	var accountLegacyCount int
+	if err := db.QueryRow(`select count(*) from sqlite_master where type = 'table' and name = ?`, usageAccountModelRollupsLegacy).Scan(&accountLegacyCount); err != nil {
+		t.Fatalf("inspect rolled-back account legacy table: %v", err)
+	}
+	if accountLegacyCount != 0 {
+		t.Fatalf("account legacy table count after rollback = %d, want 0", accountLegacyCount)
+	}
 
-	if _, err := db.Exec(`drop trigger reject_account_rollup_delete`); err != nil {
-		t.Fatalf("drop failure trigger: %v", err)
+	if _, err := db.Exec(`drop table ` + usageDashboardHourlyLegacy); err != nil {
+		t.Fatalf("drop conflicting legacy table: %v", err)
 	}
 	if err := ensureUsageRollupLongContextColumns(db); err != nil {
 		t.Fatalf("retry migration: %v", err)
@@ -1542,6 +1772,8 @@ func TestEnsureUsageRollupLongContextColumnsRollsBackAndRetries(t *testing.T) {
 	}
 	assertTableCount(t, db, "usage_account_model_rollups", 0)
 	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 0)
+	assertTableCount(t, db, usageAccountModelRollupsLegacy, 1)
+	assertTableCount(t, db, usageDashboardHourlyLegacy, 1)
 	assertTableCount(t, db, "usage_rollup_checkpoints", 0)
 }
 
@@ -1616,7 +1848,9 @@ func TestUsageAccountModelRollupPrimaryKeyUpgradeRebuildsDerivedData(t *testing.
 	assertTableCount(t, db, "usage_events", 1)
 	assertTableCount(t, db, usageAccountModelRollupsTable, 0)
 	assertTableCount(t, db, usagePricingAccountRollupsTable, 0)
-	assertTableCount(t, db, "usage_pricing_hourly_rollups_v1", 0)
+	assertTableCount(t, db, "usage_pricing_hourly_rollups_v1", 1)
+	assertTableCount(t, db, usageAccountModelRollupsLegacy, 1)
+	assertTableCount(t, db, usagePricingAccountLegacy, 1)
 	var accountCheckpoints int
 	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'account_history'`).Scan(&accountCheckpoints); err != nil {
 		t.Fatalf("read account checkpoint: %v", err)
@@ -1639,7 +1873,7 @@ func TestUsageAccountModelRollupPrimaryKeyUpgradeRebuildsDerivedData(t *testing.
 	}
 }
 
-func TestUsageAccountModelRollupPrimaryKeyUpgradeRollsBackAndRetries(t *testing.T) {
+func TestUsageAccountModelRollupPrimaryKeyUpgradeDoesNotDeleteDerivedRows(t *testing.T) {
 	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "usage-account-model-primary-key-retry.sqlite")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -1686,25 +1920,27 @@ func TestUsageAccountModelRollupPrimaryKeyUpgradeRollsBackAndRetries(t *testing.
 		}
 	}
 
-	if err := ensureUsageAccountModelRollupPrimaryKeys(db); err == nil {
-		t.Fatal("primary key migration error = nil, want trigger failure")
+	if err := ensureUsageAccountModelRollupPrimaryKeys(db); err != nil {
+		t.Fatalf("primary key migration: %v", err)
 	}
-	if got := migrationTablePrimaryKey(t, db, usageAccountModelRollupsTable); got["model"] != 0 {
-		t.Fatalf("account primary key committed after failure = %#v", got)
+	if got := migrationTablePrimaryKey(t, db, usageAccountModelRollupsTable); got["model"] != 2 {
+		t.Fatalf("account primary key = %#v", got)
 	}
-	if got := migrationTablePrimaryKey(t, db, usagePricingAccountRollupsTable); got["model"] != 0 {
-		t.Fatalf("pricing primary key committed after failure = %#v", got)
+	if got := migrationTablePrimaryKey(t, db, usagePricingAccountRollupsTable); got["model"] != 3 {
+		t.Fatalf("pricing primary key = %#v", got)
 	}
-	assertTableCount(t, db, usageAccountModelRollupsTable, 1)
-	assertTableCount(t, db, usagePricingAccountRollupsTable, 1)
+	assertTableCount(t, db, usageAccountModelRollupsTable, 0)
+	assertTableCount(t, db, usagePricingAccountRollupsTable, 0)
+	assertTableCount(t, db, usageAccountModelRollupsLegacy, 1)
+	assertTableCount(t, db, usagePricingAccountLegacy, 1)
 	assertTableCount(t, db, "usage_pricing_hourly_rollups_v1", 1)
-	assertTableCount(t, db, "usage_rollup_checkpoints", 1)
+	assertTableCount(t, db, "usage_rollup_checkpoints", 0)
 
 	if _, err := db.Exec(`drop trigger reject_pricing_hourly_delete`); err != nil {
 		t.Fatalf("drop failure trigger: %v", err)
 	}
 	if err := ensureUsageAccountModelRollupPrimaryKeys(db); err != nil {
-		t.Fatalf("retry primary key migration: %v", err)
+		t.Fatalf("repeat primary key migration: %v", err)
 	}
 	if got := migrationTablePrimaryKey(t, db, usageAccountModelRollupsTable); got["model"] != 2 {
 		t.Fatalf("account primary key after retry = %#v", got)
@@ -1714,7 +1950,7 @@ func TestUsageAccountModelRollupPrimaryKeyUpgradeRollsBackAndRetries(t *testing.
 	}
 	assertTableCount(t, db, usageAccountModelRollupsTable, 0)
 	assertTableCount(t, db, usagePricingAccountRollupsTable, 0)
-	assertTableCount(t, db, "usage_pricing_hourly_rollups_v1", 0)
+	assertTableCount(t, db, "usage_pricing_hourly_rollups_v1", 1)
 	assertTableCount(t, db, "usage_rollup_checkpoints", 0)
 }
 
@@ -1752,6 +1988,7 @@ func TestAccountHistoryIdentityFormatUpgradeRebuildsDerivedDataOnce(t *testing.T
 	}
 	assertTableCount(t, db, "usage_events", 1)
 	assertTableCount(t, db, "usage_account_model_rollups", 0)
+	assertTableCount(t, db, usageAccountModelRollupsLegacy, 1)
 	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 1)
 	var accountCheckpoints, dashboardCheckpoints int
 	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'account_history'`).Scan(&accountCheckpoints); err != nil {
@@ -1801,7 +2038,7 @@ func TestAccountHistoryIdentityFormatUpgradeRebuildsDerivedDataOnce(t *testing.T
 	}
 }
 
-func TestAccountHistoryIdentityFormatUpgradeRollsBackAndRetries(t *testing.T) {
+func TestAccountHistoryIdentityFormatUpgradeDoesNotDeleteDerivedRows(t *testing.T) {
 	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "account-history-identity-retry.sqlite")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -1825,28 +2062,30 @@ func TestAccountHistoryIdentityFormatUpgradeRollsBackAndRetries(t *testing.T) {
 		}
 	}
 
-	if err := ensureAccountHistoryIdentityFormatVersion(db); err == nil {
-		t.Fatal("identity migration error = nil, want trigger failure")
+	if err := ensureAccountHistoryIdentityFormatVersion(db); err != nil {
+		t.Fatalf("identity migration: %v", err)
 	}
 	assertTableCount(t, db, "usage_events", 1)
-	assertTableCount(t, db, "usage_account_model_rollups", 1)
-	assertTableCount(t, db, "usage_rollup_checkpoints", 2)
+	assertTableCount(t, db, "usage_account_model_rollups", 0)
+	assertTableCount(t, db, usageAccountModelRollupsLegacy, 1)
+	assertTableCount(t, db, "usage_rollup_checkpoints", 1)
 	var version string
 	if err := db.QueryRow(`select value from settings where key = ?`, accountHistoryIdentityFormatVersionKey).Scan(&version); err != nil {
 		t.Fatalf("read rolled-back identity version: %v", err)
 	}
-	if version != "1" {
-		t.Fatalf("identity version after rollback = %q, want 1", version)
+	if version != usageidentity.AccountHistoryStructureRevision() {
+		t.Fatalf("identity version = %q, want %q", version, usageidentity.AccountHistoryStructureRevision())
 	}
 
 	if _, err := db.Exec(`drop trigger reject_account_identity_rollup_delete`); err != nil {
 		t.Fatalf("drop failure trigger: %v", err)
 	}
 	if err := ensureAccountHistoryIdentityFormatVersion(db); err != nil {
-		t.Fatalf("retry identity migration: %v", err)
+		t.Fatalf("repeat identity migration: %v", err)
 	}
 	assertTableCount(t, db, "usage_events", 1)
 	assertTableCount(t, db, "usage_account_model_rollups", 0)
+	assertTableCount(t, db, usageAccountModelRollupsLegacy, 1)
 	var accountCheckpoints, dashboardCheckpoints int
 	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'account_history'`).Scan(&accountCheckpoints); err != nil {
 		t.Fatalf("read account checkpoint count: %v", err)
@@ -1934,6 +2173,7 @@ func TestDashboardHourlyRollupFormatUpgradeRebuildsOnce(t *testing.T) {
 	}
 	assertTableCount(t, db, "usage_events", 1)
 	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 0)
+	assertTableCount(t, db, usageDashboardHourlyLegacy, 1)
 	var dashboardCheckpoints, accountCheckpoints int
 	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'dashboard_hourly'`).Scan(&dashboardCheckpoints); err != nil {
 		t.Fatalf("read dashboard checkpoint count: %v", err)
@@ -1980,7 +2220,7 @@ func TestDashboardHourlyRollupFormatUpgradeRebuildsOnce(t *testing.T) {
 	}
 }
 
-func TestDashboardHourlyRollupFormatUpgradeRollsBackAndRetries(t *testing.T) {
+func TestDashboardHourlyRollupFormatUpgradeDoesNotDeleteDerivedRows(t *testing.T) {
 	db, err := sql.Open("sqlite", dataSourceName(filepath.Join(t.TempDir(), "dashboard-rollup-format-retry.sqlite")))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -2000,26 +2240,28 @@ func TestDashboardHourlyRollupFormatUpgradeRollsBackAndRetries(t *testing.T) {
 		}
 	}
 
-	if err := ensureDashboardHourlyRollupFormatVersion(db); err == nil {
-		t.Fatal("format migration error = nil, want trigger failure")
+	if err := ensureDashboardHourlyRollupFormatVersion(db); err != nil {
+		t.Fatalf("format migration: %v", err)
 	}
-	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 1)
-	assertTableCount(t, db, "usage_rollup_checkpoints", 2)
+	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 0)
+	assertTableCount(t, db, usageDashboardHourlyLegacy, 1)
+	assertTableCount(t, db, "usage_rollup_checkpoints", 1)
 	var settingCount int
 	if err := db.QueryRow(`select count(*) from settings where key = ?`, dashboardHourlyRollupFormatVersionKey).Scan(&settingCount); err != nil {
 		t.Fatalf("read format setting count: %v", err)
 	}
-	if settingCount != 0 {
-		t.Fatalf("format setting count after rollback = %d, want 0", settingCount)
+	if settingCount != 1 {
+		t.Fatalf("format setting count = %d, want 1", settingCount)
 	}
 
 	if _, err := db.Exec(`drop trigger reject_dashboard_rollup_delete`); err != nil {
 		t.Fatalf("drop failure trigger: %v", err)
 	}
 	if err := ensureDashboardHourlyRollupFormatVersion(db); err != nil {
-		t.Fatalf("retry format migration: %v", err)
+		t.Fatalf("repeat format migration: %v", err)
 	}
 	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 0)
+	assertTableCount(t, db, usageDashboardHourlyLegacy, 1)
 	var dashboardCheckpoints, accountCheckpoints int
 	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'dashboard_hourly'`).Scan(&dashboardCheckpoints); err != nil {
 		t.Fatalf("read dashboard checkpoint count: %v", err)
@@ -2129,7 +2371,7 @@ func TestUsageHourlyAggregateMigrationIsAdditiveAndSeedsPendingState(t *testing.
 	); err != nil {
 		t.Fatalf("read aggregate state: %v", err)
 	}
-	if version != 2 || status != "pending" || checkpoint != 0 || coverage != 0 || target != 1 {
+	if version != usageHourlyAggregateSchemaVersion || status != "pending" || checkpoint != 0 || coverage != 0 || target != 1 {
 		t.Fatalf("aggregate state = version:%d status:%q checkpoint:%d coverage:%d target:%d", version, status, checkpoint, coverage, target)
 	}
 	assertTableCount(t, db, "usage_events", 1)
@@ -2143,7 +2385,7 @@ func TestMigrateRejectsUnknownHourlyAggregateVersionBeforeOtherSchemaChanges(t *
 		t.Fatalf("open sqlite: %v", err)
 	}
 	for _, statement := range []string{
-		`drop index idx_usage_events_latest_request_auth_file`,
+		`drop index if exists idx_usage_events_latest_request_auth_file`,
 		`update usage_hourly_aggregate_state set schema_version = 99
 		where aggregate_name = 'hourly_core'`,
 	} {
@@ -2171,6 +2413,29 @@ func TestMigrateRejectsUnknownHourlyAggregateVersionBeforeOtherSchemaChanges(t *
 	}
 	if indexCount != 0 {
 		t.Fatalf("unrelated index count after hourly preflight rejection = %d, want 0", indexCount)
+	}
+}
+
+func TestNewUsageHourlyAggregateRebuildRevisionIsRandomAndUnique(t *testing.T) {
+	prefix := usageHourlyAggregateStructureRevision + ":rebuild-"
+	revisions := make(map[string]struct{}, 2)
+	for index := 0; index < 2; index++ {
+		revision, err := newUsageHourlyAggregateRebuildRevision()
+		if err != nil {
+			t.Fatalf("generate rebuild revision: %v", err)
+		}
+		if !strings.HasPrefix(revision, prefix) {
+			t.Fatalf("rebuild revision = %q, want prefix %q", revision, prefix)
+		}
+		suffix := strings.TrimPrefix(revision, prefix)
+		decoded, err := hex.DecodeString(suffix)
+		if err != nil || len(decoded) != 16 {
+			t.Fatalf("rebuild revision suffix = %q, decoded=%d err=%v", suffix, len(decoded), err)
+		}
+		if _, exists := revisions[revision]; exists {
+			t.Fatalf("duplicate rebuild revision = %q", revision)
+		}
+		revisions[revision] = struct{}{}
 	}
 }
 
@@ -2202,8 +2467,8 @@ func TestUsageHourlyAggregateMigrationResetsCoverageWhenAggregateTableWasLost(t 
 		where event_hash = 'aggregate-recovery-event'`).Scan(&ledgerVersion); err != nil {
 		t.Fatalf("read reset aggregate ledger: %v", err)
 	}
-	if ledgerVersion != 0 {
-		t.Fatalf("aggregate ledger version = %d, want 0", ledgerVersion)
+	if ledgerVersion != usageHourlyAggregateSchemaVersion {
+		t.Fatalf("aggregate ledger version = %d, want %d", ledgerVersion, usageHourlyAggregateSchemaVersion)
 	}
 }
 
@@ -2315,8 +2580,8 @@ func TestUsageHourlyAggregateMigrationPreservesCompleteCoverageOnRestart(t *test
 		where event_hash = 'aggregate-recovery-event'`).Scan(&ledgerVersion); err != nil {
 		t.Fatalf("read preserved aggregate ledger: %v", err)
 	}
-	if ledgerVersion != 2 {
-		t.Fatalf("aggregate ledger version = %d, want 2", ledgerVersion)
+	if ledgerVersion != usageHourlyAggregateSchemaVersion {
+		t.Fatalf("aggregate ledger version = %d, want %d", ledgerVersion, usageHourlyAggregateSchemaVersion)
 	}
 	var status string
 	var checkpoint, coverage, target, processed int64
@@ -2337,7 +2602,7 @@ func TestUsageHourlyAggregateMigrationPreservesCompleteCoverageOnRestart(t *test
 	}
 }
 
-func TestUsageHourlyAggregateMigrationRecoveryRollsBackAndRetries(t *testing.T) {
+func TestUsageHourlyAggregateMigrationRecoveryDoesNotDeleteDerivedRows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage-hourly-aggregate-recovery-retry.sqlite")
 	db, err := Open(path)
 	if err != nil {
@@ -2359,39 +2624,13 @@ func TestUsageHourlyAggregateMigrationRecoveryRollsBackAndRetries(t *testing.T) 
 		t.Fatalf("close damaged sqlite: %v", err)
 	}
 
-	if _, err := Open(path); err == nil {
-		t.Fatal("reopen damaged sqlite error = nil, want recovery trigger failure")
-	}
-	db, err = sql.Open("sqlite", dataSourceName(path))
-	if err != nil {
-		t.Fatalf("open failed recovery sqlite: %v", err)
-	}
-	assertTableCount(t, db, "usage_hourly_aggregate_v1", 1)
-	var stateStatus string
-	var coverage int64
-	if err := db.QueryRow(`select status, coverage_event_id from usage_hourly_aggregate_state
-		where aggregate_name = 'hourly_core'`).Scan(&stateStatus, &coverage); err != nil {
-		_ = db.Close()
-		t.Fatalf("read rolled-back aggregate state: %v", err)
-	}
-	if stateStatus != "ready" || coverage != 1 {
-		_ = db.Close()
-		t.Fatalf("rolled-back aggregate state = status:%q coverage:%d", stateStatus, coverage)
-	}
-	if _, err := db.Exec(`drop trigger reject_usage_hourly_aggregate_recovery`); err != nil {
-		_ = db.Close()
-		t.Fatalf("drop aggregate recovery trigger: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close failed recovery sqlite: %v", err)
-	}
-
 	db, err = Open(path)
 	if err != nil {
-		t.Fatalf("retry aggregate recovery: %v", err)
+		t.Fatalf("recover aggregate without deleting legacy rows: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	assertTableCount(t, db, "usage_hourly_aggregate_v1", 0)
+	assertTableCount(t, db, usageHourlyAggregateLegacy, 1)
 	assertTableCount(t, db, "usage_event_identity_ledger", 0)
 	assertUsageHourlyAggregateReset(t, db, 1)
 }
@@ -2412,8 +2651,10 @@ func seedReadyUsageHourlyAggregate(t *testing.T, db *sql.DB) {
 		) values (3600000, 'gpt-test', 'gpt-test', '', 0, 1, 10, 5, 15, 1)`,
 		`insert into usage_event_identity_ledger (
 			event_hash, raw_event_id, timestamp_ms, bucket_ms,
-			aggregate_schema_version, first_seen_at_ms, updated_at_ms
-		) select event_hash, id, timestamp_ms, 3600000, 2, created_at_ms, 1
+			aggregate_schema_version, aggregate_structure_revision,
+			first_seen_at_ms, updated_at_ms
+		) select event_hash, id, timestamp_ms, 3600000, 3,
+			'schema-3:model-1', created_at_ms, 1
 		from usage_events where event_hash = 'aggregate-recovery-event'`,
 		`update usage_hourly_aggregate_state set
 			status = 'ready', backfill_last_event_id = 1, coverage_event_id = 1,
@@ -2421,7 +2662,7 @@ func seedReadyUsageHourlyAggregate(t *testing.T, db *sql.DB) {
 			min_bucket_ms = 3600000, max_bucket_ms = 3600000,
 			last_run_started_at_ms = 1, updated_at_ms = 1,
 			finished_at_ms = 1, last_error = null
-		where aggregate_name = 'hourly_core' and schema_version = 2`,
+		where aggregate_name = 'hourly_core' and schema_version = 3`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatalf("seed ready usage hourly aggregate: %v", err)
@@ -2457,7 +2698,7 @@ func assertUsageHourlyAggregateState(t *testing.T, db *sql.DB, wantStatus string
 	); err != nil {
 		t.Fatalf("read reset aggregate state: %v", err)
 	}
-	if version != 2 || status != wantStatus || checkpoint != 0 || coverage != 0 ||
+	if version != usageHourlyAggregateSchemaVersion || status != wantStatus || checkpoint != 0 || coverage != 0 ||
 		target != wantTarget || processed != 0 || minBucket.Valid || maxBucket.Valid ||
 		lastRun.Valid || finished.Valid {
 		t.Fatalf("reset aggregate state = version:%d status:%q checkpoint:%d coverage:%d target:%d processed:%d min:%v max:%v last_run:%v finished:%v",
@@ -2526,12 +2767,12 @@ func assertEmptyUsageDerivedState(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`select ready from usage_monitoring_search_index_state where id = 1`).Scan(&searchReady); err != nil {
 		t.Fatalf("read reset monitoring search state: %v", err)
 	}
-	if searchReady != 1 {
-		t.Fatalf("rebuilt empty monitoring search state = %d, want 1", searchReady)
+	if searchReady != 0 {
+		t.Fatalf("deferred empty monitoring search state = %d, want 0", searchReady)
 	}
 
 	rows, err = db.Query(`select name, status, last_event_id, target_event_id,
-		processed_rows, changed_rows from usage_data_migrations
+		processed_rows, changed_rows, applied_rows from usage_data_migrations
 		where name in ('usage_cache_accounting_v1', 'usage_cache_accounting_v2')
 		order by name`)
 	if err != nil {
@@ -2541,7 +2782,7 @@ func assertEmptyUsageDerivedState(t *testing.T, db *sql.DB) {
 	migrationStates := 0
 	for rows.Next() {
 		var name, status string
-		var lastEventID, targetEventID, processedRows, changedRows int64
+		var lastEventID, targetEventID, processedRows, changedRows, appliedRows int64
 		if err := rows.Scan(
 			&name,
 			&status,
@@ -2549,14 +2790,15 @@ func assertEmptyUsageDerivedState(t *testing.T, db *sql.DB) {
 			&targetEventID,
 			&processedRows,
 			&changedRows,
+			&appliedRows,
 		); err != nil {
 			t.Fatalf("scan reset usage data migration: %v", err)
 		}
 		migrationStates++
 		if status != "completed" || lastEventID != 0 || targetEventID != 0 ||
-			processedRows != 0 || changedRows != 0 {
-			t.Fatalf("reset usage data migration %s = status:%q last:%d target:%d processed:%d changed:%d",
-				name, status, lastEventID, targetEventID, processedRows, changedRows)
+			processedRows != 0 || changedRows != 0 || appliedRows != 0 {
+			t.Fatalf("reset usage data migration %s = status:%q last:%d target:%d processed:%d changed:%d applied:%d",
+				name, status, lastEventID, targetEventID, processedRows, changedRows, appliedRows)
 		}
 	}
 	if err := rows.Err(); err != nil {
