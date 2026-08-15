@@ -60,7 +60,7 @@ func TestLegacyQuotaSnapshotMigrationWorkerCompletesAndReportsProgress(t *testin
 	}
 }
 
-func TestLegacyQuotaSnapshotMigrationWorkerRecordsOversizedGroupFailure(t *testing.T) {
+func TestLegacyQuotaSnapshotMigrationWorkerPausesOversizedGroupForOfflineCleanup(t *testing.T) {
 	rawDB, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -74,9 +74,10 @@ func TestLegacyQuotaSnapshotMigrationWorkerRecordsOversizedGroupFailure(t *testi
 	ctx, cancel := context.WithCancel(context.Background())
 	w := NewLegacyQuotaSnapshotMigrationWorker(st)
 	w.groupLimit = 1
-	w.retryDelay = time.Hour
+	w.retryDelay = time.Millisecond
 	w.Start(ctx)
 	waitForLegacyMigrationStatus(t, rawDB, "failed")
+	time.Sleep(20 * time.Millisecond)
 	cancel()
 
 	var lastError string
@@ -92,8 +93,32 @@ func TestLegacyQuotaSnapshotMigrationWorkerRecordsOversizedGroupFailure(t *testi
 	if !strings.Contains(lastError, "exceeds safe batch limit 1") || attachedSnapshots != 0 {
 		t.Fatalf("failed worker state = error:%q attached:%d", lastError, attachedSnapshots)
 	}
-	if !strings.Contains(logs.String(), "[quota-snapshot-migration] batch failed; will retry") {
-		t.Fatalf("worker failure log missing: %s", logs.String())
+	if !strings.Contains(logs.String(), "[quota-snapshot-migration] paused; offline cleanup required") {
+		t.Fatalf("worker offline cleanup log missing: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "will retry") {
+		t.Fatalf("oversized group was incorrectly retried: %s", logs.String())
+	}
+}
+
+func TestLegacyQuotaSnapshotMigrationWorkerIsSilentWhenNoMigrationWorkExists(t *testing.T) {
+	rawDB, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	st := store.New(rawDB)
+	t.Cleanup(func() { _ = st.Close() })
+
+	logs := captureWorkerLogs(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	w := NewLegacyQuotaSnapshotMigrationWorker(st)
+	w.Start(ctx)
+	waitForLegacyMigrationStatus(t, rawDB, "completed")
+	time.Sleep(20 * time.Millisecond)
+
+	if strings.Contains(logs.String(), "[quota-snapshot-migration]") {
+		t.Fatalf("no-op legacy migration emitted logs: %s", logs.String())
 	}
 }
 
@@ -148,6 +173,12 @@ func (b *lockedLogBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buffer.String()
+}
+
+func (b *lockedLogBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buffer.Reset()
 }
 
 func captureWorkerLogs(t *testing.T) *lockedLogBuffer {

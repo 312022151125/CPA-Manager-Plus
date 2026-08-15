@@ -2,10 +2,12 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
 
+	quotasnapshotrepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/quotasnapshot"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 )
 
@@ -52,10 +54,14 @@ func (w *LegacyQuotaSnapshotMigrationWorker) run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("[quota-snapshot-migration] batch failed; will retry: %v", err)
 			if recordErr := w.store.RecordLegacyQuotaSnapshotBackfillFailure(ctx, err); recordErr != nil && ctx.Err() == nil {
 				log.Printf("[quota-snapshot-migration] record failure: %v", recordErr)
 			}
+			if errors.Is(err, quotasnapshotrepo.ErrLegacySnapshotGroupTooLarge) {
+				log.Printf("[quota-snapshot-migration] paused; offline cleanup required: %v", err)
+				return
+			}
+			log.Printf("[quota-snapshot-migration] batch failed; will retry: %v", err)
 			if !waitFor(ctx, w.retryDelay) {
 				return
 			}
@@ -70,7 +76,9 @@ func (w *LegacyQuotaSnapshotMigrationWorker) run(ctx context.Context) {
 			log.Printf("[quota-snapshot-migration] progress processed=%d lastSnapshotID=%d pending=%t", total, result.LastSnapshotID, result.Pending)
 		}
 		if result.Completed {
-			log.Printf("[quota-snapshot-migration] completed processed=%d", total)
+			if started {
+				log.Printf("[quota-snapshot-migration] completed processed=%d", total)
+			}
 			return
 		}
 		if !waitFor(ctx, w.delay) {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -19,6 +20,20 @@ const (
 	candidateRowsPerSource      = 8
 	LegacySnapshotMigrationName = "quota_snapshot_lifecycle_v1"
 )
+
+var ErrLegacySnapshotGroupTooLarge = errors.New("legacy quota observation group exceeds online batch limit")
+
+type LegacySnapshotGroupTooLargeError struct {
+	Limit int
+}
+
+func (e LegacySnapshotGroupTooLargeError) Error() string {
+	return fmt.Sprintf("legacy quota observation group exceeds safe batch limit %d; stop Manager Server and run cleanup-derived", e.Limit)
+}
+
+func (e LegacySnapshotGroupTooLargeError) Unwrap() error {
+	return ErrLegacySnapshotGroupTooLarge
+}
 
 type LegacyBackfillResult struct {
 	Processed      int
@@ -74,7 +89,13 @@ func BackfillLegacySnapshotsBatch(ctx context.Context, db *sql.DB, maxGroupSize 
 	if maxGroupSize <= 0 {
 		maxGroupSize = 1000
 	}
-	firstRows, err := loadLegacySnapshots(ctx, db, `where observation_id is null
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return LegacyBackfillResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	firstRows, err := loadLegacySnapshots(ctx, tx, `where observation_id is null
 		order by account_key, provider, observed_at_ms,
 			case lower(trim(source))
 				when 'response_body' then 1
@@ -89,7 +110,10 @@ func BackfillLegacySnapshotsBatch(ctx context.Context, db *sql.DB, maxGroupSize 
 	}
 	if len(firstRows) == 0 {
 		result := LegacyBackfillResult{Completed: true}
-		if err := updateLegacyBackfillState(ctx, db, result); err != nil {
+		if err := updateLegacyBackfillState(ctx, tx, result); err != nil {
+			return LegacyBackfillResult{}, err
+		}
+		if err := tx.Commit(); err != nil {
 			return LegacyBackfillResult{}, err
 		}
 		return result, nil
@@ -111,12 +135,12 @@ func BackfillLegacySnapshotsBatch(ctx context.Context, db *sql.DB, maxGroupSize 
 	}
 	groupWhere += ` order by id limit ?`
 	args = append(args, maxGroupSize+1)
-	snapshots, err := loadLegacySnapshots(ctx, db, groupWhere, args...)
+	snapshots, err := loadLegacySnapshots(ctx, tx, groupWhere, args...)
 	if err != nil {
 		return LegacyBackfillResult{}, err
 	}
 	if len(snapshots) > maxGroupSize {
-		return LegacyBackfillResult{}, fmt.Errorf("legacy quota observation group exceeds safe batch limit %d", maxGroupSize)
+		return LegacyBackfillResult{}, LegacySnapshotGroupTooLargeError{Limit: maxGroupSize}
 	}
 	groupKey := strings.Join([]string{
 		first.AccountKey,
@@ -152,12 +176,12 @@ func BackfillLegacySnapshotsBatch(ctx context.Context, db *sql.DB, maxGroupSize 
 	write.Observation.WindowCount = len(write.Snapshots)
 	write.Observation.ObservationHash = legacyObservationHash(groupKey, write.Snapshots)
 	writes := []model.AccountQuotaObservationWrite{write}
-	if err := (&repository{db: db}).InsertObservationWrites(ctx, writes); err != nil {
+	if err := insertObservationWrites(ctx, tx, writes); err != nil {
 		return LegacyBackfillResult{}, err
 	}
 	processed := writes[0].InsertedSnapshotCount
 	var pending int
-	if err := db.QueryRowContext(ctx, `select exists (
+	if err := tx.QueryRowContext(ctx, `select exists (
 		select 1 from account_quota_snapshots where observation_id is null limit 1
 	)`).Scan(&pending); err != nil {
 		return LegacyBackfillResult{}, err
@@ -168,7 +192,10 @@ func BackfillLegacySnapshotsBatch(ctx context.Context, db *sql.DB, maxGroupSize 
 		Pending:        pending != 0,
 		Completed:      pending == 0,
 	}
-	if err := updateLegacyBackfillState(ctx, db, result); err != nil {
+	if err := updateLegacyBackfillState(ctx, tx, result); err != nil {
+		return LegacyBackfillResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return LegacyBackfillResult{}, err
 	}
 	return result, nil
@@ -243,7 +270,11 @@ func loadLegacySnapshots(ctx context.Context, db legacySnapshotRows, suffix stri
 	return result, rows.Err()
 }
 
-func updateLegacyBackfillState(ctx context.Context, db *sql.DB, result LegacyBackfillResult) error {
+type legacyBackfillStateWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func updateLegacyBackfillState(ctx context.Context, db legacyBackfillStateWriter, result LegacyBackfillResult) error {
 	nowMS := time.Now().UnixMilli()
 	status := "running"
 	finishedAt := any(nil)

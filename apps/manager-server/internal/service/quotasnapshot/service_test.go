@@ -3046,6 +3046,50 @@ func TestQueryPrefersNewerLegacySnapshotDuringPartialLifecycleMigration(t *testi
 	}
 }
 
+func TestQueryKeepsNewerLifecycleSnapshotAheadOfOlderLegacyEvidence(t *testing.T) {
+	nowMS := quotaLifecycleBaseMS + 2*quotaLifecycleDayMS
+	service, path := newQuotaSnapshotTestServiceWithPath(t, nowMS)
+	olderObservedAtMS := quotaLifecycleBaseMS + quotaLifecycleHourMS
+	newerObservedAtMS := olderObservedAtMS + quotaLifecycleHourMS
+	current := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, 7*24*60*60, 20)
+	current.BoundaryAccuracy = "estimated"
+	writeQuotaLifecycleObservation(t, service, "partial", newerObservedAtMS, []WindowInput{current})
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open partial migration database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var accountKey string
+	if err := db.QueryRow(`select account_key from account_quota_snapshots limit 1`).Scan(&accountKey); err != nil {
+		t.Fatalf("read quota account key: %v", err)
+	}
+	legacyCycleStartMS := quotaLifecycleBaseMS + quotaLifecycleDayMS
+	legacyCycleEndMS := legacyCycleStartMS + 7*quotaLifecycleDayMS
+	if _, err := db.Exec(`insert into account_quota_snapshots (
+		account_key, provider, provider_window_id, window_kind, window_mode,
+		model_scope_kind, model_ids_json, source, source_observation_id,
+		observed_at_ms, boundary_accuracy, cycle_start_ms, cycle_end_ms,
+		duration_seconds, used_percent, remaining_percent, created_at_ms
+	) values (?, 'codex', 'weekly', 'weekly', 'fixed', 'all', '[]',
+		'inspection', 'legacy-older', ?, 'exact', ?, ?, ?, 80, 20, ?)`,
+		accountKey,
+		olderObservedAtMS,
+		legacyCycleStartMS,
+		legacyCycleEndMS,
+		int64(7*24*60*60),
+		olderObservedAtMS,
+	); err != nil {
+		t.Fatalf("insert older unmigrated snapshot: %v", err)
+	}
+
+	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
+	if window.ObservedAtMS != newerObservedAtMS || window.SourceObservationID == "legacy-older" ||
+		window.UsedPercent == nil || *window.UsedPercent != 20 {
+		t.Fatalf("partially migrated quota selection = %#v", window)
+	}
+}
+
 func TestQuotaLifecyclePreservesSubwindowRelationshipUntilContainerAbsenceIsConfirmed(t *testing.T) {
 	service := newQuotaSnapshotTestService(t, quotaLifecycleBaseMS+2*quotaLifecycleDayMS)
 	weekly := quotaLifecycleFixedWindow("weekly", "weekly", quotaLifecycleBaseMS, 7*24*60*60, 10)

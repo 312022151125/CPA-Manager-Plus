@@ -3,6 +3,7 @@ package quotasnapshot_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -120,7 +121,7 @@ func TestBackfillLegacySnapshotsBatchRejectsOversizedGroupAtomically(t *testing.
 	seedLegacySnapshot(t, db, "account-1", "codex", "five-hour", "five_hour", "inspection", "group-1", 1000)
 
 	_, err = quotasnapshotrepo.BackfillLegacySnapshotsBatch(context.Background(), db, 1)
-	if err == nil || !strings.Contains(err.Error(), "exceeds safe batch limit 1") {
+	if !errors.Is(err, quotasnapshotrepo.ErrLegacySnapshotGroupTooLarge) || !strings.Contains(err.Error(), "exceeds safe batch limit 1") {
 		t.Fatalf("oversized group error = %v", err)
 	}
 	var attached, observations int
@@ -141,6 +142,97 @@ func TestBackfillLegacySnapshotsBatchRejectsOversizedGroupAtomically(t *testing.
 	if result.Processed != 2 || !result.Completed {
 		t.Fatalf("retried group result = %#v", result)
 	}
+}
+
+func TestBackfillLegacySnapshotsBatchRepairsUnattachedSnapshotsForExistingObservation(t *testing.T) {
+	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	seedLegacySnapshot(t, db, "account-1", "codex", "weekly", "weekly", "inspection", "group-1", 1000)
+
+	result, err := quotasnapshotrepo.BackfillLegacySnapshotsBatch(context.Background(), db, 10)
+	if err != nil {
+		t.Fatalf("create initial legacy observation: %v", err)
+	}
+	if result.Processed != 1 || !result.Completed {
+		t.Fatalf("initial legacy observation result = %#v", result)
+	}
+	if _, err := db.Exec(`update account_quota_snapshots set
+		observation_id = null, logical_window_id = null, activation_id = null, cycle_id = null
+		where id = 1`); err != nil {
+		t.Fatalf("detach legacy snapshot from existing observation: %v", err)
+	}
+
+	result, err = quotasnapshotrepo.BackfillLegacySnapshotsBatch(context.Background(), db, 10)
+	if err != nil {
+		t.Fatalf("repair detached legacy snapshot: %v", err)
+	}
+	if result.Processed != 1 || result.Pending || !result.Completed {
+		t.Fatalf("repaired legacy observation result = %#v", result)
+	}
+	assertLegacySnapshotAttachment(t, db, 1, true)
+	var observations, windows, activations, cycles int
+	for query, destination := range map[string]*int{
+		`select count(*) from account_quota_observations`:       &observations,
+		`select count(*) from account_quota_windows`:            &windows,
+		`select count(*) from account_quota_window_activations`: &activations,
+		`select count(*) from account_quota_cycles`:             &cycles,
+	} {
+		if err := db.QueryRow(query).Scan(destination); err != nil {
+			t.Fatalf("inspect repaired lifecycle state: %v", err)
+		}
+	}
+	if observations != 1 || windows != 1 || activations != 1 || cycles != 0 {
+		t.Fatalf("repaired lifecycle duplicated state observations:%d windows:%d activations:%d cycles:%d", observations, windows, activations, cycles)
+	}
+}
+
+func TestBackfillLegacySnapshotsBatchRollsBackLifecycleWhenProgressUpdateFails(t *testing.T) {
+	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	seedLegacySnapshot(t, db, "account-1", "codex", "weekly", "weekly", "inspection", "group-1", 1000)
+	if _, err := db.Exec(`create trigger reject_legacy_migration_progress
+		before update on usage_data_migrations
+		when new.name = 'quota_snapshot_lifecycle_v1'
+		begin select raise(abort, 'blocked progress update'); end`); err != nil {
+		t.Fatalf("create progress failure trigger: %v", err)
+	}
+
+	if _, err := quotasnapshotrepo.BackfillLegacySnapshotsBatch(context.Background(), db, 10); err == nil || !strings.Contains(err.Error(), "blocked progress update") {
+		t.Fatalf("progress update failure = %v", err)
+	}
+	assertLegacySnapshotAttachment(t, db, 1, false)
+	var observations, windows, activations, cycles int
+	for query, destination := range map[string]*int{
+		`select count(*) from account_quota_observations`:       &observations,
+		`select count(*) from account_quota_windows`:            &windows,
+		`select count(*) from account_quota_window_activations`: &activations,
+		`select count(*) from account_quota_cycles`:             &cycles,
+	} {
+		if err := db.QueryRow(query).Scan(destination); err != nil {
+			t.Fatalf("inspect rolled-back lifecycle state: %v", err)
+		}
+	}
+	if observations != 0 || windows != 0 || activations != 0 || cycles != 0 {
+		t.Fatalf("lifecycle state committed without progress observations:%d windows:%d activations:%d cycles:%d", observations, windows, activations, cycles)
+	}
+
+	if _, err := db.Exec(`drop trigger reject_legacy_migration_progress`); err != nil {
+		t.Fatalf("drop progress failure trigger: %v", err)
+	}
+	result, err := quotasnapshotrepo.BackfillLegacySnapshotsBatch(context.Background(), db, 10)
+	if err != nil {
+		t.Fatalf("retry legacy migration after progress failure: %v", err)
+	}
+	if result.Processed != 1 || !result.Completed {
+		t.Fatalf("retried migration result = %#v", result)
+	}
+	assertLegacySnapshotAttachment(t, db, 1, true)
 }
 
 func TestBackfillLegacySnapshotsBatchUsesLifecycleOrderInsteadOfInsertionOrder(t *testing.T) {
