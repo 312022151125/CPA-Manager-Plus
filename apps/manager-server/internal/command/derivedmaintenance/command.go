@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/processlock"
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	_ "modernc.org/sqlite"
 )
@@ -27,6 +28,15 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	if err != nil {
 		return err
 	}
+	if err := validateDatabaseFile(dbPath); err != nil {
+		return err
+	}
+	databaseLock, err := processlock.Acquire(dbPath)
+	if err != nil {
+		return fmt.Errorf("acquire offline cleanup lock; stop Manager Server and retry: %w", err)
+	}
+	defer func() { _ = databaseLock.Close() }()
+	dbPath = databaseLock.DatabasePath()
 	if err := validateManagerDB(ctx, dbPath); err != nil {
 		return err
 	}
@@ -36,18 +46,15 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	if err := verifyExclusiveAccess(ctx, db); err != nil {
-		return err
-	}
 	result, err := sqliterepo.CleanupDerivedOffline(ctx, db)
 	if err != nil {
 		return fmt.Errorf("cleanup derived data: %w", err)
 	}
-	if result.CompletedJobs == 0 && result.ProcessedRows == 0 {
+	if result.CompletedJobs == 0 && result.ProcessedRows == 0 && result.PreparedIndexes == 0 {
 		_, _ = fmt.Fprintln(stdout, "No pending derived cleanup jobs.")
 		return nil
 	}
-	_, _ = fmt.Fprintf(stdout, "Derived cleanup completed: jobs=%d processed_rows=%d\n", result.CompletedJobs, result.ProcessedRows)
+	_, _ = fmt.Fprintf(stdout, "Derived cleanup completed: jobs=%d processed_rows=%d prepared_indexes=%d\n", result.CompletedJobs, result.ProcessedRows, result.PreparedIndexes)
 	return nil
 }
 
@@ -88,7 +95,7 @@ func resolveDBPath(override string) (string, error) {
 	return cfg.DBPath, nil
 }
 
-func validateManagerDB(ctx context.Context, dbPath string) error {
+func validateDatabaseFile(dbPath string) error {
 	info, err := os.Stat(dbPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -99,6 +106,10 @@ func validateManagerDB(ctx context.Context, dbPath string) error {
 	if info.IsDir() || info.Size() == 0 {
 		return fmt.Errorf("SQLite database at %s is not a non-empty file", dbPath)
 	}
+	return nil
+}
+
+func validateManagerDB(ctx context.Context, dbPath string) error {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err
@@ -111,21 +122,6 @@ func validateManagerDB(ctx context.Context, dbPath string) error {
 	}
 	if count != 2 {
 		return fmt.Errorf("SQLite database at %s does not look like a CPA Manager Plus Manager Server database", dbPath)
-	}
-	return nil
-}
-
-func verifyExclusiveAccess(ctx context.Context, db *sql.DB) error {
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `begin exclusive`); err != nil {
-		return fmt.Errorf("acquire exclusive SQLite access; stop Manager Server and retry: %w", err)
-	}
-	if _, err := conn.ExecContext(ctx, `rollback`); err != nil {
-		return fmt.Errorf("release exclusive SQLite access: %w", err)
 	}
 	return nil
 }

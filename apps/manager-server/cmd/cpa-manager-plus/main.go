@@ -20,6 +20,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/command/derivedmaintenance"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/httpapi"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/processlock"
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
 	bootstrapservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/bootstrap"
@@ -38,7 +39,9 @@ func main() {
 			}
 			return
 		case "cleanup-derived":
-			if err := derivedmaintenance.Run(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			if err := derivedmaintenance.Run(ctx, os.Args[2:], os.Stdout, os.Stderr); err != nil {
 				log.Printf("cleanup derived data: %v", err)
 				os.Exit(1)
 			}
@@ -53,6 +56,16 @@ func runServer() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	databaseLock, err := processlock.Acquire(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("acquire manager database process lock: %v", err)
+	}
+	defer func() {
+		if err := databaseLock.Close(); err != nil {
+			log.Printf("close manager database process lock: %v", err)
+		}
+	}()
+	cfg.DBPath = databaseLock.DatabasePath()
 	dataKey, dataKeyCreated, err := security.LoadOrCreateDataKey(cfg.DataKey, cfg.DataKeyPath)
 	if err != nil {
 		log.Fatalf("load data key: %v", err)
@@ -182,13 +195,7 @@ func runServer() {
 	log.Printf("cpa-manager-plus listening on %s", listener.Addr())
 	codexInspectionWorker := worker.NewCodexInspectionWorker(serverApp.AppContext().Store, serverApp.AppContext().CodexInspectionService)
 	serverResult := make(chan error, 1)
-	go func() {
-		err := server.Serve(listener)
-		if errors.Is(err, http.ErrServerClosed) {
-			err = nil
-		}
-		serverResult <- err
-	}()
+	go serveHTTPServer(server, listener, stop, serverResult)
 
 	if err := db.RunDerivedStartupMaintenance(ctx); err != nil && ctx.Err() == nil {
 		log.Printf("[startup] post-listen index preparation failed; continuing without blocking background workers: %v", err)
@@ -221,6 +228,13 @@ func runServer() {
 
 	select {
 	case <-ctx.Done():
+		select {
+		case err := <-serverResult:
+			if err != nil {
+				log.Printf("http server stopped unexpectedly: %v", err)
+			}
+		default:
+		}
 	case err := <-serverResult:
 		if err != nil {
 			log.Printf("http server stopped unexpectedly: %v", err)
@@ -241,6 +255,15 @@ func runServer() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+}
+
+func serveHTTPServer(server *http.Server, listener net.Listener, stop context.CancelFunc, result chan<- error) {
+	err := server.Serve(listener)
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+	result <- err
+	stop()
 }
 
 type codexInspectionStopper interface {

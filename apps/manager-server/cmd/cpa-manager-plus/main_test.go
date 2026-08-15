@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -77,6 +78,32 @@ func TestStopCodexInspectionWorkerDoesNotDrainAfterCleanStop(t *testing.T) {
 	}
 }
 
+func TestServeHTTPServerCancelsRuntimeOnUnexpectedExit(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go serveHTTPServer(&http.Server{Handler: http.NewServeMux()}, listener, cancel, result)
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("runtime context was not canceled after HTTP listener exit")
+	}
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("unexpected HTTP listener exit error = nil")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("HTTP listener exit result was not reported")
+	}
+}
+
 func TestDerivedMigrationsStartAfterHTTPListenerIsBound(t *testing.T) {
 	content, err := os.ReadFile("main.go")
 	if err != nil {
@@ -85,7 +112,7 @@ func TestDerivedMigrationsStartAfterHTTPListenerIsBound(t *testing.T) {
 	source := string(content)
 	listenAt := strings.Index(source, `net.Listen("tcp", cfg.HTTPAddr)`)
 	listeningLogAt := strings.Index(source, `log.Printf("cpa-manager-plus listening on %s", listener.Addr())`)
-	serveAt := strings.Index(source, "server.Serve(listener)")
+	serveAt := strings.Index(source, "go serveHTTPServer(server, listener, stop, serverResult)")
 	if listenAt < 0 || listeningLogAt < listenAt || serveAt < listeningLogAt {
 		t.Fatalf("HTTP listener ordering not found: listen=%d log=%d serve=%d", listenAt, listeningLogAt, serveAt)
 	}
@@ -112,6 +139,38 @@ func TestDerivedMigrationsStartAfterHTTPListenerIsBound(t *testing.T) {
 	}
 	if !strings.Contains(source, "continuing without blocking background workers") {
 		t.Fatal("post-listen index failure does not explicitly preserve background worker startup")
+	}
+}
+
+func TestManagerDatabaseProcessLockPrecedesStoreOpen(t *testing.T) {
+	content, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(content)
+	lockAt := strings.Index(source, "processlock.Acquire(cfg.DBPath)")
+	storeOpenAt := strings.Index(source, "store.Open(cfg.DBPath, protector)")
+	lockCloseAt := strings.Index(source, "databaseLock.Close()")
+	if lockAt < 0 || storeOpenAt < lockAt || lockCloseAt < lockAt {
+		t.Fatalf("database lock ordering invalid: lock=%d open=%d close=%d", lockAt, storeOpenAt, lockCloseAt)
+	}
+}
+
+func TestCleanupDerivedCommandUsesSignalContext(t *testing.T) {
+	content, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(content)
+	commandAt := strings.Index(source, `case "cleanup-derived":`)
+	if commandAt < 0 {
+		t.Fatal("cleanup-derived command entry not found")
+	}
+	commandSource := source[commandAt:]
+	contextAt := strings.Index(commandSource, "signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)")
+	runAt := strings.Index(commandSource, "derivedmaintenance.Run(ctx, os.Args[2:], os.Stdout, os.Stderr)")
+	if contextAt < 0 || runAt < contextAt {
+		t.Fatalf("cleanup-derived signal context ordering invalid: context=%d run=%d", contextAt, runAt)
 	}
 }
 
