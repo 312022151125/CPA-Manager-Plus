@@ -70,16 +70,11 @@
     "login": "CPA Manager Plus",
     "abbr": "CPAMP"
   },
-  "splash": {
-    "title": "CPA Manager Plus",
-    "subtitle": "WebUI"
-  },
   "auto_login": {
     "title": "Auto Login in Progress...",
     "message": "Attempting to connect to server using locally saved connection information"
   },
   "login": {
-    "subtitle": "Please enter connection information to access the management interface",
     "connection_title": "Connection Address",
     "connection_current": "Current URL",
     "connection_auto_hint": "The system will automatically use the current URL for connection",
@@ -93,8 +88,6 @@
     "usage_service_mode_hint": "This panel is hosted by Manager Server. Enter the CPA API URL.",
     "usage_service_configured_hint": "This panel is hosted by a configured Manager Server. After login it uses the saved CPA connection on the server.",
     "usage_service_address": "Manager Server URL",
-    "docker_setup_subtitle": "Initialize this Docker deployment with the admin key from the first startup log.",
-    "docker_login_subtitle": "Use the Manager Server admin key to manage the whole panel.",
     "admin_key_label": "Admin Key",
     "admin_key_placeholder": "Enter the admin key from the startup log",
     "admin_key_hint": "This key authenticates the Manager Server panel. It is different from the CPA Management Key.",
