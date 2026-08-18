@@ -70,16 +70,11 @@
     "login": "CPA Manager Plus",
     "abbr": "CPAMP"
   },
-  "splash": {
-    "title": "CPA Manager Plus",
-    "subtitle": "WebUI"
-  },
   "auto_login": {
     "title": "Автовход...",
     "message": "Пытаемся подключиться к серверу, используя сохранённые данные"
   },
   "login": {
-    "subtitle": "Введите данные подключения, чтобы получить доступ к панели управления",
     "connection_title": "Адрес подключения",
     "connection_current": "Текущий URL",
     "connection_auto_hint": "Система автоматически использует текущий URL для подключения",
@@ -93,8 +88,6 @@
     "usage_service_mode_hint": "Эта панель размещена через Manager Server. Введите URL CPA API.",
     "usage_service_configured_hint": "Эта панель размещена через настроенный Manager Server. После входа используется CPA-подключение, сохранённое на сервере.",
     "usage_service_address": "URL Manager Server",
-    "docker_setup_subtitle": "Инициализируйте Docker-развёртывание с помощью admin key из первого startup log.",
-    "docker_login_subtitle": "Используйте admin key Manager Server для управления всей панелью.",
     "admin_key_label": "Admin Key",
     "admin_key_placeholder": "Введите admin key из startup log",
     "admin_key_hint": "Этот ключ аутентифицирует панель Manager Server. Он отличается от CPA Management Key.",

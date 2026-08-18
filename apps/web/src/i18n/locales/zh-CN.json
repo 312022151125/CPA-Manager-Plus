@@ -70,16 +70,11 @@
     "login": "CPA Manager Plus",
     "abbr": "CPAMP"
   },
-  "splash": {
-    "title": "CPA Manager Plus",
-    "subtitle": "WebUI"
-  },
   "auto_login": {
     "title": "正在自动登录...",
     "message": "正在使用本地保存的连接信息尝试连接服务器"
   },
   "login": {
-    "subtitle": "请输入连接信息以访问管理界面",
     "connection_title": "连接地址",
     "connection_current": "当前地址",
     "connection_auto_hint": "系统将自动使用当前访问地址进行连接",
@@ -93,8 +88,6 @@
     "usage_service_mode_hint": "当前面板由 Manager Server 托管，请填写 CPA API 地址。",
     "usage_service_configured_hint": "当前面板由已配置的 Manager Server 托管，登录后会使用服务端保存的 CPA 连接。",
     "usage_service_address": "Manager Server 地址",
-    "docker_setup_subtitle": "使用首次启动日志中的管理员密钥完成 Docker 部署初始化。",
-    "docker_login_subtitle": "使用 Manager Server 管理员密钥管理整个面板。",
     "admin_key_label": "管理员密钥",
     "admin_key_placeholder": "请输入启动日志中的管理员密钥",
     "admin_key_hint": "该密钥用于登录 Manager Server 面板，不同于 CPA Management Key。",
