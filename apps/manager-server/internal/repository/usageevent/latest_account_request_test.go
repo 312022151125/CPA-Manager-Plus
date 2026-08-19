@@ -2,6 +2,7 @@ package usageevent
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -103,6 +104,52 @@ func TestRecentAccountRequestsUseSnapshotIdentityLimitAndConservativeLegacyFallb
 	}
 	if _, ok := byIndex[2]; ok {
 		t.Fatalf("missing credential unexpectedly matched: %#v", byIndex[2])
+	}
+}
+
+func TestRecentAccountRequestsStopsAtLimitInsteadOfScanningOlderRows(t *testing.T) {
+	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	repo := New(db)
+	ctx := context.Background()
+	baseMS := int64(1_700_100_000_000)
+
+	events := make([]usage.Event, 0, 40)
+	for i := 0; i < 40; i++ {
+		events = append(events, latestAccountRequestEvent(
+			fmt.Sprintf("old-%d", i),
+			baseMS+int64(i),
+			"hot.json",
+			"idx-1",
+			"hot.json",
+		))
+	}
+	latest := latestAccountRequestEvent("hot-latest", baseMS+1000, "hot.json", "idx-1", "hot.json")
+	previous := latestAccountRequestEvent("hot-previous", baseMS+900, "hot.json", "idx-1", "hot.json")
+	events = append(events, previous, latest)
+	if _, err := repo.InsertBatch(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	requests, err := repo.RecentAccountRequests(ctx, []LatestAccountRequestQuery{
+		{RequestIndex: 7, AuthFileSnapshot: "hot.json", AuthIndex: "idx-1"},
+	}, 2)
+	if err != nil {
+		t.Fatalf("recent account requests: %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %#v", requests)
+	}
+	if requests[0].TimestampMS != latest.TimestampMS || requests[1].TimestampMS != previous.TimestampMS {
+		t.Fatalf("limit order = %#v", requests)
+	}
+	for _, request := range requests {
+		if request.RequestIndex != 7 {
+			t.Fatalf("request index = %#v", request)
+		}
 	}
 }
 
