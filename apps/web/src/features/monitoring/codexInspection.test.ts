@@ -4885,6 +4885,8 @@ describe('Codex inspection last-run cache', () => {
               labelKey: 'codex_quota.monthly_window',
               usedPercent: 87,
               resetLabel: '06/18 12:00',
+              resetAtMs: Date.parse('2026-06-18T04:00:00Z'),
+              resetAccuracy: 'exact',
               limitWindowSeconds: 2_592_000,
             },
           ],
@@ -4907,6 +4909,8 @@ describe('Codex inspection last-run cache', () => {
         labelParams: undefined,
         usedPercent: 87,
         resetLabel: '06/18 12:00',
+        resetAtMs: Date.parse('2026-06-18T04:00:00Z'),
+        resetAccuracy: 'exact',
         limitWindowSeconds: 2_592_000,
       },
     ]);

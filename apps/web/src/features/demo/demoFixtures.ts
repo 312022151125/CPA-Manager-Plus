@@ -6556,6 +6556,8 @@ export const getDemoCodexInspectionLocalRun = (baseNow = now()): CodexInspection
         labelParams: window.labelParams,
         usedPercent: window.usedPercent ?? null,
         resetLabel: window.resetLabel ?? '',
+        resetAtMs: window.resetAtMs ?? null,
+        resetAccuracy: window.resetAccuracy,
         limitWindowSeconds: window.limitWindowSeconds ?? null,
       })),
       errorKind: item.errorKind,
