@@ -3,6 +3,7 @@ package usageevent
 import (
 	"context"
 	"database/sql"
+	"sort"
 	"strings"
 )
 
@@ -29,6 +30,87 @@ type LatestAccountRequest struct {
 	HeaderTraceID   string
 }
 
+const recentAccountRequestCandidateColumns = `id,
+	timestamp_ms,
+	failed,
+	fail_status_code,
+	coalesce(fail_summary, '') as fail_summary,
+	coalesce(header_error_kind, '') as header_error_kind,
+	coalesce(header_error_code, '') as header_error_code,
+	coalesce(header_trace_id, '') as header_trace_id`
+
+type recentAccountRequestCandidate struct {
+	id      int64
+	request LatestAccountRequest
+}
+
+func recentAccountRequestQuery(legacySource, emptyAuthIndex, afterCutoff bool) string {
+	identityColumn := "auth_file_snapshot"
+	if legacySource {
+		identityColumn = "source"
+	}
+	authIndexConditions := []string{"auth_index collate nocase = ?"}
+	if emptyAuthIndex {
+		authIndexConditions = []string{"auth_index is null", "auth_index collate nocase = ''"}
+	}
+
+	branches := make([]string, 0, len(authIndexConditions))
+	for _, authIndexCondition := range authIndexConditions {
+		conditions := []string{
+			identityColumn + " collate nocase = ?",
+			authIndexCondition,
+		}
+		if legacySource {
+			conditions = append(conditions, "coalesce(auth_file_snapshot, '') = ''")
+		}
+		if afterCutoff {
+			conditions = append(conditions, "(timestamp_ms, id) > (?, ?)")
+		}
+		branches = append(branches, `select `+recentAccountRequestCandidateColumns+`
+			from usage_events
+			where `+strings.Join(conditions, " and ")+`
+			order by timestamp_ms desc, id desc
+			limit ?`)
+	}
+	if len(branches) == 1 {
+		return branches[0]
+	}
+	wrapped := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		wrapped = append(wrapped, "select * from ("+branch+")")
+	}
+	return "select * from (" + strings.Join(wrapped, " union all ") + `)
+		order by timestamp_ms desc, id desc
+		limit ?`
+}
+
+func recentAccountRequestArgs(
+	identity, authIndex string,
+	emptyAuthIndex bool,
+	cutoff *recentAccountRequestCandidate,
+	limit int,
+) []any {
+	branchCount := 1
+	if emptyAuthIndex {
+		branchCount = 2
+	}
+	args := make([]any, 0, branchCount*5+1)
+	for range branchCount {
+		args = append(args, identity)
+		if !emptyAuthIndex {
+			args = append(args, authIndex)
+		}
+		if cutoff != nil {
+			args = append(args, cutoff.request.TimestampMS, cutoff.id)
+		}
+		args = append(args, limit)
+	}
+	if emptyAuthIndex {
+		args = append(args, limit)
+	}
+	return args
+}
+
 func (r *repository) RecentAccountRequests(
 	ctx context.Context,
 	targets []LatestAccountRequestQuery,
@@ -38,116 +120,147 @@ func (r *repository) RecentAccountRequests(
 		return []LatestAccountRequest{}, nil
 	}
 
-	values := make([]string, 0, len(targets))
-	args := make([]any, 0, len(targets)*3+1)
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	type preparedQueries struct {
+		snapshot *sql.Stmt
+		legacy   *sql.Stmt
+		after    *sql.Stmt
+	}
+	prepareQueries := func(emptyAuthIndex bool) (preparedQueries, error) {
+		queries := preparedQueries{}
+		var prepareErr error
+		queries.snapshot, prepareErr = tx.PrepareContext(ctx, recentAccountRequestQuery(false, emptyAuthIndex, false))
+		if prepareErr != nil {
+			return preparedQueries{}, prepareErr
+		}
+		queries.legacy, prepareErr = tx.PrepareContext(ctx, recentAccountRequestQuery(true, emptyAuthIndex, false))
+		if prepareErr != nil {
+			_ = queries.snapshot.Close()
+			return preparedQueries{}, prepareErr
+		}
+		queries.after, prepareErr = tx.PrepareContext(ctx, recentAccountRequestQuery(true, emptyAuthIndex, true))
+		if prepareErr != nil {
+			_ = queries.snapshot.Close()
+			_ = queries.legacy.Close()
+			return preparedQueries{}, prepareErr
+		}
+		return queries, nil
+	}
+	withAuthIndex, err := prepareQueries(false)
+	if err != nil {
+		return nil, err
+	}
+	defer withAuthIndex.snapshot.Close()
+	defer withAuthIndex.legacy.Close()
+	defer withAuthIndex.after.Close()
+	withoutAuthIndex, err := prepareQueries(true)
+	if err != nil {
+		return nil, err
+	}
+	defer withoutAuthIndex.snapshot.Close()
+	defer withoutAuthIndex.legacy.Close()
+	defer withoutAuthIndex.after.Close()
+
+	requests := make([]LatestAccountRequest, 0, len(targets)*limit)
+	validTargets := 0
 	for _, target := range targets {
 		authFileSnapshot := strings.TrimSpace(target.AuthFileSnapshot)
 		if authFileSnapshot == "" {
 			continue
 		}
-		values = append(values, "(?, ?, ?)")
-		args = append(
-			args,
-			target.RequestIndex,
-			authFileSnapshot,
-			strings.TrimSpace(target.AuthIndex),
+		validTargets++
+		authIndex := strings.TrimSpace(target.AuthIndex)
+		emptyAuthIndex := authIndex == ""
+		queries := withAuthIndex
+		if emptyAuthIndex {
+			queries = withoutAuthIndex
+		}
+
+		snapshotCandidates, queryErr := queryRecentAccountRequestCandidates(
+			ctx,
+			queries.snapshot,
+			recentAccountRequestArgs(authFileSnapshot, authIndex, emptyAuthIndex, nil, limit),
 		)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		var cutoff *recentAccountRequestCandidate
+		legacyQuery := queries.legacy
+		if len(snapshotCandidates) >= limit {
+			cutoff = &snapshotCandidates[limit-1]
+			legacyQuery = queries.after
+		}
+		legacyCandidates, queryErr := queryRecentAccountRequestCandidates(
+			ctx,
+			legacyQuery,
+			recentAccountRequestArgs(authFileSnapshot, authIndex, emptyAuthIndex, cutoff, limit),
+		)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		candidates := append(snapshotCandidates, legacyCandidates...)
+		sort.Slice(candidates, func(i, j int) bool {
+			if candidates[i].request.TimestampMS != candidates[j].request.TimestampMS {
+				return candidates[i].request.TimestampMS > candidates[j].request.TimestampMS
+			}
+			return candidates[i].id > candidates[j].id
+		})
+		if len(candidates) > limit {
+			candidates = candidates[:limit]
+		}
+		for _, candidate := range candidates {
+			candidate.request.RequestIndex = target.RequestIndex
+			requests = append(requests, candidate.request)
+		}
 	}
-	if len(values) == 0 {
+	if validTargets == 0 {
 		return []LatestAccountRequest{}, nil
 	}
-	args = append(args, limit)
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(requests, func(i, j int) bool {
+		return requests[i].RequestIndex < requests[j].RequestIndex
+	})
+	return requests, nil
+}
 
-	rows, err := r.db.QueryContext(ctx, `with credential_targets(
-	request_index, auth_file_snapshot, auth_index
-) as (
-	values `+strings.Join(values, ",")+`
-), snapshot_candidates as (
-	select
-		t.request_index,
-		e.id,
-		e.timestamp_ms,
-		e.failed,
-		e.fail_status_code,
-		coalesce(e.fail_summary, '') as fail_summary,
-		coalesce(e.header_error_kind, '') as header_error_kind,
-		coalesce(e.header_error_code, '') as header_error_code,
-		coalesce(e.header_trace_id, '') as header_trace_id
-	from credential_targets t
-	join usage_events e
-		on e.auth_file_snapshot collate nocase = t.auth_file_snapshot
-		and coalesce(e.auth_index, '') collate nocase = t.auth_index
-), legacy_source_candidates as (
-	select
-		t.request_index,
-		e.id,
-		e.timestamp_ms,
-		e.failed,
-		e.fail_status_code,
-		coalesce(e.fail_summary, '') as fail_summary,
-		coalesce(e.header_error_kind, '') as header_error_kind,
-		coalesce(e.header_error_code, '') as header_error_code,
-		coalesce(e.header_trace_id, '') as header_trace_id
-	from credential_targets t
-	join usage_events e
-		on coalesce(e.auth_file_snapshot, '') = ''
-		and e.source collate nocase = t.auth_file_snapshot
-		and coalesce(e.auth_index, '') collate nocase = t.auth_index
-), candidates as (
-	select * from snapshot_candidates
-	union all
-	select * from legacy_source_candidates
-), ranked as (
-	select
-		request_index,
-		timestamp_ms,
-		failed,
-		fail_status_code,
-		fail_summary,
-		header_error_kind,
-		header_error_code,
-		header_trace_id,
-		row_number() over (
-			partition by request_index
-			order by timestamp_ms desc, id desc
-		) as row_number
-	from candidates
-)
-select
-	request_index,
-	timestamp_ms,
-	failed,
-	fail_status_code,
-	fail_summary,
-	header_error_kind,
-	header_error_code,
-	header_trace_id
-from ranked
-where row_number <= ?
-order by request_index, row_number`, args...)
+func queryRecentAccountRequestCandidates(
+	ctx context.Context,
+	statement *sql.Stmt,
+	args []any,
+) ([]recentAccountRequestCandidate, error) {
+	rows, err := statement.QueryContext(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	requests := make([]LatestAccountRequest, 0, len(values)*limit)
+	candidates := make([]recentAccountRequestCandidate, 0)
 	for rows.Next() {
-		var request LatestAccountRequest
+		var candidate recentAccountRequestCandidate
 		var failed int
 		if err := rows.Scan(
-			&request.RequestIndex,
-			&request.TimestampMS,
+			&candidate.id,
+			&candidate.request.TimestampMS,
 			&failed,
-			&request.FailStatusCode,
-			&request.FailSummary,
-			&request.HeaderErrorKind,
-			&request.HeaderErrorCode,
-			&request.HeaderTraceID,
+			&candidate.request.FailStatusCode,
+			&candidate.request.FailSummary,
+			&candidate.request.HeaderErrorKind,
+			&candidate.request.HeaderErrorCode,
+			&candidate.request.HeaderTraceID,
 		); err != nil {
 			return nil, err
 		}
-		request.Failed = failed != 0
-		requests = append(requests, request)
+		candidate.request.Failed = failed != 0
+		candidates = append(candidates, candidate)
 	}
-	return requests, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return candidates, nil
 }
