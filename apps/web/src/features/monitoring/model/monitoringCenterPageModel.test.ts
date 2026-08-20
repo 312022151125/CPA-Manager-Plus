@@ -10,6 +10,7 @@ import {
 import zhCN from '@/i18n/locales/zh-CN.json';
 import zhTW from '@/i18n/locales/zh-TW.json';
 import type { MonitoringAccountQuotaTarget } from '@/features/monitoring/accountOverviewQuotaTargets';
+import type { AccountQuotaEntry } from '@/features/monitoring/components/accountOverviewPresentation';
 import type {
   MonitoringAccountRow,
   MonitoringApiKeyRow,
@@ -285,6 +286,8 @@ describe('monitoringCenterPageModel account quota', () => {
           labelKey: 'claude_quota.five_hour',
           usedPercent: 40,
           resetLabel: '05/20 12:00',
+          resetAtMs: Date.parse('2026-05-20T12:00:00Z'),
+          resetAccuracy: 'exact',
         },
         {
           id: 'weekly-scoped-fable%205%20max',
@@ -314,6 +317,8 @@ describe('monitoringCenterPageModel account quota', () => {
           label: '5-hour limit',
           remainingPercent: 60,
           resetLabel: '05/20 12:00',
+          resetAtMs: Date.parse('2026-05-20T12:00:00Z'),
+          resetAccuracy: 'exact',
         },
         {
           id: 'weekly-scoped-fable%205%20max',
@@ -340,6 +345,8 @@ describe('monitoringCenterPageModel account quota', () => {
           labelKey: 'codex_quota.monthly_window',
           usedPercent: 5,
           resetLabel: '06/30 12:00',
+          resetAtMs: Date.parse('2026-06-30T12:00:00Z'),
+          resetAccuracy: 'exact',
           limitWindowSeconds: 2_592_000,
         },
       ],
@@ -365,6 +372,8 @@ describe('monitoringCenterPageModel account quota', () => {
           label: 'Monthly limit',
           remainingPercent: 95,
           resetLabel: '06/30 12:00',
+          resetAtMs: Date.parse('2026-06-30T12:00:00Z'),
+          resetAccuracy: 'exact',
           usageLabel: '1.5d / 30d used',
         },
       ],
@@ -372,7 +381,7 @@ describe('monitoringCenterPageModel account quota', () => {
   });
 
   it('merges observed Codex account quota without dropping existing API-only windows', () => {
-    const activeEntry = {
+    const activeEntry: AccountQuotaEntry = {
       key: 'codex::2::codex.json',
       provider: 'codex' as const,
       providerLabel: 'Codex Quota',
@@ -386,6 +395,8 @@ describe('monitoringCenterPageModel account quota', () => {
           label: 'Monthly limit',
           remainingPercent: 95,
           resetLabel: '06/30 12:00',
+          resetAtMs: Date.parse('2026-06-30T12:00:00Z'),
+          resetAccuracy: 'exact',
           usageLabel: '1.5d / 30d used',
         },
         {
@@ -393,11 +404,13 @@ describe('monitoringCenterPageModel account quota', () => {
           label: 'spark 5-hour limit',
           remainingPercent: 70,
           resetLabel: '07/01 01:00',
+          resetAtMs: Date.parse('2026-07-01T01:00:00Z'),
+          resetAccuracy: 'exact',
           usageLabel: '1.5h / 5h used',
         },
       ],
     };
-    const observedEntry = {
+    const observedEntry: AccountQuotaEntry = {
       key: 'codex::2::codex.json',
       provider: 'codex' as const,
       providerLabel: 'Codex Quota',
@@ -411,6 +424,8 @@ describe('monitoringCenterPageModel account quota', () => {
           label: 'Monthly limit',
           remainingPercent: 55,
           resetLabel: '07/01 02:00',
+          resetAtMs: Date.parse('2026-07-01T02:00:00Z'),
+          resetAccuracy: 'estimated',
           usageLabel: '13.5d / 30d used',
         },
       ],
@@ -426,12 +441,16 @@ describe('monitoringCenterPageModel account quota', () => {
           id: 'monthly',
           remainingPercent: 55,
           resetLabel: '07/01 02:00',
+          resetAtMs: Date.parse('2026-07-01T02:00:00Z'),
+          resetAccuracy: 'estimated',
           usageLabel: '13.5d / 30d used',
         },
         {
           id: 'spark-five-hour-0',
           remainingPercent: 70,
           resetLabel: '07/01 01:00',
+          resetAtMs: Date.parse('2026-07-01T01:00:00Z'),
+          resetAccuracy: 'exact',
           usageLabel: '1.5h / 5h used',
         },
       ],
@@ -972,6 +991,8 @@ describe('monitoringCenterPageModel account quota', () => {
           used: 25,
           limit: 100,
           resetHint: '2026-07-31T00:00:00Z',
+          resetAtMs: Date.parse('2026-07-31T00:00:00Z'),
+          resetAccuracy: 'exact',
         },
       ],
     });
@@ -993,6 +1014,8 @@ describe('monitoringCenterPageModel account quota', () => {
           id: 'daily',
           label: 'Daily',
           remainingPercent: 75,
+          resetAtMs: Date.parse('2026-07-31T00:00:00Z'),
+          resetAccuracy: 'exact',
           usageLabel: null,
         },
       ],
@@ -1033,12 +1056,16 @@ describe('monitoringCenterPageModel account quota', () => {
           id: 'monthly-limit',
           label: 'Monthly credits',
           remainingPercent: 0,
+          resetAtMs: Date.parse('2026-06-01T00:00:00Z'),
+          resetAccuracy: 'exact',
           usageLabel: '$0.00 / $100.00 remaining',
         },
         {
           id: 'pay-as-you-go',
           label: 'Pay-as-you-go',
           remainingPercent: 50,
+          resetAtMs: Date.parse('2026-06-01T00:00:00Z'),
+          resetAccuracy: 'exact',
           usageLabel: '$25.00 / $50.00 remaining',
         },
       ],
@@ -1080,18 +1107,24 @@ describe('monitoringCenterPageModel account quota', () => {
           id: 'weekly-limit',
           label: 'Weekly limit',
           remainingPercent: 60,
+          resetAtMs: Date.parse('2026-07-08T00:00:00Z'),
+          resetAccuracy: 'exact',
           usageLabel: 'Used 40%',
         },
         {
           id: 'product-0-Grok 4',
           label: 'Grok 4 usage',
           remainingPercent: 75,
+          resetAtMs: Date.parse('2026-07-08T00:00:00Z'),
+          resetAccuracy: 'exact',
           usageLabel: 'Used 25%',
         },
         {
           id: 'monthly-limit',
           label: 'Monthly credits',
           remainingPercent: 75,
+          resetAtMs: Date.parse('2026-08-01T00:00:00Z'),
+          resetAccuracy: 'exact',
           usageLabel: '$75.00 / $100.00 remaining',
         },
       ],

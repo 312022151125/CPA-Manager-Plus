@@ -2,7 +2,9 @@ import type { TFunction } from 'i18next';
 import type { MonitoringAccountAuthState } from '@/features/monitoring/accountOverviewState';
 import type { MonitoringAccountQuotaProvider } from '@/features/monitoring/accountOverviewQuotaTargets';
 import type { MonitoringAccountRow } from '@/features/monitoring/hooks/useMonitoringData';
+import type { QuotaResetAccuracy } from '@/types';
 import { normalizePlanType } from '@/utils/quota';
+import { formatQuotaResetTime } from '@/utils/quota/formatters';
 import { formatCompactNumber, formatUsd } from '@/utils/usage';
 import styles from '../MonitoringCenterPage.module.scss';
 
@@ -13,6 +15,8 @@ export type AccountQuotaWindow = {
   label: string;
   remainingPercent: number | null;
   resetLabel: string;
+  resetAtMs?: number | null;
+  resetAccuracy?: QuotaResetAccuracy;
   usageLabel: string | null;
 };
 
@@ -57,6 +61,17 @@ export type CacheTokenPresentation = {
 };
 
 export const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`;
+
+export const formatAccountQuotaResetDisplay = (
+  resetAtMs: number | null | undefined,
+  resetLabel: string | null | undefined
+): string => {
+  const canonicalLabel = formatQuotaResetTime(resetAtMs);
+  if (canonicalLabel !== '-') return canonicalLabel;
+  const fallbackLabel = resetLabel?.trim() ?? '';
+  const parsedFallbackLabel = formatQuotaResetTime(fallbackLabel);
+  return parsedFallbackLabel !== '-' ? parsedFallbackLabel : fallbackLabel || '-';
+};
 
 const joinShort = (values: string[], limit = 2) => {
   if (values.length <= limit) {
