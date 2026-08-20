@@ -115,6 +115,22 @@ export interface UsageServiceDatabaseStatus {
   checkpoint?: UsageServiceCheckpointStatus;
 }
 
+export type UsageServiceDatabaseMaintenanceReason =
+  | 'deferred_indexes'
+  | 'offline_derived_cleanup'
+  | 'offline_quota_snapshot_migration'
+  | 'legacy_index_replacement'
+  | string;
+
+export interface UsageServiceDatabaseMaintenanceStatus {
+  required: boolean;
+  performanceDegraded: boolean;
+  deferredIndexes: number;
+  offlineJobs: number;
+  reasons: UsageServiceDatabaseMaintenanceReason[];
+  command?: string;
+}
+
 export interface UsageServiceStatus {
   service?: string;
   dbPath?: string;
@@ -122,7 +138,10 @@ export interface UsageServiceStatus {
   deadLetters?: number;
   collector?: UsageServiceCollectorStatus;
   database?: UsageServiceDatabaseStatus;
+  databaseMaintenance?: UsageServiceDatabaseMaintenanceStatus;
 }
+
+export type UsageServiceStatusScope = 'database-maintenance';
 
 export interface AccountPolicyCapability {
   enabled: boolean;
@@ -2755,13 +2774,19 @@ export const usageServiceApi = {
     });
   },
 
-  getStatus: async (base: string, managementKey?: string): Promise<UsageServiceStatus> => {
+  getStatus: async (
+    base: string,
+    managementKey?: string,
+    scope?: UsageServiceStatusScope
+  ): Promise<UsageServiceStatus> => {
     if (__DEMO_SITE__ && isDemoMode()) {
       return getDemoUsageServiceStatus();
     }
 
     return withUsageServiceError(async () => {
-      const response = await axios.get<UsageServiceStatus>(buildUrl(base, '/status'), {
+      const statusPath =
+        scope === 'database-maintenance' ? '/status?scope=database-maintenance' : '/status';
+      const response = await axios.get<UsageServiceStatus>(buildUrl(base, statusPath), {
         timeout: USAGE_SERVICE_TIMEOUT_MS,
         headers: authHeaders(managementKey),
       });
