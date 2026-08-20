@@ -1115,7 +1115,9 @@ const buildXaiAccountQuotaWindows = (
   const windows: AccountQuotaWindow[] = [];
   const weeklyReset = resolveAbsoluteQuotaReset(billing.periodEnd);
   const monthlyReset = resolveAbsoluteQuotaReset(billing.billingPeriodEnd);
-  const productReset = weeklyReset.resetAtMs !== null ? weeklyReset : monthlyReset;
+  // Product usage belongs to the current period window. A billing-period end
+  // is a separate monthly boundary and must not be inferred as its reset.
+  const productReset = weeklyReset;
   const hasWeeklyData =
     billing.periodType === 'weekly' &&
     (billing.usagePercent !== null ||

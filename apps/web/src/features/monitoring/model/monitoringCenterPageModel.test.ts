@@ -119,6 +119,30 @@ const createTarget = (
   planType: overrides.planType ?? null,
 });
 
+const createMergeAccountQuotaEntry = (
+  resetLabel: string,
+  resetAtMs: number | null,
+  resetAccuracy: AccountQuotaEntry['windows'][number]['resetAccuracy'] = 'unknown'
+): AccountQuotaEntry => ({
+  key: 'codex::merge::codex.json',
+  provider: 'codex',
+  providerLabel: 'Codex Quota',
+  authLabel: 'Auth',
+  fileName: 'codex.json',
+  planType: 'plus',
+  windows: [
+    {
+      id: 'monthly',
+      label: 'Monthly limit',
+      remainingPercent: 50,
+      resetLabel,
+      resetAtMs,
+      resetAccuracy,
+      usageLabel: 'Used 50%',
+    },
+  ],
+});
+
 const createAccountRow = (
   account: string,
   overrides: Partial<MonitoringAccountRow> = {}
@@ -452,6 +476,43 @@ describe('monitoringCenterPageModel account quota', () => {
           resetAtMs: Date.parse('2026-07-01T01:00:00Z'),
           resetAccuracy: 'exact',
           usageLabel: '1.5h / 5h used',
+        },
+      ],
+    });
+  });
+
+  it('does not retain an active canonical reset when observed data only has a legacy label', () => {
+    const activeEntry = createMergeAccountQuotaEntry(
+      '06/30 12:00',
+      Date.parse('2026-06-30T12:00:00Z'),
+      'exact'
+    );
+    const observedEntry = createMergeAccountQuotaEntry('2h 18m', null, 'unknown');
+
+    expect(mergeObservedAccountQuotaEntry(activeEntry, observedEntry)).toMatchObject({
+      windows: [
+        {
+          id: 'monthly',
+          resetLabel: '2h 18m',
+          resetAtMs: null,
+          resetAccuracy: 'unknown',
+        },
+      ],
+    });
+  });
+
+  it('preserves active reset metadata when observed data has no reset information', () => {
+    const resetAtMs = Date.parse('2026-06-30T12:00:00Z');
+    const activeEntry = createMergeAccountQuotaEntry('06/30 12:00', resetAtMs, 'exact');
+    const observedEntry = createMergeAccountQuotaEntry('-', null, 'unknown');
+
+    expect(mergeObservedAccountQuotaEntry(activeEntry, observedEntry)).toMatchObject({
+      windows: [
+        {
+          id: 'monthly',
+          resetLabel: '06/30 12:00',
+          resetAtMs,
+          resetAccuracy: 'exact',
         },
       ],
     });
@@ -1129,6 +1190,44 @@ describe('monitoringCenterPageModel account quota', () => {
         },
       ],
     });
+  });
+
+  it('does not use the monthly billing period as a product usage reset fallback', async () => {
+    vi.mocked(fetchXaiQuota).mockResolvedValue({
+      periodType: 'weekly',
+      usagePercent: null,
+      productUsage: [{ product: 'Grok 4', usagePercent: 25 }],
+      periodStart: undefined,
+      periodEnd: undefined,
+      monthlyLimitCents: 10000,
+      usedCents: 2500,
+      includedUsedCents: 2500,
+      onDemandCapCents: null,
+      onDemandUsedCents: null,
+      onDemandUsedPercent: null,
+      billingPeriodStart: '2026-08-01T00:00:00Z',
+      billingPeriodEnd: '2026-09-01T00:00:00Z',
+      usedPercent: 25,
+    });
+
+    const entry = await requestAccountQuota(
+      createTarget({
+        provider: 'xai',
+        authIndex: '3',
+        fileName: 'xai.json',
+      }),
+      t
+    );
+
+    expect(entry.windows).toContainEqual(
+      expect.objectContaining({
+        id: 'product-0-Grok 4',
+        remainingPercent: 75,
+        resetLabel: '-',
+        resetAtMs: null,
+        resetAccuracy: 'unknown',
+      })
+    );
   });
 
   it('does not synthesize monthly credits from an on-demand reset timestamp', async () => {

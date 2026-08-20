@@ -4,7 +4,10 @@ import type { MonitoringAccountQuotaProvider } from '@/features/monitoring/accou
 import type { MonitoringAccountRow } from '@/features/monitoring/hooks/useMonitoringData';
 import type { QuotaResetAccuracy } from '@/types';
 import { normalizePlanType } from '@/utils/quota';
-import { formatQuotaResetTime } from '@/utils/quota/formatters';
+import {
+  formatQuotaResetTime,
+  type QuotaResetTimeFormatOptions,
+} from '@/utils/quota/formatters';
 import { formatCompactNumber, formatUsd } from '@/utils/usage';
 import styles from '../MonitoringCenterPage.module.scss';
 
@@ -64,12 +67,13 @@ export const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`;
 
 export const formatAccountQuotaResetDisplay = (
   resetAtMs: number | null | undefined,
-  resetLabel: string | null | undefined
+  resetLabel: string | null | undefined,
+  options?: QuotaResetTimeFormatOptions
 ): string => {
-  const canonicalLabel = formatQuotaResetTime(resetAtMs);
+  const canonicalLabel = formatQuotaResetTime(resetAtMs, options);
   if (canonicalLabel !== '-') return canonicalLabel;
   const fallbackLabel = resetLabel?.trim() ?? '';
-  const parsedFallbackLabel = formatQuotaResetTime(fallbackLabel);
+  const parsedFallbackLabel = formatQuotaResetTime(fallbackLabel, options);
   return parsedFallbackLabel !== '-' ? parsedFallbackLabel : fallbackLabel || '-';
 };
 

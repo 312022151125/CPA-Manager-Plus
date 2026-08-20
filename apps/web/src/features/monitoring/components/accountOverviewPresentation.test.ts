@@ -6,8 +6,14 @@ describe('accountOverviewPresentation reset display', () => {
   it('prefers the canonical timestamp over a legacy reset label', () => {
     const resetAtMs = Date.parse('2026-08-20T03:40:00Z');
 
-    expect(formatAccountQuotaResetDisplay(resetAtMs, 'legacy server label')).toBe(
-      formatQuotaResetTime(resetAtMs)
+    expect(
+      formatAccountQuotaResetDisplay(resetAtMs, '08/20 03:40', {
+        locale: 'zh-CN',
+        timeZone: 'Asia/Shanghai',
+      })
+    ).toBe('08/20 11:40');
+    expect(formatQuotaResetTime(resetAtMs, { locale: 'zh-CN', timeZone: 'UTC' })).toBe(
+      '08/20 03:40'
     );
   });
 
