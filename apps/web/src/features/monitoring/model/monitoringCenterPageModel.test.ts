@@ -21,6 +21,7 @@ import {
   buildApiKeyOptionsFromRows,
   buildChannelOptionsFromValues,
   buildAccountQuotaRefreshFailureEntry,
+  buildObservedCodexAccountQuotaEntry,
   buildMonitoringInitialStateFromQuery,
   buildModelOptionsFromValues,
   buildProviderOptionsFromValues,
@@ -516,6 +517,211 @@ describe('monitoringCenterPageModel account quota', () => {
         },
       ],
     });
+  });
+
+  it('does not let the ambiguous secondary alias move monthly data onto weekly', () => {
+    const activeEntry = {
+      key: 'codex::2::codex.json',
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: 'Auth',
+      fileName: 'codex.json',
+      planType: 'team',
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly limit',
+          remainingPercent: 64,
+          resetLabel: '07/01 02:00',
+          usageLabel: '2.5d / 7d used',
+          providerWindowAliases: ['secondary'],
+        },
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 90,
+          resetLabel: '07/15 02:00',
+          usageLabel: '3d / 30d used',
+          providerWindowAliases: ['secondary'],
+        },
+      ],
+    };
+    const observedEntry = {
+      ...activeEntry,
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 55,
+          resetLabel: '07/20 02:00',
+          usageLabel: '13.5d / 30d used',
+          providerWindowAliases: ['secondary'],
+        },
+      ],
+    };
+
+    const merged = mergeObservedAccountQuotaEntry(activeEntry, observedEntry);
+
+    expect(merged?.windows).toEqual([
+      expect.objectContaining({ id: 'weekly', remainingPercent: 64 }),
+      expect.objectContaining({ id: 'monthly', remainingPercent: 55 }),
+    ]);
+  });
+
+  it('keeps Spark header quota separate from the active Main weekly quota', () => {
+    const target = createTarget({
+      provider: 'codex',
+      authIndex: '2',
+      fileName: 'codex.json',
+    });
+    const activeEntry = {
+      key: target.key,
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: target.authLabel,
+      fileName: target.fileName,
+      planType: 'plus',
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly limit',
+          remainingPercent: 64,
+          resetLabel: '07/01 02:00',
+          usageLabel: '2.5d / 7d used',
+        },
+      ],
+    };
+    const observedEntry = buildObservedCodexAccountQuotaEntry(
+      target,
+      {
+        event_hash: 'spark-header',
+        timestamp_ms: 1_700_000_000_000,
+        requested_model: 'my-spark',
+        resolved_model: 'gpt-5.3-codex-spark',
+        response_metadata: {
+          quota: {
+            plan_type: 'plus',
+            secondary: {
+              used_percent: 0,
+              window_minutes: 10_080,
+              reset_at_ms: 1_700_604_800_000,
+            },
+          },
+        },
+      },
+      t,
+      1_700_000_000_000
+    );
+
+    expect(observedEntry?.windows).toEqual([
+      expect.objectContaining({
+        id: 'spark-weekly-0',
+        remainingPercent: 100,
+        modelScope: {
+          kind: 'models',
+          models: ['gpt-5.3-codex-spark'],
+          complete: true,
+        },
+      }),
+    ]);
+    const merged = mergeObservedAccountQuotaEntry(activeEntry, observedEntry!);
+    expect(merged).not.toBeNull();
+    expect(merged!.windows).toEqual([
+      expect.objectContaining({ id: 'weekly', remainingPercent: 64 }),
+      expect.objectContaining({ id: 'spark-weekly-0', remainingPercent: 100 }),
+    ]);
+  });
+
+  it('does not duplicate a legacy Spark window when merging header evidence', () => {
+    const target = createTarget({ provider: 'codex', authIndex: '2', fileName: 'codex.json' });
+    const sparkScope = {
+      kind: 'models' as const,
+      models: ['gpt-5.3-codex-spark'],
+      complete: true,
+    };
+    const activeEntry = {
+      key: target.key,
+      provider: 'codex' as const,
+      providerLabel: 'Codex Quota',
+      authLabel: target.authLabel,
+      fileName: target.fileName,
+      planType: 'plus',
+      windows: [
+        {
+          id: 'fast-coding-weekly-0',
+          label: 'Fast coding',
+          remainingPercent: 50,
+          resetLabel: '-',
+          usageLabel: '3.5d / 7d used',
+          modelScope: sparkScope,
+        },
+      ],
+    };
+    const observedEntry = {
+      ...activeEntry,
+      observedAtMs: 2_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'spark-weekly-0',
+          label: 'Spark weekly',
+          remainingPercent: 100,
+          resetLabel: '-',
+          usageLabel: '0d / 7d used',
+          modelScope: sparkScope,
+          providerWindowAliases: ['fast-coding-weekly-0'],
+        },
+      ],
+    };
+
+    const merged = mergeObservedAccountQuotaEntry(activeEntry, observedEntry);
+    expect(merged?.windows).toHaveLength(1);
+    expect(merged?.windows[0]).toMatchObject({
+      id: 'spark-weekly-0',
+      remainingPercent: 100,
+      providerWindowAliases: expect.arrayContaining(['fast-coding-weekly-0']),
+    });
+  });
+
+  it('keeps a scoped header fallback separate when only provider usage metadata exists', () => {
+    const target = createTarget({
+      provider: 'codex',
+      authIndex: '2',
+      fileName: 'codex.json',
+    });
+    const observedEntry = buildObservedCodexAccountQuotaEntry(
+      target,
+      {
+        event_hash: 'spark-provider-usage-only',
+        timestamp_ms: 1_700_000_000_000,
+        requested_model: 'my-spark',
+        resolved_model: 'gpt-5.3-codex-spark',
+        header_quota_used_percent: 0,
+        header_quota_recover_at_ms: 1_700_604_800_000,
+        response_metadata: {
+          provider_usage: {
+            provider: 'codex',
+            state: 'available',
+            actual: 0,
+            limit: 100,
+            recover_at_ms: 1_700_604_800_000,
+          },
+        },
+      },
+      t,
+      1_700_000_000_000
+    );
+
+    expect(observedEntry?.windows).toEqual([
+      expect.objectContaining({
+        id: 'spark-observed',
+        modelScope: {
+          kind: 'models',
+          models: ['gpt-5.3-codex-spark'],
+          complete: true,
+        },
+      }),
+    ]);
   });
 
   it('marks manual quota refresh failures instead of treating cached entries as success', () => {
