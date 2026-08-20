@@ -126,20 +126,42 @@ const normalizeQuotaWindowLabelParams = (
   return Object.keys(params).length > 0 ? params : undefined;
 };
 
-const serializeQuotaWindow = (window: CodexInspectionQuotaWindow): CodexInspectionQuotaWindow => ({
-  id: readString(window.id),
-  labelKey: readString(window.labelKey),
-  labelParams: normalizeQuotaWindowLabelParams(window.labelParams),
-  usedPercent: readNullableNumber(window.usedPercent),
-  resetLabel: readString(window.resetLabel),
-  limitWindowSeconds: readNullableNumber(window.limitWindowSeconds),
-});
+const normalizeQuotaResetAccuracy = (
+  value: unknown
+): CodexInspectionQuotaWindow['resetAccuracy'] | undefined => {
+  switch (value) {
+    case 'exact':
+    case 'derived':
+    case 'estimated':
+    case 'unknown':
+      return value;
+    default:
+      return undefined;
+  }
+};
+
+const serializeQuotaWindow = (window: CodexInspectionQuotaWindow): CodexInspectionQuotaWindow => {
+  const resetAtMs = readNullableNumber(window.resetAtMs);
+  const resetAccuracy = normalizeQuotaResetAccuracy(window.resetAccuracy);
+  return {
+    id: readString(window.id),
+    labelKey: readString(window.labelKey),
+    labelParams: normalizeQuotaWindowLabelParams(window.labelParams),
+    usedPercent: readNullableNumber(window.usedPercent),
+    resetLabel: readString(window.resetLabel),
+    ...(resetAtMs !== null ? { resetAtMs } : {}),
+    ...(resetAccuracy ? { resetAccuracy } : {}),
+    limitWindowSeconds: readNullableNumber(window.limitWindowSeconds),
+  };
+};
 
 const hydrateQuotaWindow = (value: unknown): CodexInspectionQuotaWindow | null => {
   if (!isRecord(value)) return null;
   const id = readString(value.id);
   const labelKey = readString(value.labelKey);
   if (!id || !labelKey) return null;
+  const resetAtMs = readNullableNumber(value.resetAtMs);
+  const resetAccuracy = normalizeQuotaResetAccuracy(value.resetAccuracy);
 
   return {
     id,
@@ -147,6 +169,8 @@ const hydrateQuotaWindow = (value: unknown): CodexInspectionQuotaWindow | null =
     labelParams: normalizeQuotaWindowLabelParams(value.labelParams),
     usedPercent: readNullableNumber(value.usedPercent),
     resetLabel: readString(value.resetLabel),
+    ...(resetAtMs !== null ? { resetAtMs } : {}),
+    ...(resetAccuracy ? { resetAccuracy } : {}),
     limitWindowSeconds: readNullableNumber(value.limitWindowSeconds),
   };
 };
