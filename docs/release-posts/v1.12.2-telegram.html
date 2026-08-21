@@ -1,14 +1,19 @@
-🚀 <b>8 月 20 日 · v1.12.2</b>
+🚀 <b>8 月 21 日 · v1.12.2</b>
 
 ✨ <b>更新内容</b>
 
-• Manager Server 现在会在 <code>/status</code> 和管理面板中明确显示 deferred indexes、offline derived cleanup 与查询性能降级状态。
-• System Info 和 Request Monitoring 会提示历史请求可能变慢或超时，并显示待处理数量；查询仍可继续使用，不会静默改变时间范围。
-• 新增 metadata-bounded 的数据库维护状态读取，完成离线维护并重启后会根据真实 SQLite metadata 自动恢复为 clean。
-• Accounts 最近请求查询改为有界 top-N 读取，减少大历史数据库上的不必要排序。
+• Codex Spark 配额只统计 Spark 使用量，主配额与未知功能范围不会相互污染。
+• Codex 和 xAI 配额重置时间按浏览器本地时区显示，并保留准确的产品重置语义。
+• Manager Server 会在 <code>/status</code> 和面板中显示 deferred indexes、offline cleanup 与查询性能降级状态。
+• Request Monitoring 和 System Info 会提示历史查询风险，Accounts 最近请求改为有界读取以减少大历史数据库扫描。
+• 中英文 README 和文档首页更新为当前面板截图。
 
 ⚠️ <b>注意事项</b>
 
-• 如果界面提示数据库升级维护未完成，请先停止 Manager Server，再运行 <code>cpa-manager-plus cleanup-derived --db-path /data/usage.sqlite</code>；Docker Compose 用户请按操作文档停止、运行一次性容器并重新启动服务。
-• 不要从 Web UI 在线执行 cleanup；该命令需要独占 SQLite 访问。<code>cleanup-derived</code> 不会删除或重建 authoritative <code>usage_events</code>。
 • 升级前请备份 SQLite、WAL、SHM 与 <code>data.key</code>。
+• 若维护状态为 required，请先停止 Manager Server，再运行 <code>cleanup-derived</code>；Docker Compose 用户按操作文档执行一次性容器命令。
+• 不要从 Web UI 在线执行 cleanup；离线命令需要独占 SQLite，且不会删除或改写 <code>usage_events</code>。
+
+🤝 <b>致谢</b>
+
+• <a href="https://github.com/HuiCheng">@HuiCheng</a> - 改进大历史数据库中的 Accounts 最近请求读取。
