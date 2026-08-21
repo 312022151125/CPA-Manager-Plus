@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   getStatus: vi.fn(),
   authState: {
     managementKey: 'manager-admin-key',
-    connectionStatus: 'connected' as const,
+    connectionStatus: 'connected' as 'connected' | 'disconnected',
   },
   availability: {
     checking: false,
@@ -143,5 +143,55 @@ describe('DatabaseMaintenanceProvider', () => {
 
     expect(latestContext()?.status?.databaseMaintenance?.required).toBe(true);
     expect(latestContext()?.error).toBe('temporary status failure');
+  });
+
+  it('clears the previous server state immediately when the connection identity changes', async () => {
+    let resolvePendingStatus: ((status: UsageServiceStatus) => void) | undefined;
+    mocks.getStatus
+      .mockResolvedValueOnce(maintenanceStatus(true))
+      .mockImplementationOnce(
+        () =>
+          new Promise<UsageServiceStatus>((resolve) => {
+            resolvePendingStatus = resolve;
+          })
+      );
+
+    await act(async () => {
+      renderer = create(
+        <DatabaseMaintenanceProvider>
+          <Probe />
+        </DatabaseMaintenanceProvider>
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(latestContext()?.status?.databaseMaintenance?.required).toBe(true);
+
+    await act(async () => {
+      void latestContext()?.refresh();
+      await Promise.resolve();
+    });
+    expect(latestContext()?.status?.databaseMaintenance?.required).toBe(true);
+
+    mocks.authState.connectionStatus = 'disconnected';
+    await act(async () => {
+      renderer?.update(
+        <DatabaseMaintenanceProvider>
+          <Probe />
+        </DatabaseMaintenanceProvider>
+      );
+      await Promise.resolve();
+    });
+
+    expect(latestContext()?.status).toBeNull();
+    expect(latestContext()?.error).toBe('');
+
+    await act(async () => {
+      resolvePendingStatus?.(maintenanceStatus(true));
+      await Promise.resolve();
+    });
+    expect(latestContext()?.status).toBeNull();
+    expect(mocks.getStatus).toHaveBeenCalledTimes(2);
   });
 });

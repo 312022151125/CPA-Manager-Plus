@@ -61,6 +61,19 @@ export function DatabaseMaintenanceProvider({ children }: { children: ReactNode 
   }, [connectionStatus, managementKey, managerServiceAvailable, managerServiceBase]);
 
   useEffect(() => {
+    requestId.current += 1;
+    setStatus(null);
+    setError('');
+    setLoading(false);
+  }, [
+    checking,
+    connectionStatus,
+    managementKey,
+    managerServiceAvailable,
+    managerServiceBase,
+  ]);
+
+  useEffect(() => {
     if (checking) return;
     void refresh();
   }, [checking, refresh]);
