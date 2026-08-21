@@ -163,6 +163,55 @@ func TestRecentAccountRequestsStopsAtLimitInsteadOfScanningOlderRows(t *testing.
 	}
 }
 
+func TestRecentAccountRequestsUsesSourceIndexForLegacyFallback(t *testing.T) {
+	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := sqliterepo.RunDerivedStartupMaintenance(context.Background(), db); err != nil {
+		t.Fatalf("prepare latest-request indexes: %v", err)
+	}
+
+	predicate := legacyLatestRequestPredicates("credential-a.json", "auth-a")[0]
+	args := append(append([]any{}, predicate.args...), 10)
+	rows, err := db.Query(`explain query plan select
+		e.id,
+		e.timestamp_ms,
+		e.failed,
+		e.fail_status_code,
+		coalesce(e.fail_summary, ''),
+		coalesce(e.header_error_kind, ''),
+		coalesce(e.header_error_code, ''),
+		coalesce(e.header_trace_id, '')
+	from usage_events e
+	where `+predicate.sql+`
+	order by e.timestamp_ms desc, e.id desc
+	limit ?`, args...)
+	if err != nil {
+		t.Fatalf("explain legacy latest-request query: %v", err)
+	}
+	defer rows.Close()
+
+	usesSourceIndex := false
+	fullUsageScan := false
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan query plan: %v", err)
+		}
+		usesSourceIndex = usesSourceIndex || strings.Contains(detail, latestRequestSourceIndex)
+		fullUsageScan = fullUsageScan || strings.Contains(detail, "SCAN usage_events")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("query plan rows: %v", err)
+	}
+	if !usesSourceIndex || fullUsageScan {
+		t.Fatalf("legacy latest-request query did not use the source index: sourceIndex=%t scan=%t", usesSourceIndex, fullUsageScan)
+	}
+}
+
 func latestAccountRequestEvent(
 	hash string,
 	timestampMS int64,
@@ -479,6 +528,54 @@ func BenchmarkRecentAccountRequests200Targets(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if _, err := repo.RecentAccountRequests(ctx, targets, 10); err != nil {
 			b.Fatalf("recent account requests: %v", err)
+		}
+	}
+}
+
+func BenchmarkRecentAccountRequestsDenseCredential(b *testing.B) {
+	db, err := sqliterepo.Open(filepath.Join(b.TempDir(), "usage.sqlite"))
+	if err != nil {
+		b.Fatalf("open database: %v", err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+	if err := sqliterepo.RunDerivedStartupMaintenance(context.Background(), db); err != nil {
+		b.Fatalf("prepare latest-request indexes: %v", err)
+	}
+	if _, err := db.Exec(`with recursive ids(id) as (
+		select 1
+		union all
+		select id + 1 from ids where id < 100000
+	) insert into usage_events (
+		event_hash, timestamp_ms, timestamp, model,
+		auth_index, source, auth_file_snapshot, created_at_ms
+	) select
+		printf('dense-account-%06d', id),
+		1800000000000 + id,
+		'2027-01-15T08:00:00Z',
+		'gpt-test',
+		'auth-a',
+		'credential-a.json',
+		'credential-a.json',
+		1800000000000 + id
+	from ids`); err != nil {
+		b.Fatalf("seed dense credential history: %v", err)
+	}
+	repo := New(db)
+	targets := []LatestAccountRequestQuery{{
+		RequestIndex:     0,
+		AuthFileSnapshot: "credential-a.json",
+		AuthIndex:        "auth-a",
+	}}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		requests, err := repo.RecentAccountRequests(context.Background(), targets, 10)
+		if err != nil {
+			b.Fatalf("recent account requests: %v", err)
+		}
+		if len(requests) != 10 {
+			b.Fatalf("recent account requests = %d, want 10", len(requests))
 		}
 	}
 }
