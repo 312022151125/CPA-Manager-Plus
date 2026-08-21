@@ -7,6 +7,47 @@ import (
 	"strings"
 )
 
+const (
+	latestRequestAuthFileIndex = "idx_usage_events_latest_request_auth_file"
+	latestRequestSourceIndex   = "idx_usage_events_latest_request_source"
+)
+
+// snapshotLatestRequestByFileAndIndexSQL is the indexed Top-N path for a
+// credential with a non-empty auth_index. EXPLAIN tests pin this to the
+// composite latest-request auth-file index, including auth_index.
+const snapshotLatestRequestByFileAndIndexSQL = `select
+	e.id,
+	e.timestamp_ms,
+	e.failed,
+	e.fail_status_code,
+	coalesce(e.fail_summary, ''),
+	coalesce(e.header_error_kind, ''),
+	coalesce(e.header_error_code, ''),
+	coalesce(e.header_trace_id, '')
+from usage_events e
+where e.auth_file_snapshot collate nocase = ?
+	and e.auth_index collate nocase = ?
+order by e.timestamp_ms desc, e.id desc
+limit ?`
+
+// snapshotLatestRequestByFileAndEmptyIndexSQL is the indexed Top-N path for a
+// credential whose auth_index is the empty string. EXPLAIN tests pin this to
+// the same composite index, including COLLATE NOCASE on auth_index.
+const snapshotLatestRequestByFileAndEmptyIndexSQL = `select
+	e.id,
+	e.timestamp_ms,
+	e.failed,
+	e.fail_status_code,
+	coalesce(e.fail_summary, ''),
+	coalesce(e.header_error_kind, ''),
+	coalesce(e.header_error_code, ''),
+	coalesce(e.header_trace_id, '')
+from usage_events e
+where e.auth_file_snapshot collate nocase = ?
+	and e.auth_index collate nocase = ''
+order by e.timestamp_ms desc, e.id desc
+limit ?`
+
 // LatestAccountRequestQuery identifies one credential using the immutable
 // snapshot captured with a request. AuthFileSnapshot is the primary identity;
 // Source is used only for records created before auth-file snapshots existed.
@@ -30,85 +71,14 @@ type LatestAccountRequest struct {
 	HeaderTraceID   string
 }
 
-const recentAccountRequestCandidateColumns = `id,
-	timestamp_ms,
-	failed,
-	fail_status_code,
-	coalesce(fail_summary, '') as fail_summary,
-	coalesce(header_error_kind, '') as header_error_kind,
-	coalesce(header_error_code, '') as header_error_code,
-	coalesce(header_trace_id, '') as header_trace_id`
-
-type recentAccountRequestCandidate struct {
-	id      int64
-	request LatestAccountRequest
+type rankedAccountRequest struct {
+	LatestAccountRequest
+	id int64
 }
 
-func recentAccountRequestQuery(legacySource, emptyAuthIndex, afterCutoff bool) string {
-	identityColumn := "auth_file_snapshot"
-	if legacySource {
-		identityColumn = "source"
-	}
-	authIndexConditions := []string{"auth_index collate nocase = ?"}
-	if emptyAuthIndex {
-		authIndexConditions = []string{"auth_index is null", "auth_index collate nocase = ''"}
-	}
-
-	branches := make([]string, 0, len(authIndexConditions))
-	for _, authIndexCondition := range authIndexConditions {
-		conditions := []string{
-			identityColumn + " collate nocase = ?",
-			authIndexCondition,
-		}
-		if legacySource {
-			conditions = append(conditions, "coalesce(auth_file_snapshot, '') = ''")
-		}
-		if afterCutoff {
-			conditions = append(conditions, "(timestamp_ms, id) > (?, ?)")
-		}
-		branches = append(branches, `select `+recentAccountRequestCandidateColumns+`
-			from usage_events
-			where `+strings.Join(conditions, " and ")+`
-			order by timestamp_ms desc, id desc
-			limit ?`)
-	}
-	if len(branches) == 1 {
-		return branches[0]
-	}
-	wrapped := make([]string, 0, len(branches))
-	for _, branch := range branches {
-		wrapped = append(wrapped, "select * from ("+branch+")")
-	}
-	return "select * from (" + strings.Join(wrapped, " union all ") + `)
-		order by timestamp_ms desc, id desc
-		limit ?`
-}
-
-func recentAccountRequestArgs(
-	identity, authIndex string,
-	emptyAuthIndex bool,
-	cutoff *recentAccountRequestCandidate,
-	limit int,
-) []any {
-	branchCount := 1
-	if emptyAuthIndex {
-		branchCount = 2
-	}
-	args := make([]any, 0, branchCount*5+1)
-	for range branchCount {
-		args = append(args, identity)
-		if !emptyAuthIndex {
-			args = append(args, authIndex)
-		}
-		if cutoff != nil {
-			args = append(args, cutoff.request.TimestampMS, cutoff.id)
-		}
-		args = append(args, limit)
-	}
-	if emptyAuthIndex {
-		args = append(args, limit)
-	}
-	return args
+type latestRequestPredicate struct {
+	sql  string
+	args []any
 }
 
 func (r *repository) RecentAccountRequests(
@@ -119,148 +89,322 @@ func (r *repository) RecentAccountRequests(
 	if len(targets) == 0 || limit <= 0 {
 		return []LatestAccountRequest{}, nil
 	}
-
-	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	ready, err := r.latestRequestIndexesReady(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	if ready {
+		return r.recentAccountRequestsIndexed(ctx, targets, limit)
+	}
+	return r.recentAccountRequestsBatched(ctx, targets, limit)
+}
 
-	type preparedQueries struct {
-		snapshot *sql.Stmt
-		legacy   *sql.Stmt
-		after    *sql.Stmt
-	}
-	prepareQueries := func(emptyAuthIndex bool) (preparedQueries, error) {
-		queries := preparedQueries{}
-		var prepareErr error
-		queries.snapshot, prepareErr = tx.PrepareContext(ctx, recentAccountRequestQuery(false, emptyAuthIndex, false))
-		if prepareErr != nil {
-			return preparedQueries{}, prepareErr
-		}
-		queries.legacy, prepareErr = tx.PrepareContext(ctx, recentAccountRequestQuery(true, emptyAuthIndex, false))
-		if prepareErr != nil {
-			_ = queries.snapshot.Close()
-			return preparedQueries{}, prepareErr
-		}
-		queries.after, prepareErr = tx.PrepareContext(ctx, recentAccountRequestQuery(true, emptyAuthIndex, true))
-		if prepareErr != nil {
-			_ = queries.snapshot.Close()
-			_ = queries.legacy.Close()
-			return preparedQueries{}, prepareErr
-		}
-		return queries, nil
-	}
-	withAuthIndex, err := prepareQueries(false)
+func (r *repository) latestRequestIndexesReady(ctx context.Context) (bool, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, `select count(*) from sqlite_master
+		where type = 'index'
+			and tbl_name = 'usage_events'
+			and name in (?, ?)`,
+		latestRequestAuthFileIndex,
+		latestRequestSourceIndex,
+	).Scan(&count)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	defer withAuthIndex.snapshot.Close()
-	defer withAuthIndex.legacy.Close()
-	defer withAuthIndex.after.Close()
-	withoutAuthIndex, err := prepareQueries(true)
-	if err != nil {
-		return nil, err
-	}
-	defer withoutAuthIndex.snapshot.Close()
-	defer withoutAuthIndex.legacy.Close()
-	defer withoutAuthIndex.after.Close()
+	return count == 2, nil
+}
 
+func (r *repository) recentAccountRequestsIndexed(
+	ctx context.Context,
+	targets []LatestAccountRequestQuery,
+	limit int,
+) ([]LatestAccountRequest, error) {
 	requests := make([]LatestAccountRequest, 0, len(targets)*limit)
-	validTargets := 0
+	for _, target := range targets {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		authFileSnapshot := strings.TrimSpace(target.AuthFileSnapshot)
+		if authFileSnapshot == "" {
+			continue
+		}
+		authIndex := strings.TrimSpace(target.AuthIndex)
+		snapshot, err := r.recentAccountRequestsByPredicates(
+			ctx,
+			target.RequestIndex,
+			limit,
+			snapshotLatestRequestPredicates(authFileSnapshot, authIndex),
+		)
+		if err != nil {
+			return nil, err
+		}
+		legacy, err := r.recentAccountRequestsByPredicates(
+			ctx,
+			target.RequestIndex,
+			limit,
+			legacyLatestRequestPredicates(authFileSnapshot, authIndex),
+		)
+		if err != nil {
+			return nil, err
+		}
+		requests = append(requests, mergeRecentAccountRequests(limit, snapshot, legacy)...)
+	}
+	return requests, nil
+}
+
+func snapshotLatestRequestPredicates(authFileSnapshot, authIndex string) []latestRequestPredicate {
+	return latestRequestPredicates(
+		`e.auth_file_snapshot collate nocase = ?`,
+		[]any{authFileSnapshot},
+		authIndex,
+	)
+}
+
+func legacyLatestRequestPredicates(authFileSnapshot, authIndex string) []latestRequestPredicate {
+	filePredicates := []latestRequestPredicate{
+		{sql: `e.auth_file_snapshot is null and e.source collate nocase = ?`, args: []any{authFileSnapshot}},
+		{sql: `e.auth_file_snapshot = '' and e.source collate nocase = ?`, args: []any{authFileSnapshot}},
+	}
+	predicates := make([]latestRequestPredicate, 0, 4)
+	for _, filePredicate := range filePredicates {
+		predicates = append(predicates, latestRequestPredicates(filePredicate.sql, filePredicate.args, authIndex)...)
+	}
+	return predicates
+}
+
+func latestRequestPredicates(baseSQL string, baseArgs []any, authIndex string) []latestRequestPredicate {
+	if authIndex != "" {
+		return []latestRequestPredicate{{
+			sql:  baseSQL + ` and e.auth_index collate nocase = ?`,
+			args: append(append([]any{}, baseArgs...), authIndex),
+		}}
+	}
+	return []latestRequestPredicate{
+		{sql: baseSQL + ` and e.auth_index is null`, args: append([]any{}, baseArgs...)},
+		{sql: baseSQL + ` and e.auth_index collate nocase = ''`, args: append([]any{}, baseArgs...)},
+	}
+}
+
+func (r *repository) recentAccountRequestsByPredicates(
+	ctx context.Context,
+	requestIndex int,
+	limit int,
+	predicates []latestRequestPredicate,
+) ([]rankedAccountRequest, error) {
+	parts := make([][]rankedAccountRequest, 0, len(predicates))
+	for _, predicate := range predicates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		rows, err := r.recentAccountRequestsByPredicate(ctx, requestIndex, limit, predicate)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, rows)
+	}
+	merged := mergeRankedAccountRequests(limit, parts...)
+	return merged, nil
+}
+
+func (r *repository) recentAccountRequestsByPredicate(
+	ctx context.Context,
+	requestIndex int,
+	limit int,
+	predicate latestRequestPredicate,
+) ([]rankedAccountRequest, error) {
+	args := append(append([]any{}, predicate.args...), limit)
+	rows, err := r.db.QueryContext(ctx, `select
+	e.id,
+	e.timestamp_ms,
+	e.failed,
+	e.fail_status_code,
+	coalesce(e.fail_summary, ''),
+	coalesce(e.header_error_kind, ''),
+	coalesce(e.header_error_code, ''),
+	coalesce(e.header_trace_id, '')
+from usage_events e
+where `+predicate.sql+`
+order by e.timestamp_ms desc, e.id desc
+limit ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	requests := make([]rankedAccountRequest, 0, limit)
+	for rows.Next() {
+		var request rankedAccountRequest
+		var failed int
+		if err := rows.Scan(
+			&request.id,
+			&request.TimestampMS,
+			&failed,
+			&request.FailStatusCode,
+			&request.FailSummary,
+			&request.HeaderErrorKind,
+			&request.HeaderErrorCode,
+			&request.HeaderTraceID,
+		); err != nil {
+			return nil, err
+		}
+		request.RequestIndex = requestIndex
+		request.Failed = failed != 0
+		requests = append(requests, request)
+	}
+	return requests, rows.Err()
+}
+
+func (r *repository) recentAccountRequestsBatched(
+	ctx context.Context,
+	targets []LatestAccountRequestQuery,
+	limit int,
+) ([]LatestAccountRequest, error) {
+	values := make([]string, 0, len(targets))
+	args := make([]any, 0, len(targets)*3+1)
 	for _, target := range targets {
 		authFileSnapshot := strings.TrimSpace(target.AuthFileSnapshot)
 		if authFileSnapshot == "" {
 			continue
 		}
-		validTargets++
-		authIndex := strings.TrimSpace(target.AuthIndex)
-		emptyAuthIndex := authIndex == ""
-		queries := withAuthIndex
-		if emptyAuthIndex {
-			queries = withoutAuthIndex
-		}
-
-		snapshotCandidates, queryErr := queryRecentAccountRequestCandidates(
-			ctx,
-			queries.snapshot,
-			recentAccountRequestArgs(authFileSnapshot, authIndex, emptyAuthIndex, nil, limit),
+		values = append(values, "(?, ?, ?)")
+		args = append(
+			args,
+			target.RequestIndex,
+			authFileSnapshot,
+			strings.TrimSpace(target.AuthIndex),
 		)
-		if queryErr != nil {
-			return nil, queryErr
-		}
-		var cutoff *recentAccountRequestCandidate
-		legacyQuery := queries.legacy
-		if len(snapshotCandidates) >= limit {
-			cutoff = &snapshotCandidates[limit-1]
-			legacyQuery = queries.after
-		}
-		legacyCandidates, queryErr := queryRecentAccountRequestCandidates(
-			ctx,
-			legacyQuery,
-			recentAccountRequestArgs(authFileSnapshot, authIndex, emptyAuthIndex, cutoff, limit),
-		)
-		if queryErr != nil {
-			return nil, queryErr
-		}
-		candidates := append(snapshotCandidates, legacyCandidates...)
-		sort.Slice(candidates, func(i, j int) bool {
-			if candidates[i].request.TimestampMS != candidates[j].request.TimestampMS {
-				return candidates[i].request.TimestampMS > candidates[j].request.TimestampMS
-			}
-			return candidates[i].id > candidates[j].id
-		})
-		if len(candidates) > limit {
-			candidates = candidates[:limit]
-		}
-		for _, candidate := range candidates {
-			candidate.request.RequestIndex = target.RequestIndex
-			requests = append(requests, candidate.request)
-		}
 	}
-	if validTargets == 0 {
+	if len(values) == 0 {
 		return []LatestAccountRequest{}, nil
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	sort.SliceStable(requests, func(i, j int) bool {
-		return requests[i].RequestIndex < requests[j].RequestIndex
-	})
-	return requests, nil
-}
+	args = append(args, limit)
 
-func queryRecentAccountRequestCandidates(
-	ctx context.Context,
-	statement *sql.Stmt,
-	args []any,
-) ([]recentAccountRequestCandidate, error) {
-	rows, err := statement.QueryContext(ctx, args...)
+	rows, err := r.db.QueryContext(ctx, `with credential_targets(
+	request_index, auth_file_snapshot, auth_index
+) as (
+	values `+strings.Join(values, ",")+`
+), snapshot_candidates as (
+	select
+		t.request_index,
+		e.id,
+		e.timestamp_ms,
+		e.failed,
+		e.fail_status_code,
+		coalesce(e.fail_summary, '') as fail_summary,
+		coalesce(e.header_error_kind, '') as header_error_kind,
+		coalesce(e.header_error_code, '') as header_error_code,
+		coalesce(e.header_trace_id, '') as header_trace_id
+	from credential_targets t
+	join usage_events e
+		on e.auth_file_snapshot collate nocase = t.auth_file_snapshot
+		and coalesce(e.auth_index, '') collate nocase = t.auth_index
+), legacy_source_candidates as (
+	select
+		t.request_index,
+		e.id,
+		e.timestamp_ms,
+		e.failed,
+		e.fail_status_code,
+		coalesce(e.fail_summary, '') as fail_summary,
+		coalesce(e.header_error_kind, '') as header_error_kind,
+		coalesce(e.header_error_code, '') as header_error_code,
+		coalesce(e.header_trace_id, '') as header_trace_id
+	from credential_targets t
+	join usage_events e
+		on coalesce(e.auth_file_snapshot, '') = ''
+		and e.source collate nocase = t.auth_file_snapshot
+		and coalesce(e.auth_index, '') collate nocase = t.auth_index
+), candidates as (
+	select * from snapshot_candidates
+	union all
+	select * from legacy_source_candidates
+), ranked as (
+	select
+		request_index,
+		timestamp_ms,
+		failed,
+		fail_status_code,
+		fail_summary,
+		header_error_kind,
+		header_error_code,
+		header_trace_id,
+		row_number() over (
+			partition by request_index
+			order by timestamp_ms desc, id desc
+		) as row_number
+	from candidates
+)
+select
+	request_index,
+	timestamp_ms,
+	failed,
+	fail_status_code,
+	fail_summary,
+	header_error_kind,
+	header_error_code,
+	header_trace_id
+from ranked
+where row_number <= ?
+order by request_index, row_number`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	candidates := make([]recentAccountRequestCandidate, 0)
+
+	requests := make([]LatestAccountRequest, 0, len(values)*limit)
 	for rows.Next() {
-		var candidate recentAccountRequestCandidate
+		var request LatestAccountRequest
 		var failed int
 		if err := rows.Scan(
-			&candidate.id,
-			&candidate.request.TimestampMS,
+			&request.RequestIndex,
+			&request.TimestampMS,
 			&failed,
-			&candidate.request.FailStatusCode,
-			&candidate.request.FailSummary,
-			&candidate.request.HeaderErrorKind,
-			&candidate.request.HeaderErrorCode,
-			&candidate.request.HeaderTraceID,
+			&request.FailStatusCode,
+			&request.FailSummary,
+			&request.HeaderErrorKind,
+			&request.HeaderErrorCode,
+			&request.HeaderTraceID,
 		); err != nil {
 			return nil, err
 		}
-		candidate.request.Failed = failed != 0
-		candidates = append(candidates, candidate)
+		request.Failed = failed != 0
+		requests = append(requests, request)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	return requests, rows.Err()
+}
+
+func mergeRecentAccountRequests(limit int, parts ...[]rankedAccountRequest) []LatestAccountRequest {
+	merged := mergeRankedAccountRequests(limit, parts...)
+	if len(merged) == 0 {
+		return nil
 	}
-	return candidates, nil
+	requests := make([]LatestAccountRequest, len(merged))
+	for i, request := range merged {
+		requests[i] = request.LatestAccountRequest
+	}
+	return requests
+}
+
+func mergeRankedAccountRequests(limit int, parts ...[]rankedAccountRequest) []rankedAccountRequest {
+	total := 0
+	for _, part := range parts {
+		total += len(part)
+	}
+	if total == 0 {
+		return nil
+	}
+	merged := make([]rankedAccountRequest, 0, total)
+	for _, part := range parts {
+		merged = append(merged, part...)
+	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		if merged[i].TimestampMS != merged[j].TimestampMS {
+			return merged[i].TimestampMS > merged[j].TimestampMS
+		}
+		return merged[i].id > merged[j].id
+	})
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged
 }
