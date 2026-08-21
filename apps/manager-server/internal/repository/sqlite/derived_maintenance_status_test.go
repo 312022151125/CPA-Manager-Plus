@@ -232,6 +232,37 @@ func TestReadDerivedMaintenanceStatusIgnoresLedgerForMissingTargetTable(t *testi
 	assertDerivedMaintenanceClean(t, status)
 }
 
+func TestReadDerivedMaintenanceStatusRechecksCurrentTargetAfterStaleLedgerTargetDisappears(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "stale-ledger-target.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`insert into usage_account_model_rollups (
+		account_key, model, billing_model, service_tier,
+		first_seen_ms, last_seen_ms, updated_at_ms
+	) values ('account-1', 'model', 'model', '', 1, 1, 1)`); err != nil {
+		t.Fatalf("seed current derived target: %v", err)
+	}
+	if _, err := db.Exec(`insert into usage_derived_deferred_indexes (
+		index_name, table_name, reason, created_at_ms, updated_at_ms
+	) values ('idx_usage_account_model_rollups_last_seen',
+		'parked_derived_table_that_is_gone', 'deferred_indexes', 1, 1)`); err != nil {
+		t.Fatalf("seed stale deferred index ledger: %v", err)
+	}
+
+	status, err := ReadDerivedMaintenanceStatus(context.Background(), db)
+	if err != nil {
+		t.Fatalf("read maintenance status: %v", err)
+	}
+	if !status.Required || status.DeferredIndexes == 0 {
+		t.Fatalf("maintenance status = %+v, want current non-empty target to remain degraded", status)
+	}
+	if !containsString(status.Reasons, DerivedMaintenanceReasonDeferredIndexes) {
+		t.Fatalf("maintenance reasons = %v, want %q", status.Reasons, DerivedMaintenanceReasonDeferredIndexes)
+	}
+}
+
 func TestReadDerivedMaintenanceStatusReportsOfflineQuotaSnapshotMigration(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "offline-quota.sqlite"))
 	if err != nil {

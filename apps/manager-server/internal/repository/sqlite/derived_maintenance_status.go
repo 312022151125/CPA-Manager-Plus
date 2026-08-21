@@ -69,7 +69,7 @@ func ReadDerivedMaintenanceStatus(ctx context.Context, db *sql.DB) (DerivedMaint
 	tableChecked := make(map[string]bool)
 
 	for _, index := range derivedIndexStatements {
-		if _, recorded := deferredIndexReasons[index.name]; recorded {
+		if entry, recorded := deferredIndexReasons[index.name]; recorded && entry.tableName == index.tableName {
 			continue
 		}
 		indexedTable, indexExists := indexes[index.name]
