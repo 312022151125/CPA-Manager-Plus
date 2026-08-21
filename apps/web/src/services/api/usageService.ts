@@ -21,7 +21,7 @@ import {
 } from '@/features/demo/demoFixtures';
 import { isDemoMode } from '@/features/demo/demoMode';
 import { hasCodexInspectionStableIdentity } from '@/features/monitoring/model/codexInspectionOwnership';
-import type { AuthFileItem } from '@/types';
+import type { AuthFileItem, QuotaModelScope } from '@/types';
 import { normalizeApiBase } from '@/utils/connection';
 import {
   getAuthFileStatusIdentityKey,
@@ -286,6 +286,8 @@ export interface CodexInspectionQuotaWindow {
   resetAtMs?: number | null;
   resetAccuracy?: 'exact' | 'derived' | 'estimated' | 'unknown';
   limitWindowSeconds?: number | null;
+  modelScope?: QuotaModelScope;
+  providerWindowAliases?: string[];
 }
 
 export interface CodexInspectionResult {
@@ -896,6 +898,7 @@ export interface MonitoringAccountWindowModelScope {
   kind: 'all' | 'family' | 'models' | 'product' | 'feature';
   key?: string;
   models?: string[];
+  complete?: boolean;
 }
 
 export interface MonitoringAccountWindowUsageRequest {
@@ -967,6 +970,7 @@ export interface AccountQuotaSnapshotObservationInput {
 
 export interface AccountQuotaSnapshotRemovedWindowInput {
   provider_window_id: string;
+  window_kind?: string;
   model_scope_kind?: MonitoringAccountWindowModelScope['kind'];
   model_scope_key?: string;
   model_ids?: string[];
@@ -974,6 +978,7 @@ export interface AccountQuotaSnapshotRemovedWindowInput {
 
 export interface AccountQuotaSnapshotWindowInput {
   provider_window_id: string;
+  provider_window_aliases?: string[];
   window_kind: string;
   window_mode: AccountQuotaSnapshotWindowMode;
   model_scope_kind: MonitoringAccountWindowModelScope['kind'];
@@ -1723,6 +1728,10 @@ export interface ResponseHeaderMetadata {
 export interface UsageHeaderSnapshot {
   event_hash: string;
   timestamp_ms: number;
+  model?: string;
+  analytics_model?: string;
+  requested_model?: string;
+  resolved_model?: string;
   auth_file_snapshot?: string;
   auth_index?: string;
   account_snapshot?: string;
