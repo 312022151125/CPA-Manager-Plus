@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/codexquota"
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	monitoringrepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usagemonitoring"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
@@ -1413,6 +1414,48 @@ func TestUsageMonitoringMetadataBackfillRefreshesHistoricalHeadersWithoutReset(t
 	}
 	if !strings.Contains(searchText, "backfilled-trace") {
 		t.Fatalf("event projection search_text was not refreshed: %q", searchText)
+	}
+}
+
+func TestUsageMonitoringHeaderSnapshotsPreserveRequestAndResolvedModelIdentity(t *testing.T) {
+	_, db := newMonitoringRepositoryStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_800_057_700_000)
+	event := monitoringRepositoryEvent(
+		"header-model-identity",
+		baseMS+1_000,
+		"my-spark",
+		"key-a",
+		"alice@example.com",
+		"auth-a",
+		"source-a",
+		false,
+		10,
+		5,
+		10,
+	)
+	event.RequestedModel = "my-spark"
+	event.ResolvedModel = codexquota.SparkModelID
+	if _, err := db.InsertEvents(ctx, []usage.Event{event}); err != nil {
+		t.Fatalf("insert header identity event: %v", err)
+	}
+
+	raw, err := db.LatestHeaderSnapshots(ctx, baseMS, 10)
+	if err != nil {
+		t.Fatalf("load raw header identity: %v", err)
+	}
+	if len(raw) != 1 || raw[0].Model != "my-spark" || raw[0].AnalyticsModel != "my-spark" ||
+		raw[0].RequestedModel != "my-spark" || raw[0].ResolvedModel != codexquota.SparkModelID {
+		t.Fatalf("raw header identity = %#v", raw)
+	}
+
+	catchUpMonitoringRepository(t, ctx, db)
+	rolled, _, available, err := db.UsageMonitoringHeaderSnapshots(ctx, baseMS, 10)
+	if err != nil || !available {
+		t.Fatalf("load rolled header identity: available=%v err=%v", available, err)
+	}
+	if !reflect.DeepEqual(rolled, raw) {
+		t.Fatalf("rolled header identity mismatch\nrolled=%#v\nraw=%#v", rolled, raw)
 	}
 }
 

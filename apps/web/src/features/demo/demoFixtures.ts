@@ -5612,7 +5612,7 @@ export const getDemoAccountWindowUsage = (
           success_rate: null,
           last_seen_ms: null,
           sync_status: 'empty',
-          scope_match_status: window.model_scope?.kind === 'all' ? 'complete' : 'unmatched',
+          scope_match_status: window.model_scope?.complete === false ? 'unmatched' : 'complete',
           unmatched_requests: 0,
         };
       }
@@ -6584,6 +6584,8 @@ export const getDemoCodexInspectionLocalRun = (baseNow = now()): CodexInspection
         resetAtMs: window.resetAtMs ?? null,
         resetAccuracy: window.resetAccuracy,
         limitWindowSeconds: window.limitWindowSeconds ?? null,
+        modelScope: window.modelScope,
+        providerWindowAliases: window.providerWindowAliases,
       })),
       errorKind: item.errorKind,
       errorDetail: item.errorDetail,
