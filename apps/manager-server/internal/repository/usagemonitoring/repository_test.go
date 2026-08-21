@@ -135,6 +135,65 @@ func TestMigrationCreatesUsageMonitoringRollupSchema(t *testing.T) {
 	}
 }
 
+func TestRequestMonitoringProjectionTimestampIndexAvoidsTemporaryOrderBy(t *testing.T) {
+	sqlDB, db := newMonitoringRepositoryStore(t)
+	if err := db.RunDerivedStartupMaintenance(context.Background()); err != nil {
+		t.Fatalf("prepare monitoring projection indexes: %v", err)
+	}
+	if _, err := sqlDB.Exec(`with recursive ids(event_id) as (
+		select 1
+		union all
+		select event_id + 1 from ids where event_id < 100000
+	) insert into usage_monitoring_event_projection_v1 (
+		event_id, timestamp_ms, search_text, account_key, provider, executor_type,
+		model, analytics_model, resolved_model, auth_index, source, source_hash,
+		api_key_hash, account_snapshot, auth_label_snapshot, auth_file_snapshot,
+		auth_provider_snapshot, auth_project_id_snapshot, reasoning_effort,
+		service_tier, failed, latency_ms, input_tokens, output_tokens,
+		reasoning_tokens, cached_tokens, cache_tokens, cache_read_tokens,
+		cache_creation_tokens, normalized_total_input_tokens, total_tokens,
+		header_quota_plan_type, header_error_kind, header_error_code,
+		header_trace_id, updated_at_ms
+	) select
+		event_id, 1800000000000 + event_id, '', 'account', 'provider', 'executor',
+		'model', 'model', 'model', 'auth', 'source', 'source-hash',
+		'api-key', 'account', 'auth-label', 'auth-file', 'provider', 'project',
+		'', '', 0, null, 1, 1, 0, 0, 0, 0, 0, 1, 2, '', '', '', '',
+		1800000000000 + event_id
+	from ids`); err != nil {
+		t.Fatalf("seed 100k monitoring projection rows: %v", err)
+	}
+
+	query := `explain query plan with filtered_events as (
+		select p.event_id as id, p.timestamp_ms
+		from usage_monitoring_event_projection_v1 p
+		where p.timestamp_ms >= ? and p.timestamp_ms < ?
+	) select id, timestamp_ms
+	from filtered_events
+	order by timestamp_ms desc, id desc
+	limit ?`
+	withIndex := explainMonitoringPlan(t, sqlDB, query, int64(1800000000000), int64(1800000200000), 100)
+	withIndexText := strings.Join(withIndex, "\n")
+	if !strings.Contains(withIndexText, "idx_usage_monitoring_event_projection_timestamp") {
+		t.Fatalf("request monitoring plan with index = %v", withIndex)
+	}
+	if strings.Contains(withIndexText, "USE TEMP B-TREE FOR ORDER BY") {
+		t.Fatalf("request monitoring plan with index uses temporary order by: %v", withIndex)
+	}
+
+	if _, err := sqlDB.Exec(`drop index idx_usage_monitoring_event_projection_timestamp`); err != nil {
+		t.Fatalf("drop monitoring projection timestamp index: %v", err)
+	}
+	withoutIndex := explainMonitoringPlan(t, sqlDB, query, int64(1800000000000), int64(1800000200000), 100)
+	withoutIndexText := strings.Join(withoutIndex, "\n")
+	if strings.Contains(withoutIndexText, "idx_usage_monitoring_event_projection_timestamp") {
+		t.Fatalf("request monitoring plan without index still references timestamp index: %v", withoutIndex)
+	}
+	if !strings.Contains(withoutIndexText, "USE TEMP B-TREE FOR ORDER BY") {
+		t.Fatalf("request monitoring plan without index = %v, want temporary order by", withoutIndex)
+	}
+}
+
 func TestUsageMonitoringProjectionCatchUpResumesAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.sqlite")
 	sqlDB, db := openMonitoringRepositoryStore(t, path)
@@ -1785,6 +1844,29 @@ func openMonitoringRepositoryStore(t *testing.T, path string) (*sql.DB, *store.S
 		t.Fatalf("open sqlite: %v", err)
 	}
 	return sqlDB, store.New(sqlDB)
+}
+
+func explainMonitoringPlan(t *testing.T, db *sql.DB, query string, args ...any) []string {
+	t.Helper()
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		t.Fatalf("explain monitoring query plan: %v", err)
+	}
+	defer rows.Close()
+
+	details := make([]string, 0, 4)
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("scan monitoring query plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read monitoring query plan: %v", err)
+	}
+	return details
 }
 
 func TestUsageMonitoringUnknownFailureName(t *testing.T) {

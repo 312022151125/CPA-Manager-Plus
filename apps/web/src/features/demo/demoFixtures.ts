@@ -42,6 +42,7 @@ import { buildQuotaCredentialIdentity } from '@/utils/quota/credentialScope';
 import type { TFunction } from 'i18next';
 import {
   DEMO_API_BASE,
+  getDemoMaintenanceScenario,
   DEMO_SERVER_VERSION,
   formatDemoDate,
   getDemoServerBuildDate,
@@ -5699,6 +5700,29 @@ export const getDemoUsageServiceInfo = (): UsageServiceInfo => ({
   hasHistoricalData: true,
 });
 
+const getDemoDatabaseMaintenanceStatus = (): NonNullable<
+  UsageServiceStatus['databaseMaintenance']
+> => {
+  if (getDemoMaintenanceScenario() !== 'degraded') {
+    return {
+      required: false,
+      performanceDegraded: false,
+      deferredIndexes: 0,
+      offlineJobs: 0,
+      reasons: [],
+    };
+  }
+
+  return {
+    required: true,
+    performanceDegraded: true,
+    deferredIndexes: 10,
+    offlineJobs: 1,
+    reasons: ['deferred_indexes', 'offline_derived_cleanup', 'legacy_index_replacement'],
+    command: 'cleanup-derived',
+  };
+};
+
 export const getDemoUsageServiceStatus = (): UsageServiceStatus => ({
   service: 'cpa-manager-plus',
   dbPath: '/data/demo-usage.sqlite',
@@ -5732,6 +5756,7 @@ export const getDemoUsageServiceStatus = (): UsageServiceStatus => ({
       lastTruncateAttemptAtMs: now() - 42 * minute,
     },
   },
+  databaseMaintenance: getDemoDatabaseMaintenanceStatus(),
 });
 
 const getDemoQuotaStoreStateByFileName = (): DemoQuotaStoreState => ({
