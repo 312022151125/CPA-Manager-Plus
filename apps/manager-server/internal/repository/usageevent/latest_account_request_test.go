@@ -113,8 +113,18 @@ func TestRecentAccountRequestsStopsAtLimitInsteadOfScanningOlderRows(t *testing.
 		t.Fatalf("open database: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	repo := New(db)
 	ctx := context.Background()
+	if err := sqliterepo.RunDerivedStartupMaintenance(ctx, db); err != nil {
+		t.Fatalf("prepare latest-request indexes: %v", err)
+	}
+	repo := New(db)
+	ready, err := repo.(*repository).latestRequestIndexesReady(ctx)
+	if err != nil {
+		t.Fatalf("inspect indexes: %v", err)
+	}
+	if !ready {
+		t.Fatal("latest-request indexes were not created for the indexed Top-N path")
+	}
 	baseMS := int64(1_700_100_000_000)
 
 	events := make([]usage.Event, 0, 40)
@@ -268,6 +278,46 @@ func TestSnapshotLatestRequestQueryUsesAuthFileAndAuthIndexIndex(t *testing.T) {
 	}
 }
 
+func TestSnapshotLatestRequestEmptyAuthIndexUsesCompositeIndex(t *testing.T) {
+	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := sqliterepo.RunDerivedStartupMaintenance(context.Background(), db); err != nil {
+		t.Fatalf("prepare latest-request indexes: %v", err)
+	}
+
+	rows, err := db.Query(`explain query plan `+snapshotLatestRequestByFileAndEmptyIndexSQL, "file-a.json", 10)
+	if err != nil {
+		t.Fatalf("explain empty auth_index query: %v", err)
+	}
+	defer rows.Close()
+
+	details := make([]string, 0, 8)
+	usesCompositeIndex := false
+	fullUsageScan := false
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan query plan: %v", err)
+		}
+		details = append(details, detail)
+		usesCompositeIndex = usesCompositeIndex ||
+			strings.Contains(detail, "INDEX "+latestRequestAuthFileIndex) &&
+				strings.Contains(detail, "auth_file_snapshot=?") &&
+				strings.Contains(detail, "auth_index=?")
+		fullUsageScan = fullUsageScan || strings.Contains(detail, "SCAN usage_events")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("query plan rows: %v", err)
+	}
+	if !usesCompositeIndex || fullUsageScan {
+		t.Fatalf("empty auth_index query did not use the composite auth-file index: %v", details)
+	}
+}
+
 func TestRecentAccountRequestsMatchesNullAndEmptyAuthIndex(t *testing.T) {
 	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
 	if err != nil {
@@ -281,9 +331,8 @@ func TestRecentAccountRequestsMatchesNullAndEmptyAuthIndex(t *testing.T) {
 	ctx := context.Background()
 	baseMS := int64(1_700_200_000_000)
 
-	emptyIndex := latestAccountRequestEvent("empty-index", baseMS+2, "file-a.json", "", "file-a.json")
 	nonEmpty := latestAccountRequestEvent("non-empty", baseMS+3, "file-a.json", "idx-1", "file-a.json")
-	if _, err := repo.InsertBatch(ctx, []usage.Event{emptyIndex, nonEmpty}); err != nil {
+	if _, err := repo.InsertBatch(ctx, []usage.Event{nonEmpty}); err != nil {
 		t.Fatalf("insert events: %v", err)
 	}
 	if _, err := db.Exec(`insert into usage_events (
@@ -299,6 +348,29 @@ func TestRecentAccountRequestsMatchesNullAndEmptyAuthIndex(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert null auth_index: %v", err)
 	}
+	if _, err := db.Exec(`insert into usage_events (
+		event_hash, timestamp_ms, timestamp, model, auth_file_snapshot, auth_index, source, created_at_ms
+	) values (?, ?, ?, ?, ?, '', ?, ?)`,
+		"empty-index",
+		baseMS+2,
+		time.UnixMilli(baseMS+2).UTC().Format(time.RFC3339Nano),
+		"gpt-test",
+		"file-a.json",
+		"file-a.json",
+		baseMS+2,
+	); err != nil {
+		t.Fatalf("insert empty auth_index: %v", err)
+	}
+	var storedNull, storedEmpty int
+	if err := db.QueryRow(`select
+		sum(case when auth_index is null then 1 else 0 end),
+		sum(case when auth_index = '' then 1 else 0 end)
+	from usage_events where auth_file_snapshot = 'file-a.json'`).Scan(&storedNull, &storedEmpty); err != nil {
+		t.Fatalf("inspect stored auth_index values: %v", err)
+	}
+	if storedNull != 1 || storedEmpty != 1 {
+		t.Fatalf("stored auth_index null=%d empty=%d, want 1 and 1", storedNull, storedEmpty)
+	}
 
 	emptyRequests, err := repo.RecentAccountRequests(ctx, []LatestAccountRequestQuery{
 		{RequestIndex: 0, AuthFileSnapshot: "file-a.json", AuthIndex: ""},
@@ -309,7 +381,7 @@ func TestRecentAccountRequestsMatchesNullAndEmptyAuthIndex(t *testing.T) {
 	if len(emptyRequests) != 2 {
 		t.Fatalf("empty auth_index requests = %#v", emptyRequests)
 	}
-	if emptyRequests[0].TimestampMS != emptyIndex.TimestampMS || emptyRequests[1].TimestampMS != baseMS+1 {
+	if emptyRequests[0].TimestampMS != baseMS+2 || emptyRequests[1].TimestampMS != baseMS+1 {
 		t.Fatalf("empty auth_index order = %#v", emptyRequests)
 	}
 

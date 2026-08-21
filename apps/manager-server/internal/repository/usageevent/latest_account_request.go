@@ -30,6 +30,24 @@ where e.auth_file_snapshot collate nocase = ?
 order by e.timestamp_ms desc, e.id desc
 limit ?`
 
+// snapshotLatestRequestByFileAndEmptyIndexSQL is the indexed Top-N path for a
+// credential whose auth_index is the empty string. EXPLAIN tests pin this to
+// the same composite index, including COLLATE NOCASE on auth_index.
+const snapshotLatestRequestByFileAndEmptyIndexSQL = `select
+	e.id,
+	e.timestamp_ms,
+	e.failed,
+	e.fail_status_code,
+	coalesce(e.fail_summary, ''),
+	coalesce(e.header_error_kind, ''),
+	coalesce(e.header_error_code, ''),
+	coalesce(e.header_trace_id, '')
+from usage_events e
+where e.auth_file_snapshot collate nocase = ?
+	and e.auth_index collate nocase = ''
+order by e.timestamp_ms desc, e.id desc
+limit ?`
+
 // LatestAccountRequestQuery identifies one credential using the immutable
 // snapshot captured with a request. AuthFileSnapshot is the primary identity;
 // Source is used only for records created before auth-file snapshots existed.
@@ -163,7 +181,7 @@ func latestRequestPredicates(baseSQL string, baseArgs []any, authIndex string) [
 	}
 	return []latestRequestPredicate{
 		{sql: baseSQL + ` and e.auth_index is null`, args: append([]any{}, baseArgs...)},
-		{sql: baseSQL + ` and e.auth_index = ''`, args: append([]any{}, baseArgs...)},
+		{sql: baseSQL + ` and e.auth_index collate nocase = ''`, args: append([]any{}, baseArgs...)},
 	}
 }
 
