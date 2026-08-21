@@ -31,6 +31,7 @@ cpa_url=""
 cpa_management_key=""
 cpa_management_key_file=""
 cpa_management_key_cleanup_allowed="0"
+cpa_management_key_inline_input="0"
 admin_key=""
 demo_client_key=""
 generated_admin_key=""
@@ -46,6 +47,8 @@ cpa_connection_rollback_pending="0"
 legacy_compose_backup=""
 legacy_env_backup=""
 legacy_cpa_runtime_config_modified="0"
+docker_data_snapshot_dir=""
+docker_data_snapshot_created="0"
 native_binary_dir=""
 native_existing_binary_dir=""
 native_existing_config_file=""
@@ -67,6 +70,7 @@ native_previous_process_was_running="0"
 native_upgrade_switch_applied="0"
 native_upgrade_rollback_pending="0"
 native_upgrade_log_file=""
+installer_exit_rollback_in_progress="0"
 installer_script_path="${BASH_SOURCE[0]:-$0}"
 case "$installer_script_path" in
   /*) ;;
@@ -83,6 +87,24 @@ die() {
   printf '%s\n' "$message" >&2
   exit 1
 }
+
+handle_installer_exit() {
+  local status="$?"
+  trap - EXIT
+  if [ "$status" -eq 0 ] || [ "${installer_exit_rollback_in_progress:-0}" = "1" ]; then
+    exit "$status"
+  fi
+  installer_exit_rollback_in_progress="1"
+  set +e
+  if [ "${native_upgrade_rollback_pending:-0}" = "1" ]; then
+    rollback_native_upgrade || true
+  elif [ "${cpa_connection_rollback_pending:-0}" = "1" ]; then
+    rollback_legacy_cpa_runtime_config || true
+  fi
+  exit "$status"
+}
+
+trap handle_installer_exit EXIT
 
 text() {
   case "${lang_code:-zh-CN}:$1" in
@@ -649,9 +671,10 @@ resolve_operation() {
 
 read_existing_secret() {
   local file="$1"
+  local restrict_permissions="${2:-1}"
   local value=""
   [ -f "$file" ] || return 1
-  if [ "$dry_run" != "1" ]; then
+  if [ "$dry_run" != "1" ] && [ "$restrict_permissions" = "1" ]; then
     chmod 600 "$file" 2>/dev/null || die "Unable to restrict secret file permissions: $file"
   fi
   value="$(< "$file")"
@@ -662,7 +685,8 @@ read_existing_secret() {
 
 materialize_cpa_management_key_file() {
   local file="${cpa_management_key_file:-}"
-  if [ -z "$file" ] || [ -f "$file" ]; then
+  local tmp=""
+  if [ -z "$file" ] || { [ "$cpa_management_key_inline_input" != "1" ] && [ -f "$file" ]; }; then
     return 0
   fi
   if [ "$dry_run" = "1" ]; then
@@ -672,8 +696,19 @@ materialize_cpa_management_key_file() {
     die "CPA Management Key file is missing and is not installer-managed: $file"
   [ -n "$cpa_management_key" ] || die "CPA Management Key is empty; refusing to create a temporary key file."
   mkdir -p "$(dirname "$file")"
-  printf '%s\n' "$cpa_management_key" > "$file" || die "Unable to write temporary CPA Management Key file: $file"
-  chmod 600 "$file" || die "Unable to restrict temporary CPA Management Key file permissions: $file"
+  tmp="${file}.tmp.$$"
+  if ! (umask 077 && printf '%s\n' "$cpa_management_key" > "$tmp"); then
+    rm -f "$tmp"
+    die "Unable to write temporary CPA Management Key file: $file"
+  fi
+  chmod 600 "$tmp" || {
+    rm -f "$tmp"
+    die "Unable to restrict temporary CPA Management Key file permissions: $file"
+  }
+  mv -f "$tmp" "$file" || {
+    rm -f "$tmp"
+    die "Unable to publish temporary CPA Management Key file: $file"
+  }
 }
 
 read_json_string_value() {
@@ -763,6 +798,40 @@ path_is_managed_cpa_key_file() {
   local secrets_dir=""
   secrets_dir="$(cd "$install_dir/secrets" 2>/dev/null && pwd -P)" || return 1
   [ "$candidate" = "$secrets_dir/cpa-management-key" ]
+}
+
+compose_service_references_token() {
+  local token="$1"
+  awk '
+    function indentation(value) {
+      match(value, /^[[:space:]]*/)
+      return RLENGTH
+    }
+    BEGIN { in_services = 0; in_service = 0; services_indent = -1; service_indent = -1 }
+    {
+      line = $0
+      indent = indentation(line)
+      if (in_service && line !~ /^[[:space:]]*$/ && indent <= service_indent) {
+        in_service = 0
+      }
+      if (line ~ /^[[:space:]]*services:[[:space:]]*$/) {
+        in_services = 1
+        services_indent = indent
+      } else if (in_services && line !~ /^[[:space:]]*$/ && indent <= services_indent) {
+        in_services = 0
+        in_service = 0
+      }
+      if (in_services && line ~ /^[[:space:]]*["\047]?cpa-manager-plus["\047]?:[[:space:]]*$/) {
+        in_service = 1
+        service_indent = indent
+        next
+      }
+      if (in_service && line !~ /^[[:space:]]*#/ && line ~ ("(^|[^A-Za-z0-9_])" token "([^A-Za-z0-9_]|$)")) {
+        found = 1
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' token="$token" "$install_dir/compose.yaml"
 }
 
 locate_existing_native_config() {
@@ -884,12 +953,15 @@ load_existing_native_config() {
       die "Existing native config must contain both cpaUpstreamUrl and managementKeyFile for migration."
     validate_url_value "$(text cpa_url)" "$cpa_url"
     cpa_management_key_file="$(resolve_native_config_path "$raw_cpa_key_file" "$config_dir")"
-    cpa_management_key="$(read_existing_secret "$cpa_management_key_file")" ||
-      die "CPA Management Key file is missing: $cpa_management_key_file"
-    cpa_connection_mode="env"
     if path_is_managed_cpa_key_file "$cpa_management_key_file"; then
       cpa_management_key_cleanup_allowed="1"
+      cpa_management_key="$(read_existing_secret "$cpa_management_key_file" "1")" ||
+        die "CPA Management Key file is missing: $cpa_management_key_file"
+    else
+      cpa_management_key="$(read_existing_secret "$cpa_management_key_file" "0")" ||
+        die "CPA Management Key file is missing: $cpa_management_key_file"
     fi
+    cpa_connection_mode="env"
   else
     cpa_connection_mode="stored"
   fi
@@ -903,6 +975,12 @@ load_existing_docker_config() {
   local value=""
   local legacy_key_file=""
   local legacy_key_dir=""
+  local compose_has_cpa_url="0"
+  local compose_has_cpa_key="0"
+  local compose_has_cpa_key_file="0"
+  local compose_has_managed_cpa_secret="0"
+  local effective_key=""
+  local effective_key_file=""
 
   [ -f "$install_dir/.env" ] || die "Missing existing config: $install_dir/.env"
   [ -f "$install_dir/compose.yaml" ] || die "Missing existing config: $install_dir/compose.yaml"
@@ -911,6 +989,10 @@ load_existing_docker_config() {
   validate_image_ref "$(text cpamp_image)" "$cpamp_image"
   cpamp_port="$(read_env_value "$install_dir/.env" CPAMP_PORT 2>/dev/null || printf '18317')"
   normalize_port "$cpamp_port" || die "Invalid CPAMP port in existing .env: $cpamp_port"
+  compose_service_references_token CPA_UPSTREAM_URL && compose_has_cpa_url="1"
+  compose_service_references_token CPA_MANAGEMENT_KEY && compose_has_cpa_key="1"
+  compose_service_references_token CPA_MANAGEMENT_KEY_FILE && compose_has_cpa_key_file="1"
+  compose_service_references_token cpa_management_key && compose_has_managed_cpa_secret="1"
   if grep -q '^[[:space:]]*cli-proxy-api:' "$install_dir/compose.yaml"; then
     install_mode="stack"
     cpa_image="$(read_env_value "$install_dir/.env" CPA_IMAGE 2>/dev/null || printf '%s' "$default_cpa_image")"
@@ -918,76 +1000,81 @@ load_existing_docker_config() {
     cpa_port="$(read_env_value "$install_dir/.env" CPA_PORT 2>/dev/null || printf '8317')"
     normalize_port "$cpa_port" || die "Invalid CPA port in existing .env: $cpa_port"
     cpa_url="http://cli-proxy-api:8317"
-    if grep -q 'CPA_MANAGEMENT_KEY_FILE' "$install_dir/compose.yaml" ||
-       grep -qE '(^|[^A-Za-z0-9_])CPA_MANAGEMENT_KEY([^A-Za-z0-9_]|$)' "$install_dir/compose.yaml" ||
-       [ -f "$install_dir/secrets/cpa-management-key" ] ||
-       read_env_value "$install_dir/.env" CPA_MANAGEMENT_KEY >/dev/null 2>&1 ||
-       read_env_value "$install_dir/.env" CPA_MANAGEMENT_KEY_FILE >/dev/null 2>&1 ||
-       [ -n "${CPA_MANAGEMENT_KEY:-}" ] ||
-       [ -n "${CPA_MANAGEMENT_KEY_FILE:-}" ]; then
+    if [ "$compose_has_cpa_key" = "1" ] ||
+       [ "$compose_has_cpa_key_file" = "1" ] ||
+       [ "$compose_has_managed_cpa_secret" = "1" ]; then
       cpa_connection_mode="env"
     else
       cpa_connection_mode="stored"
     fi
   else
     install_mode="cpamp"
-    if grep -q 'CPA_MANAGEMENT_KEY_FILE' "$install_dir/compose.yaml" ||
-       grep -qE '(^|[^A-Za-z0-9_])CPA_MANAGEMENT_KEY([^A-Za-z0-9_]|$)' "$install_dir/compose.yaml" ||
-       read_env_value "$install_dir/.env" CPA_MANAGEMENT_KEY >/dev/null 2>&1 ||
-       read_env_value "$install_dir/.env" CPA_MANAGEMENT_KEY_FILE >/dev/null 2>&1 ||
-       [ -n "${CPA_MANAGEMENT_KEY:-}" ] ||
-       [ -n "${CPA_MANAGEMENT_KEY_FILE:-}" ]; then
+    if [ "$compose_has_cpa_key" = "1" ] ||
+       [ "$compose_has_cpa_key_file" = "1" ] ||
+       [ "$compose_has_managed_cpa_secret" = "1" ]; then
       cpa_connection_mode="env"
-      cpa_url="$(read_env_value "$install_dir/.env" CPA_UPSTREAM_URL 2>/dev/null || printf '%s' "${CPA_UPSTREAM_URL:-}")"
+      if [ "$compose_has_cpa_url" = "1" ]; then
+        if [ "${CPA_UPSTREAM_URL+x}" = "x" ]; then
+          cpa_url="${CPA_UPSTREAM_URL-}"
+        else
+          cpa_url="$(read_env_value "$install_dir/.env" CPA_UPSTREAM_URL 2>/dev/null || true)"
+        fi
+      fi
     else
       cpa_connection_mode="setup"
     fi
   fi
   if [ "$cpa_connection_mode" = "env" ]; then
-    if [ -f "$install_dir/secrets/cpa-management-key" ]; then
-      cpa_management_key_file="$install_dir/secrets/cpa-management-key"
-      cpa_management_key_cleanup_allowed="1"
-      cpa_management_key="$(read_existing_secret "$cpa_management_key_file")" ||
-        die "CPA Management Key file is missing: $cpa_management_key_file"
-    elif cpa_management_key="$(read_env_value "$install_dir/.env" CPA_MANAGEMENT_KEY 2>/dev/null)"; then
-      cpa_management_key_cleanup_allowed="1"
-      cpa_management_key_file="$install_dir/secrets/cpa-management-key"
-    elif [ -n "${CPA_MANAGEMENT_KEY:-}" ]; then
-      cpa_management_key="$CPA_MANAGEMENT_KEY"
-      cpa_management_key_cleanup_allowed="1"
-      cpa_management_key_file="$install_dir/secrets/cpa-management-key"
-    elif [ -n "${CPA_MANAGEMENT_KEY_FILE:-}" ]; then
-      legacy_key_file="$CPA_MANAGEMENT_KEY_FILE"
-      case "$legacy_key_file" in
-        /*) ;;
-        *) legacy_key_file="$install_dir/$legacy_key_file" ;;
-      esac
-      legacy_key_dir="$(cd "$(dirname "$legacy_key_file")" 2>/dev/null && pwd -P)" ||
-        die "CPA Management Key file parent does not exist: $legacy_key_file"
-      legacy_key_file="$legacy_key_dir/$(basename "$legacy_key_file")"
-      cpa_management_key_file="$legacy_key_file"
-      cpa_management_key_cleanup_allowed="0"
-      if path_is_managed_cpa_key_file "$legacy_key_file"; then
-        cpa_management_key_cleanup_allowed="1"
+    if [ "$compose_has_cpa_key" = "1" ]; then
+      if [ "${CPA_MANAGEMENT_KEY+x}" = "x" ]; then
+        effective_key="${CPA_MANAGEMENT_KEY-}"
+      else
+        effective_key="$(read_env_value "$install_dir/.env" CPA_MANAGEMENT_KEY 2>/dev/null || true)"
       fi
-      cpa_management_key="$(read_existing_secret "$legacy_key_file")" ||
-        die "CPA Management Key is referenced by the existing Docker configuration but the key file is not readable: $legacy_key_file"
-    elif legacy_key_file="$(read_env_value "$install_dir/.env" CPA_MANAGEMENT_KEY_FILE 2>/dev/null)"; then
-      case "$legacy_key_file" in
-        /*) ;;
-        *) legacy_key_file="$install_dir/$legacy_key_file" ;;
-      esac
-      legacy_key_dir="$(cd "$(dirname "$legacy_key_file")" 2>/dev/null && pwd -P)" ||
-        die "CPA Management Key file parent does not exist: $legacy_key_file"
-      legacy_key_file="$legacy_key_dir/$(basename "$legacy_key_file")"
-      cpa_management_key_file="$legacy_key_file"
-      cpa_management_key_cleanup_allowed="0"
-      if path_is_managed_cpa_key_file "$legacy_key_file"; then
-        cpa_management_key_cleanup_allowed="1"
+    fi
+    if [ -n "$effective_key" ]; then
+      cpa_management_key="$effective_key"
+      cpa_management_key_cleanup_allowed="1"
+      cpa_management_key_inline_input="1"
+      if [ -e "$install_dir/secrets/cpa-management-key" ]; then
+        cpa_management_key_file="$install_dir/secrets/cpa-management-key.import.$$"
+      else
+        cpa_management_key_file="$install_dir/secrets/cpa-management-key"
       fi
-      cpa_management_key="$(read_existing_secret "$legacy_key_file")" ||
-        die "CPA Management Key is referenced by the existing Docker configuration but the key file is not readable: $legacy_key_file"
     else
+      if [ "$compose_has_cpa_key_file" = "1" ]; then
+        if [ "${CPA_MANAGEMENT_KEY_FILE+x}" = "x" ]; then
+          effective_key_file="${CPA_MANAGEMENT_KEY_FILE-}"
+        else
+          effective_key_file="$(read_env_value "$install_dir/.env" CPA_MANAGEMENT_KEY_FILE 2>/dev/null || true)"
+        fi
+      fi
+      if [ -n "$effective_key_file" ]; then
+        legacy_key_file="$effective_key_file"
+      elif [ "$compose_has_managed_cpa_secret" = "1" ]; then
+        legacy_key_file="$install_dir/secrets/cpa-management-key"
+      fi
+    fi
+    if [ -z "$cpa_management_key" ] && [ -n "$legacy_key_file" ]; then
+      case "$legacy_key_file" in
+        /*) ;;
+        *) legacy_key_file="$install_dir/$legacy_key_file" ;;
+      esac
+      legacy_key_dir="$(cd "$(dirname "$legacy_key_file")" 2>/dev/null && pwd -P)" ||
+        die "CPA Management Key file parent does not exist: $legacy_key_file"
+      legacy_key_file="$legacy_key_dir/$(basename "$legacy_key_file")"
+      cpa_management_key_file="$legacy_key_file"
+      cpa_management_key_cleanup_allowed="0"
+      if path_is_managed_cpa_key_file "$legacy_key_file"; then
+        cpa_management_key_cleanup_allowed="1"
+        cpa_management_key="$(read_existing_secret "$legacy_key_file" "1")" ||
+          die "CPA Management Key is referenced by the existing Docker configuration but the key file is not readable: $legacy_key_file"
+      else
+        cpa_management_key="$(read_existing_secret "$legacy_key_file" "0")" ||
+          die "CPA Management Key is referenced by the existing Docker configuration but the key file is not readable: $legacy_key_file"
+      fi
+    fi
+    if [ -z "$cpa_management_key" ]; then
       die "CPA Management Key is referenced by the existing Docker configuration but no readable key input was found."
     fi
     validate_secret_value "CPA Management Key" "$cpa_management_key"
@@ -1768,6 +1855,44 @@ run_docker_connection_import() {
   )
 }
 
+run_docker_data_snapshot() {
+  local action="$1"
+  (
+    cd "$install_dir"
+    if [ "$action" = "delete" ]; then
+      docker compose run --rm --no-deps \
+        -e CPA_UPSTREAM_URL= \
+        -e CPA_MANAGEMENT_KEY= \
+        -e CPA_MANAGEMENT_KEY_FILE=/dev/null \
+        cpa-manager-plus manager-data-snapshot delete \
+        --snapshot-dir "$docker_data_snapshot_dir"
+    else
+      docker compose run --rm --no-deps \
+        -e CPA_UPSTREAM_URL= \
+        -e CPA_MANAGEMENT_KEY= \
+        -e CPA_MANAGEMENT_KEY_FILE=/dev/null \
+        cpa-manager-plus manager-data-snapshot "$action" \
+        --snapshot-dir "$docker_data_snapshot_dir" \
+        --db-path /data/usage.sqlite \
+        --data-key-path /data/data.key
+    fi
+  )
+}
+
+prepare_docker_data_snapshot() {
+  local timestamp=""
+  timestamp="$(date '+%Y%m%d%H%M%S')"
+  docker_data_snapshot_dir="/data/.cpamp-manager-snapshot-$timestamp-$$"
+  run_docker_data_snapshot create || return 1
+  docker_data_snapshot_created="1"
+}
+
+delete_docker_data_snapshot() {
+  [ "$docker_data_snapshot_created" = "1" ] || return 0
+  run_docker_data_snapshot delete || return 1
+  docker_data_snapshot_created="0"
+}
+
 backup_legacy_cpa_runtime_config() {
   local timestamp=""
   timestamp="$(date '+%Y%m%d%H%M%S')"
@@ -1967,23 +2092,38 @@ restore_legacy_cpa_runtime_config() {
 
 rollback_legacy_cpa_runtime_config() {
   local failed="0"
+  local process_safe="1"
   cpa_connection_rollback_pending="0"
-  if [ "$legacy_cpa_runtime_config_modified" = "1" ]; then
+  if ! (
+    cd "$install_dir"
+    docker compose stop cpa-manager-plus
+  ); then
+    failed="1"
+    process_safe="0"
+  fi
+  if [ "$process_safe" = "1" ] && [ "$docker_data_snapshot_created" = "1" ]; then
+    run_docker_data_snapshot restore || failed="1"
+  fi
+  if [ "$process_safe" = "1" ] && [ "$failed" = "0" ] && [ "$legacy_cpa_runtime_config_modified" = "1" ]; then
     restore_legacy_cpa_runtime_config || failed="1"
   fi
-  if ! (
+  if [ "$process_safe" = "1" ] && [ "$failed" = "0" ] && ! (
     cd "$install_dir"
     docker compose up -d
   ); then
     failed="1"
   fi
+  if [ "$failed" = "0" ]; then
+    delete_docker_data_snapshot || failed="1"
+  fi
   if [ "$failed" = "1" ]; then
-    printf '%s\n' "$(text cpa_rollback_failed)" >&2
+    printf '%s\n' "$(text cpa_rollback_failed) Snapshot: ${docker_data_snapshot_dir:-not-created}" >&2
     return 1
   fi
 }
 
 commit_legacy_cpa_runtime_config() {
+  delete_docker_data_snapshot || return 1
   cpa_connection_rollback_pending="0"
 }
 
@@ -2004,6 +2144,7 @@ run_docker_install() {
     if needs_cpa_connection_import; then
       if [ "$operation" = "upgrade" ]; then
         say "$(text run_command): cd \"$install_dir\" && docker compose stop cpa-manager-plus"
+        say "$(text run_command): create a protected Manager data snapshot in /data before import"
       fi
       print_docker_connection_import_command
     fi
@@ -2039,6 +2180,9 @@ run_docker_install() {
         docker compose stop cpa-manager-plus
       ); then
         die "Failed to stop CPA Manager Plus before CPA connection import."
+      fi
+      if ! prepare_docker_data_snapshot; then
+        die "Failed to create a protected Manager data snapshot before CPA connection import."
       fi
     fi
     if ! run_docker_connection_import; then
@@ -2216,43 +2360,16 @@ EOF
 write_native_upgrade_config() {
   local binary_dir="$1"
   local file="$binary_dir/config.json"
-  local tmp="${file}.tmp.$$"
 
   prepare_file "$file"
-  if command_exists jq; then
-    jq 'del(.cpaUpstreamUrl, .managementKeyFile)' "$native_existing_config_file" > "$tmp" || {
-      rm -f "$tmp"
-      die "Failed to sanitize the existing native runtime config."
-    }
-  elif command_exists python3; then
-    python3 - "$native_existing_config_file" "$tmp" <<'PY' || {
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    data = json.load(handle)
-data.pop("cpaUpstreamUrl", None)
-data.pop("managementKeyFile", None)
-with open(sys.argv[2], "w", encoding="utf-8") as handle:
-    json.dump(data, handle, indent=2, ensure_ascii=False)
-    handle.write("\n")
-PY
-      rm -f "$tmp"
-      die "Failed to sanitize the existing native runtime config."
-    }
-  elif ! awk '
-      /^[[:space:]]*"cpaUpstreamUrl"[[:space:]]*:/ { next }
-      /^[[:space:]]*"managementKeyFile"[[:space:]]*:/ { next }
-      { print }
-    ' "$native_existing_config_file" > "$tmp"; then
-      rm -f "$tmp"
-      die "Failed to sanitize the existing native runtime config."
+  if ! "$binary_dir/cpa-manager-plus" sanitize-runtime-config \
+    --input "$native_existing_config_file" \
+    --output "$file"; then
+    die "Failed to sanitize the existing native runtime config."
   fi
-  if grep -qE '"(cpaUpstreamUrl|managementKeyFile)"[[:space:]]*:' "$tmp"; then
-    rm -f "$tmp"
+  if grep -qE '"(cpaUpstreamUrl|managementKeyFile)"[[:space:]]*:' "$file"; then
     die "The generated native runtime config still contains legacy CPA credentials."
   fi
-  mv -f "$tmp" "$file"
 }
 
 write_native_run_script() {
