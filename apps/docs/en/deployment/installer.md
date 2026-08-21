@@ -251,7 +251,11 @@ CPAMP_OPERATION=regenerate bash install-cpamp.sh
 
 `CPAMP_OVERWRITE=1` remains compatible with the old workflow and maps to config regeneration. The installer backs up the previous `.env`, `compose.yaml`, CPA config, `run.sh`, and service file under `backups/installer-*`. You should still separately back up `secrets/`, `data/`, and `cliproxyapi/`. If `data.key` is lost, stored CPA Management Keys cannot be recovered.
 
-When upgrading a legacy env/secret deployment, it also keeps timestamped `compose.yaml.cpa-key-migration.bak.*` and `.env.cpa-key-migration.bak.*` files. If import, targeted cleanup, or restart fails, the old config is restored and the temporary secret is kept so the connection is not lost before migration is confirmed.
+When upgrading a legacy env/secret Docker deployment, the installer first stops Manager Server and creates a protected offline snapshot inside the data volume. The snapshot records the original presence and contents of `usage.sqlite`, `-wal`, `-shm`, `-journal`, and `data.key`. Import and any SQLite schema migration start only after the complete snapshot exists. The snapshot is deleted only after health, admin authentication, and CPA proxy validation all pass. On failure, the installer stops the replacement process, restores the data and old config, and then starts the previous service. A snapshot whose restore fails is retained and its path is reported for manual recovery.
+
+The installer also keeps timestamped `compose.yaml.cpa-key-migration.bak.*` and `.env.cpa-key-migration.bak.*` files. Legacy CPA inputs are resolved only from sources actually referenced by the `cpa-manager-plus` Compose service, with the process environment overriding `.env`; unreferenced legacy `.env` declarations and stale secret files do not trigger migration. The installer may restrict and remove its managed `secrets/cpa-management-key`. An external `CPA_MANAGEMENT_KEY_FILE` is read only: its contents, permissions, and file remain unchanged.
+
+Native-package upgrades likewise back up SQLite sidecars and `data.key` before switching runtime entry files. The new binary sanitizes the old `config.json` with Go's JSON parser, deleting only `cpaUpstreamUrl` and `managementKeyFile` while preserving unknown fields. The common exit handler also rolls back unhandled shell failures.
 
 :::
 
