@@ -124,6 +124,9 @@ if [ "$1" = "compose" ] && [ "\${2:-}" = "run" ]; then
       fi
       ;;
     *'manager-data-snapshot delete'*)
+      if [ "\${FAKE_DOCKER_SNAPSHOT_DELETE_OK:-1}" != "1" ]; then
+        exit 1
+      fi
       if [ -n "\${FAKE_DOCKER_SNAPSHOT_STORE:-}" ]; then
         rm -f "$FAKE_DOCKER_SNAPSHOT_STORE"/*
         rmdir "$FAKE_DOCKER_SNAPSHOT_STORE"
@@ -332,6 +335,26 @@ exit 22
 `
   );
   chmodSync(fakeCurl, 0o755);
+  const realLsof = ['/usr/sbin/lsof', '/usr/bin/lsof', '/sbin/lsof'].find((candidate) =>
+    existsSync(candidate)
+  );
+  const fakeLsof = path.join(fakeBin, 'lsof');
+  writeFileSync(
+    fakeLsof,
+    `#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *-iTCP*)
+    # A host port published by the local Docker daemon (for example 18317) is
+    # environmental noise for these tests; the native listener gate must see a
+    # free port. Non-network queries fall through to the real lsof.
+    exit 1
+    ;;
+esac
+${realLsof ? `exec ${realLsof} "$@"` : 'exit 1'}
+`
+  );
+  chmodSync(fakeLsof, 0o755);
   return { fakeBin, fixtureDir, archivePath, packageName };
 };
 
@@ -1577,9 +1600,12 @@ secrets:
       expect(result.status).toBe(0);
       expect(readFileSync(path.join(installDir, '.env'), 'utf8')).toBe(envContent);
       expect(readFileSync(path.join(installDir, 'compose.yaml'), 'utf8')).toBe(composeContent);
-      expect(existsSync(path.join(installDir, 'secrets/cpa-management-key'))).toBe(true);
+      // The unreferenced managed key file is finalized: the stored connection
+      // is re-verified through the CPA proxy and the plaintext key is removed.
       expect(readFileSync(dockerLog, 'utf8')).not.toContain('store-cpa-connection');
       expect(readFileSync(dockerLog, 'utf8')).not.toContain('manager-data-snapshot');
+      expect(readFileSync(dockerLog, 'utf8')).toContain('/v0/management/config');
+      expect(existsSync(path.join(installDir, 'secrets/cpa-management-key'))).toBe(false);
     } finally {
       rmSync(installDir, { recursive: true, force: true });
       rmSync(fakeBin, { recursive: true, force: true });
@@ -1907,6 +1933,279 @@ secrets:
       expect(readFileSync(`${dbPath}-journal`, 'utf8')).toBe('journal-before\n');
       expect(readFileSync(dataKeyPath, 'utf8')).toBe('data-key-before\n');
       expect(existsSync(snapshotStore)).toBe(false);
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(fakeBin, { recursive: true, force: true });
+      rmSync(dockerLog, { force: true });
+    }
+  });
+
+  it('finalizes a leftover installer-managed CPA key on a successful rerun (Docker)', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const fakeBin = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-bin-'));
+    const dockerLog = path.join(os.tmpdir(), `cpamp-installer-docker-${process.pid}-${Date.now()}.log`);
+    const managedKeyPath = path.join(installDir, 'secrets/cpa-management-key');
+
+    try {
+      // Post-failed-install state: config no longer references the CPA key,
+      // the connection is already stored in SQLite, and the installer-managed
+      // plaintext key file from the failed run is still on disk.
+      mkdirSync(path.join(installDir, 'secrets'), { recursive: true });
+      writeFileSync(
+        path.join(installDir, '.env'),
+        'COMPOSE_PROJECT_NAME=cpamp\nCPAMP_IMAGE=example/cpamp:v1\nCPAMP_PORT=18317\n'
+      );
+      writeFileSync(
+        path.join(installDir, 'compose.yaml'),
+        'services:\n  cpa-manager-plus:\n    image: ${CPAMP_IMAGE}\n'
+      );
+      writeFileSync(path.join(installDir, 'secrets/cpamp-admin-key'), 'cpamp_existing_admin_key\n');
+      writeFileSync(managedKeyPath, 'cpa_leftover_key\n');
+      chmodSync(managedKeyPath, 0o600);
+      writeFakeDocker(fakeBin);
+
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_INSTALL_DIR: installDir,
+          FAKE_DOCKER_LOG: dockerLog,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(0);
+      const calls = readFileSync(dockerLog, 'utf8');
+      expect(calls).not.toContain('store-cpa-connection');
+      expect(calls).not.toContain('manager-data-snapshot');
+      expect(calls).toContain('/v0/management/config');
+      expect(combinedOutput(result)).toContain('previous installer run');
+      expect(combinedOutput(result)).toContain('Install steps completed');
+      expect(existsSync(managedKeyPath)).toBe(false);
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(fakeBin, { recursive: true, force: true });
+      rmSync(dockerLog, { force: true });
+    }
+  });
+
+  it('keeps a leftover installer-managed CPA key when the rerun proxy validation fails (Docker)', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const fakeBin = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-bin-'));
+    const managedKeyPath = path.join(installDir, 'secrets/cpa-management-key');
+
+    try {
+      mkdirSync(path.join(installDir, 'secrets'), { recursive: true });
+      writeFileSync(
+        path.join(installDir, '.env'),
+        'COMPOSE_PROJECT_NAME=cpamp\nCPAMP_IMAGE=example/cpamp:v1\nCPAMP_PORT=18317\n'
+      );
+      writeFileSync(
+        path.join(installDir, 'compose.yaml'),
+        'services:\n  cpa-manager-plus:\n    image: ${CPAMP_IMAGE}\n'
+      );
+      writeFileSync(path.join(installDir, 'secrets/cpamp-admin-key'), 'cpamp_existing_admin_key\n');
+      writeFileSync(managedKeyPath, 'cpa_leftover_key\n');
+      writeFakeDocker(fakeBin);
+
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_INSTALL_DIR: installDir,
+          FAKE_DOCKER_CPA_OK: '0',
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).toContain('CPA connection validation failed');
+      expect(existsSync(managedKeyPath)).toBe(true);
+      expect(readFileSync(managedKeyPath, 'utf8')).toBe('cpa_leftover_key\n');
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(fakeBin, { recursive: true, force: true });
+    }
+  });
+
+  it('finalizes a leftover installer-managed CPA key on a successful native rerun', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const release = writeFakeNativeRelease();
+    const legacy = writeLegacyNativeInstall(installDir);
+    const commandLog = path.join(installDir, 'native-command.log');
+    const externalDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-external-secret-'));
+    const externalKeyPath = path.join(externalDir, 'external-cpa-key');
+
+    // Post-migration state: config.json no longer carries the legacy CPA
+    // fields, so the rerun classifies the connection as stored.
+    const legacyConfig = JSON.parse(readFileSync(legacy.configPath, 'utf8'));
+    delete legacyConfig.cpaUpstreamUrl;
+    delete legacyConfig.managementKeyFile;
+    writeFileSync(legacy.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+    writeFileSync(externalKeyPath, 'external-key-content\n');
+    chmodSync(externalKeyPath, 0o640);
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+          CPAMP_FAKE_NATIVE_ARCHIVE: release.archivePath,
+          FAKE_NATIVE_COMMAND_LOG: commandLog,
+          FAKE_NATIVE_DB_PATH: legacy.dbPath,
+          PATH: `${release.fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(0);
+      // No import may run during the stored-mode rerun; the fake binary only
+      // creates the command log when store-cpa-connection is invoked.
+      expect(existsSync(commandLog)).toBe(false);
+      expect(existsSync(legacy.cpaKeyPath)).toBe(false);
+      expect(readFileSync(legacy.dbPath, 'utf8')).toBe('existing-usage-data\n');
+      expect(readFileSync(externalKeyPath, 'utf8')).toBe('external-key-content\n');
+      expect(statSync(externalKeyPath).mode & 0o777).toBe(0o640);
+    } finally {
+      stopNativeFixtureProcess(installDir);
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(externalDir, { recursive: true, force: true });
+      rmSync(release.fakeBin, { recursive: true, force: true });
+      rmSync(release.fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a leftover installer-managed CPA key when the native rerun proxy validation fails', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const release = writeFakeNativeRelease();
+    const legacy = writeLegacyNativeInstall(installDir);
+    const commandLog = path.join(installDir, 'native-command.log');
+
+    const legacyConfig = JSON.parse(readFileSync(legacy.configPath, 'utf8'));
+    delete legacyConfig.cpaUpstreamUrl;
+    delete legacyConfig.managementKeyFile;
+    writeFileSync(legacy.configPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+          CPAMP_FAKE_NATIVE_ARCHIVE: release.archivePath,
+          FAKE_NATIVE_COMMAND_LOG: commandLog,
+          FAKE_NATIVE_DB_PATH: legacy.dbPath,
+          FAKE_NATIVE_CPA_OK: '0',
+          PATH: `${release.fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).toContain('CPA connection validation failed');
+      expect(existsSync(legacy.cpaKeyPath)).toBe(true);
+      expect(readFileSync(legacy.dbPath, 'utf8')).toBe('existing-usage-data\n');
+    } finally {
+      stopNativeFixtureProcess(installDir);
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(release.fakeBin, { recursive: true, force: true });
+      rmSync(release.fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not roll back a committed Docker migration when snapshot cleanup fails', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const fakeBin = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-bin-'));
+    const dockerLog = path.join(os.tmpdir(), `cpamp-installer-docker-${process.pid}-${Date.now()}.log`);
+    const dockerDataDir = path.join(installDir, 'fake-docker-data');
+    const dbPath = path.join(dockerDataDir, 'usage.sqlite');
+    const dataKeyPath = path.join(dockerDataDir, 'data.key');
+    const snapshotStore = path.join(installDir, 'fake-docker-snapshot');
+    const envContent =
+      'COMPOSE_PROJECT_NAME=cpamp\nCPAMP_IMAGE=example/cpamp:v1\nCPAMP_PORT=18317\nCPA_UPSTREAM_URL=http://host.docker.internal:8317\n';
+    const composeContent = `services:
+  cpa-manager-plus:
+    image: \${CPAMP_IMAGE}
+    environment:
+      CPA_UPSTREAM_URL: "\${CPA_UPSTREAM_URL}"
+      CPA_MANAGEMENT_KEY_FILE: "/run/secrets/cpa_management_key"
+    secrets:
+      - cpamp_admin_key
+      - cpa_management_key
+secrets:
+  cpamp_admin_key:
+    file: ./secrets/cpamp-admin-key
+  cpa_management_key:
+    file: ./secrets/cpa-management-key
+`;
+
+    try {
+      mkdirSync(path.join(installDir, 'secrets'), { recursive: true });
+      mkdirSync(dockerDataDir, { recursive: true });
+      writeFileSync(path.join(installDir, '.env'), envContent);
+      writeFileSync(path.join(installDir, 'compose.yaml'), composeContent);
+      writeFileSync(path.join(installDir, 'secrets/cpamp-admin-key'), 'cpamp_existing_admin_key\n');
+      writeFileSync(path.join(installDir, 'secrets/cpa-management-key'), 'cpa_legacy_key\n');
+      writeFileSync(dbPath, 'database-before\n');
+      writeFileSync(dataKeyPath, 'data-key-before\n');
+      writeFakeDocker(fakeBin);
+
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_INSTALL_DIR: installDir,
+          FAKE_DOCKER_LOG: dockerLog,
+          FAKE_DOCKER_DB_PATH: dbPath,
+          FAKE_DOCKER_DATA_KEY_PATH: dataKeyPath,
+          FAKE_DOCKER_SNAPSHOT_STORE: snapshotStore,
+          FAKE_DOCKER_SNAPSHOT_DELETE_OK: '0',
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(0);
+      expect(combinedOutput(result)).toContain('Install steps completed');
+      expect(combinedOutput(result)).toContain('cleaning the Manager data snapshot failed');
+      const calls = readFileSync(dockerLog, 'utf8');
+      expect(calls).not.toContain('manager-data-snapshot restore');
+      expect(calls.match(/compose stop/g)).toHaveLength(1);
+      // The verified migration stays committed: runtime config migrated,
+      // imported data retained, snapshot kept for manual removal.
+      expect(readFileSync(path.join(installDir, 'compose.yaml'), 'utf8')).not.toContain(
+        'CPA_MANAGEMENT_KEY_FILE'
+      );
+      expect(readFileSync(dbPath, 'utf8')).toContain('import-attempt');
+      expect(existsSync(snapshotStore)).toBe(true);
+      expect(existsSync(path.join(installDir, 'secrets/cpa-management-key'))).toBe(false);
     } finally {
       rmSync(installDir, { recursive: true, force: true });
       rmSync(fakeBin, { recursive: true, force: true });

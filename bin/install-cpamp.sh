@@ -43,6 +43,13 @@ existing_volume_name=""
 auth_validation_status="pending"
 admin_secret_missing="0"
 cpa_connection_imported="0"
+# Pending finalization from an earlier installer run: the installer-managed
+# plaintext CPA Management Key still exists while the runtime config no longer
+# references it. It is removed only after the stored SQLite connection is
+# re-verified through the CPA proxy during this run.
+installer_managed_cpa_key_pending_cleanup="0"
+installer_managed_cpa_key_pending_file=""
+cpa_proxy_validation_passed="0"
 cpa_connection_rollback_pending="0"
 legacy_compose_backup=""
 legacy_env_backup=""
@@ -69,6 +76,8 @@ native_upgrade_data_mutated="0"
 native_previous_process_was_running="0"
 native_upgrade_switch_applied="0"
 native_upgrade_rollback_pending="0"
+native_spawned_pid=""
+native_spawned_pid_start=""
 native_upgrade_log_file=""
 installer_exit_rollback_in_progress="0"
 installer_script_path="${BASH_SOURCE[0]:-$0}"
@@ -212,6 +221,10 @@ text() {
     en-US:cpa_skip_upgrade) printf 'The legacy CPA env/secret migration is still pending. After reviewing the plan, run the full upgrade command below; it performs import, config cleanup, restart, verification, and temporary-key removal.' ;;
     zh-CN:cpa_rollback_failed) printf 'CPA 连接迁移自动回滚未完全成功；请从 cpa-key-migration 备份恢复配置，并保留临时 secret 后重启服务。' ;;
     en-US:cpa_rollback_failed) printf 'Automatic CPA connection migration rollback did not fully succeed. Restore the cpa-key-migration backups, keep the temporary secret, and restart the service.' ;;
+    zh-CN:cpa_key_pending_cleanup) printf '检测到上次安装遗留的临时 CPA Management Key；本次将在健康、管理员和 CPA 代理验证全部通过后删除它。' ;;
+    en-US:cpa_key_pending_cleanup) printf 'A temporary CPA Management Key from a previous installer run was detected; it will be removed after health, admin, and CPA proxy validation all pass.' ;;
+    zh-CN:cpa_snapshot_cleanup_failed) printf '迁移已提交，但 Manager 数据快照清理失败；快照已保留，请稍后手动删除。' ;;
+    en-US:cpa_snapshot_cleanup_failed) printf 'The migration was committed, but cleaning the Manager data snapshot failed; the snapshot was kept for manual removal.' ;;
     zh-CN:native_upgrade_pending) printf '旧版 native CPA 配置迁移仍待执行。检查计划后，请运行下面的完整升级命令；旧运行入口和密钥不会在预览阶段被修改。' ;;
     en-US:native_upgrade_pending) printf 'The legacy native CPA configuration migration is still pending. After reviewing the plan, run the full upgrade command below; the existing runtime entry and key are not changed during preview.' ;;
     zh-CN:native_rollback_failed) printf 'Native 升级自动回滚未完全成功；旧运行入口备份和 CPA 密钥均已保留，请人工恢复并启动旧版本。' ;;
@@ -800,6 +813,34 @@ path_is_managed_cpa_key_file() {
   [ "$candidate" = "$secrets_dir/cpa-management-key" ]
 }
 
+# detect_installer_managed_cpa_key_pending_cleanup recognizes an unfinished
+# CPA connection finalization from an earlier installer run: the
+# installer-managed plaintext key file still exists while the runtime config no
+# longer references any CPA key input. Only a real file at the managed path
+# qualifies; external CPA_MANAGEMENT_KEY_FILE values never point here, and
+# symlinks are ignored so nothing outside the install directory can be removed.
+detect_installer_managed_cpa_key_pending_cleanup() {
+  local managed_key="$install_dir/secrets/cpa-management-key"
+  local managed_dir=""
+  if [ "$cpa_connection_mode" = "env" ]; then
+    return 0
+  fi
+  if [ ! -f "$managed_key" ] || [ -L "$managed_key" ]; then
+    return 0
+  fi
+  # Resolve through symlinks in the install path (for example /var versus
+  # /private/var) so the comparison against the managed secrets directory is
+  # performed on physical paths, exactly like the runtime config readers do.
+  managed_dir="$(cd "$(dirname "$managed_key")" 2>/dev/null && pwd -P)" || return 0
+  managed_key="$managed_dir/$(basename "$managed_key")"
+  if ! path_is_managed_cpa_key_file "$managed_key"; then
+    return 0
+  fi
+  installer_managed_cpa_key_pending_cleanup="1"
+  installer_managed_cpa_key_pending_file="$managed_key"
+  return 0
+}
+
 compose_service_references_token() {
   local token="$1"
   awk '
@@ -969,6 +1010,7 @@ load_existing_native_config() {
   for value in "$native_data_dir" "$native_db_path" "$native_data_key_path" "$native_admin_key_file"; do
     validate_single_line "Native config path" "$value"
   done
+  detect_installer_managed_cpa_key_pending_cleanup
 }
 
 load_existing_docker_config() {
@@ -1087,6 +1129,7 @@ load_existing_docker_config() {
   else
     die "Admin key file is missing: $install_dir/secrets/cpamp-admin-key. Run with CPAMP_OPERATION=repair."
   fi
+  detect_installer_managed_cpa_key_pending_cleanup
 }
 
 ensure_repair_admin_key() {
@@ -1357,6 +1400,9 @@ print_summary() {
     if [ "$cpa_connection_mode" = "env" ]; then
       say "$(text cpa_url): $cpa_url"
     fi
+  fi
+  if [ "$installer_managed_cpa_key_pending_cleanup" = "1" ]; then
+    say "$(text cpa_key_pending_cleanup)"
   fi
 }
 
@@ -2114,7 +2160,12 @@ rollback_legacy_cpa_runtime_config() {
     failed="1"
   fi
   if [ "$failed" = "0" ]; then
-    delete_docker_data_snapshot || failed="1"
+    # The business rollback already succeeded; a snapshot cleanup failure only
+    # leaves the rollback artifact behind and must not report the rollback
+    # itself as failed.
+    if ! delete_docker_data_snapshot; then
+      printf '%s\n' "$(text cpa_snapshot_cleanup_failed) Snapshot: $docker_data_snapshot_dir" >&2
+    fi
   fi
   if [ "$failed" = "1" ]; then
     printf '%s\n' "$(text cpa_rollback_failed) Snapshot: ${docker_data_snapshot_dir:-not-created}" >&2
@@ -2123,17 +2174,35 @@ rollback_legacy_cpa_runtime_config() {
 }
 
 commit_legacy_cpa_runtime_config() {
-  delete_docker_data_snapshot || return 1
+  # Business commit boundary: health, admin auth, CPA proxy validation, and
+  # the runtime config migration all succeeded. The rollback flag must be
+  # cleared before snapshot cleanup so a cleanup failure can never roll back
+  # an already-verified deployment; a failed cleanup only keeps the snapshot.
   cpa_connection_rollback_pending="0"
+  if ! delete_docker_data_snapshot; then
+    printf '%s\n' "$(text cpa_snapshot_cleanup_failed) Snapshot: $docker_data_snapshot_dir" >&2
+  fi
 }
 
 finalize_cpa_connection_import() {
-  if [ "$cpa_connection_imported" != "1" ] || [ "$dry_run" = "1" ] || [ "$skip_execute" = "1" ]; then
+  if [ "$dry_run" = "1" ] || [ "$skip_execute" = "1" ]; then
     return
   fi
-  if [ "$cpa_management_key_cleanup_allowed" = "1" ] && [ -n "$cpa_management_key_file" ]; then
-    if ! rm -f "$cpa_management_key_file"; then
-      die "CPA connection was imported, but the temporary CPA Management Key file could not be removed: $cpa_management_key_file"
+  if [ "$cpa_connection_imported" = "1" ]; then
+    if [ "$cpa_management_key_cleanup_allowed" = "1" ] && [ -n "$cpa_management_key_file" ]; then
+      if ! rm -f "$cpa_management_key_file"; then
+        die "CPA connection was imported, but the temporary CPA Management Key file could not be removed: $cpa_management_key_file"
+      fi
+    fi
+    return
+  fi
+  # Cleanup boundary for a pending finalization from an earlier run: the
+  # stored SQLite connection was re-verified through the CPA proxy during this
+  # run, so the leftover installer-managed plaintext key can be removed. A
+  # verification failure already aborted the run and kept the file for retry.
+  if [ "$installer_managed_cpa_key_pending_cleanup" = "1" ] && [ "$cpa_proxy_validation_passed" = "1" ]; then
+    if ! rm -f "$installer_managed_cpa_key_pending_file"; then
+      die "CPA connection verification succeeded, but the leftover installer-managed CPA Management Key file could not be removed: $installer_managed_cpa_key_pending_file"
     fi
   fi
 }
@@ -2263,7 +2332,7 @@ verify_docker_admin_key() {
 }
 
 verify_docker_cpa_connection() {
-  if [ "$cpa_connection_imported" != "1" ]; then
+  if [ "$cpa_connection_imported" != "1" ] && [ "$installer_managed_cpa_key_pending_cleanup" != "1" ]; then
     return 0
   fi
   (
@@ -2308,6 +2377,7 @@ validate_docker_install() {
   if ! verify_docker_cpa_connection; then
     die "$(text cpa_validation_failed)"
   fi
+  cpa_proxy_validation_passed="1"
 }
 
 resolve_latest_version() {
@@ -2717,6 +2787,26 @@ ensure_native_upgrade_port_is_free() {
   fi
 }
 
+# native_upgrade_owns_pid reports whether the pid file still names the exact
+# process this run started. Comparing the recorded process start time makes the
+# decision independent of how far the child has progressed: cwd or command-line
+# heuristics can observe the child before it has even changed into the runtime
+# directory, which would wrongly veto the data rollback.
+native_upgrade_owns_pid() {
+  local pid="$1"
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  if [ -z "$native_spawned_pid" ] || [ "$native_spawned_pid" != "$pid" ]; then
+    return 1
+  fi
+  if [ -n "$native_spawned_pid_start" ]; then
+    [ "$(ps -p "$pid" -o lstart= 2>/dev/null || true)" = "$native_spawned_pid_start" ]
+    return
+  fi
+  return 0
+}
+
 native_pid_matches_binary_dir() {
   local pid="$1"
   local binary_dir="$2"
@@ -2738,7 +2828,13 @@ native_pid_matches_binary_dir() {
   elif command_exists lsof; then
     process_cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | awk 'substr($0, 1, 1) == "n" { print substr($0, 2); exit }')"
   fi
-  [ "$process_cwd" = "$resolved_binary_dir" ] || return 1
+  # A readable but different working directory proves the pid is not ours. An
+  # unreadable cwd (right after exec, or when lsof cannot resolve it yet) must
+  # not veto the rollback; the command-line check below still has to identify
+  # our binary before the pid is trusted.
+  if [ -n "$process_cwd" ] && [ "$process_cwd" != "$resolved_binary_dir" ]; then
+    return 1
+  fi
 
   if [ -r "/proc/$pid/cmdline" ]; then
     command_line="$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
@@ -2893,7 +2989,8 @@ rollback_native_upgrade() {
       ''|*[!0-9]*) failed="1"; process_safe="0" ;;
       *)
         if kill -0 "$current_pid" >/dev/null 2>&1; then
-          if native_pid_matches_binary_dir "$current_pid" "$native_binary_dir"; then
+          if native_upgrade_owns_pid "$current_pid" ||
+             native_pid_matches_binary_dir "$current_pid" "$native_binary_dir"; then
             if stop_native_pid "$current_pid"; then
               rm -f "$pid_file"
             else
@@ -3008,7 +3105,7 @@ verify_native_admin_key() {
 }
 
 verify_native_cpa_connection() {
-  if [ "$cpa_connection_imported" != "1" ]; then
+  if [ "$cpa_connection_imported" != "1" ] && [ "$installer_managed_cpa_key_pending_cleanup" != "1" ]; then
     return 0
   fi
   curl -fsS \
@@ -3041,6 +3138,8 @@ run_native_install() {
     pid="$!"
     printf '%s\n' "$pid" > "$pid_file"
   fi
+  native_spawned_pid="$pid"
+  native_spawned_pid_start="$(ps -p "$pid" -o lstart= 2>/dev/null || true)"
   wait_native_health "$pid" "$log_file"
   if ! verify_native_admin_key; then
     die "$(text auth_failed)"
@@ -3049,6 +3148,7 @@ run_native_install() {
   if ! verify_native_cpa_connection; then
     die "$(text cpa_validation_failed)"
   fi
+  cpa_proxy_validation_passed="1"
 }
 
 post_install_message() {
