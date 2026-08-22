@@ -245,6 +245,64 @@ func TestFilterSelectionFeedbackDropsPricedModels(t *testing.T) {
 	}
 }
 
+// Regression test for the sync-feedback filter: models that already have a
+// stored (e.g. manually configured) price must be dropped from candidates and
+// unmatched without touching their stored prices, matched, or import behavior.
+func TestSyncDropsFeedbackForStoredPrices(t *testing.T) {
+	cfg := testutil.NewConfig(t)
+	st := testutil.NewStore(t, cfg)
+
+	if err := st.SaveModelPrices(context.Background(), map[string]store.ModelPrice{
+		"test-model-latest": {Prompt: 5, Completion: 6},
+		"priced-unmatched":  {Prompt: 7, Completion: 8},
+	}); err != nil {
+		t.Fatalf("save manual prices: %v", err)
+	}
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"openai/fresh-model": {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002},
+			"provider/test-model-20250101": {"input_cost_per_token": 0.000003, "output_cost_per_token": 0.000004},
+			"provider/test-model-20250202": {"input_cost_per_token": 0.000005, "output_cost_per_token": 0.000006}
+		}`))
+	}))
+	t.Cleanup(source.Close)
+	syncURL := source.URL
+
+	result, err := New(st, &syncURL).Sync(context.Background(), SyncRequest{
+		Models: []string{"fresh-model", "test-model-latest", "priced-unmatched"},
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	// Both stored-price models were candidate/unmatched before filtering; the
+	// sync feedback must no longer report them as actionable.
+	if len(result.Candidates) != 0 || len(result.Unmatched) != 0 {
+		t.Fatalf("candidates = %#v, unmatched = %#v", result.Candidates, result.Unmatched)
+	}
+	if result.Imported != 1 || len(result.Matched) != 1 || result.Matched["fresh-model"].SourceModelID != "openai/fresh-model" {
+		t.Fatalf("imported = %d, matched = %#v", result.Imported, result.Matched)
+	}
+
+	prices, err := st.LoadModelPrices(context.Background())
+	if err != nil {
+		t.Fatalf("load prices: %v", err)
+	}
+	manualCandidate := prices["test-model-latest"]
+	if manualCandidate.Prompt != 5 || manualCandidate.Completion != 6 || manualCandidate.Source == SyncSource {
+		t.Fatalf("manual candidate price overwritten: %#v", manualCandidate)
+	}
+	manualUnmatched := prices["priced-unmatched"]
+	if manualUnmatched.Prompt != 7 || manualUnmatched.Completion != 8 || manualUnmatched.Source == SyncSource {
+		t.Fatalf("manual unmatched price overwritten: %#v", manualUnmatched)
+	}
+	if prices["fresh-model"].SourceModelID != "openai/fresh-model" {
+		t.Fatalf("fresh-model import missing: %#v", prices["fresh-model"])
+	}
+}
+
 func TestFilterSelectionFeedbackKeepsEverythingWithoutStoredPrices(t *testing.T) {
 	selection := priceSelectionResult{
 		Candidates: []SyncCandidateSet{
