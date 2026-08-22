@@ -205,11 +205,29 @@ func snapshotOne(ctx context.Context, source string, target string) (manifestEnt
 	}, nil
 }
 
+// renameFn is a fault-injection seam for tests. Production restore commits
+// use os.Rename; the rollback path always calls os.Rename directly so an
+// injected forward failure still rolls back with real filesystem calls.
+var renameFn = os.Rename
+
+// restore swaps the whole Manager file-set (database, sidecars, data.key) as
+// one logical transaction. A usage.sqlite restored without its matching
+// data.key is unrecoverable, so the commit phase first moves every live file
+// into a rollback slot next to it; any later failure reverses the whole set
+// instead of leaving a half-restored state behind.
 func restore(ctx context.Context, dbPath string, dataKeyPath string, snapshotDir string) error {
 	absSnapshotDir, m, err := loadManifest(snapshotDir)
 	if err != nil {
 		return err
 	}
+
+	type restoreItem struct {
+		name    string
+		existed bool
+		target  string
+		staged  string
+	}
+	items := make([]restoreItem, 0, len(snapshotFiles))
 	staged := make(map[string]string)
 	defer func() {
 		for _, path := range staged {
@@ -218,53 +236,181 @@ func restore(ctx context.Context, dbPath string, dataKeyPath string, snapshotDir
 	}()
 	for _, item := range snapshotFiles {
 		entry := m.Files[item.Name]
+		target := sourcePath(item, dbPath, dataKeyPath)
+		if err := ensureRestorableTarget(target); err != nil {
+			return err
+		}
 		if !entry.Existed {
+			items = append(items, restoreItem{name: item.Name, target: target})
 			continue
 		}
 		source := filepath.Join(absSnapshotDir, item.Name)
-		target := sourcePath(item, dbPath, dataKeyPath)
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return fmt.Errorf("create restore directory for %s: %w", target, err)
-		}
-		temp, err := os.CreateTemp(filepath.Dir(target), ".cpamp-restore-*")
+		stagedPath, err := stageRestoreFile(ctx, source, target, entry)
 		if err != nil {
-			return fmt.Errorf("create restore file for %s: %w", target, err)
+			return err
 		}
-		tempPath := temp.Name()
-		if err := temp.Close(); err != nil {
-			_ = os.Remove(tempPath)
-			return fmt.Errorf("close restore file for %s: %w", target, err)
-		}
-		if err := os.Remove(tempPath); err != nil {
-			return fmt.Errorf("prepare restore file for %s: %w", target, err)
-		}
-		digest, size, err := copyFile(ctx, source, tempPath, os.FileMode(entry.Mode))
-		if err != nil {
-			return fmt.Errorf("stage restore for %s: %w", target, err)
-		}
-		if size != entry.Size || digest != entry.SHA256 {
-			return fmt.Errorf("snapshot file %s failed integrity validation", item.Name)
-		}
-		staged[target] = tempPath
+		staged[target] = stagedPath
+		items = append(items, restoreItem{name: item.Name, existed: true, target: target, staged: stagedPath})
 	}
-	for _, item := range snapshotFiles {
-		entry := m.Files[item.Name]
-		target := sourcePath(item, dbPath, dataKeyPath)
-		if !entry.Existed {
-			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("remove post-snapshot file %s: %w", target, err)
+
+	// Commit boundary. Step 1 moves the current live set aside; step 2 switches
+	// the staged snapshot files in. Both use renameFn so tests can fail either
+	// step, while rollbackRestore below only uses os.Rename.
+	type rollbackSlot struct {
+		target string
+		slot   string
+	}
+	slots := make([]rollbackSlot, 0, len(items))
+	rollbackRestore := func(restored []string) error {
+		var problems []string
+		for index := len(restored) - 1; index >= 0; index-- {
+			if err := os.Remove(restored[index]); err != nil && !os.IsNotExist(err) {
+				problems = append(problems, fmt.Sprintf("remove restored %s: %v", restored[index], err))
 			}
+		}
+		for index := len(slots) - 1; index >= 0; index-- {
+			if err := os.Rename(slots[index].slot, slots[index].target); err != nil {
+				problems = append(problems, fmt.Sprintf("recover live file from %s: %v", slots[index].slot, err))
+			}
+		}
+		if len(problems) > 0 {
+			return errors.New(strings.Join(problems, "; "))
+		}
+		return nil
+	}
+	for _, item := range items {
+		info, err := os.Lstat(item.target)
+		if os.IsNotExist(err) {
 			continue
 		}
-		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("replace %s: %w", target, err)
+		if err != nil {
+			_ = rollbackRestore(nil)
+			return fmt.Errorf("inspect live file %s: %w", item.target, err)
 		}
-		if err := os.Rename(staged[target], target); err != nil {
-			return fmt.Errorf("restore %s: %w", target, err)
+		if !info.Mode().IsRegular() {
+			_ = rollbackRestore(nil)
+			return fmt.Errorf("live file %s is not a regular file", item.target)
 		}
-		delete(staged, target)
+		slot, err := reserveRollbackSlot(item.target)
+		if err != nil {
+			_ = rollbackRestore(nil)
+			return err
+		}
+		if err := renameFn(item.target, slot); err != nil {
+			_ = os.Remove(slot)
+			_ = rollbackRestore(nil)
+			return fmt.Errorf("move live file %s aside: %w", item.target, err)
+		}
+		slots = append(slots, rollbackSlot{target: item.target, slot: slot})
+	}
+
+	restored := make([]string, 0, len(items))
+	for _, item := range items {
+		if !item.existed {
+			// Files created after the snapshot: phase 1 already moved them into
+			// a rollback slot, so the target is absent exactly as the manifest
+			// requires.
+			continue
+		}
+		if err := renameFn(item.staged, item.target); err != nil {
+			if rollbackErr := rollbackRestore(restored); rollbackErr != nil {
+				return fmt.Errorf("restore %s: %v; rollback incomplete, original live files may remain in rollback slots: %v", item.target, err, rollbackErr)
+			}
+			return fmt.Errorf("restore %s: %w (live files were restored to their pre-restore state)", item.target, err)
+		}
+		restored = append(restored, item.target)
+		delete(staged, item.target)
+	}
+
+	for _, slot := range slots {
+		if err := os.Remove(slot.slot); err != nil {
+			return fmt.Errorf("cleanup rollback slot %s: %w", slot.slot, err)
+		}
+	}
+	targets := make([]string, 0, len(items))
+	for _, item := range items {
+		targets = append(targets, item.target)
+	}
+	syncTargetDirs(targets)
+	return nil
+}
+
+// ensureRestorableTarget rejects symlinked or special restore targets before
+// anything is staged, so a restore never renames a link away and replaces it
+// with attacker-controlled content.
+func ensureRestorableTarget(target string) error {
+	info, err := os.Lstat(target)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect restore target %s: %w", target, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("restore target %s is not a regular file", target)
 	}
 	return nil
+}
+
+func stageRestoreFile(ctx context.Context, source string, target string, entry manifestEntry) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", fmt.Errorf("create restore directory for %s: %w", target, err)
+	}
+	temp, err := os.CreateTemp(filepath.Dir(target), ".cpamp-restore-*")
+	if err != nil {
+		return "", fmt.Errorf("create restore file for %s: %w", target, err)
+	}
+	tempPath := temp.Name()
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return "", fmt.Errorf("close restore file for %s: %w", target, err)
+	}
+	if err := os.Remove(tempPath); err != nil {
+		return "", fmt.Errorf("prepare restore file for %s: %w", target, err)
+	}
+	digest, size, err := copyFile(ctx, source, tempPath, os.FileMode(entry.Mode))
+	if err != nil {
+		return "", fmt.Errorf("stage restore for %s: %w", target, err)
+	}
+	if size != entry.Size || digest != entry.SHA256 {
+		return "", fmt.Errorf("snapshot file %s failed integrity validation", filepath.Base(source))
+	}
+	return tempPath, nil
+}
+
+func reserveRollbackSlot(target string) (string, error) {
+	temp, err := os.CreateTemp(filepath.Dir(target), ".cpamp-restore-rollback-*")
+	if err != nil {
+		return "", fmt.Errorf("create rollback slot for %s: %w", target, err)
+	}
+	slot := temp.Name()
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(slot)
+		return "", fmt.Errorf("close rollback slot for %s: %w", target, err)
+	}
+	if err := os.Remove(slot); err != nil {
+		return "", fmt.Errorf("prepare rollback slot for %s: %w", target, err)
+	}
+	return slot, nil
+}
+
+// syncTargetDirs best-effort fsyncs the parent directories of the restored
+// set so the commit survives a crash shortly after restore returns.
+func syncTargetDirs(targets []string) {
+	seen := make(map[string]bool)
+	for _, target := range targets {
+		dir := filepath.Dir(target)
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		file, err := os.Open(dir)
+		if err != nil {
+			continue
+		}
+		_ = file.Sync()
+		_ = file.Close()
+	}
 }
 
 func loadManifest(snapshotDir string) (string, manifest, error) {
@@ -305,6 +451,11 @@ func loadManifest(snapshotDir string) (string, manifest, error) {
 func deleteSnapshot(snapshotDir string) error {
 	absSnapshotDir, _, err := loadManifest(snapshotDir)
 	if err != nil {
+		// A missing manifest with the directory still present usually means an
+		// earlier delete removed files but failed before the final rmdir.
+		if info, statErr := os.Lstat(absSnapshotDir); statErr == nil && info.IsDir() {
+			return fmt.Errorf("%w; snapshot directory %s is incomplete (possibly a partially failed earlier delete); verify it is no longer needed and remove the directory manually", err, absSnapshotDir)
+		}
 		return err
 	}
 	allowed := map[string]bool{"manifest.json": true}

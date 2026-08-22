@@ -129,6 +129,142 @@ func TestRunCreateCleansIncompleteSnapshot(t *testing.T) {
 	}
 }
 
+func TestRunRestoreMidCommitFailureRollsBackWholeFileSet(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dataDir, "data.key")
+	snapshotDir := filepath.Join(dataDir, ".cpamp-manager-snapshot-test")
+	writeTestFile(t, dbPath, "database-before", 0o600)
+	writeTestFile(t, dbPath+"-wal", "wal-before", 0o600)
+	writeTestFile(t, dbPath+"-shm", "shm-before", 0o600)
+	writeTestFile(t, dbPath+"-journal", "journal-before", 0o600)
+	writeTestFile(t, dataKeyPath, "key-before", 0o600)
+	runSnapshotCommand(t, "create", dbPath, dataKeyPath, snapshotDir)
+
+	writeTestFile(t, dbPath, "database-after", 0o600)
+	writeTestFile(t, dbPath+"-wal", "wal-after", 0o600)
+	writeTestFile(t, dbPath+"-shm", "shm-after", 0o600)
+	writeTestFile(t, dbPath+"-journal", "journal-after", 0o600)
+	writeTestFile(t, dataKeyPath, "key-after", 0o600)
+
+	injectRestoreSwitchFailure(t, dataKeyPath)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := Run(context.Background(), snapshotArgs("restore", dbPath, dataKeyPath, snapshotDir), &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "injected data-key switch failure") {
+		t.Fatalf("err=%v", err)
+	}
+	if !strings.Contains(err.Error(), "pre-restore state") {
+		t.Fatalf("error does not report rollback: %v", err)
+	}
+	// The database was already switched to the snapshot copy when the data-key
+	// switch failed; the rollback must bring the whole live set back.
+	requireTestFile(t, dbPath, "database-after")
+	requireTestFile(t, dbPath+"-wal", "wal-after")
+	requireTestFile(t, dbPath+"-shm", "shm-after")
+	requireTestFile(t, dbPath+"-journal", "journal-after")
+	requireTestFile(t, dataKeyPath, "key-after")
+	requireNoRestoreTempFiles(t, dataDir)
+}
+
+func TestRunRestoreMidCommitFailureRestoresMissingSidecarState(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dataDir, "data.key")
+	snapshotDir := filepath.Join(dataDir, ".cpamp-manager-snapshot-test")
+	// The snapshot records an existing -shm and a missing -journal.
+	writeTestFile(t, dbPath, "database-before", 0o600)
+	writeTestFile(t, dbPath+"-wal", "wal-before", 0o600)
+	writeTestFile(t, dbPath+"-shm", "shm-before", 0o600)
+	writeTestFile(t, dataKeyPath, "key-before", 0o600)
+	runSnapshotCommand(t, "create", dbPath, dataKeyPath, snapshotDir)
+
+	// Live state diverges: -shm removed, -journal created after the snapshot.
+	if err := os.Remove(dbPath + "-shm"); err != nil {
+		t.Fatalf("remove shm: %v", err)
+	}
+	writeTestFile(t, dbPath, "database-after", 0o600)
+	writeTestFile(t, dbPath+"-wal", "wal-after", 0o600)
+	writeTestFile(t, dbPath+"-journal", "journal-after", 0o600)
+	writeTestFile(t, dataKeyPath, "key-after", 0o600)
+
+	injectRestoreSwitchFailure(t, dataKeyPath)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := Run(context.Background(), snapshotArgs("restore", dbPath, dataKeyPath, snapshotDir), &stdout, &stderr)
+	if err == nil {
+		t.Fatal("restore unexpectedly succeeded")
+	}
+	// Rollback must also restore the missing/existing sidecar states: -shm was
+	// switched in before the failure and must be removed again, while the
+	// post-snapshot -journal must survive with its live content.
+	if _, err := os.Stat(dbPath + "-shm"); !os.IsNotExist(err) {
+		t.Fatalf("shm was not rolled back to missing: %v", err)
+	}
+	requireTestFile(t, dbPath+"-journal", "journal-after")
+	requireTestFile(t, dbPath, "database-after")
+	requireTestFile(t, dbPath+"-wal", "wal-after")
+	requireTestFile(t, dataKeyPath, "key-after")
+	requireNoRestoreTempFiles(t, dataDir)
+}
+
+func TestRunRestoreRejectsSymlinkedTargetBeforeStaging(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dataDir, "data.key")
+	snapshotDir := filepath.Join(dataDir, ".cpamp-manager-snapshot-test")
+	outsideTarget := filepath.Join(dataDir, "outside-secret")
+	writeTestFile(t, dbPath, "database-before", 0o600)
+	writeTestFile(t, dataKeyPath, "key-before", 0o600)
+	runSnapshotCommand(t, "create", dbPath, dataKeyPath, snapshotDir)
+
+	writeTestFile(t, dbPath, "database-after", 0o600)
+	writeTestFile(t, dataKeyPath, "key-after", 0o600)
+	writeTestFile(t, outsideTarget, "outside-content", 0o600)
+	if err := os.Remove(dataKeyPath); err != nil {
+		t.Fatalf("remove data key: %v", err)
+	}
+	if err := os.Symlink(outsideTarget, dataKeyPath); err != nil {
+		t.Fatalf("create data key symlink: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := Run(context.Background(), snapshotArgs("restore", dbPath, dataKeyPath, snapshotDir), &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("err=%v", err)
+	}
+	info, err := os.Lstat(dataKeyPath)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("data key symlink was replaced: info=%v err=%v", info, err)
+	}
+	requireTestFile(t, outsideTarget, "outside-content")
+	requireTestFile(t, dbPath, "database-after")
+	requireNoRestoreTempFiles(t, dataDir)
+}
+
+func injectRestoreSwitchFailure(t testing.TB, failTarget string) {
+	t.Helper()
+	previous := renameFn
+	renameFn = func(from string, to string) error {
+		if to == failTarget {
+			return errors.New("injected data-key switch failure")
+		}
+		return os.Rename(from, to)
+	}
+	t.Cleanup(func() { renameFn = previous })
+}
+
+func requireNoRestoreTempFiles(t testing.TB, dir string) {
+	t.Helper()
+	for _, pattern := range []string{".cpamp-restore-*", ".cpamp-restore-rollback-*"} {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil || len(matches) != 0 {
+			t.Fatalf("leftover %s files=%v err=%v", pattern, matches, err)
+		}
+	}
+}
+
 func runSnapshotCommand(t testing.TB, action string, dbPath string, dataKeyPath string, snapshotDir string) {
 	t.Helper()
 	var stdout bytes.Buffer
