@@ -57,6 +57,14 @@ func newCompatHandler(t *testing.T, cfg config.Config, setup *store.Setup) (http
 	return New(cfg, db, manager).Handler(), db
 }
 
+type staticDatabaseMaintenanceStatus struct {
+	snapshot sqliterepo.WALMaintenanceSnapshot
+}
+
+func (s staticDatabaseMaintenanceStatus) Snapshot() sqliterepo.WALMaintenanceSnapshot {
+	return s.snapshot
+}
+
 func TestServerCompatHealthInfoAndPanel(t *testing.T) {
 	cfg := testutil.NewConfig(t)
 	handler, _ := newCompatHandler(t, cfg, nil)
@@ -407,6 +415,120 @@ func TestServerCompatStatusAuthAndCounts(t *testing.T) {
 	}
 }
 
+func TestServerCompatStatusIncludesSanitizedDerivedMaintenanceState(t *testing.T) {
+	cfg := testutil.NewConfig(t)
+	handler, db := newCompatHandler(t, cfg, nil)
+
+	cleanRR := testutil.Request(t, handler, http.MethodGet, "/status", "", testutil.AdminKey)
+	testutil.RequireStatus(t, cleanRR, http.StatusOK)
+	var cleanPayload struct {
+		DatabaseMaintenance struct {
+			Required            bool     `json:"required"`
+			PerformanceDegraded bool     `json:"performanceDegraded"`
+			DeferredIndexes     int      `json:"deferredIndexes"`
+			OfflineJobs         int      `json:"offlineJobs"`
+			Reasons             []string `json:"reasons"`
+			Command             string   `json:"command"`
+		} `json:"databaseMaintenance"`
+	}
+	testutil.DecodeJSON(t, cleanRR, &cleanPayload)
+	if cleanPayload.DatabaseMaintenance.Required ||
+		cleanPayload.DatabaseMaintenance.PerformanceDegraded ||
+		cleanPayload.DatabaseMaintenance.DeferredIndexes != 0 ||
+		cleanPayload.DatabaseMaintenance.OfflineJobs != 0 ||
+		len(cleanPayload.DatabaseMaintenance.Reasons) != 0 ||
+		cleanPayload.DatabaseMaintenance.Command != "" {
+		t.Fatalf("clean maintenance payload = %#v", cleanPayload.DatabaseMaintenance)
+	}
+
+	if _, err := db.InsertEvents(context.Background(), []usage.Event{compatEvent("maintenance-status-event", 2)}); err != nil {
+		t.Fatalf("insert maintenance status event: %v", err)
+	}
+	degradedRR := testutil.Request(t, handler, http.MethodGet, "/status", "", testutil.AdminKey)
+	testutil.RequireStatus(t, degradedRR, http.StatusOK)
+	var degradedPayload struct {
+		DatabaseMaintenance json.RawMessage `json:"databaseMaintenance"`
+	}
+	testutil.DecodeJSON(t, degradedRR, &degradedPayload)
+	var degraded struct {
+		Required            bool     `json:"required"`
+		PerformanceDegraded bool     `json:"performanceDegraded"`
+		DeferredIndexes     int      `json:"deferredIndexes"`
+		OfflineJobs         int      `json:"offlineJobs"`
+		Reasons             []string `json:"reasons"`
+		Command             string   `json:"command"`
+	}
+	if err := json.Unmarshal(degradedPayload.DatabaseMaintenance, &degraded); err != nil {
+		t.Fatalf("decode maintenance payload: %v", err)
+	}
+	if !degraded.Required || !degraded.PerformanceDegraded || degraded.DeferredIndexes == 0 || degraded.Command != "cleanup-derived" {
+		t.Fatalf("degraded maintenance payload = %#v", degraded)
+	}
+	maintenanceJSON := strings.ToLower(string(degradedPayload.DatabaseMaintenance))
+	for _, forbidden := range []string{"idx_", "create index", "usage_monitoring_event_projection", strings.ToLower(cfg.DBPath)} {
+		if forbidden != "" && strings.Contains(maintenanceJSON, forbidden) {
+			t.Fatalf("maintenance payload leaks %q: %s", forbidden, maintenanceJSON)
+		}
+	}
+
+	boundedRR := testutil.Request(t, handler, http.MethodGet, "/status?scope=database-maintenance", "", testutil.AdminKey)
+	testutil.RequireStatus(t, boundedRR, http.StatusOK)
+	var boundedPayload map[string]json.RawMessage
+	testutil.DecodeJSON(t, boundedRR, &boundedPayload)
+	if len(boundedPayload) != 1 || boundedPayload["databaseMaintenance"] == nil {
+		t.Fatalf("bounded maintenance payload = %s", boundedRR.Body.String())
+	}
+	for _, forbidden := range []string{"dbPath", "events", "deadLetters", "dataMigration", "database"} {
+		if _, found := boundedPayload[forbidden]; found {
+			t.Fatalf("bounded maintenance payload includes %q: %s", forbidden, boundedRR.Body.String())
+		}
+	}
+}
+
+func TestServerCompatStatusIncludesDatabaseMaintenanceSnapshot(t *testing.T) {
+	cfg := testutil.NewConfig(t)
+	db := testutil.NewStore(t, cfg)
+	manager := collector.NewManager(cfg, db)
+	server := New(cfg, db, manager)
+	server.AppContext().DatabaseMaintenance = staticDatabaseMaintenanceStatus{
+		snapshot: sqliterepo.WALMaintenanceSnapshot{
+			DatabaseBytes:         1024,
+			WALBytes:              2048,
+			SHMBytes:              32,
+			TotalBytes:            3104,
+			JournalSizeLimitBytes: sqliterepo.WALJournalSizeLimitBytes,
+			Checkpoint: sqliterepo.WALCheckpointSnapshot{
+				Mode:               sqliterepo.WALCheckpointModePassive,
+				Busy:               1,
+				LogFrames:          20,
+				CheckpointedFrames: 12,
+				ExecutedAtMS:       1_786_000_000_000,
+				DurationMS:         250,
+				Error:              "checkpoint timed out",
+			},
+		},
+	}
+
+	rr := testutil.Request(t, server.Handler(), http.MethodGet, "/status", "", testutil.AdminKey)
+	testutil.RequireStatus(t, rr, http.StatusOK)
+	var response struct {
+		Database sqliterepo.WALMaintenanceSnapshot `json:"database"`
+	}
+	testutil.DecodeJSON(t, rr, &response)
+	if response.Database.DatabaseBytes != 1024 ||
+		response.Database.WALBytes != 2048 ||
+		response.Database.SHMBytes != 32 ||
+		response.Database.TotalBytes != 3104 ||
+		response.Database.Checkpoint.Mode != sqliterepo.WALCheckpointModePassive ||
+		response.Database.Checkpoint.Busy != 1 ||
+		response.Database.Checkpoint.LogFrames != 20 ||
+		response.Database.Checkpoint.CheckpointedFrames != 12 ||
+		response.Database.Checkpoint.DurationMS != 250 ||
+		response.Database.Checkpoint.Error != "checkpoint timed out" {
+		t.Fatalf("database maintenance status = %#v", response.Database)
+	}
+}
+
 func TestServerCompatUsageRoutes(t *testing.T) {
 	cpa := testutil.NewCPAMock(t)
 	setup := &store.Setup{CPAUpstreamURL: cpa.URL(), ManagementKey: "management-key", Queue: "usage", PopSide: "right"}
@@ -730,6 +852,17 @@ func TestServerCompatProxyRoutes(t *testing.T) {
 		t.Fatalf("reload proxy request = %#v", reloadReq)
 	}
 
+	apiCallBody := `{"method":"GET","url":"https://api.example.com/v1/models","proxy_url":"socks5h://proxy.example:1080"}`
+	apiCallRR := testutil.Request(t, handler, http.MethodPost, "/v0/management/api-call", apiCallBody, testutil.AdminKey)
+	testutil.RequireStatus(t, apiCallRR, http.StatusOK)
+	apiCallReq, ok := cpa.LastRequest("/v0/management/api-call")
+	if !ok {
+		t.Fatal("CPA mock did not receive /v0/management/api-call")
+	}
+	if apiCallReq.Authorization != "Bearer management-key" || apiCallReq.Body != apiCallBody {
+		t.Fatalf("api-call proxy request = %#v", apiCallReq)
+	}
+
 	modelsReq := httptest.NewRequest(http.MethodGet, "/v1/models?limit=20", nil)
 	modelsReq.Header.Set("Authorization", "Bearer upstream-key")
 	modelsRR := httptest.NewRecorder()
@@ -755,7 +888,7 @@ func TestServerCompatPluginProxyRoutes(t *testing.T) {
 		body              string
 	}
 
-	observed := make(chan observedRequest, 9)
+	observed := make(chan observedRequest, 12)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		observed <- observedRequest{
@@ -954,7 +1087,9 @@ func TestServerCompatPluginProxyRoutes(t *testing.T) {
 	)
 	testutil.RequireStatus(t, resourceTraceRR, http.StatusMethodNotAllowed)
 
-	resourceRR := requestWithHeaders(
+	// Public plugin resources may remain reachable, but an unauthenticated
+	// caller must never be elevated to the saved CPA management key.
+	resourceNoAuthRR := requestWithHeaders(
 		http.MethodGet,
 		"/v0/resource/plugins/codex-invite/invite",
 		"",
@@ -963,12 +1098,54 @@ func TestServerCompatPluginProxyRoutes(t *testing.T) {
 			"X-Codex-Invite-Origin": "http://localhost:18317",
 		},
 	)
-	testutil.RequireStatus(t, resourceRR, http.StatusOK)
+	testutil.RequireStatus(t, resourceNoAuthRR, http.StatusOK)
 	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
 		method:            http.MethodGet,
 		path:              "/v0/resource/plugins/codex-invite/invite",
-		authorization:     "Bearer management-key",
 		codexInviteOrigin: upstream.URL,
+	})
+
+	resourceCallerAuthRR := requestWithHeaders(
+		http.MethodGet,
+		"/v0/resource/plugins/codex-invite/invite",
+		"",
+		"plugin-management-key",
+		nil,
+	)
+	testutil.RequireStatus(t, resourceCallerAuthRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method:        http.MethodGet,
+		path:          "/v0/resource/plugins/codex-invite/invite",
+		authorization: "Bearer plugin-management-key",
+	})
+
+	resourceAdminAuthRR := testutil.Request(
+		t,
+		handler,
+		http.MethodGet,
+		"/v0/resource/plugins/codex-invite/invite",
+		"",
+		testutil.AdminKey,
+	)
+	testutil.RequireStatus(t, resourceAdminAuthRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method:        http.MethodGet,
+		path:          "/v0/resource/plugins/codex-invite/invite",
+		authorization: "Bearer management-key",
+	})
+
+	resourceHeadNoAuthRR := testutil.Request(
+		t,
+		handler,
+		http.MethodHead,
+		"/v0/resource/plugins/codex-invite/invite",
+		"",
+		"",
+	)
+	testutil.RequireStatus(t, resourceHeadNoAuthRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method: http.MethodHead,
+		path:   "/v0/resource/plugins/codex-invite/invite",
 	})
 }
 
