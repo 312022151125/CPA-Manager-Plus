@@ -280,6 +280,37 @@ func SetupFromManagerConfig(cfg store.ManagerConfig) store.Setup {
 	}
 }
 
+// ConnectionComplete reports whether manager_config_v1 carries both sides of
+// the CPA connection. A complete manager config is the authority for the
+// active connection; bootstrap normalization and the offline importer must
+// agree on this definition.
+func ConnectionComplete(cfg store.ManagerConfig) bool {
+	return cpa.NormalizeBaseURL(cfg.CPAConnection.CPABaseURL) != "" &&
+		strings.TrimSpace(cfg.CPAConnection.ManagementKey) != ""
+}
+
+// SetupConnectionComplete mirrors ConnectionComplete for the legacy setup row.
+func SetupConnectionComplete(setup store.Setup) bool {
+	return cpa.NormalizeBaseURL(setup.CPAUpstreamURL) != "" &&
+		strings.TrimSpace(setup.ManagementKey) != ""
+}
+
+// MergeLegacyCollectorSettings fills empty manager collector fields from a
+// usable legacy setup. It is used when the manager config is authoritative,
+// so legacy collector choices are preserved without overriding manager
+// settings that already carry a value.
+func MergeLegacyCollectorSettings(managerCfg *store.ManagerConfig, setup store.Setup, setupUsable bool) {
+	if managerCfg == nil || !setupUsable {
+		return
+	}
+	if strings.TrimSpace(managerCfg.Collector.Queue) == "" {
+		managerCfg.Collector.Queue = ValueOr(setup.Queue, managerCfg.Collector.Queue)
+	}
+	if strings.TrimSpace(managerCfg.Collector.PopSide) == "" {
+		managerCfg.Collector.PopSide = NormalizePopSide(setup.PopSide, managerCfg.Collector.PopSide)
+	}
+}
+
 func ManagerConfigConnectionDiffers(left store.ManagerConfig, right store.ManagerConfig) bool {
 	return cpa.NormalizeBaseURL(left.CPAConnection.CPABaseURL) != cpa.NormalizeBaseURL(right.CPAConnection.CPABaseURL) ||
 		left.CPAConnection.ManagementKey != right.CPAConnection.ManagementKey ||

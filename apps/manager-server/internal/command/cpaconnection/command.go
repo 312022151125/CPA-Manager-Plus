@@ -238,8 +238,22 @@ func storeConnection(ctx context.Context, cfg config.Config, st *store.Store, ba
 	if err != nil {
 		return fmt.Errorf("load manager_config_v1: %w", err)
 	}
-	if managerOK {
-		if err := validateConnection(
+	setup, setupOK, err := st.LoadSetup(ctx)
+	if err != nil {
+		return fmt.Errorf("load legacy setup: %w", err)
+	}
+	if !managerOK {
+		managerCfg = managerconfig.New(cfg, st, nil).DefaultManagerConfig()
+	}
+	setupUsable := setupOK && managerconfig.SetupConnectionComplete(setup)
+
+	// Authority rule, shared with the bootstrap migration: a complete
+	// manager_config_v1 is authoritative and a stale or partial legacy setup
+	// row is rewritten from it instead of failing the import; when the manager
+	// config is incomplete, a complete legacy setup is the authority; a
+	// conflicting authoritative connection is never silently overwritten.
+	if managerOK && managerconfig.ConnectionComplete(managerCfg) {
+		if err := validateAuthorityConnection(
 			"manager_config_v1",
 			managerCfg.CPAConnection.CPABaseURL,
 			managerCfg.CPAConnection.ManagementKey,
@@ -247,21 +261,31 @@ func storeConnection(ctx context.Context, cfg config.Config, st *store.Store, ba
 		); err != nil {
 			return err
 		}
+		managerconfig.MergeLegacyCollectorSettings(&managerCfg, setup, setupUsable)
 	} else {
-		managerCfg = managerconfig.New(cfg, st, nil).DefaultManagerConfig()
-	}
-
-	setup, setupOK, err := st.LoadSetup(ctx)
-	if err != nil {
-		return fmt.Errorf("load legacy setup: %w", err)
-	}
-	if setupOK {
-		if err := validateConnection("legacy setup", setup.CPAUpstreamURL, setup.ManagementKey, input); err != nil {
-			return err
+		if managerOK {
+			if err := validateAuthorityConnection(
+				"manager_config_v1",
+				managerCfg.CPAConnection.CPABaseURL,
+				managerCfg.CPAConnection.ManagementKey,
+				input,
+			); err != nil {
+				return err
+			}
 		}
-		if !managerOK {
-			managerCfg.Collector.Queue = managerconfig.ValueOr(setup.Queue, managerCfg.Collector.Queue)
-			managerCfg.Collector.PopSide = managerconfig.NormalizePopSide(setup.PopSide, managerCfg.Collector.PopSide)
+		if setupOK {
+			if err := validateAuthorityConnection(
+				"legacy setup",
+				setup.CPAUpstreamURL,
+				setup.ManagementKey,
+				input,
+			); err != nil {
+				return err
+			}
+			if setupUsable {
+				managerCfg.Collector.Queue = managerconfig.ValueOr(setup.Queue, managerCfg.Collector.Queue)
+				managerCfg.Collector.PopSide = managerconfig.NormalizePopSide(setup.PopSide, managerCfg.Collector.PopSide)
+			}
 		}
 	}
 
@@ -269,10 +293,6 @@ func storeConnection(ctx context.Context, cfg config.Config, st *store.Store, ba
 	managerCfg.CPAConnection.ManagementKey = input.ManagementKey
 
 	nextSetup := managerconfig.SetupFromManagerConfig(managerCfg)
-	if setupOK {
-		nextSetup.Queue = managerconfig.ValueOr(setup.Queue, nextSetup.Queue)
-		nextSetup.PopSide = managerconfig.NormalizePopSide(setup.PopSide, nextSetup.PopSide)
-	}
 	if err := st.SaveManagerConfigAndSetup(ctx, managerCfg, nextSetup); err != nil {
 		return fmt.Errorf("save encrypted manager_config_v1 and legacy setup: %w", err)
 	}
@@ -295,6 +315,8 @@ type connection struct {
 	ManagementKey string
 }
 
+// validateConnection guards an unrepairable connection source (the resolved
+// environment): any partial state is refused outright.
 func validateConnection(source string, rawBaseURL string, rawManagementKey string, input connection) error {
 	existing := connection{
 		BaseURL:       cpa.NormalizeBaseURL(rawBaseURL),
@@ -310,6 +332,36 @@ func validateConnection(source string, rawBaseURL string, rawManagementKey strin
 		return fmt.Errorf("%s CPA connection conflicts with the requested connection", source)
 	}
 	return nil
+}
+
+// validateAuthorityConnection guards a persisted connection source that the
+// import may repair. A complete connection must equal the input; a partial
+// connection is tolerated only when its present side matches the input, so
+// the import completes the connection instead of rebinding it.
+func validateAuthorityConnection(source string, rawBaseURL string, rawManagementKey string, input connection) error {
+	existing := connection{
+		BaseURL:       cpa.NormalizeBaseURL(rawBaseURL),
+		ManagementKey: strings.TrimSpace(rawManagementKey),
+	}
+	switch {
+	case existing.BaseURL == "" && existing.ManagementKey == "":
+		return nil
+	case existing.BaseURL != "" && existing.ManagementKey != "":
+		if !connectionsEqual(existing, input) {
+			return fmt.Errorf("%s CPA connection conflicts with the requested connection", source)
+		}
+		return nil
+	case existing.BaseURL != "":
+		if existing.BaseURL != input.BaseURL {
+			return fmt.Errorf("%s contains a partial CPA connection whose URL conflicts with the requested connection", source)
+		}
+		return nil
+	default:
+		if !security.EqualHMAC(existing.ManagementKey, input.ManagementKey) {
+			return fmt.Errorf("%s contains a partial CPA connection whose key conflicts with the requested connection", source)
+		}
+		return nil
+	}
 }
 
 func connectionsEqual(left connection, right connection) bool {

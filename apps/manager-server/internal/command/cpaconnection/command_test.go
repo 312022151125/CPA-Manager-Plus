@@ -536,3 +536,232 @@ func sqliteTableExists(t testing.TB, dbPath string, table string) bool {
 	}
 	return count == 1
 }
+
+func TestRunRebuildsConflictingSetupWhenManagerMatchesInput(t *testing.T) {
+	clearConnectionEnvironment(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dir, "data.key")
+	legacy, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := legacy.SaveManagerConfig(context.Background(), store.ManagerConfig{
+		CPAConnection: store.ManagerCPAConnectionConfig{
+			CPABaseURL:    testCPABaseURL,
+			ManagementKey: testCPAManagementKey,
+		},
+		Collector: store.ManagerCollectorConfig{BatchSize: 321, QueryLimit: 65432},
+	}); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("save manager config: %v", err)
+	}
+	if err := legacy.SaveSetup(context.Background(), store.Setup{
+		CPAUpstreamURL: "http://legacy-cpa.local:8317",
+		ManagementKey:  "legacy-key",
+	}); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("save conflicting legacy setup: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	runStoreCommand(t, dbPath, dataKeyPath, testCPABaseURL, testCPAManagementKey)
+	managerCfg, setup := loadProtectedConnections(t, dbPath, dataKeyPath)
+	if managerCfg.Collector.BatchSize != 321 || managerCfg.Collector.QueryLimit != 65432 {
+		t.Fatalf("manager collector settings were overwritten: %#v", managerCfg.Collector)
+	}
+	if setup.CPAUpstreamURL != testCPABaseURL || setup.ManagementKey != testCPAManagementKey {
+		t.Fatalf("legacy setup did not follow manager authority = %#v", setup)
+	}
+	requireRawSettingEncrypted(t, dbPath, "setup")
+	requireRawSettingEncrypted(t, dbPath, "manager_config_v1")
+}
+
+func TestRunIgnoresPartialSetupWhenManagerMatchesInput(t *testing.T) {
+	clearConnectionEnvironment(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dir, "data.key")
+	legacy, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := legacy.SaveManagerConfig(context.Background(), store.ManagerConfig{
+		CPAConnection: store.ManagerCPAConnectionConfig{
+			CPABaseURL:    testCPABaseURL,
+			ManagementKey: testCPAManagementKey,
+		},
+	}); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("save manager config: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+	execSQLiteStatements(t, dbPath,
+		`insert into settings (key, value, updated_at_ms) values ('setup', '{"cpaBaseUrl":"http://stale-cpa.local:8317","queue":"stale-queue"}', 1)`,
+	)
+
+	runStoreCommand(t, dbPath, dataKeyPath, testCPABaseURL, testCPAManagementKey)
+	managerCfg, setup := loadProtectedConnections(t, dbPath, dataKeyPath)
+	if managerCfg.CPAConnection.ManagementKey != testCPAManagementKey {
+		t.Fatalf("manager connection = %#v", managerCfg.CPAConnection)
+	}
+	if setup.CPAUpstreamURL != testCPABaseURL || setup.ManagementKey != testCPAManagementKey {
+		t.Fatalf("partial legacy setup was not rebuilt from manager authority = %#v", setup)
+	}
+	requireRawSettingEncrypted(t, dbPath, "setup")
+}
+
+func TestRunRepairsPartialManagerFromMatchingSetup(t *testing.T) {
+	clearConnectionEnvironment(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dir, "data.key")
+	legacy, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := legacy.SaveManagerConfig(context.Background(), store.ManagerConfig{
+		CPAConnection: store.ManagerCPAConnectionConfig{CPABaseURL: testCPABaseURL},
+	}); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("save partial manager config: %v", err)
+	}
+	if err := legacy.SaveSetup(context.Background(), store.Setup{
+		CPAUpstreamURL: testCPABaseURL,
+		ManagementKey:  testCPAManagementKey,
+		Queue:          "legacy-queue",
+		PopSide:        "left",
+	}); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("save matching legacy setup: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	runStoreCommand(t, dbPath, dataKeyPath, testCPABaseURL, testCPAManagementKey)
+	managerCfg, setup := loadProtectedConnections(t, dbPath, dataKeyPath)
+	if managerCfg.CPAConnection.CPABaseURL != testCPABaseURL || managerCfg.CPAConnection.ManagementKey != testCPAManagementKey {
+		t.Fatalf("repaired manager connection = %#v", managerCfg.CPAConnection)
+	}
+	if managerCfg.Collector.Queue != "legacy-queue" || managerCfg.Collector.PopSide != "left" {
+		t.Fatalf("legacy collector settings were not adopted: %#v", managerCfg.Collector)
+	}
+	if setup.ManagementKey != testCPAManagementKey {
+		t.Fatalf("canonical setup = %#v", setup)
+	}
+}
+
+func TestRunRejectsConflictingSetupWhenManagerPartial(t *testing.T) {
+	clearConnectionEnvironment(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dir, "data.key")
+	legacy, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := legacy.SaveManagerConfig(context.Background(), store.ManagerConfig{
+		CPAConnection: store.ManagerCPAConnectionConfig{CPABaseURL: testCPABaseURL},
+	}); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("save partial manager config: %v", err)
+	}
+	if err := legacy.SaveSetup(context.Background(), store.Setup{
+		CPAUpstreamURL: testCPABaseURL,
+		ManagementKey:  "different-key",
+	}); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("save conflicting legacy setup: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	managementKeyPath := writeManagementKeyFile(t, dir, testCPAManagementKey)
+	var stdout, stderr bytes.Buffer
+	err = Run(context.Background(), []string{
+		"--db-path", dbPath,
+		"--data-key-path", dataKeyPath,
+		"--cpa-base-url", testCPABaseURL,
+		"--management-key-file", managementKeyPath,
+	}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "legacy setup CPA connection conflicts") {
+		t.Fatalf("err=%v", err)
+	}
+	if strings.Contains(err.Error(), "different-key") || strings.Contains(stderr.String(), "different-key") {
+		t.Fatalf("conflict error leaked the stored key: %v %s", err, stderr.String())
+	}
+}
+
+func TestRunRejectsPartialManagerURLConflict(t *testing.T) {
+	clearConnectionEnvironment(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dir, "data.key")
+	legacy, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := legacy.SaveManagerConfig(context.Background(), store.ManagerConfig{
+		CPAConnection: store.ManagerCPAConnectionConfig{CPABaseURL: "http://other-cpa.local:8317"},
+	}); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("save partial manager config: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	managementKeyPath := writeManagementKeyFile(t, dir, testCPAManagementKey)
+	var stdout, stderr bytes.Buffer
+	err = Run(context.Background(), []string{
+		"--db-path", dbPath,
+		"--data-key-path", dataKeyPath,
+		"--cpa-base-url", testCPABaseURL,
+		"--management-key-file", managementKeyPath,
+	}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "partial CPA connection whose URL conflicts") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestRunRejectsSetupOnlyConflictingConnection(t *testing.T) {
+	clearConnectionEnvironment(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dir, "data.key")
+	legacy, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := legacy.SaveSetup(context.Background(), store.Setup{
+		CPAUpstreamURL: testCPABaseURL,
+		ManagementKey:  "different-key",
+	}); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("save legacy setup: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	managementKeyPath := writeManagementKeyFile(t, dir, testCPAManagementKey)
+	var stdout, stderr bytes.Buffer
+	err = Run(context.Background(), []string{
+		"--db-path", dbPath,
+		"--data-key-path", dataKeyPath,
+		"--cpa-base-url", testCPABaseURL,
+		"--management-key-file", managementKeyPath,
+	}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "legacy setup CPA connection conflicts") {
+		t.Fatalf("err=%v", err)
+	}
+	if got := rawSettingValue(t, dbPath, "setup"); !strings.Contains(got, "different-key") {
+		t.Fatalf("rejected import rewrote the legacy setup row: %s", got)
+	}
+}
