@@ -1,13 +1,16 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/command/cpaconnection"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
@@ -648,5 +651,84 @@ func unblockSetupWrites(t testing.TB, dbPath string) {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatalf("remove setup write blocker: %v", err)
 		}
+	}
+}
+
+func TestBootstrapSucceedsAfterExplicitConflictRepair(t *testing.T) {
+	t.Setenv("CPA_UPSTREAM_URL", "")
+	t.Setenv("CPA_MANAGEMENT_KEY", "")
+	t.Setenv("CPA_MANAGER_CONFIG", filepath.Join(t.TempDir(), "missing-config.json"))
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dir, "data.key")
+	legacyStore, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := legacyStore.SaveManagerConfig(context.Background(), store.ManagerConfig{
+		CPAConnection: store.ManagerCPAConnectionConfig{CPABaseURL: "http://manager-a.local:8317"},
+	}); err != nil {
+		_ = legacyStore.Close()
+		t.Fatalf("save partial manager config: %v", err)
+	}
+	if err := writeRawSetting(dbPath, "setup",
+		"{\"cpaBaseUrl\":\"http://manager-b.local:8317\",\"managementKey\":\"setup-key\"}"); err != nil {
+		_ = legacyStore.Close()
+		t.Fatalf("write conflicting setup: %v", err)
+	}
+	if err := legacyStore.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	managementKeyPath := filepath.Join(dir, "cpa-management-key")
+	if err := os.WriteFile(managementKeyPath, []byte("repaired-key\n"), 0o600); err != nil {
+		t.Fatalf("write management key: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := cpaconnection.Run(context.Background(), []string{
+		"--db-path", dbPath,
+		"--data-key-path", dataKeyPath,
+		"--cpa-base-url", "http://cpa-c.local:8317",
+		"--management-key-file", managementKeyPath,
+		"--repair-conflict",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("explicit repair: %v stderr=%s", err, stderr.String())
+	}
+
+	dataKey, _, err := security.LoadOrCreateDataKey("", dataKeyPath)
+	if err != nil {
+		t.Fatalf("load data key: %v", err)
+	}
+	protector, err := security.NewProtector(dataKey)
+	if err != nil {
+		t.Fatalf("create protector: %v", err)
+	}
+	st, err := store.Open(dbPath, protector)
+	if err != nil {
+		t.Fatalf("open protected store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	result, err := Run(context.Background(), config.Config{}, st, false)
+	if err != nil {
+		t.Fatalf("bootstrap after repair: %v", err)
+	}
+	if !result.State.ProjectInitialized || result.State.ConnectionStorageMigrationVersion != 2 {
+		t.Fatalf("bootstrap state after repair = %#v", result.State)
+	}
+	credential, ok, err := st.LoadAdminCredential(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("load admin credential ok=%v err=%v", ok, err)
+	}
+	if result.GeneratedAdminKey == "" || !security.VerifyAdminKey(credential, result.GeneratedAdminKey) {
+		t.Fatalf("generated admin key was not disclosed or does not verify: %#v", result)
+	}
+	managerCfg, ok, err := st.LoadManagerConfig(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("load manager config ok=%v err=%v", ok, err)
+	}
+	if managerCfg.CPAConnection.CPABaseURL != "http://cpa-c.local:8317" ||
+		managerCfg.CPAConnection.ManagementKey != "repaired-key" {
+		t.Fatalf("manager config after bootstrap = %#v", managerCfg.CPAConnection)
 	}
 }

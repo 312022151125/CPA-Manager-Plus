@@ -147,7 +147,7 @@ func migrateLegacyConfig(ctx context.Context, cfg config.Config, st *store.Store
 		if err := st.NormalizeLegacyConnectionStorage(ctx, managerCfg, managerOK, setup, setupOK); err != nil {
 			return false, fmt.Errorf("normalize legacy CPA connection storage: %w", err)
 		}
-		return false, resolveErr
+		return false, fmt.Errorf("%w%s", resolveErr, managerconfig.LegacyConnectionConflictRepairHint)
 	}
 
 	var normalizedManager store.ManagerConfig

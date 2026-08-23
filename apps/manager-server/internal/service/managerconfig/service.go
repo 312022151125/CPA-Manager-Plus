@@ -292,6 +292,24 @@ const (
 	LegacyConnectionAuthoritySetup   LegacyConnectionAuthority = "legacy setup"
 )
 
+// LegacyConnectionConflictRepairHint is appended to persisted-state conflict
+// errors so operators learn the explicit recovery path instead of having to
+// edit SQLite by hand. Repairing is always an explicit, offline action: the
+// shared resolver itself never picks a side.
+const LegacyConnectionConflictRepairHint = `
+
+The persisted manager_config_v1 and legacy setup rows contain conflicting CPA connection data: neither side was chosen and nothing was overwritten. To repair the stored connection explicitly, stop Manager Server and re-run:
+
+  cpa-manager-plus store-cpa-connection --repair-conflict --cpa-base-url <url> --management-key-file <key-file> [--db-path <db>] [--data-key-path <key>]`
+
+// LegacyConnectionCompleteAuthorityNote is appended when --repair-conflict
+// cannot apply because the persisted authority is complete and consistent.
+// A healthy stored connection must not be rebound through the offline repair
+// path; it is changed through the management panel or an identical import.
+const LegacyConnectionCompleteAuthorityNote = `
+
+--repair-conflict only repairs persisted rows that conflict with each other; this stored CPA connection is complete and consistent. Provide the matching connection, or change it through the management panel while the server is running.`
+
 type LegacyConnection struct {
 	BaseURL       string
 	ManagementKey string
