@@ -54,6 +54,7 @@ compose.yaml
 .env
 secrets/cpamp-admin-key
 secrets/cpa-management-key       # temporary import input
+secrets/cpa-connection-import.pending # exists only while import is pending; contains no key plaintext
 secrets/cpa-demo-client-key
 cliproxyapi/config.yaml
 cliproxyapi/auths/
@@ -101,6 +102,8 @@ http://cli-proxy-api:8317
 ```
 
 The import encrypts the CPA URL and CPA Management Key into `/data/usage.sqlite`, protected by `/data/data.key`. After the install passes health, admin-auth, and proxied CPA Management API checks, `secrets/cpa-management-key` is deleted; the final `compose.yaml` no longer passes the CPA Key to Manager Server. Open the panel and log in with the CPAMP Admin Key; first setup is not required.
+
+If the first offline import or a later validation step fails, the installer retains `secrets/cpa-connection-import.pending` with mode `0600` together with the temporary key. The pending file records only its version, the CPA URL, and the installer-owned key filename; it does not contain key plaintext. Rerun the installer in the same directory and choose upgrade to retry the import automatically. The pending file and temporary key are removed only after every validation succeeds. A corrupt, conflicting, or externally owned pending input fails safely without guessing a connection or deleting files.
 
 After deployment, open:
 
@@ -153,6 +156,7 @@ runtime/<package>/
 data/
 secrets/cpamp-admin-key
 secrets/cpa-management-key       # deleted after import
+secrets/cpa-connection-import.pending # retained after import failure; contains no key plaintext
 run.sh
 cpa-manager-plus.service  # Linux
 cpa-manager-plus.log
@@ -178,6 +182,19 @@ CPAMP_SKIP_EXECUTE=1 bash install-cpamp.sh
 ```
 
 This mode keeps the temporary CPA Key and prints manual commands in the order import -> start -> health check -> admin authentication -> proxied CPA Management API check -> temporary-key removal. For a Docker upgrade that still uses legacy env/secret wiring, the script leaves the runtime config untouched and prints one full upgrade command without `CPAMP_SKIP_EXECUTE`; the normal upgrade flow then owns backup, rollback, and final cleanup.
+
+The current installer automatically reads pending state left by a failed install. If an older installer left `secrets/cpa-management-key` without creating pending state, provide the recovery URL explicitly so the retained key cannot be rebound to an unknown CPA:
+
+```bash
+CPAMP_OPERATION=upgrade \
+CPAMP_CPA_CONNECTION_MODE=env \
+CPAMP_CPA_URL=http://cli-proxy-api:8317 \
+bash install-cpamp.sh
+```
+
+For Docker, use a CPA service URL reachable from the Manager Server container. For Native, use a URL reachable from the Manager Server process, such as `http://127.0.0.1:8317` for a local CPA instance.
+
+If the temporary key file is also gone, provide `CPAMP_CPA_MANAGEMENT_KEY` in the same invocation. The installer removes only temporary files it owns; an external `CPA_MANAGEMENT_KEY_FILE` remains read-only and is never deleted.
 
 Non-interactive full Docker install:
 

@@ -54,6 +54,7 @@ compose.yaml
 .env
 secrets/cpamp-admin-key
 secrets/cpa-management-key       # CPA 连接导入期间的临时文件
+secrets/cpa-connection-import.pending # 仅在导入待完成时存在，不包含 Key 明文
 secrets/cpa-demo-client-key
 cliproxyapi/config.yaml
 cliproxyapi/auths/
@@ -101,6 +102,8 @@ http://cli-proxy-api:8317
 ```
 
 导入命令把 CPA URL 和 CPA Management Key 加密写入 `/data/usage.sqlite`，密钥由 `/data/data.key` 保护。安装成功且健康、管理员鉴权及 CPA 管理接口代理验证通过后，`secrets/cpa-management-key` 会被删除；最终 `compose.yaml` 不再向 Manager Server 传入 CPA Key。打开面板后直接使用 CPAMP 管理员密钥登录，不需要再走首次 setup。
+
+如果首次离线导入或后续验证失败，安装器会保留权限为 `0600` 的 `secrets/cpa-connection-import.pending` 和临时 Key。pending 文件只记录版本、CPA URL 和安装器拥有的 Key 文件名，不包含 Key 明文；在同一目录重跑并选择升级后，安装器会自动重试导入，全部验证通过后再删除 pending 文件和临时 Key。损坏、冲突或指向非安装器文件的 pending 状态会安全失败，不会猜测连接或删除文件。
 
 部署完成后打开：
 
@@ -153,6 +156,7 @@ runtime/<package>/
 data/
 secrets/cpamp-admin-key
 secrets/cpa-management-key       # 导入完成后删除
+secrets/cpa-connection-import.pending # 导入失败时保留，不包含 Key 明文
 run.sh
 cpa-manager-plus.service  # Linux
 cpa-manager-plus.log
@@ -178,6 +182,19 @@ CPAMP_SKIP_EXECUTE=1 bash install-cpamp.sh
 ```
 
 此模式会保留临时 CPA Key，并按“导入 -> 启动 -> 健康检查 -> 管理员鉴权 -> CPA 管理接口代理验证 -> 删除临时 Key”的顺序打印人工命令。对于仍使用旧 env/secret 的 Docker 升级，脚本不会提前修改运行配置，而是打印一条去掉 `CPAMP_SKIP_EXECUTE` 的完整升级命令，由正常升级流程负责备份、回滚和最终清理。
+
+当前版本会自动读取失败安装留下的 pending 状态。对于旧版安装器已经留下 `secrets/cpa-management-key`、但尚未创建 pending 状态的现场，必须显式提供恢复 URL，避免把遗留 Key 错绑到未知 CPA：
+
+```bash
+CPAMP_OPERATION=upgrade \
+CPAMP_CPA_CONNECTION_MODE=env \
+CPAMP_CPA_URL=http://cli-proxy-api:8317 \
+bash install-cpamp.sh
+```
+
+Docker 部署应填写 Manager Server 容器可达的 CPA 服务地址；Native 部署则填写 Manager Server 进程可达的地址，例如本机 CPA 使用 `http://127.0.0.1:8317`。
+
+如果临时 Key 文件也已丢失，再同时提供 `CPAMP_CPA_MANAGEMENT_KEY`。安装器只会删除自己管理的临时文件；外部 `CPA_MANAGEMENT_KEY_FILE` 继续保持只读且永不删除。
 
 非交互完整 Docker 安装示例：
 
