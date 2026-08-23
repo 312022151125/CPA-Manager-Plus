@@ -32,6 +32,7 @@ cpa_management_key=""
 cpa_management_key_file=""
 cpa_management_key_cleanup_allowed="0"
 cpa_management_key_inline_input="0"
+cpa_management_key_import_copy="0"
 admin_key=""
 demo_client_key=""
 generated_admin_key=""
@@ -49,6 +50,7 @@ cpa_connection_imported="0"
 # re-verified through the CPA proxy during this run.
 installer_managed_cpa_key_pending_cleanup="0"
 installer_managed_cpa_key_pending_file=""
+installer_managed_cpa_key_pending_import_copies=""
 cpa_proxy_validation_passed="0"
 cpa_connection_rollback_pending="0"
 legacy_compose_backup=""
@@ -685,7 +687,9 @@ read_existing_secret() {
   local restrict_permissions="${2:-1}"
   local value=""
   [ -f "$file" ] || return 1
-  if [ "$dry_run" != "1" ] && [ "$restrict_permissions" = "1" ]; then
+  # Never chmod through a symlink: the target may be an externally managed
+  # secret whose permissions belong to the user, not the installer.
+  if [ "$dry_run" != "1" ] && [ "$restrict_permissions" = "1" ] && [ ! -L "$file" ]; then
     chmod 600 "$file" 2>/dev/null || die "Unable to restrict secret file permissions: $file"
   fi
   value="$(< "$file")"
@@ -705,6 +709,9 @@ materialize_cpa_management_key_file() {
   fi
   [ "$cpa_management_key_cleanup_allowed" = "1" ] ||
     die "CPA Management Key file is missing and is not installer-managed: $file"
+  if [ -L "$file" ]; then
+    die "Refusing to replace a symlinked CPA Management Key file: $file"
+  fi
   [ -n "$cpa_management_key" ] || die "CPA Management Key is empty; refusing to create a temporary key file."
   mkdir -p "$(dirname "$file")"
   tmp="${file}.tmp.$$"
@@ -811,29 +818,59 @@ path_is_managed_cpa_key_file() {
   [ "$candidate" = "$secrets_dir/cpa-management-key" ]
 }
 
+canonical_parent_path() {
+  local candidate="$1"
+  local parent=""
+  parent="$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/%s\n' "$parent" "$(basename "$candidate")"
+}
+
+# is_installer_owned_cpa_key_file is the single ownership predicate for CPA
+# Management Key files: only a regular file (final path component is not a
+# symlink) at the canonical managed secrets path counts as installer-owned and
+# may be chmod-ed, marked cleanup-eligible, or removed by the installer. A
+# symlink at the managed path is treated as an externally managed secret: its
+# content may be read as migration input, but the symlink, its target, and the
+# target's permissions must never be touched.
+is_installer_owned_cpa_key_file() {
+  local candidate="$1"
+  local canonical=""
+  [ -n "$candidate" ] || return 1
+  [ -f "$candidate" ] || return 1
+  if [ -L "$candidate" ]; then
+    return 1
+  fi
+  canonical="$(canonical_parent_path "$candidate")" || return 1
+  path_is_managed_cpa_key_file "$canonical"
+}
+
 # detect_installer_managed_cpa_key_pending_cleanup recognizes an unfinished
 # CPA connection finalization from an earlier installer run: the
 # installer-managed plaintext key file still exists while the runtime config no
-# longer references any CPA key input. Only a real file at the managed path
-# qualifies; external CPA_MANAGEMENT_KEY_FILE values never point here, and
-# symlinks are ignored so nothing outside the install directory can be removed.
+# longer references any CPA key input. Only an installer-owned regular file at
+# the managed path qualifies (is_installer_owned_cpa_key_file): external
+# CPA_MANAGEMENT_KEY_FILE values never point here, and symlinks are externally
+# managed so nothing outside the install directory can be removed. Import
+# copies (cpa-management-key.import.<pid>...) left behind by a failed inline
+# import are recorded separately and removed only after this run re-verifies
+# the stored connection through the CPA proxy.
 detect_installer_managed_cpa_key_pending_cleanup() {
   local managed_key="$install_dir/secrets/cpa-management-key"
-  local managed_dir=""
+  local stale_entry=""
+  for stale_entry in "$install_dir"/secrets/cpa-management-key.import.[0-9]*; do
+    if [ -f "$stale_entry" ] && [ ! -L "$stale_entry" ]; then
+      installer_managed_cpa_key_pending_import_copies+="${stale_entry}"$'\n'
+    fi
+  done
   if [ "$cpa_connection_mode" = "env" ]; then
     return 0
   fi
-  if [ ! -f "$managed_key" ] || [ -L "$managed_key" ]; then
+  if ! is_installer_owned_cpa_key_file "$managed_key"; then
     return 0
   fi
-  # Resolve through symlinks in the install path (for example /var versus
-  # /private/var) so the comparison against the managed secrets directory is
-  # performed on physical paths, exactly like the runtime config readers do.
-  managed_dir="$(cd "$(dirname "$managed_key")" 2>/dev/null && pwd -P)" || return 0
-  managed_key="$managed_dir/$(basename "$managed_key")"
-  if ! path_is_managed_cpa_key_file "$managed_key"; then
-    return 0
-  fi
+  # Keep the canonical physical form (for example /var versus /private/var)
+  # for the recorded cleanup target, exactly like the runtime config readers.
+  managed_key="$(canonical_parent_path "$managed_key")" || return 0
   installer_managed_cpa_key_pending_cleanup="1"
   installer_managed_cpa_key_pending_file="$managed_key"
   return 0
@@ -992,7 +1029,7 @@ load_existing_native_config() {
       die "Existing native config must contain both cpaUpstreamUrl and managementKeyFile for migration."
     validate_url_value "$(text cpa_url)" "$cpa_url"
     cpa_management_key_file="$(resolve_native_config_path "$raw_cpa_key_file" "$config_dir")"
-    if path_is_managed_cpa_key_file "$cpa_management_key_file"; then
+    if is_installer_owned_cpa_key_file "$cpa_management_key_file"; then
       cpa_management_key_cleanup_allowed="1"
       cpa_management_key="$(read_existing_secret "$cpa_management_key_file" "1")" ||
         die "CPA Management Key file is missing: $cpa_management_key_file"
@@ -1076,8 +1113,12 @@ load_existing_docker_config() {
       cpa_management_key="$effective_key"
       cpa_management_key_cleanup_allowed="1"
       cpa_management_key_inline_input="1"
-      if [ -e "$install_dir/secrets/cpa-management-key" ]; then
+      # A symlink at the managed path (valid or dangling) is externally
+      # managed: materialize the inline key into an installer-owned import
+      # copy next to it instead of replacing or writing through the symlink.
+      if [ -e "$install_dir/secrets/cpa-management-key" ] || [ -L "$install_dir/secrets/cpa-management-key" ]; then
         cpa_management_key_file="$install_dir/secrets/cpa-management-key.import.$$"
+        cpa_management_key_import_copy="1"
       else
         cpa_management_key_file="$install_dir/secrets/cpa-management-key"
       fi
@@ -1105,7 +1146,7 @@ load_existing_docker_config() {
       legacy_key_file="$legacy_key_dir/$(basename "$legacy_key_file")"
       cpa_management_key_file="$legacy_key_file"
       cpa_management_key_cleanup_allowed="0"
-      if path_is_managed_cpa_key_file "$legacy_key_file"; then
+      if is_installer_owned_cpa_key_file "$legacy_key_file"; then
         cpa_management_key_cleanup_allowed="1"
         cpa_management_key="$(read_existing_secret "$legacy_key_file" "1")" ||
           die "CPA Management Key is referenced by the existing Docker configuration but the key file is not readable: $legacy_key_file"
@@ -1591,12 +1632,17 @@ ensure_secret_file() {
 
   mkdir -p "$(dirname "$file")"
   if [ -f "$file" ]; then
-    chmod 600 "$file" 2>/dev/null || die "Unable to restrict secret file permissions: $file"
+    if [ ! -L "$file" ]; then
+      chmod 600 "$file" 2>/dev/null || die "Unable to restrict secret file permissions: $file"
+    fi
     existing="$(< "$file")"
     existing="${existing%$'\r'}"
     validate_secret_value "$file" "$existing"
     printf '%s\n' "$existing"
     return
+  fi
+  if [ -L "$file" ]; then
+    die "Refusing to write through a symlinked secret path: $file"
   fi
 
   validate_secret_value "$file" "$value"
@@ -1839,14 +1885,18 @@ generate_docker_files() {
     generated_cpa_management_key="cpa_$(random_alnum 32)"
     cpa_management_key="$(ensure_secret_file "$install_dir/secrets/cpa-management-key" "$generated_cpa_management_key")"
     cpa_management_key_file="$install_dir/secrets/cpa-management-key"
-    cpa_management_key_cleanup_allowed="1"
+    if is_installer_owned_cpa_key_file "$cpa_management_key_file"; then
+      cpa_management_key_cleanup_allowed="1"
+    fi
     generated_demo_client_key="sk-$(random_alnum 64)"
     demo_client_key="$(ensure_secret_file "$install_dir/secrets/cpa-demo-client-key" "$generated_demo_client_key")"
     write_cpa_config
   elif [ "$cpa_connection_mode" = "env" ]; then
     cpa_management_key="$(ensure_secret_file "$install_dir/secrets/cpa-management-key" "$cpa_management_key")"
     cpa_management_key_file="$install_dir/secrets/cpa-management-key"
-    cpa_management_key_cleanup_allowed="1"
+    if is_installer_owned_cpa_key_file "$cpa_management_key_file"; then
+      cpa_management_key_cleanup_allowed="1"
+    fi
   fi
 
   write_docker_compose
@@ -2193,25 +2243,43 @@ finalize_cpa_connection_import() {
     return
   fi
   if [ "$cpa_connection_imported" = "1" ]; then
+    # Only genuinely installer-owned key files may be removed: the managed
+    # path re-checked through is_installer_owned_cpa_key_file, or an import
+    # copy this run created next to an externally managed symlink/file.
     if [ "$cpa_management_key_cleanup_allowed" = "1" ] && [ -n "$cpa_management_key_file" ]; then
-      if ! rm -f "$cpa_management_key_file"; then
-        printf '%s\n' "$(text cpa_key_cleanup_failed) File: $cpa_management_key_file" >&2
+      if [ "$cpa_management_key_import_copy" = "1" ] || is_installer_owned_cpa_key_file "$cpa_management_key_file"; then
+        if ! rm -f "$cpa_management_key_file"; then
+          printf '%s\n' "$(text cpa_key_cleanup_failed) File: $cpa_management_key_file" >&2
+        else
+          installer_managed_cpa_key_pending_cleanup="0"
+        fi
       else
-        installer_managed_cpa_key_pending_cleanup="0"
+        printf '%s\n' "Skipping CPA key cleanup: file is not installer-owned: $cpa_management_key_file" >&2
       fi
     fi
-    return
-  fi
-  # Cleanup boundary for a pending finalization from an earlier run: the
-  # stored SQLite connection was re-verified through the CPA proxy during this
-  # run, so the leftover installer-managed plaintext key can be removed. A
-  # verification failure already aborted the run and kept the file for retry.
-  if [ "$installer_managed_cpa_key_pending_cleanup" = "1" ] && [ "$cpa_proxy_validation_passed" = "1" ]; then
+  elif [ "$installer_managed_cpa_key_pending_cleanup" = "1" ] && [ "$cpa_proxy_validation_passed" = "1" ]; then
+    # Cleanup boundary for a pending finalization from an earlier run: the
+    # stored SQLite connection was re-verified through the CPA proxy during this
+    # run, so the leftover installer-managed plaintext key can be removed. A
+    # verification failure already aborted the run and kept the file for retry.
     if ! rm -f "$installer_managed_cpa_key_pending_file"; then
       printf '%s\n' "$(text cpa_key_cleanup_failed) File: $installer_managed_cpa_key_pending_file" >&2
     else
       installer_managed_cpa_key_pending_cleanup="0"
     fi
+  fi
+  # Import copies from earlier failed runs hold the same plaintext key and are
+  # never an input for this run's migration; remove them only after the stored
+  # connection has been re-verified through the CPA proxy.
+  if [ "$cpa_proxy_validation_passed" = "1" ] && [ -n "$installer_managed_cpa_key_pending_import_copies" ]; then
+    local stale_copy=""
+    while IFS= read -r stale_copy; do
+      [ -n "$stale_copy" ] || continue
+      if ! rm -f "$stale_copy"; then
+        printf '%s\n' "$(text cpa_key_cleanup_failed) File: $stale_copy" >&2
+      fi
+    done <<< "$installer_managed_cpa_key_pending_import_copies"
+    installer_managed_cpa_key_pending_import_copies=""
   fi
 }
 
@@ -2340,7 +2408,8 @@ verify_docker_admin_key() {
 }
 
 verify_docker_cpa_connection() {
-  if [ "$cpa_connection_imported" != "1" ] && [ "$installer_managed_cpa_key_pending_cleanup" != "1" ]; then
+  if [ "$cpa_connection_imported" != "1" ] && [ "$installer_managed_cpa_key_pending_cleanup" != "1" ] &&
+     [ -z "$installer_managed_cpa_key_pending_import_copies" ]; then
     return 0
   fi
   (
@@ -2624,7 +2693,9 @@ generate_native_files() {
     if [ "$cpa_connection_mode" = "env" ]; then
       cpa_management_key="$(ensure_secret_file "$install_dir/secrets/cpa-management-key" "$cpa_management_key")"
       cpa_management_key_file="$install_dir/secrets/cpa-management-key"
-      cpa_management_key_cleanup_allowed="1"
+      if is_installer_owned_cpa_key_file "$cpa_management_key_file"; then
+        cpa_management_key_cleanup_allowed="1"
+      fi
     fi
   fi
 
@@ -3151,7 +3222,8 @@ verify_native_admin_key() {
 }
 
 verify_native_cpa_connection() {
-  if [ "$cpa_connection_imported" != "1" ] && [ "$installer_managed_cpa_key_pending_cleanup" != "1" ]; then
+  if [ "$cpa_connection_imported" != "1" ] && [ "$installer_managed_cpa_key_pending_cleanup" != "1" ] &&
+     [ -z "$installer_managed_cpa_key_pending_import_copies" ]; then
     return 0
   fi
   curl -fsS \
