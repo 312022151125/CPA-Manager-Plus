@@ -186,10 +186,13 @@ const writeLegacyNativeInstall = (installDir) => {
     `#!/usr/bin/env bash
 if [ "\${FAKE_LEGACY_NATIVE_IGNORE_TERM:-0}" = "1" ]; then
   trap ':' TERM INT
-else
-  trap 'exit 0' TERM INT
+  while true; do sleep 1; done
 fi
-while true; do sleep 1; done
+trap 'exit 0' TERM INT
+if [ -n "\${FAKE_LEGACY_NATIVE_START_MARKER:-}" ]; then
+  printf 'start\n' >> "\$FAKE_LEGACY_NATIVE_START_MARKER"
+fi
+while true; do read -r -t 1 _ || true; done
 `
   );
   chmodSync(path.join(binaryDir, 'cpa-manager-plus'), 0o755);
@@ -252,6 +255,65 @@ const writeFakeNativeRelease = () => {
     path.join(packageDir, 'cpa-manager-plus'),
     `#!/usr/bin/env bash
 set -euo pipefail
+if [ "\${1:-}" = "manager-data-snapshot" ]; then
+  action="\${2:-}"
+  shift 2
+  snapshot_dir=""
+  db_path=""
+  data_key_path=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --snapshot-dir) snapshot_dir="$2"; shift 2 ;;
+      --db-path) db_path="$2"; shift 2 ;;
+      --data-key-path) data_key_path="$2"; shift 2 ;;
+      *) exit 43 ;;
+    esac
+  done
+  if [ "$action" = "create" ]; then
+    [ "\${FAKE_NATIVE_SNAPSHOT_CREATE_OK:-1}" = "1" ]
+    mkdir -p "$snapshot_dir"
+    for suffix in '' -wal -shm -journal; do
+      source="\${db_path}\${suffix}"
+      target="$snapshot_dir/database\${suffix}"
+      if [ -e "$source" ]; then
+        cp "$source" "$target"
+      else
+        : > "$target.missing"
+      fi
+    done
+    if [ -e "$data_key_path" ]; then
+      cp "$data_key_path" "$snapshot_dir/data-key"
+    else
+      : > "$snapshot_dir/data-key.missing"
+    fi
+  elif [ "$action" = "restore" ]; then
+    [ "\${FAKE_NATIVE_SNAPSHOT_RESTORE_OK:-1}" = "1" ]
+    for suffix in '' -wal -shm -journal; do
+      target="\${db_path}\${suffix}"
+      source="$snapshot_dir/database\${suffix}"
+      if [ -e "$source.missing" ]; then
+        rm -f "$target"
+      else
+        cp "$source" "$target"
+      fi
+    done
+    if [ "\${FAKE_NATIVE_SNAPSHOT_RESTORE_FAIL_AFTER_DATABASE:-0}" = "1" ]; then
+      exit 45
+    fi
+    if [ -e "$snapshot_dir/data-key.missing" ]; then
+      rm -f "$data_key_path"
+    else
+      cp "$snapshot_dir/data-key" "$data_key_path"
+    fi
+  elif [ "$action" = "delete" ]; then
+    [ "\${FAKE_NATIVE_SNAPSHOT_DELETE_OK:-1}" = "1" ]
+    rm -f "$snapshot_dir"/*
+    rmdir "$snapshot_dir"
+  else
+    exit 44
+  fi
+  exit 0
+fi
 if [ "\${1:-}" = "store-cpa-connection" ]; then
   printf '%s\n' "$*" >> "$FAKE_NATIVE_COMMAND_LOG"
   printf 'import-attempt\n' >> "$FAKE_NATIVE_DB_PATH"
@@ -261,7 +323,13 @@ if [ "\${1:-}" = "store-cpa-connection" ]; then
   if [ -n "\${FAKE_NATIVE_JOURNAL_PATH:-}" ]; then
     printf 'import-attempt\n' >> "$FAKE_NATIVE_JOURNAL_PATH"
   fi
-if [ "\${FAKE_NATIVE_IMPORT_OK:-1}" != "1" ]; then
+  if [ "\${FAKE_NATIVE_MUTATE_ALL_DATA:-0}" = "1" ]; then
+    for suffix in -wal -shm -journal; do
+      printf 'import-attempt\n' >> "\${FAKE_NATIVE_DB_PATH}\${suffix}"
+    done
+    printf 'import-attempt\n' >> "$FAKE_NATIVE_DATA_KEY_PATH"
+  fi
+  if [ "\${FAKE_NATIVE_IMPORT_OK:-1}" != "1" ]; then
     exit 41
   fi
   exit 0
@@ -283,7 +351,10 @@ fi
 if [ "\${FAKE_NATIVE_IGNORE_TERM:-0}" = "1" ]; then
   trap ':' TERM INT
 else
-  trap 'exit 0' TERM INT
+  trap 'if [ -n "\${FAKE_NATIVE_STOP_MARKER:-}" ]; then printf "stop\\n" >> "\$FAKE_NATIVE_STOP_MARKER"; fi; exit 0' TERM INT
+fi
+if [ -n "\${FAKE_NATIVE_START_MARKER:-}" ]; then
+  printf 'start\\n' >> "\$FAKE_NATIVE_START_MARKER"
 fi
 while true; do
   sleep 1
@@ -305,6 +376,9 @@ set -euo pipefail
 for arg in "$@"; do
   case "$arg" in
     */health)
+      if [ -n "\${FAKE_NATIVE_EMPTY_PID_FILE:-}" ]; then
+        : > "\$FAKE_NATIVE_EMPTY_PID_FILE"
+      fi
       [ "\${FAKE_NATIVE_HEALTH_OK:-1}" = "1" ]
       exit
       ;;
@@ -355,13 +429,51 @@ ${realLsof ? `exec ${realLsof} "$@"` : 'exit 1'}
 `
   );
   chmodSync(fakeLsof, 0o755);
+  const realPs = ['/bin/ps', '/usr/bin/ps'].find((candidate) => existsSync(candidate));
+  const fakePs = path.join(fakeBin, 'ps');
+  writeFileSync(
+    fakePs,
+    `#!/usr/bin/env bash
+set -euo pipefail
+pid=""
+format=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "-p" ]; then pid="$arg"; fi
+  if [ "$previous" = "-o" ]; then format="$arg"; fi
+  previous="$arg"
+done
+  case "$format" in
+  lstart=)
+    printf '%s\\n' "\${FAKE_NATIVE_PROCESS_START:-fake-native-process-start}"
+    exit 0
+    ;;
+  stat=)
+    ${realPs ? `exec ${realPs} -p "$pid" -o stat=` : `printf 'S\\n'`}
+    exit 0
+    ;;
+  command=)
+    printf './cpa-manager-plus\\n'
+    exit 0
+    ;;
+esac
+exit 1
+`
+  );
+  chmodSync(fakePs, 0o755);
   return { fakeBin, fixtureDir, archivePath, packageName };
 };
 
 const stopNativeFixtureProcess = (installDir) => {
   const pidPath = path.join(installDir, 'cpa-manager-plus.pid');
   if (!existsSync(pidPath)) return;
-  const pid = Number(readFileSync(pidPath, 'utf8').trim());
+  let pidContents = '';
+  try {
+    pidContents = readFileSync(pidPath, 'utf8');
+  } catch {
+    return;
+  }
+  const pid = Number(pidContents.trim());
   if (!Number.isInteger(pid) || pid <= 0) return;
   try {
     process.kill(pid, 'SIGTERM');
@@ -3063,6 +3175,277 @@ secrets:
     }
   });
 
+  it('restores the complete native data file-set after a partially mutating import failure', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const release = writeFakeNativeRelease();
+    const legacy = writeLegacyNativeInstall(installDir);
+    const beforeRun = readFileSync(legacy.runPath, 'utf8');
+    const beforeService = readFileSync(
+      path.join(installDir, 'cpa-manager-plus.service'),
+      'utf8'
+    );
+    const sidecars = [
+      legacy.dbPath + '-wal',
+      legacy.dbPath + '-shm',
+      legacy.dbPath + '-journal',
+    ];
+    const beforeFiles = [
+      [legacy.dbPath, 'existing-usage-data\n'],
+      [legacy.dataKeyPath, 'existing-data-key\n'],
+      ...sidecars.map((file, index) => [file, 'existing-sidecar-' + index + '\n']),
+    ];
+    for (const [file, content] of beforeFiles) writeFileSync(file, content);
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+          CPAMP_FAKE_NATIVE_ARCHIVE: release.archivePath,
+          FAKE_NATIVE_COMMAND_LOG: path.join(installDir, 'native-command.log'),
+          FAKE_NATIVE_DB_PATH: legacy.dbPath,
+          FAKE_NATIVE_DATA_KEY_PATH: legacy.dataKeyPath,
+          FAKE_NATIVE_MUTATE_ALL_DATA: '1',
+          FAKE_NATIVE_IMPORT_OK: '0',
+          PATH: release.fakeBin + path.delimiter + (process.env.PATH || ''),
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).toContain('CPA connection import failed');
+      for (const [file, content] of beforeFiles) {
+        expect(readFileSync(file, 'utf8')).toBe(content);
+      }
+      expect(readFileSync(legacy.runPath, 'utf8')).toBe(beforeRun);
+      expect(readFileSync(path.join(installDir, 'cpa-manager-plus.service'), 'utf8')).toBe(
+        beforeService
+      );
+      expect(existsSync(legacy.cpaKeyPath)).toBe(true);
+    } finally {
+      stopNativeFixtureProcess(installDir);
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(release.fakeBin, { recursive: true, force: true });
+      rmSync(release.fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('restores absent native sidecars and an absent data key after rollback', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const release = writeFakeNativeRelease();
+    const legacy = writeLegacyNativeInstall(installDir);
+    rmSync(legacy.dataKeyPath);
+    const sidecars = [
+      legacy.dbPath + '-wal',
+      legacy.dbPath + '-shm',
+      legacy.dbPath + '-journal',
+    ];
+    for (const file of sidecars) rmSync(file, { force: true });
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+          CPAMP_FAKE_NATIVE_ARCHIVE: release.archivePath,
+          FAKE_NATIVE_COMMAND_LOG: path.join(installDir, 'native-command.log'),
+          FAKE_NATIVE_DB_PATH: legacy.dbPath,
+          FAKE_NATIVE_DATA_KEY_PATH: legacy.dataKeyPath,
+          FAKE_NATIVE_MUTATE_ALL_DATA: '1',
+          FAKE_NATIVE_IMPORT_OK: '0',
+          PATH: release.fakeBin + path.delimiter + (process.env.PATH || ''),
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(readFileSync(legacy.dbPath, 'utf8')).toBe('existing-usage-data\n');
+      expect(existsSync(legacy.dataKeyPath)).toBe(false);
+      for (const file of sidecars) expect(existsSync(file)).toBe(false);
+    } finally {
+      stopNativeFixtureProcess(installDir);
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(release.fakeBin, { recursive: true, force: true });
+      rmSync(release.fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not restart the previous native runtime when snapshot restore fails', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const release = writeFakeNativeRelease();
+    const legacy = writeLegacyNativeInstall(installDir);
+    const startMarker = path.join(installDir, 'legacy-starts.log');
+    const oldProcess = spawn(legacy.runPath, {
+      cwd: installDir,
+      env: { ...process.env, FAKE_LEGACY_NATIVE_START_MARKER: startMarker },
+      stdio: 'ignore',
+    });
+    const oldPID = oldProcess.pid;
+    const pidPath = path.join(installDir, 'cpa-manager-plus.pid');
+
+    try {
+      spawnSync('bash', ['-c', 'sleep 0.2'], { encoding: 'utf8' });
+      process.kill(oldPID, 'SIGKILL');
+      spawnSync('bash', ['-c', 'sleep 0.1'], { encoding: 'utf8' });
+      expect(readFileSync(startMarker, 'utf8')).toBe('start\n');
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NATIVE_HEALTH_ATTEMPTS: '1',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+          CPAMP_FAKE_NATIVE_ARCHIVE: release.archivePath,
+          FAKE_NATIVE_COMMAND_LOG: path.join(installDir, 'native-command.log'),
+          FAKE_NATIVE_DB_PATH: legacy.dbPath,
+          FAKE_NATIVE_DATA_KEY_PATH: legacy.dataKeyPath,
+          FAKE_NATIVE_MUTATE_ALL_DATA: '1',
+          FAKE_NATIVE_SNAPSHOT_RESTORE_FAIL_AFTER_DATABASE: '1',
+          FAKE_NATIVE_CPA_OK: '0',
+          PATH: release.fakeBin + path.delimiter + (process.env.PATH || ''),
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).toContain('Automatic native upgrade rollback did not fully succeed');
+      expect(existsSync(pidPath)).toBe(false);
+      expect(readFileSync(startMarker, 'utf8')).toBe('start\n');
+    } finally {
+      try {
+        process.kill(oldPID, 'SIGKILL');
+      } catch {
+        // The old process was stopped by the installer or already exited.
+      }
+      stopNativeFixtureProcess(installDir);
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(release.fakeBin, { recursive: true, force: true });
+      rmSync(release.fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('stops a new native process when PID publication fails before rollback', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const release = writeFakeNativeRelease();
+    const legacy = writeLegacyNativeInstall(installDir);
+    mkdirSync(path.join(installDir, 'cpa-manager-plus.pid'));
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+          CPAMP_FAKE_NATIVE_ARCHIVE: release.archivePath,
+          FAKE_NATIVE_COMMAND_LOG: path.join(installDir, 'native-command.log'),
+          FAKE_NATIVE_DB_PATH: legacy.dbPath,
+          FAKE_NATIVE_DATA_KEY_PATH: legacy.dataKeyPath,
+          FAKE_NATIVE_CPA_OK: '1',
+          PATH: release.fakeBin + path.delimiter + (process.env.PATH || ''),
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      spawnSync('sleep', ['0.2'], { encoding: 'utf8' });
+      const processTable = spawnSync('ps', ['-axo', 'pid=,command='], {
+        encoding: 'utf8',
+      });
+      const newRuntimePrefix = path.join(installDir, 'runtime', 'cpa-manager-plus_vnext');
+      const leakedPids = (processTable.stdout || '')
+        .split('\n')
+        .filter((line) => line.includes(newRuntimePrefix))
+        .map((line) => Number(line.trim().split(/\s+/, 1)[0]))
+        .filter((pid) => Number.isInteger(pid) && pid > 0);
+      for (const pid of leakedPids) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // The process may have exited between ps and cleanup.
+        }
+      }
+      expect(leakedPids).toEqual([]);
+      expect(readFileSync(legacy.dbPath, 'utf8')).toBe('existing-usage-data\n');
+      expect(readFileSync(legacy.runPath, 'utf8')).toContain(legacy.binaryDir);
+    } finally {
+      stopNativeFixtureProcess(installDir);
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(release.fakeBin, { recursive: true, force: true });
+      rmSync(release.fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('retains a native snapshot when post-commit cleanup fails', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const release = writeFakeNativeRelease();
+    const legacy = writeLegacyNativeInstall(installDir);
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+          CPAMP_FAKE_NATIVE_ARCHIVE: release.archivePath,
+          FAKE_NATIVE_COMMAND_LOG: path.join(installDir, 'native-command.log'),
+          FAKE_NATIVE_DB_PATH: legacy.dbPath,
+          FAKE_NATIVE_DATA_KEY_PATH: legacy.dataKeyPath,
+          FAKE_NATIVE_SNAPSHOT_DELETE_OK: '0',
+          PATH: release.fakeBin + path.delimiter + (process.env.PATH || ''),
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(0);
+      expect(combinedOutput(result)).toContain('cleaning the Manager data snapshot failed');
+      expect(readFileSync(legacy.dbPath, 'utf8')).toBe(
+        'existing-usage-data\nimport-attempt\n'
+      );
+      expect(existsSync(legacy.cpaKeyPath)).toBe(false);
+      const backupEntries = readdirSync(path.join(installDir, 'backups'));
+      expect(backupEntries.length).toBe(1);
+      expect(
+        existsSync(path.join(installDir, 'backups', backupEntries[0], 'manager-data-snapshot'))
+      ).toBe(true);
+    } finally {
+      stopNativeFixtureProcess(installDir);
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(release.fakeBin, { recursive: true, force: true });
+      rmSync(release.fixtureDir, { recursive: true, force: true });
+    }
+  });
+
   it('rolls back a native upgrade on an unhandled set -e exit after data mutation', () => {
     const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
     const release = writeFakeNativeRelease();
@@ -3213,6 +3596,9 @@ exec /bin/mv "$@"
           FAKE_NATIVE_COMMAND_LOG: commandLog,
           FAKE_NATIVE_DB_PATH: legacy.dbPath,
           PATH: `${release.fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+          ...(expected === 'did not become healthy'
+            ? { FAKE_NATIVE_EMPTY_PID_FILE: path.join(installDir, 'cpa-manager-plus.pid') }
+            : {}),
           ...env,
         },
         encoding: 'utf8',
@@ -3227,6 +3613,7 @@ exec /bin/mv "$@"
         beforeService
       );
       expect(existsSync(legacy.cpaKeyPath)).toBe(true);
+      expect(existsSync(path.join(installDir, 'cpa-manager-plus.pid'))).toBe(false);
     } finally {
       stopNativeFixtureProcess(installDir);
       rmSync(installDir, { recursive: true, force: true });

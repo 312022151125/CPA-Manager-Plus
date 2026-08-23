@@ -64,14 +64,10 @@ native_db_path=""
 native_data_key_path=""
 native_admin_key_file=""
 native_upgrade_backup_dir=""
+native_upgrade_snapshot_dir=""
+native_upgrade_snapshot_created="0"
 native_upgrade_service_existed="0"
 native_upgrade_run_script_existed="0"
-native_upgrade_db_existed="0"
-native_upgrade_wal_existed="0"
-native_upgrade_shm_existed="0"
-native_upgrade_journal_existed="0"
-native_upgrade_data_key_existed="0"
-native_upgrade_data_backup_complete="0"
 native_upgrade_data_mutated="0"
 native_previous_process_was_running="0"
 native_upgrade_switch_applied="0"
@@ -225,6 +221,8 @@ text() {
     en-US:cpa_key_pending_cleanup) printf 'A temporary CPA Management Key from a previous installer run was detected; it will be removed after health, admin, and CPA proxy validation all pass.' ;;
     zh-CN:cpa_snapshot_cleanup_failed) printf '迁移已提交，但 Manager 数据快照清理失败；快照已保留，请稍后手动删除。' ;;
     en-US:cpa_snapshot_cleanup_failed) printf 'The migration was committed, but cleaning the Manager data snapshot failed; the snapshot was kept for manual removal.' ;;
+    zh-CN:cpa_key_cleanup_failed) printf '业务迁移已成功，但临时 CPA Management Key 清理失败；文件已保留，请稍后手动删除。' ;;
+    en-US:cpa_key_cleanup_failed) printf 'The migration succeeded, but cleaning the temporary CPA Management Key failed; the file was retained for manual removal.' ;;
     zh-CN:native_upgrade_pending) printf '旧版 native CPA 配置迁移仍待执行。检查计划后，请运行下面的完整升级命令；旧运行入口和密钥不会在预览阶段被修改。' ;;
     en-US:native_upgrade_pending) printf 'The legacy native CPA configuration migration is still pending. After reviewing the plan, run the full upgrade command below; the existing runtime entry and key are not changed during preview.' ;;
     zh-CN:native_rollback_failed) printf 'Native 升级自动回滚未完全成功；旧运行入口备份和 CPA 密钥均已保留，请人工恢复并启动旧版本。' ;;
@@ -1475,6 +1473,12 @@ check_requirements() {
     if [ "$normalized_os" = "darwin" ] || [ "$normalized_os" = "linux" ]; then
       require_command tar
     fi
+    if [ "$operation" = "upgrade" ] && [ "$existing_install_state" = "native-managed" ] &&
+       [ "$dry_run" != "1" ] && [ "$skip_execute" != "1" ]; then
+      # Native rollback must be able to bind the spawned PID to its recorded
+      # process start time before it mutates or restores the data file-set.
+      require_command ps
+    fi
   fi
 }
 
@@ -2191,7 +2195,9 @@ finalize_cpa_connection_import() {
   if [ "$cpa_connection_imported" = "1" ]; then
     if [ "$cpa_management_key_cleanup_allowed" = "1" ] && [ -n "$cpa_management_key_file" ]; then
       if ! rm -f "$cpa_management_key_file"; then
-        die "CPA connection was imported, but the temporary CPA Management Key file could not be removed: $cpa_management_key_file"
+        printf '%s\n' "$(text cpa_key_cleanup_failed) File: $cpa_management_key_file" >&2
+      else
+        installer_managed_cpa_key_pending_cleanup="0"
       fi
     fi
     return
@@ -2202,7 +2208,9 @@ finalize_cpa_connection_import() {
   # verification failure already aborted the run and kept the file for retry.
   if [ "$installer_managed_cpa_key_pending_cleanup" = "1" ] && [ "$cpa_proxy_validation_passed" = "1" ]; then
     if ! rm -f "$installer_managed_cpa_key_pending_file"; then
-      die "CPA connection verification succeeded, but the leftover installer-managed CPA Management Key file could not be removed: $installer_managed_cpa_key_pending_file"
+      printf '%s\n' "$(text cpa_key_cleanup_failed) File: $installer_managed_cpa_key_pending_file" >&2
+    else
+      installer_managed_cpa_key_pending_cleanup="0"
     fi
   fi
 }
@@ -2743,7 +2751,8 @@ stop_native_pid() {
   fi
   kill -TERM "$pid" >/dev/null 2>&1 || return 1
   while [ "$i" -le "$attempts" ]; do
-    if ! kill -0 "$pid" >/dev/null 2>&1; then
+    if ! kill -0 "$pid" >/dev/null 2>&1 ||
+       [[ "$(ps -p "$pid" -o stat= 2>/dev/null || true)" =~ ^[[:space:]]*Z ]]; then
       return 0
     fi
     sleep 0.25
@@ -2792,6 +2801,12 @@ ensure_native_upgrade_port_is_free() {
 # decision independent of how far the child has progressed: cwd or command-line
 # heuristics can observe the child before it has even changed into the runtime
 # directory, which would wrongly veto the data rollback.
+native_spawned_pid_start_matches() {
+  local pid="$1"
+  [ -n "$native_spawned_pid_start" ] || return 1
+  [ "$(ps -p "$pid" -o lstart= 2>/dev/null || true)" = "$native_spawned_pid_start" ]
+}
+
 native_upgrade_owns_pid() {
   local pid="$1"
   case "$pid" in
@@ -2800,11 +2815,7 @@ native_upgrade_owns_pid() {
   if [ -z "$native_spawned_pid" ] || [ "$native_spawned_pid" != "$pid" ]; then
     return 1
   fi
-  if [ -n "$native_spawned_pid_start" ]; then
-    [ "$(ps -p "$pid" -o lstart= 2>/dev/null || true)" = "$native_spawned_pid_start" ]
-    return
-  fi
-  return 0
+  native_spawned_pid_start_matches "$pid"
 }
 
 native_pid_matches_binary_dir() {
@@ -2818,6 +2829,12 @@ native_pid_matches_binary_dir() {
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
+  # Once this run has recorded a PID, a later start-time mismatch must not be
+  # bypassed by the binary/cwd fallback: the PID may have been reused by an
+  # unrelated process that happens to execute the same runtime binary.
+  if [ "$pid" = "$native_spawned_pid" ]; then
+    native_spawned_pid_start_matches "$pid" || return 1
+  fi
   resolved_binary_dir="$(cd "$binary_dir" 2>/dev/null && pwd -P)" || return 1
   expected_binary="$resolved_binary_dir/cpa-manager-plus"
   if [ -r "/proc/$pid/exe" ]; then
@@ -2893,49 +2910,16 @@ stop_existing_native_process() {
   ensure_native_upgrade_port_is_free
 }
 
-backup_native_upgrade_data() {
-  local source=""
-  local target=""
-  mkdir -p "$native_upgrade_backup_dir/data"
-
-  source="$native_db_path"
-  target="$native_upgrade_backup_dir/data/usage.sqlite"
-  if [ -e "$source" ]; then
-    native_upgrade_db_existed="1"
-    cp -p "$source" "$target" || return 1
-  fi
-  source="${native_db_path}-wal"
-  target="$native_upgrade_backup_dir/data/usage.sqlite-wal"
-  if [ -e "$source" ]; then
-    native_upgrade_wal_existed="1"
-    cp -p "$source" "$target" || return 1
-  fi
-  source="${native_db_path}-shm"
-  target="$native_upgrade_backup_dir/data/usage.sqlite-shm"
-  if [ -e "$source" ]; then
-    native_upgrade_shm_existed="1"
-    cp -p "$source" "$target" || return 1
-  fi
-  source="${native_db_path}-journal"
-  target="$native_upgrade_backup_dir/data/usage.sqlite-journal"
-  if [ -e "$source" ]; then
-    native_upgrade_journal_existed="1"
-    cp -p "$source" "$target" || return 1
-  fi
-  if [ -e "$native_data_key_path" ]; then
-    native_upgrade_data_key_existed="1"
-    cp -p "$native_data_key_path" "$native_upgrade_backup_dir/data/data.key" || return 1
-  fi
-  native_upgrade_data_backup_complete="1"
-}
-
 prepare_native_upgrade_rollback() {
-  backup_native_upgrade_runtime_entry
   native_upgrade_rollback_pending="1"
+  backup_native_upgrade_runtime_entry
   stop_existing_native_process
-  if ! backup_native_upgrade_data; then
-    die "Failed to back up existing native SQLite data before upgrade."
+
+  native_upgrade_snapshot_dir="$native_upgrade_backup_dir/manager-data-snapshot"
+  if ! run_native_data_snapshot create; then
+    die "Failed to create a protected Manager data snapshot before native CPA connection import."
   fi
+  native_upgrade_snapshot_created="1"
 }
 
 restore_native_upgrade_file() {
@@ -2950,12 +2934,19 @@ restore_native_upgrade_file() {
   fi
 }
 
-restore_native_upgrade_data() {
-  restore_native_upgrade_file "$native_upgrade_db_existed" "$native_upgrade_backup_dir/data/usage.sqlite" "$native_db_path" || return 1
-  restore_native_upgrade_file "$native_upgrade_wal_existed" "$native_upgrade_backup_dir/data/usage.sqlite-wal" "${native_db_path}-wal" || return 1
-  restore_native_upgrade_file "$native_upgrade_shm_existed" "$native_upgrade_backup_dir/data/usage.sqlite-shm" "${native_db_path}-shm" || return 1
-  restore_native_upgrade_file "$native_upgrade_journal_existed" "$native_upgrade_backup_dir/data/usage.sqlite-journal" "${native_db_path}-journal" || return 1
-  restore_native_upgrade_file "$native_upgrade_data_key_existed" "$native_upgrade_backup_dir/data/data.key" "$native_data_key_path" || return 1
+run_native_data_snapshot() {
+  local action="$1"
+  local binary="${native_binary_dir:-$native_existing_binary_dir}/cpa-manager-plus"
+  [ -n "$native_upgrade_snapshot_dir" ] || return 1
+  if [ "$action" = "delete" ]; then
+    "$binary" manager-data-snapshot delete \
+      --snapshot-dir "$native_upgrade_snapshot_dir"
+  else
+    "$binary" manager-data-snapshot "$action" \
+      --snapshot-dir "$native_upgrade_snapshot_dir" \
+      --db-path "$native_db_path" \
+      --data-key-path "$native_data_key_path"
+  fi
 }
 
 restore_native_upgrade_runtime_entry() {
@@ -2978,49 +2969,106 @@ restart_previous_native_process() {
 rollback_native_upgrade() {
   local failed="0"
   local process_safe="1"
+  local data_restore_succeeded="1"
+  local runtime_restore_succeeded="1"
   local pid_file="$install_dir/cpa-manager-plus.pid"
   local current_pid=""
   native_upgrade_rollback_pending="0"
 
-  if [ "$native_upgrade_switch_applied" = "1" ] && [ -f "$pid_file" ]; then
-    current_pid="$(< "$pid_file")"
-    current_pid="${current_pid%$'\r'}"
+  # The PID file is only a publication record. If publishing it failed after
+  # the new process was spawned, native_spawned_pid is the only trustworthy
+  # handle left for stopping this run's process. Never restore data and start
+  # the previous runtime while that process is still alive.
+  if [ "$native_upgrade_switch_applied" = "1" ]; then
+    if [ -f "$pid_file" ]; then
+      current_pid="$(< "$pid_file")"
+      current_pid="${current_pid%$'\r'}"
+    else
+      current_pid="$native_spawned_pid"
+    fi
+    if [ -z "$current_pid" ] && [ -n "$native_spawned_pid" ]; then
+      current_pid="$native_spawned_pid"
+    fi
     case "$current_pid" in
-      ''|*[!0-9]*) failed="1"; process_safe="0" ;;
+      '') ;;
+      *[!0-9]*)
+        if [ -n "$native_spawned_pid" ]; then
+          current_pid="$native_spawned_pid"
+        else
+          failed="1"
+          process_safe="0"
+        fi
+        ;;
       *)
-        if kill -0 "$current_pid" >/dev/null 2>&1; then
-          if native_upgrade_owns_pid "$current_pid" ||
-             native_pid_matches_binary_dir "$current_pid" "$native_binary_dir"; then
-            if stop_native_pid "$current_pid"; then
-              rm -f "$pid_file"
+        if [ -n "$native_spawned_pid" ] && [ "$current_pid" != "$native_spawned_pid" ]; then
+          failed="1"
+          process_safe="0"
+        fi
+        ;;
+    esac
+    if [ "$process_safe" = "1" ] && [ -n "$current_pid" ]; then
+      case "$current_pid" in
+        ''|*[!0-9]*)
+          failed="1"
+          process_safe="0"
+          ;;
+        *)
+          if kill -0 "$current_pid" >/dev/null 2>&1; then
+            if native_upgrade_owns_pid "$current_pid" ||
+               native_pid_matches_binary_dir "$current_pid" "$native_binary_dir"; then
+              if stop_native_pid "$current_pid"; then
+                rm -f "$pid_file"
+              else
+                failed="1"
+                process_safe="0"
+              fi
             else
               failed="1"
               process_safe="0"
             fi
           else
-            failed="1"
-            process_safe="0"
+            rm -f "$pid_file"
           fi
-        else
-          rm -f "$pid_file"
-        fi
-        ;;
-    esac
+          ;;
+      esac
+    fi
   fi
   if [ "$process_safe" != "1" ]; then
     printf '%s\n' "$(text native_rollback_failed) Backup: $native_upgrade_backup_dir" >&2
     return 1
   fi
-  if [ "$native_upgrade_data_mutated" = "1" ] && [ "$native_upgrade_data_backup_complete" = "1" ]; then
-    restore_native_upgrade_data || failed="1"
+  if [ "$native_upgrade_data_mutated" = "1" ] && [ "$native_upgrade_snapshot_created" = "1" ]; then
+    if ! run_native_data_snapshot restore; then
+      data_restore_succeeded="0"
+      failed="1"
+    fi
   fi
   if [ "$native_upgrade_switch_applied" = "1" ]; then
-    restore_native_upgrade_runtime_entry || failed="1"
+    if ! restore_native_upgrade_runtime_entry; then
+      runtime_restore_succeeded="0"
+      failed="1"
+    fi
   fi
-  restart_previous_native_process || failed="1"
+  # Never start the previous runtime on a data or entry set whose restoration
+  # was not confirmed. The snapshot and runtime-entry backup remain available
+  # for manual recovery in that case.
+  if [ "$data_restore_succeeded" = "1" ] && [ "$runtime_restore_succeeded" = "1" ]; then
+    restart_previous_native_process || failed="1"
+  fi
   if [ "$failed" = "1" ]; then
     printf '%s\n' "$(text native_rollback_failed) Backup: $native_upgrade_backup_dir" >&2
     return 1
+  fi
+
+  # Business rollback is complete. Snapshot deletion is cleanup only; a
+  # failure keeps the complete file-set artifact and must not turn rollback
+  # into a second failure path.
+  if [ "$native_upgrade_snapshot_created" = "1" ]; then
+    if ! run_native_data_snapshot delete; then
+      printf '%s\n' "$(text cpa_snapshot_cleanup_failed) Snapshot: $native_upgrade_snapshot_dir" >&2
+    else
+      native_upgrade_snapshot_created="0"
+    fi
   fi
 }
 
@@ -3032,14 +3080,12 @@ switch_native_runtime_entry() {
 
 commit_native_upgrade() {
   native_upgrade_rollback_pending="0"
-  if [ "$native_upgrade_data_backup_complete" = "1" ]; then
-    rm -f \
-      "$native_upgrade_backup_dir/data/usage.sqlite" \
-      "$native_upgrade_backup_dir/data/usage.sqlite-wal" \
-      "$native_upgrade_backup_dir/data/usage.sqlite-shm" \
-      "$native_upgrade_backup_dir/data/usage.sqlite-journal" \
-      "$native_upgrade_backup_dir/data/data.key"
-    rmdir "$native_upgrade_backup_dir/data" 2>/dev/null || true
+  if [ "$native_upgrade_snapshot_created" = "1" ]; then
+    if ! run_native_data_snapshot delete; then
+      printf '%s\n' "$(text cpa_snapshot_cleanup_failed) Snapshot: $native_upgrade_snapshot_dir" >&2
+    else
+      native_upgrade_snapshot_created="0"
+    fi
   fi
 }
 
@@ -3136,10 +3182,14 @@ run_native_install() {
   else
     nohup "$install_dir/run.sh" >> "$log_file" 2>&1 &
     pid="$!"
+    native_spawned_pid="$pid"
+    native_spawned_pid_start="$(ps -p "$pid" -o lstart= 2>/dev/null || true)"
     printf '%s\n' "$pid" > "$pid_file"
   fi
-  native_spawned_pid="$pid"
-  native_spawned_pid_start="$(ps -p "$pid" -o lstart= 2>/dev/null || true)"
+  if [ -n "$native_spawned_pid" ] && [ "$native_spawned_pid" != "$pid" ]; then
+    native_spawned_pid="$pid"
+    native_spawned_pid_start="$(ps -p "$pid" -o lstart= 2>/dev/null || true)"
+  fi
   wait_native_health "$pid" "$log_file"
   if ! verify_native_admin_key; then
     die "$(text auth_failed)"
