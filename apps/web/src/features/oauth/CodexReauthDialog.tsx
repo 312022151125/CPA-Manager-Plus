@@ -70,7 +70,6 @@ export function CodexReauthDialog({
   const feedbackTimerRef = useRef<number | null>(null);
   const successHandledRef = useRef(false);
   const operationGenerationRef = useRef(0);
-  const targetRef = useRef(target);
 
   const targetKey = useMemo(
     () =>
@@ -94,9 +93,6 @@ export function CodexReauthDialog({
   useLayoutEffect(() => {
     activeDialogContextRef.current = dialogContext;
   }, [dialogContext]);
-  useLayoutEffect(() => {
-    targetRef.current = target;
-  }, [target]);
 
   const isCurrentOperation = useCallback(
     (operationGeneration: number, operationContext: CodexReauthDialogContext) =>
@@ -225,12 +221,7 @@ export function CodexReauthDialog({
       setCopiedTarget(null);
       setLinkRefreshed(false);
       try {
-        const replace = targetRef.current?.fileName?.trim();
-        const response = await oauthApi.startAuth(
-          'codex',
-          requestScope,
-          replace ? { replace } : undefined
-        );
+        const response = await oauthApi.startAuth('codex', requestScope);
         if (!isCurrentOperation(operationGeneration, operationContext)) return;
         if (!response.state) {
           const message = t('codex_reauth.missing_state');

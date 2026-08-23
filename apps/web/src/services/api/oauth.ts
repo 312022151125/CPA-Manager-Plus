@@ -16,25 +16,13 @@ export interface OAuthCallbackResponse {
   status: 'ok';
 }
 
-export type OAuthStartOptions = {
-  replace?: string;
-};
-
 const WEBUI_SUPPORTED: string[] = ['codex', 'anthropic', 'antigravity', 'xai'];
 
 export const oauthApi = {
-  startAuth: (
-    provider: OAuthProvider,
-    requestScope?: ApiClientRequestScope,
-    options?: OAuthStartOptions
-  ) => {
+  startAuth: (provider: OAuthProvider, requestScope?: ApiClientRequestScope) => {
     const params: Record<string, string | boolean> = {};
     if (WEBUI_SUPPORTED.includes(provider)) {
       params.is_webui = true;
-    }
-    const replace = options?.replace?.trim();
-    if (replace) {
-      params.replace = replace;
     }
     return apiClient.get<OAuthStartResponse>(`/${provider}-auth-url`, {
       ...(requestScope ? createScopedApiRequestConfig(requestScope) : {}),

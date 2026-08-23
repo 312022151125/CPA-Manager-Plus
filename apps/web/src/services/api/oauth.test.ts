@@ -37,16 +37,6 @@ describe('oauthApi', () => {
     });
   });
 
-  it('forwards replace when starting Codex OAuth for an existing auth file', async () => {
-    mocks.get.mockResolvedValue({ url: 'https://auth.example/codex', state: 'state-1' });
-
-    await oauthApi.startAuth('codex', undefined, { replace: 'codex-user-free.json' });
-
-    expect(mocks.get).toHaveBeenCalledWith('/codex-auth-url', {
-      params: { is_webui: true, replace: 'codex-user-free.json' },
-    });
-  });
-
   it('starts plugin OAuth providers through their dynamic auth-url endpoint', async () => {
     mocks.get.mockResolvedValue({ url: 'https://auth.example/plugin', state: 'state-2' });
 
