@@ -119,6 +119,8 @@ import { useRequestMonitoringAvailability } from '@/hooks/useRequestMonitoringAv
 import { isFileLogsAvailable } from '@/features/logs/logFeatureAvailability';
 import { useAuthStore, useConfigStore, useNotificationStore } from '@/stores';
 import { useUsageHeaderSnapshotStore } from '@/stores/useUsageHeaderSnapshotStore';
+import { useAccountCredentialMutationRevisionStore } from '@/stores/useAccountCredentialMutationRevisionStore';
+import { createCodexInspectionConnectionFingerprint } from '@/features/monitoring/codexInspection';
 import type { StatusBarData } from '@/utils/recentRequests';
 import { downloadBlob } from '@/utils/download';
 import { sha256Hex } from '@/utils/apiKeyHash';
@@ -168,6 +170,13 @@ export function MonitoringCenterPage() {
   const showNotification = useNotificationStore((state) => state.showNotification);
   const showConfirmation = useNotificationStore((state) => state.showConfirmation);
   const requestMonitoringAvailability = useRequestMonitoringAvailability();
+  const connectionFingerprint = useMemo(
+    () => createCodexInspectionConnectionFingerprint(apiBase, managementKey),
+    [apiBase, managementKey]
+  );
+  const credentialMutationRevisions = useAccountCredentialMutationRevisionStore(
+    (state) => state.events
+  );
   const accountQuotaContextKey = useMemo(
     () =>
       JSON.stringify({
@@ -308,9 +317,17 @@ export function MonitoringCenterPage() {
   const previousAccountPageResetStateRef = useRef<AccountOverviewPageResetState | null>(null);
   const accountQuotaStatesRef = useRef<Record<string, AccountQuotaState>>({});
   const accountQuotaRequestIdsRef = useRef<Record<string, number>>({});
+  const accountQuotaMutationRevisionsRef = useRef<Record<string, number>>({});
   const accountQuotaContextGenerationRef = useRef(0);
   const accountQuotaContextKeyRef = useRef(accountQuotaContextKey);
   const [accountQuotaRefreshQueue] = useState(() => createKeyedSerialTaskQueue());
+  const processedCredentialMutationRevisionsRef = useRef<Record<string, number>>({});
+  const queuedCredentialMutationProvidersRef = useRef<Set<string>>(new Set());
+  const credentialMutationRefreshPromiseRef = useRef<Promise<void> | null>(null);
+  const credentialMutationRefreshGenerationRef = useRef(0);
+  const [pendingCredentialMutationProviders, setPendingCredentialMutationProviders] = useState<
+    string[]
+  >([]);
   const usageImportInputRef = useRef<HTMLInputElement | null>(null);
   const usageImportAbortRef = useRef<AbortController | null>(null);
   const usageImportCancelPendingRef = useRef(false);
@@ -461,8 +478,13 @@ export function MonitoringCenterPage() {
     accountQuotaContextKeyRef.current = accountQuotaContextKey;
     accountQuotaContextGenerationRef.current += 1;
     accountQuotaRequestIdsRef.current = {};
+    accountQuotaMutationRevisionsRef.current = {};
     accountQuotaStatesRef.current = {};
+    credentialMutationRefreshGenerationRef.current += 1;
+    credentialMutationRefreshPromiseRef.current = null;
+    queuedCredentialMutationProvidersRef.current.clear();
     setAccountQuotaStates((current) => (Object.keys(current).length === 0 ? current : {}));
+    setPendingCredentialMutationProviders([]);
   }, [accountQuotaContextKey]);
 
   useEffect(
@@ -476,6 +498,35 @@ export function MonitoringCenterPage() {
   const refreshAll = useCallback(async () => {
     await Promise.all([loadApiKeyAliases(), refreshMeta(false), loadHeaderSnapshots()]);
   }, [loadApiKeyAliases, loadHeaderSnapshots, refreshMeta]);
+
+  useEffect(() => {
+    if (!connectionFingerprint) return;
+    let hasNewRevision = false;
+    Object.entries(credentialMutationRevisions).forEach(([key, event]) => {
+      if (event.connectionFingerprint !== connectionFingerprint) return;
+      if ((processedCredentialMutationRevisionsRef.current[key] ?? 0) >= event.revision) return;
+      processedCredentialMutationRevisionsRef.current[key] = event.revision;
+      queuedCredentialMutationProvidersRef.current.add(event.provider);
+      hasNewRevision = true;
+    });
+    if (!hasNewRevision || credentialMutationRefreshPromiseRef.current) return;
+
+    const refreshGeneration = credentialMutationRefreshGenerationRef.current;
+    const refresh = Promise.resolve()
+      .then(() => refreshMeta(false))
+      .finally(() => {
+        if (credentialMutationRefreshGenerationRef.current !== refreshGeneration) return;
+        const providers = Array.from(queuedCredentialMutationProvidersRef.current);
+        queuedCredentialMutationProvidersRef.current.clear();
+        credentialMutationRefreshPromiseRef.current = null;
+        if (providers.length > 0) {
+          setPendingCredentialMutationProviders((current) =>
+            Array.from(new Set([...current, ...providers]))
+          );
+        }
+      });
+    credentialMutationRefreshPromiseRef.current = refresh;
+  }, [connectionFingerprint, credentialMutationRevisions, refreshMeta]);
 
   const setCurrentAccountPage = useCallback(
     (page: number) => {
@@ -1044,7 +1095,8 @@ export function MonitoringCenterPage() {
       const currentState = accountQuotaStatesRef.current[account];
       const targets = accountQuotaTargetsByAccount.get(account) ?? [];
       const targetKey = targets.map((target) => target.key).join('|');
-      const requestKey = `${accountQuotaContextKey}\u0000${account}\u0000${targetKey}`;
+      const mutationRevision = accountQuotaMutationRevisionsRef.current[account] ?? 0;
+      const requestKey = `${accountQuotaContextKey}\u0000${account}\u0000${targetKey}\u0000${mutationRevision}`;
       if (accountQuotaRefreshQueue.isPending(requestKey)) {
         return accountQuotaRefreshQueue.run(requestKey, async () => undefined);
       }
@@ -1177,6 +1229,44 @@ export function MonitoringCenterPage() {
       t,
     ]
   );
+
+  useEffect(() => {
+    if (pendingCredentialMutationProviders.length === 0) return;
+    const providers = new Set(pendingCredentialMutationProviders);
+    const affectedAccounts = new Set<string>();
+    accountQuotaTargetsByAccount.forEach((targets, account) => {
+      if (targets.some((target) => providers.has(target.provider))) affectedAccounts.add(account);
+    });
+    Object.entries(accountQuotaStatesRef.current).forEach(([account, state]) => {
+      if (state.entries.some((entry) => providers.has(entry.provider)))
+        affectedAccounts.add(account);
+    });
+
+    const previousStates = accountQuotaStatesRef.current;
+    const nextStates = { ...previousStates };
+    affectedAccounts.forEach((account) => {
+      delete nextStates[account];
+      accountQuotaRequestIdsRef.current[account] =
+        (accountQuotaRequestIdsRef.current[account] ?? 0) + 1;
+      accountQuotaMutationRevisionsRef.current[account] =
+        (accountQuotaMutationRevisionsRef.current[account] ?? 0) + 1;
+    });
+    accountQuotaStatesRef.current = nextStates;
+    setAccountQuotaStates(nextStates);
+    setPendingCredentialMutationProviders([]);
+
+    affectedAccounts.forEach((account) => {
+      if (previousStates[account] || expandedAccounts[account] || focusedAccount === account) {
+        void loadAccountQuota(account, true);
+      }
+    });
+  }, [
+    accountQuotaTargetsByAccount,
+    expandedAccounts,
+    focusedAccount,
+    loadAccountQuota,
+    pendingCredentialMutationProviders,
+  ]);
 
   const toggleAccountExpanded = useCallback((accountId: string) => {
     setExpandedAccounts((previous) => ({
