@@ -54,6 +54,44 @@ func TestRunRemovesOnlyLegacyConnectionFields(t *testing.T) {
 	}
 }
 
+func TestRunRemovesCaseInsensitiveAndDuplicateLegacyConnectionFields(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "legacy.json")
+	outputPath := filepath.Join(dir, "config.json")
+	input := `{
+  "httpAddr": "0.0.0.0:18317",
+  "CPAUpstreamURL": "http://uppercase.example:8317",
+  "cPaUpStReAmUrL": "http://mixed.example:8317",
+  "ManagementKeyFile": "../../secrets/uppercase-key",
+  "mAnAgEmEnTkEyFiLe": "../../secrets/mixed-key"
+}`
+	if err := os.WriteFile(inputPath, []byte(input), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := Run([]string{"--input", inputPath, "--output", outputPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run sanitizer: %v stderr=%s", err, stderr.String())
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("output is invalid JSON: %v\n%s", err, data)
+	}
+	for key := range fields {
+		if strings.EqualFold(key, "cpaUpstreamUrl") || strings.EqualFold(key, "managementKeyFile") {
+			t.Fatalf("legacy CPA field %q was retained", key)
+		}
+	}
+	if string(fields["httpAddr"]) != `"0.0.0.0:18317"` {
+		t.Fatalf("httpAddr=%s", fields["httpAddr"])
+	}
+}
+
 func TestRunRejectsInvalidJSONWithoutReplacingOutput(t *testing.T) {
 	dir := t.TempDir()
 	inputPath := filepath.Join(dir, "legacy.json")

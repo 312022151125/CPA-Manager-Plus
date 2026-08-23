@@ -83,8 +83,11 @@ func sanitize(inputPath string, outputPath string) error {
 		}
 		return fmt.Errorf("decode trailing runtime config data %s: %w", inputPath, err)
 	}
-	delete(fields, "cpaUpstreamUrl")
-	delete(fields, "managementKeyFile")
+	for key := range fields {
+		if strings.EqualFold(key, "cpaUpstreamUrl") || strings.EqualFold(key, "managementKeyFile") {
+			delete(fields, key)
+		}
+	}
 	output, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode sanitized runtime config: %w", err)
