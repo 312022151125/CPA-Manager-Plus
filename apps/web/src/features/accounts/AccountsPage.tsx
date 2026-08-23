@@ -118,6 +118,8 @@ import {
 } from '@/features/accounts/model/accountCredentialEvidenceStorage';
 import {
   acknowledgeAccountCredentialMutationMarkers,
+  createAccountCredentialMutationBaseline,
+  hasAccountCredentialMutationEvidence,
   listAccountCredentialMutationMarkers,
   type AccountCredentialMutationMarker,
 } from '@/features/accounts/model/accountCredentialMutationMarker';
@@ -126,6 +128,7 @@ import {
   confirmAccountDirectReauth,
   createAccountDirectReauthBaseline,
   listPendingAccountDirectReauths,
+  reconcileAccountDirectReauth,
   recordPendingAccountDirectReauth,
   type AccountDirectReauthBaseline,
 } from '@/features/accounts/model/accountDirectReauth';
@@ -285,6 +288,7 @@ import {
 import {
   captureQuotaCacheGeneration,
   commitIfQuotaCacheCurrent,
+  publishAccountCredentialMutationRevision,
   useAuthStore,
   useNotificationStore,
   useQuotaStore,
@@ -1157,6 +1161,12 @@ export function AccountsPage() {
   const oauthEditorConnectionFingerprintRef = useRef(connectionFingerprint);
   const [authJsonPasteOpen, setAuthJsonPasteOpen] = useState(false);
   const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
+  const codexReauthBaselineRef = useRef<AccountDirectReauthBaseline | null>(null);
+  const inspectionCodexReauthBaselineRef = useRef<{
+    scopeKey: string;
+    target: CodexReauthTarget;
+    baseline: AccountDirectReauthBaseline;
+  } | null>(null);
   const [detailEventsRowKey, setDetailEventsRowKey] = useState<string | null>(null);
   const [detailEvents, setDetailEvents] = useState<MonitoringAnalyticsEventRow[]>([]);
   const [detailEventsSummary, setDetailEventsSummary] = useState<MonitoringAnalyticsSummary | null>(
@@ -1291,6 +1301,7 @@ export function AccountsPage() {
   const accountActionCandidatesLoadedRef = useRef(false);
   const quotaCooldownsLoadedRef = useRef(false);
   const consumedCredentialMutationMarkerIdsRef = useRef<Set<string>>(new Set());
+  const credentialMutationMarkerAttemptsRef = useRef<Map<string, string>>(new Map());
   const credentialMutationMarkerSynchronizationsRef = useRef<Map<string, Promise<boolean>>>(
     new Map()
   );
@@ -1358,6 +1369,9 @@ export function AccountsPage() {
     setOauthModelAliasEditorProvider(null);
     setAuthJsonPasteOpen(false);
     setCodexReauthTarget(null);
+    codexReauthBaselineRef.current = null;
+    inspectionCodexReauthBaselineRef.current = null;
+    credentialMutationMarkerAttemptsRef.current.clear();
     quotaRefreshGenerationRef.current += 1;
     quotaRefreshBatchRef.current = null;
     quotaRequestVersionsRef.current.forEach((version, key) => {
@@ -1543,9 +1557,13 @@ export function AccountsPage() {
   );
 
   const synchronizeExternalCredentialMutationMarkers = useCallback(async () => {
-    const markers = listAccountCredentialMutationMarkers(connectionFingerprint).filter(
-      (marker) => !consumedCredentialMutationMarkerIdsRef.current.has(marker.id)
-    );
+    const markers = listAccountCredentialMutationMarkers(connectionFingerprint).filter((marker) => {
+      if (consumedCredentialMutationMarkerIdsRef.current.has(marker.id)) return false;
+      const currentEvidence = JSON.stringify(
+        createAccountCredentialMutationBaseline(files, marker.provider)
+      );
+      return credentialMutationMarkerAttemptsRef.current.get(marker.id) !== currentEvidence;
+    });
     if (markers.length === 0) return false;
     const pendingSynchronization = credentialMutationMarkerSynchronizationsRef.current.get(
       credentialEvidenceScopeKey
@@ -1573,6 +1591,18 @@ export function AccountsPage() {
         if (!reloadedFiles) return false;
         const consumedIds: string[] = [];
         markersByProvider.forEach((providerMarkers, provider) => {
+          const observedEvidence = JSON.stringify(
+            createAccountCredentialMutationBaseline(reloadedFiles, provider)
+          );
+          const evidencedMarkers = providerMarkers.filter((marker) =>
+            hasAccountCredentialMutationEvidence(marker, reloadedFiles)
+          );
+          providerMarkers
+            .filter((marker) => !evidencedMarkers.includes(marker))
+            .forEach((marker) =>
+              credentialMutationMarkerAttemptsRef.current.set(marker.id, observedEvidence)
+            );
+          if (evidencedMarkers.length === 0) return;
           const markerAtMs = Math.max(...providerMarkers.map((marker) => marker.createdAtMs));
           const targetFiles = invalidateProviderCredentialEvidenceRef.current(
             provider,
@@ -1583,7 +1613,12 @@ export function AccountsPage() {
             }
           );
           if (targetFiles.length === 0) return;
-          providerMarkers.forEach((marker) => consumedIds.push(marker.id));
+          evidencedMarkers.forEach((marker) => consumedIds.push(marker.id));
+          publishAccountCredentialMutationRevision({
+            connectionFingerprint,
+            provider,
+            kind: 'oauth',
+          });
         });
         if (consumedIds.length === 0) return false;
         consumedIds.forEach((id) => consumedCredentialMutationMarkerIdsRef.current.add(id));
@@ -1601,7 +1636,12 @@ export function AccountsPage() {
       synchronization
     );
     return synchronization;
-  }, [connectionFingerprint, credentialEvidenceScopeKey, reloadInspectionCredentialArtifacts]);
+  }, [
+    connectionFingerprint,
+    credentialEvidenceScopeKey,
+    files,
+    reloadInspectionCredentialArtifacts,
+  ]);
 
   const getInspectionCredentialMutationScopedKey = useCallback(
     (
@@ -2675,6 +2715,12 @@ export function AccountsPage() {
     }
     if (mutation.kind === 'credential-refreshed') {
       invalidateCodexCredentialEvidenceForSelectionKeys(mutation.selectionKeys);
+      publishAccountCredentialMutationRevision({
+        connectionFingerprint,
+        provider: 'codex',
+        kind: 'credential',
+        credentialIdentity: mutation.selectionKeys[0],
+      });
       return;
     }
     invalidateCodexCredentialStatusForSelectionKeys(mutation.selectionKeys);
@@ -2828,6 +2874,12 @@ export function AccountsPage() {
       captureReloadedCodexOperationalEvidence(
         invalidation ?? { file: confirmedFile, invalidatedAtMs: Date.now() }
       );
+      publishAccountCredentialMutationRevision({
+        connectionFingerprint,
+        provider: 'codex',
+        kind: 'reauth',
+        credentialIdentity: getAuthFileSelectionKey(confirmedFile),
+      });
     },
     [
       captureReloadedCodexOperationalEvidence,
@@ -2855,10 +2907,26 @@ export function AccountsPage() {
 
           let synchronized = false;
           pendingItems.forEach((pending) => {
-            const confirmedFile = confirmAccountDirectReauth(pending, reloadedFiles);
-            if (!confirmedFile) return;
-            completeConfirmedAccountDirectReauth(pending, confirmedFile, pending.id);
-            synchronized = true;
+            const reconciliation = reconcileAccountDirectReauth(pending, reloadedFiles);
+            if (reconciliation.status === 'confirmed') {
+              completeConfirmedAccountDirectReauth(pending, reconciliation.file, pending.id);
+              synchronized = true;
+              return;
+            }
+            if (
+              reconciliation.status === 'identity-changed' ||
+              reconciliation.status === 'ambiguous'
+            ) {
+              acknowledgePendingAccountDirectReauths([pending.id]);
+              showNotification(
+                t(
+                  reconciliation.status === 'identity-changed'
+                    ? 'codex_reauth.identity_changed'
+                    : 'codex_reauth.identity_ambiguous'
+                ),
+                'warning'
+              );
+            }
           });
           return synchronized;
         } catch {
@@ -2876,35 +2944,14 @@ export function AccountsPage() {
       credentialEvidenceScopeKey,
       files,
       reloadInspectionCredentialArtifacts,
+      showNotification,
+      t,
     ]
   );
   synchronizePendingAccountDirectReauthsRef.current = synchronizePendingAccountDirectReauths;
 
   const handleCodexReauthSuccess = useCallback(async () => {
-    const target = codexReauthTarget;
-    if (!target?.fileName) return;
-    const targetIdentityKey = getAuthFileCodexInspectionKeyForIdentity({
-      fileName: target.fileName,
-      runtimeId: target.runtimeId,
-      provider: target.provider,
-      authIndex: target.authIndex ?? null,
-      accountId: target.accountId,
-      accountSnapshot: target.accountSnapshot,
-    });
-    const targetFile = files.find(
-      (file) => getAuthFileCodexInspectionKeyForFile(file) === targetIdentityKey
-    );
-    if (!targetFile) throw new Error(t('notification.refresh_failed'));
-    const baseline = createAccountDirectReauthBaseline({
-      target,
-      file: targetFile,
-      resultKeys: getHandledAccountInspectionResultKeys(
-        inspectionResults,
-        targetIdentityKey,
-        target.fileName,
-        files
-      ),
-    });
+    const baseline = codexReauthBaselineRef.current;
     if (!baseline) throw new Error(t('notification.refresh_failed'));
     const pending = recordPendingAccountDirectReauth({ connectionFingerprint, baseline });
     if (!pending) throw new Error(t('notification.refresh_failed'));
@@ -2913,16 +2960,29 @@ export function AccountsPage() {
       requireSuccessfulReload: true,
     });
     if (activeCredentialEvidenceScopeKeyRef.current !== reauthScopeKey) return;
-    const confirmedFile = reloadedFiles ? confirmAccountDirectReauth(pending, reloadedFiles) : null;
-    if (!confirmedFile) throw new Error(t('notification.refresh_failed'));
-    completeConfirmedAccountDirectReauth(pending, confirmedFile, pending.id);
+    const reconciliation = reloadedFiles
+      ? reconcileAccountDirectReauth(pending, reloadedFiles)
+      : { status: 'unconfirmed' as const };
+    if (reconciliation.status === 'confirmed') {
+      completeConfirmedAccountDirectReauth(pending, reconciliation.file, pending.id);
+      return;
+    }
+    if (reconciliation.status !== 'unconfirmed') {
+      acknowledgePendingAccountDirectReauths([pending.id]);
+    }
+    throw new Error(
+      t(
+        reconciliation.status === 'identity-changed'
+          ? 'codex_reauth.identity_changed'
+          : reconciliation.status === 'ambiguous'
+            ? 'codex_reauth.identity_ambiguous'
+            : 'codex_reauth.identity_unconfirmed'
+      )
+    );
   }, [
-    codexReauthTarget,
     completeConfirmedAccountDirectReauth,
     connectionFingerprint,
     credentialEvidenceScopeKey,
-    files,
-    inspectionResults,
     reloadInspectionCredentialArtifacts,
     t,
   ]);
@@ -2931,7 +2991,25 @@ export function AccountsPage() {
     (file: AuthFileItem) => {
       const action = resolveAccountReauthAction(file);
       if (action.kind === 'codex-dialog') {
-        setCodexReauthTarget(createCodexReauthTargetFromAuthFile(file));
+        const target = createCodexReauthTargetFromAuthFile(file);
+        const targetIdentityKey = getAuthFileCodexInspectionKeyForFile(file);
+        const baseline = createAccountDirectReauthBaseline({
+          target,
+          file,
+          files,
+          resultKeys: getHandledAccountInspectionResultKeys(
+            inspectionResults,
+            targetIdentityKey,
+            file.name,
+            files
+          ),
+        });
+        if (!baseline) {
+          showNotification(t('notification.refresh_failed'), 'error');
+          return;
+        }
+        codexReauthBaselineRef.current = baseline;
+        setCodexReauthTarget(target);
         return;
       }
       if (action.kind === 'navigate') {
@@ -4474,35 +4552,64 @@ export function AccountsPage() {
     [location.pathname, location.search, navigate, workspaceUrlState]
   );
 
+  const handleInspectionCodexReauthStart = useCallback(
+    (target: CodexReauthTarget): boolean => {
+      const targetIdentityKey = getAuthFileCodexInspectionKeyForIdentity({
+        fileName: target.fileName ?? '',
+        runtimeId: target.runtimeId,
+        provider: target.provider,
+        authIndex: target.authIndex ?? null,
+        accountId: target.accountId,
+        accountSnapshot: target.accountSnapshot,
+      });
+      const targetFile = files.find(
+        (file) => getAuthFileCodexInspectionKeyForFile(file) === targetIdentityKey
+      );
+      if (!targetFile) {
+        inspectionCodexReauthBaselineRef.current = null;
+        showNotification(t('notification.refresh_failed'), 'error');
+        return false;
+      }
+      const baseline = createAccountDirectReauthBaseline({
+        target,
+        file: targetFile,
+        files,
+        resultKeys: getHandledAccountInspectionResultKeys(
+          inspectionResults,
+          targetIdentityKey,
+          target.fileName ?? '',
+          files
+        ),
+      });
+      if (!baseline) {
+        inspectionCodexReauthBaselineRef.current = null;
+        showNotification(t('notification.refresh_failed'), 'error');
+        return false;
+      }
+      inspectionCodexReauthBaselineRef.current = {
+        scopeKey: credentialEvidenceScopeKey,
+        target,
+        baseline,
+      };
+      return true;
+    },
+    [credentialEvidenceScopeKey, files, inspectionResults, showNotification, t]
+  );
+
   const handleInspectionCredentialsChanged = useCallback(
     async (target?: CodexReauthTarget | null, snapshot?: CredentialInspectionSnapshot | null) => {
       const callbackScopeKey = credentialEvidenceScopeKey;
       if (activeCredentialEvidenceScopeKeyRef.current !== callbackScopeKey) return;
       if (target) {
-        const targetIdentityKey = getAuthFileCodexInspectionKeyForIdentity({
-          fileName: target.fileName ?? '',
-          runtimeId: target.runtimeId,
-          provider: target.provider,
-          authIndex: target.authIndex ?? null,
-          accountId: target.accountId,
-          accountSnapshot: target.accountSnapshot,
+        const captured = inspectionCodexReauthBaselineRef.current;
+        if (!captured || captured.scopeKey !== callbackScopeKey || captured.target !== target) {
+          throw new Error(t('notification.refresh_failed'));
+        }
+        inspectionCodexReauthBaselineRef.current = null;
+        const pending = recordPendingAccountDirectReauth({
+          connectionFingerprint,
+          baseline: captured.baseline,
         });
-        const targetFile = files.find(
-          (file) => getAuthFileCodexInspectionKeyForFile(file) === targetIdentityKey
-        );
-        if (!targetFile) throw new Error(t('notification.refresh_failed'));
-        const baseline = createAccountDirectReauthBaseline({
-          target,
-          file: targetFile,
-          resultKeys: getHandledAccountInspectionResultKeys(
-            inspectionResults,
-            targetIdentityKey,
-            target.fileName ?? '',
-            files
-          ),
-        });
-        if (!baseline) throw new Error(t('notification.refresh_failed'));
-        const pending = recordPendingAccountDirectReauth({ connectionFingerprint, baseline });
         if (!pending) throw new Error(t('notification.refresh_failed'));
         const reloadedFiles = await reloadInspectionCredentialArtifacts({
           requireSuccessfulReload: true,
@@ -4532,9 +4639,7 @@ export function AccountsPage() {
       completeConfirmedAccountDirectReauth,
       connectionFingerprint,
       credentialEvidenceScopeKey,
-      files,
       getInspectionCredentialMutationScopedKey,
-      inspectionResults,
       reloadInspectionCredentialArtifacts,
       synchronizeInspectionCredentialMutations,
       t,
@@ -5296,6 +5401,17 @@ export function AccountsPage() {
           );
           if (!isCurrentBatch()) return;
           const successCount = results.filter(Boolean).length;
+          results.forEach((succeeded, index) => {
+            if (!succeeded) return;
+            const row = taskPlan[index]?.item;
+            if (!row) return;
+            publishAccountCredentialMutationRevision({
+              connectionFingerprint,
+              provider: row.provider,
+              kind: 'quota',
+              credentialIdentity: row.selectionKey,
+            });
+          });
           showNotification(
             t('accounts.quota_refresh_result', {
               success: successCount,
@@ -7313,6 +7429,7 @@ export function AccountsPage() {
       onModeChange={changeHealthMode}
       onSnapshotChange={handleInspectionSnapshotChange}
       onCredentialsChanged={handleInspectionCredentialsChanged}
+      onCodexReauthStart={handleInspectionCodexReauthStart}
       onOpenCredential={handleOpenInspectionCredential}
     />
   );
@@ -7617,7 +7734,10 @@ export function AccountsPage() {
         open={Boolean(codexReauthTarget)}
         target={codexReauthTarget}
         requestScope={authFilesRequestScope}
-        onClose={() => setCodexReauthTarget(null)}
+        onClose={() => {
+          codexReauthBaselineRef.current = null;
+          setCodexReauthTarget(null);
+        }}
         onSuccess={handleCodexReauthSuccess}
       />
     </div>

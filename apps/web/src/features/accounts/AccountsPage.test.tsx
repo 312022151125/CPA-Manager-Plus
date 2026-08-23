@@ -461,6 +461,7 @@ const { mocks } = vi.hoisted(() => {
           target?: CodexReauthTarget | null,
           snapshot?: CredentialInspectionSnapshot | null
         ) => void | Promise<void>;
+        onCodexReauthStart?: (target: CodexReauthTarget) => boolean | void;
         onOpenCredential: (target: CredentialInspectionTarget) => void;
       },
       quotaState: {
@@ -668,6 +669,7 @@ vi.mock('@/features/monitoring/components/CredentialHealthInspectionWorkspace', 
       target?: CodexReauthTarget | null,
       snapshot?: CredentialInspectionSnapshot | null
     ) => void | Promise<void>;
+    onCodexReauthStart?: (target: CodexReauthTarget) => boolean | void;
     onOpenCredential: (target: CredentialInspectionTarget) => void;
   }) => {
     mocks.lastHealthWorkspaceProps = props;
@@ -794,6 +796,7 @@ vi.mock('@/services/api/usageService', async (importOriginal) => {
 
 vi.mock('@/stores', () => ({
   captureQuotaCacheGeneration: () => 0,
+  publishAccountCredentialMutationRevision: vi.fn(),
   commitIfQuotaCacheCurrent: (_generation: number, commit: () => void) => {
     commit();
     return true;
@@ -1093,6 +1096,11 @@ const runCodexReauthSuccessAndCaptureError = async (): Promise<unknown> => {
     }
   });
   return caught;
+};
+
+const runInspectionCodexReauth = async (target: CodexReauthTarget): Promise<void> => {
+  expect(mocks.lastHealthWorkspaceProps?.onCodexReauthStart?.(target)).not.toBe(false);
+  await mocks.lastHealthWorkspaceProps?.onCredentialsChanged(target);
 };
 
 describe('AccountsPage replacement flows', () => {
@@ -1422,7 +1430,7 @@ describe('AccountsPage replacement flows', () => {
     });
 
     expect(await runCodexReauthSuccessAndCaptureError()).toEqual(
-      new Error('notification.refresh_failed')
+      new Error('codex_reauth.identity_unconfirmed')
     );
 
     expect(listPendingAccountDirectReauths('http://cpa-a.local:8317:manager-key')).toHaveLength(1);
@@ -4930,7 +4938,7 @@ describe('AccountsPage replacement flows', () => {
           2_000
         )
       );
-      await mocks.lastHealthWorkspaceProps?.onCredentialsChanged({
+      await runInspectionCodexReauth({
         account: 'first@example.com',
         fileName: first.name,
         provider: 'codex',
@@ -4970,6 +4978,55 @@ describe('AccountsPage replacement flows', () => {
     expect(getAccountCardText(renderer, getAuthFileSelectionKey(second))).toContain(
       'accounts.health_reauth'
     );
+  });
+
+  it('keeps the health-workspace reauth baseline when credentials refresh during OAuth', async () => {
+    const original = {
+      ...makeCodexFile('codex-old.json', 'auth-1', 'workspace@example.com'),
+      account_id: 'workspace-a',
+      status: 'error',
+      statusMessage: 'token_expired',
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const replacement = {
+      ...makeCodexFile('codex-new.json', 'auth-2', 'workspace@example.com'),
+      account_id: 'workspace-a',
+      status: 'ready',
+      statusMessage: '',
+      last_refresh: 3_000,
+      modified: 3_100,
+    } as AuthFileItem;
+    const target: CodexReauthTarget = {
+      account: 'workspace@example.com',
+      fileName: original.name,
+      provider: 'codex',
+      authIndex: original.authIndex,
+      accountId: 'workspace-a',
+      accountSnapshot: 'workspace@example.com',
+    };
+    mocks.files = [original];
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.tab_health').props.onClick();
+    });
+    expect(mocks.lastHealthWorkspaceProps?.onCodexReauthStart?.(target)).toBe(true);
+
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [replacement];
+      return mocks.files;
+    });
+    await act(async () => {
+      await mocks.lastHealthWorkspaceProps?.onCredentialsChanged();
+    });
+
+    mocks.loadFiles.mockImplementationOnce(async () => mocks.files);
+    await act(async () => {
+      await mocks.lastHealthWorkspaceProps?.onCredentialsChanged(target);
+    });
+
+    expect(listPendingAccountDirectReauths('http://cpa-a.local:8317:manager-key')).toEqual([]);
   });
 
   it('invalidates only the refreshed credential inside a shared physical file', async () => {
@@ -6188,7 +6245,7 @@ describe('AccountsPage replacement flows', () => {
       findHostButtonByText(renderer, 'accounts.tab_health').props.onClick();
     });
     await act(async () => {
-      await mocks.lastHealthWorkspaceProps?.onCredentialsChanged({
+      await runInspectionCodexReauth({
         account: 'before@example.com',
         fileName: original.name,
         provider: 'codex',
@@ -6372,7 +6429,7 @@ describe('AccountsPage replacement flows', () => {
           2_000
         )
       );
-      await mocks.lastHealthWorkspaceProps?.onCredentialsChanged({
+      await runInspectionCodexReauth({
         account: 'first@example.com',
         fileName: first.name,
         provider: 'codex',
@@ -6494,7 +6551,7 @@ describe('AccountsPage replacement flows', () => {
           inspectionAtMs
         )
       );
-      await mocks.lastHealthWorkspaceProps?.onCredentialsChanged({
+      await runInspectionCodexReauth({
         account: 'first@example.com',
         fileName: first.name,
         provider: 'codex',
