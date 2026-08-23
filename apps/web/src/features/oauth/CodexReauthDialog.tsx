@@ -70,18 +70,15 @@ export function CodexReauthDialog({
   const feedbackTimerRef = useRef<number | null>(null);
   const successHandledRef = useRef(false);
   const operationGenerationRef = useRef(0);
+  const targetRef = useRef(target);
+  targetRef.current = target;
 
   const targetKey = useMemo(
     () =>
       target
-        ? [
-            target.account,
-            target.fileName ?? '',
-            target.authIndex ?? '',
-            target.accountId ?? '',
-          ].join('\u0000')
+        ? [target.account, target.fileName ?? '', target.accountId ?? ''].join('\u0000')
         : '',
-    [target]
+    [target?.account, target?.accountId, target?.fileName]
   );
   const dialogContext = useMemo<CodexReauthDialogContext>(
     () => ({
@@ -224,7 +221,12 @@ export function CodexReauthDialog({
       setCopiedTarget(null);
       setLinkRefreshed(false);
       try {
-        const response = await oauthApi.startAuth('codex', requestScope);
+        const replace = targetRef.current?.fileName?.trim();
+        const response = await oauthApi.startAuth(
+          'codex',
+          requestScope,
+          replace ? { replace } : undefined
+        );
         if (!isCurrentOperation(operationGeneration, operationContext)) return;
         if (!response.state) {
           const message = t('codex_reauth.missing_state');
@@ -258,16 +260,18 @@ export function CodexReauthDialog({
       t,
     ]
   );
+  const loadAuthLinkRef = useRef(loadAuthLink);
+  loadAuthLinkRef.current = loadAuthLink;
 
   useEffect(() => {
-    if (!open || !target) {
+    if (!open || !targetKey) {
       operationGenerationRef.current += 1;
       clearPolling();
       clearFeedbackTimer();
       return;
     }
     const timer = window.setTimeout(() => {
-      void loadAuthLink();
+      void loadAuthLinkRef.current();
     }, 0);
     return () => {
       operationGenerationRef.current += 1;
@@ -275,7 +279,14 @@ export function CodexReauthDialog({
       clearPolling();
       clearFeedbackTimer();
     };
-  }, [clearFeedbackTimer, clearPolling, loadAuthLink, open, target, targetKey]);
+  }, [
+    clearFeedbackTimer,
+    clearPolling,
+    open,
+    requestScope?.apiBase,
+    requestScope?.managementKey,
+    targetKey,
+  ]);
 
   useEffect(
     () => () => {

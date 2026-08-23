@@ -154,7 +154,9 @@ describe('CodexReauthDialog connection lifecycle', () => {
       );
     });
     await flushEffects();
-    expect(mocks.startAuth).toHaveBeenCalledWith('codex', REQUEST_SCOPE);
+    expect(mocks.startAuth).toHaveBeenCalledWith('codex', REQUEST_SCOPE, {
+      replace: TARGET.fileName,
+    });
 
     await act(async () => {
       renderer.update(
@@ -167,7 +169,9 @@ describe('CodexReauthDialog connection lifecycle', () => {
       );
     });
     await flushEffects();
-    expect(mocks.startAuth).toHaveBeenCalledWith('codex', NEXT_REQUEST_SCOPE);
+    expect(mocks.startAuth).toHaveBeenCalledWith('codex', NEXT_REQUEST_SCOPE, {
+      replace: TARGET.fileName,
+    });
 
     await act(async () => {
       oldRequest.resolve({ url: 'https://auth.example/old', state: 'old-state' });
@@ -368,6 +372,55 @@ describe('CodexReauthDialog connection lifecycle', () => {
       'error'
     );
     expect(textContent(renderer.root)).toContain('temporary Accounts reload failure');
+
+    act(() => renderer.unmount());
+  });
+
+  it('does not restart OAuth after success when the parent refreshes the same account', async () => {
+    mocks.startAuth.mockResolvedValue({ url: 'https://auth.example/codex', state: 'state-1' });
+    mocks.submitCallback.mockResolvedValue({ status: 'ok' });
+    const onSuccess = vi.fn();
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexReauthDialog
+          open
+          target={TARGET}
+          requestScope={REQUEST_SCOPE}
+          onClose={vi.fn()}
+          onSuccess={onSuccess}
+        />
+      );
+    });
+    await flushEffects();
+    const startCount = mocks.startAuth.mock.calls.length;
+
+    const input = renderer.root.findByType('input');
+    act(() => input.props.onChange({ target: { value: 'http://localhost/callback?code=1' } }));
+    await act(async () => {
+      findButton(renderer, 'codex_reauth.submit_callback').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(textContent(renderer.root)).toContain('codex_reauth.success');
+
+    await act(async () => {
+      renderer.update(
+        <CodexReauthDialog
+          open
+          target={{ ...TARGET, authIndex: 'auth-2' }}
+          requestScope={{ ...REQUEST_SCOPE }}
+          onClose={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      );
+    });
+    await flushEffects();
+
+    expect(mocks.startAuth).toHaveBeenCalledTimes(startCount);
+    expect(textContent(renderer.root)).toContain('codex_reauth.success');
 
     act(() => renderer.unmount());
   });
