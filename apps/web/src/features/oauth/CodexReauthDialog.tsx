@@ -71,13 +71,14 @@ export function CodexReauthDialog({
   const successHandledRef = useRef(false);
   const operationGenerationRef = useRef(0);
   const targetRef = useRef(target);
-  targetRef.current = target;
 
   const targetKey = useMemo(
     () =>
       target
         ? [target.account, target.fileName ?? '', target.accountId ?? ''].join('\u0000')
         : '',
+    // Keep primitive fields only. Including `target` would restart OAuth after Accounts reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stable session identity
     [target?.account, target?.accountId, target?.fileName]
   );
   const dialogContext = useMemo<CodexReauthDialogContext>(
@@ -93,6 +94,9 @@ export function CodexReauthDialog({
   useLayoutEffect(() => {
     activeDialogContextRef.current = dialogContext;
   }, [dialogContext]);
+  useLayoutEffect(() => {
+    targetRef.current = target;
+  }, [target]);
 
   const isCurrentOperation = useCallback(
     (operationGeneration: number, operationContext: CodexReauthDialogContext) =>
@@ -261,7 +265,9 @@ export function CodexReauthDialog({
     ]
   );
   const loadAuthLinkRef = useRef(loadAuthLink);
-  loadAuthLinkRef.current = loadAuthLink;
+  useLayoutEffect(() => {
+    loadAuthLinkRef.current = loadAuthLink;
+  }, [loadAuthLink]);
 
   useEffect(() => {
     if (!open || !targetKey) {
