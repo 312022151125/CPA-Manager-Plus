@@ -304,7 +304,6 @@ func TestRunRejectsConflictingExistingConnectionWithoutOverwritingIt(t *testing.
 	dbPath := filepath.Join(dir, "usage.sqlite")
 	dataKeyPath := filepath.Join(dir, "data.key")
 	runStoreCommand(t, dbPath, dataKeyPath, testCPABaseURL, testCPAManagementKey)
-	before := rawSettingValue(t, dbPath, "manager_config_v1")
 	managementKeyPath := writeManagementKeyFile(t, dir, "different-key")
 
 	var stdout, stderr bytes.Buffer
@@ -320,8 +319,10 @@ func TestRunRejectsConflictingExistingConnectionWithoutOverwritingIt(t *testing.
 	if stdout.Len() != 0 || strings.Contains(stderr.String(), "different-key") {
 		t.Fatalf("unexpected output: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-	if after := rawSettingValue(t, dbPath, "manager_config_v1"); after != before {
-		t.Fatal("conflicting import overwrote manager_config_v1")
+	requireRawSettingEncrypted(t, dbPath, "manager_config_v1")
+	stored, _ := loadProtectedConnections(t, dbPath, dataKeyPath)
+	if stored.CPAConnection.ManagementKey != testCPAManagementKey {
+		t.Fatalf("conflicting import changed manager connection: %#v", stored.CPAConnection)
 	}
 }
 
@@ -696,6 +697,10 @@ func TestRunRejectsConflictingSetupWhenManagerPartial(t *testing.T) {
 	if strings.Contains(err.Error(), "different-key") || strings.Contains(stderr.String(), "different-key") {
 		t.Fatalf("conflict error leaked the stored key: %v %s", err, stderr.String())
 	}
+	requireRawSettingEncrypted(t, dbPath, "setup")
+	if got := rawSettingValue(t, dbPath, "setup"); strings.Contains(got, "different-key") {
+		t.Fatalf("rejected import retained plaintext setup key: %s", got)
+	}
 }
 
 func TestRunRejectsPartialManagerURLConflict(t *testing.T) {
@@ -761,7 +766,8 @@ func TestRunRejectsSetupOnlyConflictingConnection(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "legacy setup CPA connection conflicts") {
 		t.Fatalf("err=%v", err)
 	}
-	if got := rawSettingValue(t, dbPath, "setup"); !strings.Contains(got, "different-key") {
-		t.Fatalf("rejected import rewrote the legacy setup row: %s", got)
+	requireRawSettingEncrypted(t, dbPath, "setup")
+	if got := rawSettingValue(t, dbPath, "setup"); strings.Contains(got, "different-key") {
+		t.Fatalf("rejected import retained plaintext setup key: %s", got)
 	}
 }

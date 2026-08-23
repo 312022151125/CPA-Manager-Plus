@@ -8,6 +8,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
 	collectorservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
@@ -280,6 +281,143 @@ func SetupFromManagerConfig(cfg store.ManagerConfig) store.Setup {
 	}
 }
 
+// LegacyConnectionAuthority identifies which historical row, if any, is
+// authoritative for a persisted CPA connection. It deliberately does not
+// perform secret storage or fill a connection from two partial rows.
+type LegacyConnectionAuthority string
+
+const (
+	LegacyConnectionAuthorityNone    LegacyConnectionAuthority = ""
+	LegacyConnectionAuthorityManager LegacyConnectionAuthority = "manager_config_v1"
+	LegacyConnectionAuthoritySetup   LegacyConnectionAuthority = "legacy setup"
+)
+
+type LegacyConnection struct {
+	BaseURL       string
+	ManagementKey string
+}
+
+type LegacyConnectionResolution struct {
+	Authority  LegacyConnectionAuthority
+	Connection LegacyConnection
+
+	manager LegacyConnection
+	setup   LegacyConnection
+}
+
+// ResolveLegacyConnectionAuthority is the single authority decision used by
+// bootstrap normalization and the offline connection importer. A complete
+// manager row wins over legacy setup, while a complete setup can repair a
+// partial manager row only when every manager side that exists matches it.
+// Two partial rows never get combined implicitly.
+func ResolveLegacyConnectionAuthority(
+	managerCfg store.ManagerConfig,
+	managerOK bool,
+	setup store.Setup,
+	setupOK bool,
+) (LegacyConnectionResolution, error) {
+	manager := LegacyConnection{}
+	if managerOK {
+		manager = LegacyConnection{
+			BaseURL:       cpa.NormalizeBaseURL(managerCfg.CPAConnection.CPABaseURL),
+			ManagementKey: strings.TrimSpace(managerCfg.CPAConnection.ManagementKey),
+		}
+	}
+	legacySetup := LegacyConnection{}
+	if setupOK {
+		legacySetup = LegacyConnection{
+			BaseURL:       cpa.NormalizeBaseURL(setup.CPAUpstreamURL),
+			ManagementKey: strings.TrimSpace(setup.ManagementKey),
+		}
+	}
+
+	resolution := LegacyConnectionResolution{
+		manager: manager,
+		setup:   legacySetup,
+	}
+	managerComplete := manager.BaseURL != "" && manager.ManagementKey != ""
+	setupComplete := legacySetup.BaseURL != "" && legacySetup.ManagementKey != ""
+	if managerComplete {
+		resolution.Authority = LegacyConnectionAuthorityManager
+		resolution.Connection = manager
+		return resolution, nil
+	}
+	if !setupComplete {
+		return resolution, nil
+	}
+	if manager.BaseURL != "" && manager.BaseURL != legacySetup.BaseURL {
+		return LegacyConnectionResolution{}, errors.New(
+			"legacy setup CPA connection conflicts with the present manager_config_v1 URL",
+		)
+	}
+	if manager.ManagementKey != "" && !security.EqualHMAC(manager.ManagementKey, legacySetup.ManagementKey) {
+		return LegacyConnectionResolution{}, errors.New(
+			"legacy setup CPA connection conflicts with the present manager_config_v1 key",
+		)
+	}
+	resolution.Authority = LegacyConnectionAuthoritySetup
+	resolution.Connection = legacySetup
+	return resolution, nil
+}
+
+// ValidateRequestedLegacyConnection compares an explicit import request with
+// the resolved persisted authority. When both historical rows are partial and
+// there is no authority, every present side is checked independently; the
+// helper never treats those sides as one inferred connection.
+func (r LegacyConnectionResolution) ValidateRequestedLegacyConnection(input LegacyConnection) error {
+	input.BaseURL = cpa.NormalizeBaseURL(input.BaseURL)
+	input.ManagementKey = strings.TrimSpace(input.ManagementKey)
+	if r.Authority != LegacyConnectionAuthorityNone {
+		if !legacyConnectionsEqual(r.Connection, input) {
+			return errors.New(string(r.Authority) + " CPA connection conflicts with the requested connection")
+		}
+		return nil
+	}
+	if r.manager.BaseURL != "" && r.manager.BaseURL != input.BaseURL {
+		return errors.New("manager_config_v1 contains a partial CPA connection whose URL conflicts with the requested connection")
+	}
+	if r.manager.ManagementKey != "" && !security.EqualHMAC(r.manager.ManagementKey, input.ManagementKey) {
+		return errors.New("manager_config_v1 contains a partial CPA connection whose key conflicts with the requested connection")
+	}
+	if r.setup.BaseURL != "" && r.setup.BaseURL != input.BaseURL {
+		return errors.New("legacy setup contains a partial CPA connection whose URL conflicts with the requested connection")
+	}
+	if r.setup.ManagementKey != "" && !security.EqualHMAC(r.setup.ManagementKey, input.ManagementKey) {
+		return errors.New("legacy setup contains a partial CPA connection whose key conflicts with the requested connection")
+	}
+	return nil
+}
+
+func legacyConnectionsEqual(left LegacyConnection, right LegacyConnection) bool {
+	return cpa.NormalizeBaseURL(left.BaseURL) == cpa.NormalizeBaseURL(right.BaseURL) &&
+		security.EqualHMAC(strings.TrimSpace(left.ManagementKey), strings.TrimSpace(right.ManagementKey))
+}
+
+// LegacyConnectionsEqual compares a resolved historical connection with an
+// explicit connection supplied by an offline importer. Keep this comparison
+// next to the authority resolver so callers cannot drift into a second set of
+// URL/key equality rules.
+func LegacyConnectionsEqual(left LegacyConnection, right LegacyConnection) bool {
+	return legacyConnectionsEqual(left, right)
+}
+
+// CanonicalSetupFromManagerConfig rebuilds the connection sides from the
+// manager authority while retaining non-connection collector fields already
+// present in the legacy row when the manager row did not have them.
+func CanonicalSetupFromManagerConfig(cfg store.ManagerConfig, legacySetup store.Setup, legacySetupPresent bool) store.Setup {
+	next := SetupFromManagerConfig(cfg)
+	if !legacySetupPresent {
+		return next
+	}
+	if strings.TrimSpace(next.Queue) == "" {
+		next.Queue = legacySetup.Queue
+	}
+	if strings.TrimSpace(next.PopSide) == "" {
+		next.PopSide = NormalizePopSide(legacySetup.PopSide, next.PopSide)
+	}
+	return next
+}
+
 // ConnectionComplete reports whether manager_config_v1 carries both sides of
 // the CPA connection. A complete manager config is the authority for the
 // active connection; bootstrap normalization and the offline importer must
@@ -296,11 +434,11 @@ func SetupConnectionComplete(setup store.Setup) bool {
 }
 
 // MergeLegacyCollectorSettings fills empty manager collector fields from a
-// usable legacy setup. It is used when the manager config is authoritative,
-// so legacy collector choices are preserved without overriding manager
-// settings that already carry a value.
-func MergeLegacyCollectorSettings(managerCfg *store.ManagerConfig, setup store.Setup, setupUsable bool) {
-	if managerCfg == nil || !setupUsable {
+// persisted legacy setup row. Connection completeness is intentionally not a
+// prerequisite: partial historical rows still contain non-connection fields
+// that must survive storage normalization.
+func MergeLegacyCollectorSettings(managerCfg *store.ManagerConfig, setup store.Setup, setupPresent bool) {
+	if managerCfg == nil || !setupPresent {
 		return
 	}
 	if strings.TrimSpace(managerCfg.Collector.Queue) == "" {

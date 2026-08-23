@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
@@ -19,6 +20,7 @@ const bootstrapStateKey = "bootstrap_state_v1"
 type Repository interface {
 	SaveManagerConfig(ctx context.Context, cfg model.ManagerConfig) error
 	SaveManagerConfigAndSetup(ctx context.Context, cfg model.ManagerConfig, setup model.Setup) error
+	NormalizeLegacyConnectionStorage(ctx context.Context, cfg model.ManagerConfig, managerPresent bool, setup model.Setup, setupPresent bool) error
 	LoadManagerConfig(ctx context.Context) (model.ManagerConfig, bool, error)
 	SaveAutomationSettings(ctx context.Context, settings model.AutomationSettings) (model.AutomationSettings, error)
 	LoadAutomationSettings(ctx context.Context) (model.AutomationSettings, bool, error)
@@ -90,6 +92,65 @@ func (r *repository) SaveManagerConfigAndSetup(ctx context.Context, cfg model.Ma
 	return tx.Commit()
 }
 
+// NormalizeLegacyConnectionStorage is migration-only persistence. Unlike the
+// public SaveSetup path it accepts incomplete historical rows, but it never
+// permits a non-empty management key to be written without a protector. Both
+// rows are written in one transaction so a failed normalization cannot leave
+// only one side rewritten.
+func (r *repository) NormalizeLegacyConnectionStorage(
+	ctx context.Context,
+	cfg model.ManagerConfig,
+	managerPresent bool,
+	setup model.Setup,
+	setupPresent bool,
+) error {
+	if !managerPresent && !setupPresent {
+		return nil
+	}
+	if r.protector == nil && ((managerPresent && strings.TrimSpace(cfg.CPAConnection.ManagementKey) != "") ||
+		(setupPresent && strings.TrimSpace(setup.ManagementKey) != "")) {
+		return errors.New("secret protector is required to normalize legacy CPA connection storage")
+	}
+
+	var managerData []byte
+	managerUpdatedAtMS := time.Now().UnixMilli()
+	if managerPresent {
+		var err error
+		managerData, err = r.marshalManagerConfig(cfg)
+		if err != nil {
+			return err
+		}
+		if cfg.UpdatedAtMS > 0 {
+			managerUpdatedAtMS = cfg.UpdatedAtMS
+		}
+	}
+	var setupData []byte
+	if setupPresent {
+		var err error
+		setupData, err = r.marshalLegacySetup(setup)
+		if err != nil {
+			return err
+		}
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if managerPresent {
+		if err := upsertSetting(ctx, tx, managerConfigKey, managerData, managerUpdatedAtMS); err != nil {
+			return err
+		}
+	}
+	if setupPresent {
+		if err := upsertSetting(ctx, tx, "setup", setupData, time.Now().UnixMilli()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (r *repository) LoadSetup(ctx context.Context) (model.Setup, bool, error) {
 	var raw string
 	err := r.db.QueryRowContext(ctx, `select value from settings where key = 'setup'`).Scan(&raw)
@@ -140,6 +201,14 @@ func (r *repository) marshalSetup(setup model.Setup) ([]byte, error) {
 	if setup.CPAUpstreamURL == "" || setup.ManagementKey == "" {
 		return nil, errors.New("cpaBaseUrl and managementKey are required")
 	}
+	protected, err := r.protectSetup(setup)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(protected)
+}
+
+func (r *repository) marshalLegacySetup(setup model.Setup) ([]byte, error) {
 	protected, err := r.protectSetup(setup)
 	if err != nil {
 		return nil, err

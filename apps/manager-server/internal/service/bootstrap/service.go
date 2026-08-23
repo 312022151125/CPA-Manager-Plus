@@ -2,7 +2,7 @@ package bootstrap
 
 import (
 	"context"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
@@ -130,64 +130,70 @@ func migrateLegacyConfig(ctx context.Context, cfg config.Config, st *store.Store
 	if err != nil {
 		return false, err
 	}
-	setupUsable := setupOK && managerconfig.SetupConnectionComplete(setup)
-	if managerOK {
-		if managerconfig.ConnectionComplete(managerCfg) {
-			// A complete manager_config_v1 is the current schema's authority.
-			// Rewrite legacy setup from it so stale/partial plaintext history is
-			// normalized and encrypted without changing the active connection.
-			managerconfig.MergeLegacyCollectorSettings(&managerCfg, setup, setupUsable)
-			if err := st.SaveManagerConfigAndSetup(ctx, managerCfg, managerconfig.SetupFromManagerConfig(managerCfg)); err != nil {
-				return false, err
-			}
-			return true, nil
-		}
-		if setupUsable {
-			// A complete legacy setup is the only unambiguous source when the
-			// manager config is missing either side of its connection.
-			mergeLegacySetupConnection(&managerCfg, setup)
-			if err := st.SaveManagerConfigAndSetup(ctx, managerCfg, managerconfig.SetupFromManagerConfig(managerCfg)); err != nil {
-				return false, err
-			}
-			return true, nil
-		}
-		if err := st.SaveManagerConfig(ctx, managerCfg); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-	if setupUsable {
-		managerCfg = managerConfigFromSetup(cfg, setup)
-		if err := st.SaveManagerConfigAndSetup(ctx, managerCfg, managerconfig.SetupFromManagerConfig(managerCfg)); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-	return false, nil
-}
 
-// mergeLegacySetupConnection repairs a partial manager config from the
-// complete legacy setup. It is called only when manager_config_v1 is missing a
-// URL or key, so the complete setup is the only usable connection source.
-func mergeLegacySetupConnection(managerCfg *store.ManagerConfig, setup store.Setup) {
-	if managerCfg == nil {
-		return
+	resolution, resolveErr := managerconfig.ResolveLegacyConnectionAuthority(
+		managerCfg,
+		managerOK,
+		setup,
+		setupOK,
+	)
+
+	// Secret-at-rest normalization is deliberately independent from authority
+	// resolution. Even a conflicting or otherwise unusable historical pair is
+	// rewritten through the migration-only transactional path before the
+	// authority error is returned. This prevents a failed migration from
+	// preserving plaintext keys while still refusing to guess a connection.
+	if resolveErr != nil {
+		if err := st.NormalizeLegacyConnectionStorage(ctx, managerCfg, managerOK, setup, setupOK); err != nil {
+			return false, fmt.Errorf("normalize legacy CPA connection storage: %w", err)
+		}
+		return false, resolveErr
 	}
 
-	managerURL := cpa.NormalizeBaseURL(managerCfg.CPAConnection.CPABaseURL)
-	managerKey := strings.TrimSpace(managerCfg.CPAConnection.ManagementKey)
-	setupURL := cpa.NormalizeBaseURL(setup.CPAUpstreamURL)
-	setupKey := strings.TrimSpace(setup.ManagementKey)
-	if setupURL == "" || setupKey == "" {
-		return
+	var normalizedManager store.ManagerConfig
+	managerPresent := managerOK
+	var normalizedSetup store.Setup
+	setupPresent := setupOK
+	switch resolution.Authority {
+	case managerconfig.LegacyConnectionAuthorityManager:
+		// The complete manager row is authoritative. A stale or partial setup
+		// is canonicalized from it, while its collector fields are retained.
+		normalizedManager = managerCfg
+		managerconfig.MergeLegacyCollectorSettings(&normalizedManager, setup, setupOK)
+		normalizedSetup = managerconfig.CanonicalSetupFromManagerConfig(normalizedManager, setup, setupOK)
+		setupPresent = true
+	case managerconfig.LegacyConnectionAuthoritySetup:
+		// A complete setup can repair a partial manager only after the shared
+		// resolver has confirmed every existing manager side matches it.
+		if !managerOK {
+			normalizedManager = managerConfigFromSetup(cfg, setup)
+		} else {
+			normalizedManager = managerCfg
+			normalizedManager.CPAConnection.CPABaseURL = resolution.Connection.BaseURL
+			normalizedManager.CPAConnection.ManagementKey = resolution.Connection.ManagementKey
+			managerconfig.MergeLegacyCollectorSettings(&normalizedManager, setup, setupOK)
+		}
+		managerPresent = true
+		normalizedSetup = managerconfig.CanonicalSetupFromManagerConfig(normalizedManager, setup, setupOK)
+		setupPresent = true
+	default:
+		// No complete authority exists. Preserve each partial historical row
+		// independently; in particular, never combine a manager URL with a
+		// setup-only key during bootstrap.
+		normalizedManager = managerCfg
+		normalizedSetup = setup
 	}
 
-	if managerURL == "" || managerKey == "" {
-		managerCfg.CPAConnection.CPABaseURL = setupURL
-		managerCfg.CPAConnection.ManagementKey = setupKey
+	if err := st.NormalizeLegacyConnectionStorage(
+		ctx,
+		normalizedManager,
+		managerPresent,
+		normalizedSetup,
+		setupPresent,
+	); err != nil {
+		return false, fmt.Errorf("normalize legacy CPA connection storage: %w", err)
 	}
-
-	managerconfig.MergeLegacyCollectorSettings(managerCfg, setup, true)
+	return managerPresent || setupPresent, nil
 }
 
 func managerConfigFromSetup(cfg config.Config, setup store.Setup) store.ManagerConfig {

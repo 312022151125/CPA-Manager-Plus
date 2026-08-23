@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -214,6 +215,205 @@ func TestMigrateLegacySetupKeepsCompleteManagerConfigAsAuthority(t *testing.T) {
 	}
 }
 
+func TestMigrateLegacyPartialConnectionRowsNormalizeSecretsWithoutCombiningRows(t *testing.T) {
+	const (
+		urlA = "http://cpa-a.local:8317"
+		keyA = "partial-key-a"
+		keyB = "partial-key-b"
+	)
+	tests := []struct {
+		name           string
+		manager        *store.ManagerConfig
+		setup          *store.Setup
+		wantManager    bool
+		wantSetup      bool
+		wantManagerURL string
+		wantManagerKey string
+		wantSetupURL   string
+		wantSetupKey   string
+	}{
+		{
+			name: "manager URL only and setup key only stay separate",
+			manager: &store.ManagerConfig{CPAConnection: store.ManagerCPAConnectionConfig{
+				CPABaseURL: urlA,
+			}},
+			setup:          &store.Setup{ManagementKey: keyA},
+			wantManager:    true,
+			wantSetup:      true,
+			wantManagerURL: urlA,
+			wantSetupKey:   keyA,
+		},
+		{
+			name:         "setup key only is encrypted without creating manager connection",
+			setup:        &store.Setup{ManagementKey: keyA},
+			wantSetup:    true,
+			wantSetupKey: keyA,
+		},
+		{
+			name: "manager key only is encrypted without creating setup connection",
+			manager: &store.ManagerConfig{CPAConnection: store.ManagerCPAConnectionConfig{
+				ManagementKey: keyA,
+			}},
+			wantManager:    true,
+			wantManagerKey: keyA,
+		},
+		{
+			name: "different partial keys are both normalized without guessing authority",
+			manager: &store.ManagerConfig{CPAConnection: store.ManagerCPAConnectionConfig{
+				ManagementKey: keyA,
+			}},
+			setup:          &store.Setup{ManagementKey: keyB},
+			wantManager:    true,
+			wantSetup:      true,
+			wantManagerKey: keyA,
+			wantSetupKey:   keyB,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "usage.sqlite")
+			legacyStore, err := store.Open(dbPath)
+			if err != nil {
+				t.Fatalf("open legacy store: %v", err)
+			}
+			if tt.manager != nil {
+				if err := legacyStore.SaveManagerConfig(context.Background(), *tt.manager); err != nil {
+					_ = legacyStore.Close()
+					t.Fatalf("save manager config: %v", err)
+				}
+			}
+			if err := legacyStore.Close(); err != nil {
+				t.Fatalf("close legacy store: %v", err)
+			}
+			if tt.setup != nil {
+				data, err := json.Marshal(tt.setup)
+				if err != nil {
+					t.Fatalf("marshal setup: %v", err)
+				}
+				if err := writeRawSetting(dbPath, "setup", string(data)); err != nil {
+					t.Fatalf("write partial setup: %v", err)
+				}
+			}
+
+			protector, err := security.NewProtector([]byte("0123456789abcdef0123456789abcdef"))
+			if err != nil {
+				t.Fatalf("create protector: %v", err)
+			}
+			st, err := store.Open(dbPath, protector)
+			if err != nil {
+				t.Fatalf("open protected store: %v", err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			migrated, err := migrateLegacyConfig(context.Background(), config.Config{}, st)
+			if err != nil || migrated != (tt.wantManager || tt.wantSetup) {
+				t.Fatalf("migration result migrated=%v err=%v", migrated, err)
+			}
+
+			managerCfg, managerOK, err := st.LoadManagerConfig(context.Background())
+			if err != nil {
+				t.Fatalf("load manager config: %v", err)
+			}
+			if managerOK != tt.wantManager {
+				t.Fatalf("manager presence=%v want %v", managerOK, tt.wantManager)
+			}
+			if managerOK && (managerCfg.CPAConnection.CPABaseURL != tt.wantManagerURL ||
+				managerCfg.CPAConnection.ManagementKey != tt.wantManagerKey) {
+				t.Fatalf("manager connection=%#v want URL=%q key=%q",
+					managerCfg.CPAConnection, tt.wantManagerURL, tt.wantManagerKey)
+			}
+			setup, setupOK, err := st.LoadSetup(context.Background())
+			if err != nil {
+				t.Fatalf("load setup: %v", err)
+			}
+			if setupOK != tt.wantSetup {
+				t.Fatalf("setup presence=%v want %v", setupOK, tt.wantSetup)
+			}
+			if setupOK && (setup.CPAUpstreamURL != tt.wantSetupURL ||
+				setup.ManagementKey != tt.wantSetupKey) {
+				t.Fatalf("setup=%#v want URL=%q key=%q",
+					setup, tt.wantSetupURL, tt.wantSetupKey)
+			}
+			for _, key := range []string{"setup", "manager_config_v1"} {
+				raw, err := rawSettingValueIfPresent(dbPath, key)
+				if err != nil {
+					t.Fatalf("read raw %s: %v", key, err)
+				}
+				if strings.Contains(raw, keyA) || strings.Contains(raw, keyB) {
+					t.Fatalf("%s retained plaintext secret: %s", key, raw)
+				}
+			}
+			if tt.wantSetup {
+				raw := rawBootstrapSettingValue(t, dbPath, "setup")
+				if !strings.Contains(raw, "enc:v1:") {
+					t.Fatalf("setup secret is not encrypted: %s", raw)
+				}
+			}
+			if tt.wantManager && tt.wantManagerKey != "" {
+				raw := rawBootstrapSettingValue(t, dbPath, "manager_config_v1")
+				if !strings.Contains(raw, "enc:v1:") {
+					t.Fatalf("manager secret is not encrypted: %s", raw)
+				}
+			}
+		})
+	}
+}
+
+func TestRunDoesNotAdvanceMigrationVersionForPartialAuthorityConflict(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "usage.sqlite")
+	legacyStore, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := legacyStore.SaveManagerConfig(context.Background(), store.ManagerConfig{
+		CPAConnection: store.ManagerCPAConnectionConfig{CPABaseURL: "http://manager-a.local:8317"},
+	}); err != nil {
+		_ = legacyStore.Close()
+		t.Fatalf("save partial manager config: %v", err)
+	}
+	if err := writeRawSetting(dbPath, "setup",
+		"{\"cpaBaseUrl\":\"http://manager-b.local:8317\",\"managementKey\":\"setup-key\"}"); err != nil {
+		_ = legacyStore.Close()
+		t.Fatalf("write conflicting setup: %v", err)
+	}
+	if err := upsertRawBootstrapState(t, dbPath,
+		"{\"version\":1,\"migratedLegacy\":true,\"connectionStorageMigrationVersion\":1}"); err != nil {
+		_ = legacyStore.Close()
+		t.Fatalf("write old bootstrap state: %v", err)
+	}
+	if err := legacyStore.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	protector, err := security.NewProtector([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("create protector: %v", err)
+	}
+	st, err := store.Open(dbPath, protector)
+	if err != nil {
+		t.Fatalf("open protected store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if _, err := Run(context.Background(), config.Config{}, st, false); err == nil {
+		t.Fatal("bootstrap accepted conflicting partial authority")
+	}
+	state, ok, err := st.LoadBootstrapState(context.Background())
+	if err != nil {
+		t.Fatalf("load bootstrap state: %v", err)
+	}
+	if !ok || state.ConnectionStorageMigrationVersion != 1 {
+		t.Fatalf("migration version advanced after conflict: ok=%v state=%#v", ok, state)
+	}
+	setupRaw := rawBootstrapSettingValue(t, dbPath, "setup")
+	if strings.Contains(setupRaw, "setup-key") || !strings.Contains(setupRaw, "enc:v1:") {
+		t.Fatalf("setup was not normalized before conflict abort: %s", setupRaw)
+	}
+	managerRaw := rawBootstrapSettingValue(t, dbPath, "manager_config_v1")
+	if strings.Contains(managerRaw, "setup-key") {
+		t.Fatalf("manager retained setup plaintext secret: %s", managerRaw)
+	}
+}
+
 func rawBootstrapSettingValue(t testing.TB, dbPath string, key string) string {
 	t.Helper()
 	db, err := sql.Open("sqlite", dbPath)
@@ -227,6 +427,31 @@ func rawBootstrapSettingValue(t testing.TB, dbPath string, key string) string {
 		t.Fatalf("load raw setting %s: %v", key, err)
 	}
 	return raw
+}
+
+func rawSettingValueIfPresent(dbPath string, key string) (string, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	var raw string
+	err = db.QueryRow("select value from settings where key = ?", key).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return raw, err
+}
+
+func writeRawSetting(dbPath string, key string, value string) error {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec("insert into settings (key, value, updated_at_ms) values (?, ?, 1) "+
+		"on conflict(key) do update set value = excluded.value", key, value)
+	return err
 }
 
 func TestRunNormalizesLegacyConflictDespiteOldMigratedLegacyFlag(t *testing.T) {
