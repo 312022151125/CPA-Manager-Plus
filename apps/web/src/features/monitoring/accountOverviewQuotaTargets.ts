@@ -12,13 +12,9 @@ import {
 } from '@/utils/quota';
 import type { MonitoringAccountAuthState } from './accountOverviewState';
 import type { MonitoringAccountRow } from './hooks/useMonitoringData';
+import { normalizeMonitoringProvider } from './model/accountIdentity';
 
-export type MonitoringAccountQuotaProvider =
-  | 'antigravity'
-  | 'claude'
-  | 'codex'
-  | 'kimi'
-  | 'xai';
+export type MonitoringAccountQuotaProvider = 'antigravity' | 'claude' | 'codex' | 'kimi' | 'xai';
 
 export type MonitoringAccountQuotaTarget = {
   key: string;
@@ -67,6 +63,7 @@ const resolveActiveQuotaProvidersForRow = (
 ): Set<MonitoringAccountQuotaProvider> => {
   const activeProviders = new Set<MonitoringAccountQuotaProvider>();
   if (!authState) return activeProviders;
+  const rowProvider = normalizeMonitoringProvider(row.provider);
 
   const rowAuthIndices = new Set(
     row.authIndices
@@ -80,13 +77,13 @@ const resolveActiveQuotaProvidersForRow = (
     if (!authIndex || !rowAuthIndices.has(authIndex)) return;
 
     const provider = resolveMonitoringAccountQuotaProvider(file);
-    if (provider) activeProviders.add(provider);
+    if (provider && (!rowProvider || provider === rowProvider)) activeProviders.add(provider);
   });
 
   return activeProviders;
 };
 
-export const buildMonitoringAccountQuotaTargetsByAccount = (
+export const buildMonitoringAccountQuotaTargetsByRowId = (
   rows: MonitoringAccountRow[],
   authStateByRowId: Map<string, MonitoringAccountAuthState>
 ) =>
@@ -118,7 +115,7 @@ export const buildMonitoringAccountQuotaTargetsByAccount = (
       });
 
       return [
-        row.account,
+        row.id,
         Array.from(bucket.values()).sort(
           (left, right) =>
             left.authLabel.localeCompare(right.authLabel) ||

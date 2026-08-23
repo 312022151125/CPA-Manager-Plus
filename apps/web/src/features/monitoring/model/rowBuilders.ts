@@ -9,6 +9,7 @@ import {
   buildMonitoringAccountFilterValue,
   parseMonitoringAccountFilterValue,
 } from './analyticsAdapters';
+import { buildMonitoringAccountRowId, normalizeMonitoringProvider } from './accountIdentity';
 import { getRangeBounds } from './range';
 import type {
   MonitoringAccountRow,
@@ -317,10 +318,13 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
     {
       id: string;
       account: string;
+      filterAccount: string;
+      provider: string;
       accountMasked: string;
       authLabels: Set<string>;
       authIndices: Set<string>;
       sourceKeys: Set<string>;
+      sourceHashes: Set<string>;
       apiKeyHashes: Set<string>;
       channels: Set<string>;
       modelMap: Map<
@@ -358,14 +362,25 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
   >();
 
   rows.forEach((row) => {
-    const accountKey = row.account || row.authLabel || row.source;
+    const provider = normalizeMonitoringProvider(row.providerIdentity ?? row.provider);
+    const accountKey = buildMonitoringAccountRowId({
+      provider,
+      account: row.accountIdentity ?? row.account,
+      authLabel: row.authLabelIdentity ?? row.authLabel,
+      source: row.sourceIdentity ?? row.source,
+      authIndex: row.authIndexIdentity ?? row.authIndex,
+      sourceHash: row.sourceHashIdentity,
+    });
     const existing = grouped.get(accountKey) ?? {
       id: accountKey,
       account: row.account,
+      filterAccount: row.accountIdentity ?? row.account,
+      provider,
       accountMasked: row.accountMasked,
       authLabels: new Set<string>(),
       authIndices: new Set<string>(),
       sourceKeys: new Set<string>(),
+      sourceHashes: new Set<string>(),
       apiKeyHashes: new Set<string>(),
       channels: new Set<string>(),
       modelMap: new Map(),
@@ -387,10 +402,11 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
 
     existing.rows.push(row);
     existing.authLabels.add(row.authLabel);
-    existing.authIndices.add(row.authIndex);
+    existing.authIndices.add(row.authIndexIdentity ?? row.authIndex);
     if (row.sourceKey) {
       existing.sourceKeys.add(row.sourceKey);
     }
+    existing.sourceHashes.add(row.sourceHashIdentity ?? '');
     existing.apiKeyHashes.add(row.apiKeyHash);
     existing.channels.add(row.channel);
     existing.totalCalls += 1;
@@ -446,14 +462,17 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
       const channels = Array.from(item.channels).sort();
       const authIndices = Array.from(item.authIndices).sort();
       const sourceKeys = Array.from(item.sourceKeys).sort();
+      const sourceHashes = Array.from(item.sourceHashes).sort();
       const apiKeyHashes = Array.from(item.apiKeyHashes).sort();
       return {
         id: item.id,
         account: item.account,
+        provider: item.provider,
         filterValue:
           buildMonitoringAccountFilterValue({
-            account: item.account,
+            account: item.filterAccount,
             authIndices,
+            sourceHashes,
             apiKeyHashes,
           }) || item.account,
         displayAccount: resolveAccountDisplayName(item.account, channels),

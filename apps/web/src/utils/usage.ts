@@ -177,6 +177,8 @@ export interface UsageResponseHeaderMetadata {
 export interface UsageDetail {
   timestamp: string;
   source: string;
+  source_hash?: string;
+  sourceHash?: string;
   auth_index: string | number | null;
   api_key_hash?: string;
   apiKeyHash?: string;

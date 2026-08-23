@@ -39,6 +39,22 @@ const buildRows = (
   );
 
 describe('buildEventRows', () => {
+  it('preserves persisted account identity fields before display enrichment', () => {
+    const [row] = buildRows({
+      account_snapshot: '',
+      auth_label_snapshot: 'Shared Label',
+      auth_provider_snapshot: '',
+      provider: 'antigravity',
+    });
+
+    expect(row.accountIdentity).toBe('');
+    expect(row.authLabelIdentity).toBe('Shared Label');
+    expect(row.authIndexIdentity).toBe('auth-1');
+    expect(row.sourceIdentity).toBe('alice@example.com');
+    expect(row.providerIdentity).toBe('antigravity');
+    expect(row.provider).toBe('antigravity');
+  });
+
   it('calculates tokens per second from total latency', () => {
     const [row] = buildRows();
 

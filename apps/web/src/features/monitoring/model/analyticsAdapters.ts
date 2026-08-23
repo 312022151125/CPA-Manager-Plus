@@ -33,6 +33,7 @@ import {
   readString,
 } from './base';
 import { sanitizeApiKeyDisplayText, type ApiKeyDisplayInfo } from './apiKeys';
+import { buildMonitoringAccountRowId, normalizeMonitoringProvider } from './accountIdentity';
 import { buildDayLabel, buildHourLabel, buildLocalDayKey, padNumber } from './range';
 import { buildMonitoringSourceDisplay } from './sourceDisplay';
 import type {
@@ -609,6 +610,9 @@ export const buildAccountRowsFromAnalytics = (
         { authMetaMap, authFileMap, sourceInfoMap, channelByAuthIndex }
       );
       const account = firstReadableValue(display.account, row.account_snapshot, row.id);
+      const provider = normalizeMonitoringProvider(
+        firstReadableValue(row.auth_provider_snapshot, display.provider)
+      );
       const displayAccount = firstReadableValue(display.primary, account);
       const authLabels = uniqueReadableValues([
         ...authMetas.map((meta) => meta.label),
@@ -624,8 +628,18 @@ export const buildAccountRowsFromAnalytics = (
       );
 
       return {
-        id: account || row.id,
+        id:
+          firstReadableValue(row.id) ||
+          buildMonitoringAccountRowId({
+            provider,
+            account: row.account_snapshot,
+            authLabel: row.auth_label_snapshot,
+            source: row.sources?.[0],
+            authIndex,
+            sourceHash: row.source_hashes?.[0],
+          }),
         account,
+        provider,
         displayAccount,
         accountMasked: display.accountMasked || maskEmailLike(account),
         authLabels,
@@ -780,6 +794,7 @@ export const buildFilterOptionsFromAnalytics = (
       (account): MonitoringAccountRow => ({
         id: `selector:${normalizeFilterText(account)}`,
         account,
+        provider: '',
         filterValue: buildMonitoringAccountFilterValue({ account }) || account,
         displayAccount: account,
         accountMasked: maskEmailLike(account),
@@ -987,10 +1002,12 @@ export const buildUsageDetailsFromAnalyticsEvents = (
 ): UsageDetailWithEndpoint[] =>
   items.map((item) => {
     const requestedModel = readString(item.requested_model) || item.model;
-    const analyticsModel = readString(item.analytics_model) || normalizeAnalyticsModel(requestedModel);
+    const analyticsModel =
+      readString(item.analytics_model) || normalizeAnalyticsModel(requestedModel);
     return {
       timestamp: new Date(item.timestamp_ms).toISOString(),
       source: readString(item.source),
+      source_hash: readString(item.source_hash),
       auth_index: item.auth_index || null,
       api_key_hash: readString(item.api_key_hash),
       account_snapshot: readString(item.account_snapshot),
