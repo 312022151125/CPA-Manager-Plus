@@ -208,6 +208,49 @@ func TestRunRestoreMidCommitFailureRestoresMissingSidecarState(t *testing.T) {
 	requireNoRestoreTempFiles(t, dataDir)
 }
 
+func TestRunRestoreCleanupFailureKeepsCommittedFileSetAndRetainsArtifact(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dataDir, "data.key")
+	snapshotDir := filepath.Join(dataDir, ".cpamp-manager-snapshot-test")
+	writeTestFile(t, dbPath, "database-before", 0o600)
+	writeTestFile(t, dbPath+"-wal", "wal-before", 0o600)
+	writeTestFile(t, dbPath+"-shm", "shm-before", 0o600)
+	writeTestFile(t, dbPath+"-journal", "journal-before", 0o600)
+	writeTestFile(t, dataKeyPath, "key-before", 0o600)
+	runSnapshotCommand(t, "create", dbPath, dataKeyPath, snapshotDir)
+
+	writeTestFile(t, dbPath, "database-after", 0o600)
+	writeTestFile(t, dbPath+"-wal", "wal-after", 0o600)
+	writeTestFile(t, dbPath+"-shm", "shm-after", 0o600)
+	writeTestFile(t, dbPath+"-journal", "journal-after", 0o600)
+	writeTestFile(t, dataKeyPath, "key-after", 0o600)
+	previous := removeFn
+	removeFn = func(string) error {
+		return errors.New("injected rollback-slot cleanup failure")
+	}
+	t.Cleanup(func() { removeFn = previous })
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := Run(context.Background(), snapshotArgs("restore", dbPath, dataKeyPath, snapshotDir), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("restore returned business error after cleanup failure: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "rollback slot") || !strings.Contains(stderr.String(), "retained") {
+		t.Fatalf("cleanup warning = %q", stderr.String())
+	}
+	requireTestFile(t, dbPath, "database-before")
+	requireTestFile(t, dbPath+"-wal", "wal-before")
+	requireTestFile(t, dbPath+"-shm", "shm-before")
+	requireTestFile(t, dbPath+"-journal", "journal-before")
+	requireTestFile(t, dataKeyPath, "key-before")
+	matches, err := filepath.Glob(filepath.Join(dataDir, ".cpamp-restore-rollback-*"))
+	if err != nil || len(matches) == 0 {
+		t.Fatalf("rollback cleanup artifacts were not retained: matches=%v err=%v", matches, err)
+	}
+}
+
 func TestRunRestoreRejectsSymlinkedTargetBeforeStaging(t *testing.T) {
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "usage.sqlite")

@@ -69,10 +69,16 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 		_, _ = fmt.Fprintf(stdout, "Manager data snapshot created at %s.\n", opts.SnapshotDir)
 	case "restore":
+		var outcome restoreOutcome
 		if err := withDatabaseLock(opts.DBPath, func(dbPath string) error {
-			return restore(ctx, dbPath, opts.DataKeyPath, opts.SnapshotDir)
+			var err error
+			outcome, err = restoreWithWarnings(ctx, dbPath, opts.DataKeyPath, opts.SnapshotDir)
+			return err
 		}); err != nil {
 			return err
+		}
+		for _, warning := range outcome.cleanupWarnings {
+			_, _ = fmt.Fprintf(stderr, "Warning: %s\n", warning)
 		}
 		_, _ = fmt.Fprintf(stdout, "Manager data restored from %s.\n", opts.SnapshotDir)
 	case "delete":
@@ -210,15 +216,37 @@ func snapshotOne(ctx context.Context, source string, target string) (manifestEnt
 // injected forward failure still rolls back with real filesystem calls.
 var renameFn = os.Rename
 
+// removeFn is used only for post-commit rollback-slot cleanup. It is a test
+// seam for proving that a cleanup failure cannot turn a committed restore into
+// a business failure. Required rollback/removal paths continue to use os.Remove
+// directly so fault injection cannot weaken recovery.
+var removeFn = os.Remove
+
+type restoreOutcome struct {
+	cleanupWarnings []string
+}
+
 // restore swaps the whole Manager file-set (database, sidecars, data.key) as
 // one logical transaction. A usage.sqlite restored without its matching
 // data.key is unrecoverable, so the commit phase first moves every live file
 // into a rollback slot next to it; any later failure reverses the whole set
 // instead of leaving a half-restored state behind.
+// restore keeps the historical package-local helper signature for callers
+// that do not need to capture warnings. The command path uses
+// restoreWithWarnings so it can report retained cleanup artifacts on stderr.
 func restore(ctx context.Context, dbPath string, dataKeyPath string, snapshotDir string) error {
+	outcome, err := restoreWithWarnings(ctx, dbPath, dataKeyPath, snapshotDir)
+	for _, warning := range outcome.cleanupWarnings {
+		_, _ = fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+	}
+	return err
+}
+
+func restoreWithWarnings(ctx context.Context, dbPath string, dataKeyPath string, snapshotDir string) (restoreOutcome, error) {
+	var outcome restoreOutcome
 	absSnapshotDir, m, err := loadManifest(snapshotDir)
 	if err != nil {
-		return err
+		return outcome, err
 	}
 
 	type restoreItem struct {
@@ -238,7 +266,7 @@ func restore(ctx context.Context, dbPath string, dataKeyPath string, snapshotDir
 		entry := m.Files[item.Name]
 		target := sourcePath(item, dbPath, dataKeyPath)
 		if err := ensureRestorableTarget(target); err != nil {
-			return err
+			return outcome, err
 		}
 		if !entry.Existed {
 			items = append(items, restoreItem{name: item.Name, target: target})
@@ -247,7 +275,7 @@ func restore(ctx context.Context, dbPath string, dataKeyPath string, snapshotDir
 		source := filepath.Join(absSnapshotDir, item.Name)
 		stagedPath, err := stageRestoreFile(ctx, source, target, entry)
 		if err != nil {
-			return err
+			return outcome, err
 		}
 		staged[target] = stagedPath
 		items = append(items, restoreItem{name: item.Name, existed: true, target: target, staged: stagedPath})
@@ -285,21 +313,21 @@ func restore(ctx context.Context, dbPath string, dataKeyPath string, snapshotDir
 		}
 		if err != nil {
 			_ = rollbackRestore(nil)
-			return fmt.Errorf("inspect live file %s: %w", item.target, err)
+			return outcome, fmt.Errorf("inspect live file %s: %w", item.target, err)
 		}
 		if !info.Mode().IsRegular() {
 			_ = rollbackRestore(nil)
-			return fmt.Errorf("live file %s is not a regular file", item.target)
+			return outcome, fmt.Errorf("live file %s is not a regular file", item.target)
 		}
 		slot, err := reserveRollbackSlot(item.target)
 		if err != nil {
 			_ = rollbackRestore(nil)
-			return err
+			return outcome, err
 		}
 		if err := renameFn(item.target, slot); err != nil {
 			_ = os.Remove(slot)
 			_ = rollbackRestore(nil)
-			return fmt.Errorf("move live file %s aside: %w", item.target, err)
+			return outcome, fmt.Errorf("move live file %s aside: %w", item.target, err)
 		}
 		slots = append(slots, rollbackSlot{target: item.target, slot: slot})
 	}
@@ -314,25 +342,29 @@ func restore(ctx context.Context, dbPath string, dataKeyPath string, snapshotDir
 		}
 		if err := renameFn(item.staged, item.target); err != nil {
 			if rollbackErr := rollbackRestore(restored); rollbackErr != nil {
-				return fmt.Errorf("restore %s: %v; rollback incomplete, original live files may remain in rollback slots: %v", item.target, err, rollbackErr)
+				return outcome, fmt.Errorf("restore %s: %v; rollback incomplete, original live files may remain in rollback slots: %v", item.target, err, rollbackErr)
 			}
-			return fmt.Errorf("restore %s: %w (live files were restored to their pre-restore state)", item.target, err)
+			return outcome, fmt.Errorf("restore %s: %w (live files were restored to their pre-restore state)", item.target, err)
 		}
 		restored = append(restored, item.target)
 		delete(staged, item.target)
 	}
 
-	for _, slot := range slots {
-		if err := os.Remove(slot.slot); err != nil {
-			return fmt.Errorf("cleanup rollback slot %s: %w", slot.slot, err)
-		}
-	}
 	targets := make([]string, 0, len(items))
 	for _, item := range items {
 		targets = append(targets, item.target)
 	}
+	// The file-set is committed once every target has switched and its parent
+	// directory has been synced. Rollback slots are now cleanup artifacts; a
+	// failure to remove one must not make callers undo an already-valid restore.
 	syncTargetDirs(targets)
-	return nil
+	for _, slot := range slots {
+		if err := removeFn(slot.slot); err != nil && !os.IsNotExist(err) {
+			outcome.cleanupWarnings = append(outcome.cleanupWarnings,
+				fmt.Sprintf("cleanup rollback slot %s failed: %v; the restore committed and the artifact was retained", slot.slot, err))
+		}
+	}
+	return outcome, nil
 }
 
 // ensureRestorableTarget rejects symlinked or special restore targets before
