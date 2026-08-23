@@ -10899,6 +10899,41 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.showConfirmation).toHaveBeenCalledTimes(1);
   });
 
+  it('releases the reset lock when confirmation is cancelled so the credential can retry', async () => {
+    mocks.quotaState.codexQuota = {
+      'codex.json': {
+        status: 'success',
+        authFileKey: 'codex.json::auth-1',
+        windows: [],
+        rateLimitResetCreditsAvailableCount: 1,
+      },
+    };
+    const fetchSpy = vi
+      .spyOn(CODEX_CONFIG, 'fetchQuota')
+      .mockResolvedValue(makeCodexQuotaData(1, [makeResetCredit('fresh-credit-1')]));
+
+    const renderer = await renderAccountsPage();
+    await openCodexQuotaTab(renderer, 'codex.json');
+    await act(async () => {
+      renderer.root.findByProps({ 'data-quota-reset-action': 'true' }).props.onClick();
+    });
+    await flushPromises();
+    const firstConfirmation = mocks.showConfirmation.mock.calls[0]?.[0] as {
+      onCancel: () => void;
+    };
+    await act(async () => {
+      firstConfirmation.onCancel();
+    });
+    await act(async () => {
+      renderer.root.findByProps({ 'data-quota-reset-action': 'true' }).props.onClick();
+    });
+    await flushPromises();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(mocks.showConfirmation).toHaveBeenCalledTimes(2);
+    expect(mocks.consumeResetCredit).not.toHaveBeenCalled();
+  });
+
   it('consumes exactly once when the confirmation callback fires twice', async () => {
     mocks.quotaState.codexQuota = {
       'codex.json': {
