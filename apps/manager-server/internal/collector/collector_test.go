@@ -132,7 +132,7 @@ func TestManagerEnrichesMissingProjectSnapshotWithoutOverwritingAccount(t *testi
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"files":[{"auth_index":"auth-1","account":"alice@example.com","label":"Alice","name":"alice.json","provider":"codex","project_id":"vertex-project-42"}]}`))
+			_, _ = w.Write([]byte(`{"files":[{"auth_index":"auth-1","account":"alice@example.com","label":"Alice","name":"alice.json","provider":"vertex","project_id":"vertex-project-42"}]}`))
 			return
 		}
 		if r.URL.Path != "/v0/management/usage-queue" {
@@ -191,6 +191,46 @@ func TestManagerEnrichesMissingProjectSnapshotWithoutOverwritingAccount(t *testi
 	}
 	if events[0].AuthLabelSnapshot != "Alice" {
 		t.Fatalf("auth label snapshot = %q", events[0].AuthLabelSnapshot)
+	}
+}
+
+func TestManagerEnrichesCodexProjectSnapshotFromAccountID(t *testing.T) {
+	var calls int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v0/management/auth-files" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"files":[{"auth_index":"auth-1","account":"same@example.com","name":"codex.json","provider":"codex","project_id":"unsafe-generic-project","id_token":{"chatgpt_account_id":"account-a"}}]}`))
+			return
+		}
+		if r.URL.Path != "/v0/management/usage-queue" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if atomic.AddInt32(&calls, 1) == 1 {
+			_, _ = w.Write([]byte(`[{"timestamp":"2026-05-06T00:00:00Z","model":"gpt-test","auth_index":"auth-1","input_tokens":10,"output_tokens":5}]`))
+			return
+		}
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := newTestStore(t)
+	manager := NewManager(testConfig(t, "auto"), db)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx, RuntimeConfig{CPAUpstreamURL: upstream.URL, ManagementKey: "management-key"})
+
+	waitFor(t, func() bool {
+		events, _, err := db.Counts(context.Background())
+		return err == nil && events == 1
+	})
+	events, err := db.RecentEvents(context.Background(), 10)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("recent events: len=%d err=%v", len(events), err)
+	}
+	if events[0].AuthProjectIDSnapshot != "account-a" {
+		t.Fatalf("codex account snapshot = %q, want account-a", events[0].AuthProjectIDSnapshot)
 	}
 }
 

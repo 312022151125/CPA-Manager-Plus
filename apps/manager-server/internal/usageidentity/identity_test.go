@@ -37,6 +37,49 @@ func TestAccountKeyRejectsMissingIdentity(t *testing.T) {
 	}
 }
 
+func TestAccountKeyKeepsCodexAccountAcrossMutableCredentialIdentity(t *testing.T) {
+	oldKey, ok := AccountKey(Fields{
+		AuthFileSnapshot:      "codex-a-free.json",
+		AuthIndex:             "auth-1",
+		AuthProviderSnapshot:  "codex",
+		AuthProjectIDSnapshot: "account-a",
+	})
+	if !ok {
+		t.Fatal("old key is invalid")
+	}
+	newKey, ok := AccountKey(Fields{
+		AuthFileSnapshot:      "codex-a-pro.json",
+		AuthIndex:             "auth-2",
+		AuthProviderSnapshot:  "codex",
+		AuthProjectIDSnapshot: "account-a",
+	})
+	if !ok {
+		t.Fatal("new key is invalid")
+	}
+	if oldKey != newKey {
+		t.Fatalf("same Codex account split across reauth: old=%q new=%q", oldKey, newKey)
+	}
+	legacyKey, ok := LegacyAccountKey(Fields{
+		AuthFileSnapshot:      "codex-a-pro.json",
+		AuthIndex:             "auth-2",
+		AuthProviderSnapshot:  "codex",
+		AuthProjectIDSnapshot: "account-a",
+	})
+	if !ok || legacyKey == newKey {
+		t.Fatalf("legacy exact credential key = %q, stable key = %q", legacyKey, newKey)
+	}
+	differentKey, ok := AccountKey(Fields{
+		AuthFileSnapshot:      "codex-b.json",
+		AuthIndex:             "auth-3",
+		AuthProviderSnapshot:  "codex",
+		AuthProjectIDSnapshot: "account-b",
+		AccountSnapshot:       "same@example.com",
+	})
+	if !ok || differentKey == oldKey {
+		t.Fatalf("different Codex account merged: old=%q different=%q", oldKey, differentKey)
+	}
+}
+
 func TestSQLAccountKeyExpressionMatchesGo(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -68,6 +111,17 @@ func TestSQLAccountKeyExpressionMatchesGo(t *testing.T) {
 				Source:                "legacy-source",
 			},
 			provider: "xai",
+		},
+		{
+			name: "codex stable account",
+			fields: Fields{
+				AuthFileSnapshot:      "codex-new.json",
+				AuthIndex:             "auth-new",
+				AuthProviderSnapshot:  "codex",
+				AuthProjectIDSnapshot: "account-a",
+				AccountSnapshot:       "same@example.com",
+			},
+			provider: "codex",
 		},
 		{
 			name: "legacy source file and project",
@@ -145,7 +199,7 @@ func TestSQLAccountKeyExpressionMatchesGo(t *testing.T) {
 }
 
 func TestPricingStructureRevisionIncludesIdentityFormat(t *testing.T) {
-	if got := PricingStructureRevision("price-revision"); got != "model-1:identity-2:price-revision" {
+	if got := PricingStructureRevision("price-revision"); got != "model-1:identity-3:price-revision" {
 		t.Fatalf("revision = %q", got)
 	}
 }

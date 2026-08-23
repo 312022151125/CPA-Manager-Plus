@@ -132,12 +132,15 @@ func (r *authSnapshotResolver) fetch(ctx context.Context, baseURL string, manage
 			readAuthFileString(file, "provider"),
 			readAuthFileString(file, "type"),
 		)
-		projectID := firstNonEmpty(
-			readAuthFileString(file, "project_id"),
-			readAuthFileString(file, "projectId"),
-			readAuthFileString(file, "gemini_virtual_project"),
-			readAuthFileString(file, "geminiVirtualProject"),
-		)
+		projectID := readCodexAccountID(file)
+		if !strings.EqualFold(provider, "codex") {
+			projectID = firstNonEmpty(
+				readAuthFileString(file, "project_id"),
+				readAuthFileString(file, "projectId"),
+				readAuthFileString(file, "gemini_virtual_project"),
+				readAuthFileString(file, "geminiVirtualProject"),
+			)
+		}
 		if account == "" {
 			account = firstNonEmpty(label, fileName)
 		}
@@ -166,6 +169,22 @@ func readAuthFileString(file map[string]any, keys ...string) string {
 		text := strings.TrimSpace(toString(value))
 		if text != "" {
 			return text
+		}
+	}
+	return ""
+}
+
+func readCodexAccountID(file map[string]any) string {
+	if accountID := readAuthFileString(file, "account_id", "accountId", "chatgpt_account_id", "chatgptAccountId"); accountID != "" {
+		return accountID
+	}
+	for _, key := range []string{"id_token", "idToken", "metadata", "attributes"} {
+		child, ok := file[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if accountID := readCodexAccountID(child); accountID != "" {
+			return accountID
 		}
 	}
 	return ""

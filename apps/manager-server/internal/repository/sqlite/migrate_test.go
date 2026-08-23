@@ -708,6 +708,8 @@ func TestUsageMonitoringModelFormatUpgradeRebuildsDerivedDataOnce(t *testing.T) 
 		wantRevision := usageidentity.ModelFormatVersion
 		if name == usageMonitoringStatsRollupName {
 			wantRevision = ""
+		} else if name == usageMonitoringProjectionRollupName {
+			wantRevision = usageidentity.AccountHistoryStructureRevision()
 		}
 		if revision != wantRevision || status != "pending" || coverage != 0 || target != 1 || processed != 0 {
 			_ = rows.Close()
@@ -2006,7 +2008,7 @@ func TestAccountHistoryIdentityFormatUpgradeRebuildsDerivedDataOnce(t *testing.T
 		) values (0, '-', '-', '', 1)`,
 		`insert into usage_rollup_checkpoints (name, last_event_id, updated_at_ms)
 		values ('account_history', 1, 1), ('dashboard_hourly', 1, 1)`,
-		`update settings set value = '1' where key = 'usage_account_history_identity_format_version'`,
+		`update settings set value = 'identity-2:model-1' where key = 'usage_account_history_identity_format_version'`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			_ = db.Close()
@@ -2041,6 +2043,16 @@ func TestAccountHistoryIdentityFormatUpgradeRebuildsDerivedDataOnce(t *testing.T
 	}
 	if version != usageidentity.AccountHistoryStructureRevision() {
 		t.Fatalf("identity version = %q, want %q", version, usageidentity.AccountHistoryStructureRevision())
+	}
+	var projectionRevision, projectionStatus string
+	var projectionCoverage, projectionTarget int64
+	if err := db.QueryRow(`select structure_revision, status, coverage_event_id, target_event_id
+		from usage_monitoring_rollup_state where rollup_name = ?`, usageMonitoringProjectionRollupName).
+		Scan(&projectionRevision, &projectionStatus, &projectionCoverage, &projectionTarget); err != nil {
+		t.Fatalf("read projection identity rebuild state: %v", err)
+	}
+	if projectionRevision != usageidentity.AccountHistoryStructureRevision() || projectionStatus != "pending" || projectionCoverage != 0 || projectionTarget != 1 {
+		t.Fatalf("projection identity rebuild state = revision:%q status:%q coverage:%d target:%d", projectionRevision, projectionStatus, projectionCoverage, projectionTarget)
 	}
 	for _, statement := range []string{
 		`insert into usage_account_model_rollups (

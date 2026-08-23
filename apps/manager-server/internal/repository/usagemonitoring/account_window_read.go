@@ -295,23 +295,25 @@ func accountWindowEventSourceSQL(
 	dailyAvailable bool,
 ) (string, []any) {
 	values := make([]string, 0, len(windows))
-	args := make([]any, 0, len(windows)*7+4)
+	args := make([]any, 0, len(windows)*8+4)
 	for _, window := range windows {
-		values = append(values, "(?, ?, ?, ?, ?, ?, ?)")
+		accountKey, legacyAccountKey := accountWindowKeys(window)
+		values = append(values, "(?, ?, ?, ?, ?, ?, ?, ?)")
 		args = append(args,
 			window.RequestIndex,
 			window.FromMS,
 			window.ToMS,
 			ceilDayMS(window.FromMS),
 			floorDayMS(window.ToMS),
-			accountWindowKey(window),
+			accountKey,
+			legacyAccountKey,
 			accountWindowCanUseDaily(window),
 		)
 	}
 
 	rawIdentity := usageidentity.SQLAccountKeyExpression("e")
 	query := `with window_targets(
-		request_index, from_ms, to_ms, full_start_ms, full_end_ms, account_key, use_daily
+		request_index, from_ms, to_ms, full_start_ms, full_end_ms, account_key, legacy_account_key, use_daily
 	) as (
 		values ` + strings.Join(values, ",") + `
 	)
@@ -325,7 +327,7 @@ func accountWindowEventSourceSQL(
 		on p.event_id <= ?
 			and p.timestamp_ms >= w.from_ms
 			and p.timestamp_ms < w.to_ms
-			and p.account_key = w.account_key`
+			and p.account_key in (w.account_key, w.legacy_account_key)`
 	args = append(args, coverageEventID)
 	if dailyAvailable {
 		query += `
@@ -356,7 +358,7 @@ func accountWindowEventSourceSQL(
 		on e.id > ?
 			and e.timestamp_ms >= w.from_ms
 			and e.timestamp_ms < w.to_ms
-			and ` + rawIdentity + ` = w.account_key`
+			and ` + rawIdentity + ` in (w.account_key, w.legacy_account_key)`
 	args = append(args, coverageEventID)
 	if dailyAvailable {
 		query += `
@@ -398,4 +400,23 @@ func accountWindowKey(window AccountWindowUsageQuery) string {
 		Source:                window.Source,
 	})
 	return key
+}
+
+func accountWindowKeys(window AccountWindowUsageQuery) (string, string) {
+	accountKey := accountWindowKey(window)
+	legacyAccountKey := accountKey
+	provider := strings.TrimSpace(strings.ToLower(strings.ReplaceAll(window.AuthProviderSnapshot, "_", "-")))
+	if provider == "codex" && strings.TrimSpace(window.AuthProjectIDSnapshot) != "" {
+		if key, valid := usageidentity.LegacyAccountKey(usageidentity.Fields{
+			AuthFileSnapshot:     window.AuthFileSnapshot,
+			AuthIndex:            window.AuthIndex,
+			AuthProviderSnapshot: window.AuthProviderSnapshot,
+			AccountSnapshot:      window.AccountSnapshot,
+			AuthLabelSnapshot:    window.AuthLabelSnapshot,
+			Source:               window.Source,
+		}); valid {
+			legacyAccountKey = key
+		}
+	}
+	return accountKey, legacyAccountKey
 }

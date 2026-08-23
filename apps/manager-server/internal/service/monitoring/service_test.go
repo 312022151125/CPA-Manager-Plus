@@ -2605,12 +2605,12 @@ func TestAccountWindowUsageSeparatesCredentialsSharingEmailAndAuthIndex(t *testi
 	first.AccountSnapshot = "shared@example.com"
 	first.AuthFileSnapshot = "first.json"
 	first.AuthProviderSnapshot = "codex"
-	first.AuthProjectIDSnapshot = "project-shared"
+	first.AuthProjectIDSnapshot = "project-a"
 	second := monitoringEvent("window-shared-second", baseMS+2_000, "gpt-a", "auth-shared", "source-b", false, 20, 10, 0, 0, 30, nil)
 	second.AccountSnapshot = "shared@example.com"
 	second.AuthFileSnapshot = "second.json"
 	second.AuthProviderSnapshot = "codex"
-	second.AuthProjectIDSnapshot = "project-shared"
+	second.AuthProjectIDSnapshot = "project-b"
 	if _, err := db.InsertEvents(ctx, []usage.Event{first, second}); err != nil {
 		t.Fatalf("insert events: %v", err)
 	}
@@ -2624,7 +2624,7 @@ func TestAccountWindowUsageSeparatesCredentialsSharingEmailAndAuthIndex(t *testi
 			AccountSnapshot:       "shared@example.com",
 			AuthFileSnapshot:      "first.json",
 			AuthProviderSnapshot:  "codex",
-			AuthProjectIDSnapshot: "project-shared",
+			AuthProjectIDSnapshot: "project-a",
 			AuthIndex:             "auth-shared",
 			Source:                "first.json",
 		},
@@ -2636,7 +2636,7 @@ func TestAccountWindowUsageSeparatesCredentialsSharingEmailAndAuthIndex(t *testi
 			AccountSnapshot:       "shared@example.com",
 			AuthFileSnapshot:      "second.json",
 			AuthProviderSnapshot:  "codex",
-			AuthProjectIDSnapshot: "project-shared",
+			AuthProjectIDSnapshot: "project-b",
 			AuthIndex:             "auth-shared",
 			Source:                "second.json",
 		},

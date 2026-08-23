@@ -1586,20 +1586,22 @@ func (r *repository) AccountWindowModelStats(ctx context.Context, windows []Acco
 	}
 
 	values := make([]string, 0, len(windows))
-	args := make([]any, 0, len(windows)*4)
+	args := make([]any, 0, len(windows)*5)
 	for _, window := range windows {
-		values = append(values, "(?, ?, ?, ?)")
+		accountKey, legacyAccountKey := accountWindowQueryKeys(window)
+		values = append(values, "(?, ?, ?, ?, ?)")
 		args = append(
 			args,
 			window.RequestIndex,
 			window.FromMS,
 			window.ToMS,
-			accountWindowQueryKey(window),
+			accountKey,
+			legacyAccountKey,
 		)
 	}
 
 	rows, err := r.db.QueryContext(ctx, pricingBandedUsageEventsCTE+`, window_targets(
-	request_index, from_ms, to_ms, account_key
+	request_index, from_ms, to_ms, account_key, legacy_account_key
 ) as (
 	values `+strings.Join(values, ",")+`
 )
@@ -1629,7 +1631,7 @@ from window_targets w
 	join banded_usage_events e
 		on e.timestamp_ms >= w.from_ms
 		and e.timestamp_ms < w.to_ms
-		and `+usageidentity.SQLAccountKeyExpression("e")+` = w.account_key
+		and `+usageidentity.SQLAccountKeyExpression("e")+` in (w.account_key, w.legacy_account_key)
 	group by w.request_index, e.analytics_model_value, billing_model, e.pricing_model_value, e.context_threshold_tokens_value, coalesce(e.service_tier, '')
 order by w.request_index, max(e.timestamp_ms) desc`, args...)
 	if err != nil {
@@ -1684,6 +1686,25 @@ func accountWindowQueryKey(window AccountWindowUsageQuery) string {
 		Source:                window.Source,
 	})
 	return key
+}
+
+func accountWindowQueryKeys(window AccountWindowUsageQuery) (string, string) {
+	accountKey := accountWindowQueryKey(window)
+	legacyAccountKey := accountKey
+	provider := strings.TrimSpace(strings.ToLower(strings.ReplaceAll(window.AuthProviderSnapshot, "_", "-")))
+	if provider == "codex" && strings.TrimSpace(window.AuthProjectIDSnapshot) != "" {
+		if key, valid := usageidentity.LegacyAccountKey(usageidentity.Fields{
+			AuthFileSnapshot:     window.AuthFileSnapshot,
+			AuthIndex:            window.AuthIndex,
+			AuthProviderSnapshot: window.AuthProviderSnapshot,
+			AccountSnapshot:      window.AccountSnapshot,
+			AuthLabelSnapshot:    window.AuthLabelSnapshot,
+			Source:               window.Source,
+		}); valid {
+			legacyAccountKey = key
+		}
+	}
+	return accountKey, legacyAccountKey
 }
 
 func (r *repository) CredentialModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]CredentialModelStat, error) {

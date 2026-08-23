@@ -9,7 +9,7 @@ import (
 // FormatVersion changes whenever the canonical account-history identity
 // algorithm changes. Persistent derived rollups include this version so they
 // can be rebuilt from immutable usage_events without touching raw history.
-const FormatVersion = "2"
+const FormatVersion = "3"
 
 const keyPrefix = "usage-account-history"
 
@@ -30,6 +30,18 @@ type Fields struct {
 // credential snapshot. The key is opaque to clients; RowKey is the response
 // correlation contract.
 func AccountKey(fields Fields) (string, bool) {
+	provider := normalizeProvider(fields.AuthProviderSnapshot)
+	projectID := strings.TrimSpace(fields.AuthProjectIDSnapshot)
+	if provider == "codex" && projectID != "" {
+		return encodeKey("codex-account", provider, projectID), true
+	}
+	return LegacyAccountKey(fields)
+}
+
+// LegacyAccountKey returns the format-v2 credential identity. Account-window
+// reads use it only as an exact file/index compatibility key for Codex events
+// collected before a stable account_id snapshot was available.
+func LegacyAccountKey(fields Fields) (string, bool) {
 	authFile := effectiveAuthFile(fields)
 	authIndex := strings.TrimSpace(fields.AuthIndex)
 	provider := normalizeProvider(fields.AuthProviderSnapshot)
@@ -115,6 +127,7 @@ func SQLAccountKeyExpression(alias string) string {
 	}
 
 	return "case " +
+		"when " + providerNormalized + " = 'codex' and " + projectID + " <> '' then " + key("codex-account", providerNormalized, projectID) + " " +
 		"when " + authFile + " <> '' and " + authIndex + " <> '' then " + key("file-index", authFile, authIndex) + " " +
 		"when " + authFile + " <> '' and " + projectID + " <> '' then " + key("file-project", authFile, providerNormalized, projectID) + " " +
 		"when " + authFile + " <> '' and " + account + " <> '' then " + key("file-account", authFile, providerNormalized, account) + " " +

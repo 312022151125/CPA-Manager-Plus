@@ -16,6 +16,7 @@ import (
 
 const (
 	accountHistoryIdentityFormatVersionKey = "usage_account_history_identity_format_version"
+	legacyAccountHistoryStructureRevision  = "identity-2:model-1"
 	dashboardHourlyRollupFormatVersionKey  = "usage_dashboard_hourly_format_version"
 	dashboardHourlyRollupFormatVersion     = "3"
 	usageMonitoringModelFormatVersionKey   = "usage_monitoring_model_format_version"
@@ -992,7 +993,7 @@ func validateUsageDerivedSchemaVersions(db *sql.DB, hourlySnapshot usageHourlyAg
 		var accountHistoryVersion string
 		err = db.QueryRow(`select value from settings where key = ?`, accountHistoryIdentityFormatVersionKey).Scan(&accountHistoryVersion)
 		switch {
-		case err == nil && accountHistoryVersion != "1" && accountHistoryVersion != usageidentity.FormatVersion && accountHistoryVersion != usageidentity.AccountHistoryStructureRevision():
+		case err == nil && accountHistoryVersion != "1" && accountHistoryVersion != "2" && accountHistoryVersion != legacyAccountHistoryStructureRevision && accountHistoryVersion != usageidentity.FormatVersion && accountHistoryVersion != usageidentity.AccountHistoryStructureRevision():
 			return fmt.Errorf("unsupported account history identity format version %q", accountHistoryVersion)
 		case err != nil && !errors.Is(err, sql.ErrNoRows):
 			return fmt.Errorf("inspect account history identity format version: %w", err)
@@ -1604,14 +1605,26 @@ func ensureUsageMonitoringProjectionIdentity(db *sql.DB) error {
 			coverage_event_id = 0, target_event_id = ?, processed_events = 0,
 			last_run_started_at_ms = null, updated_at_ms = 0,
 			finished_at_ms = null, last_error = null
-			where rollup_name in (?, ?)`,
+			where rollup_name = ?`,
 			usageidentity.ModelFormatVersion,
 			status,
 			latestEventID,
 			usageMonitoringMetadataRollupName,
+		); err != nil {
+			return fmt.Errorf("reset usage monitoring metadata state: %w", err)
+		}
+		if _, err := tx.Exec(`update usage_monitoring_rollup_state set
+			structure_revision = ?, status = ?, backfill_last_event_id = 0,
+			coverage_event_id = 0, target_event_id = ?, processed_events = 0,
+			last_run_started_at_ms = null, updated_at_ms = 0,
+			finished_at_ms = null, last_error = null
+			where rollup_name = ?`,
+			usageidentity.AccountHistoryStructureRevision(),
+			status,
+			latestEventID,
 			usageMonitoringProjectionRollupName,
 		); err != nil {
-			return fmt.Errorf("reset usage monitoring model derivation state: %w", err)
+			return fmt.Errorf("reset usage monitoring projection state: %w", err)
 		}
 		var searchStateExists int
 		if err := tx.QueryRow(`select count(*) from sqlite_master where type = 'table' and name = ?`, usageMonitoringSearchStateTable).Scan(&searchStateExists); err != nil {
@@ -1795,7 +1808,7 @@ func ensureUsageMonitoringSearchIndex(db *sql.DB) error {
 			last_run_started_at_ms = null, updated_at_ms = 0,
 			finished_at_ms = null, last_error = null
 			where rollup_name = ?`,
-			usageidentity.ModelFormatVersion,
+			usageidentity.AccountHistoryStructureRevision(),
 			status,
 			latestEventID,
 			usageMonitoringProjectionRollupName,
@@ -1818,7 +1831,7 @@ func ensureAccountHistoryIdentityFormatVersion(db *sql.DB) error {
 	switch {
 	case err == nil && version == usageidentity.AccountHistoryStructureRevision():
 		return tx.Commit()
-	case err == nil && version != "1" && version != usageidentity.FormatVersion:
+	case err == nil && version != "1" && version != "2" && version != legacyAccountHistoryStructureRevision && version != usageidentity.FormatVersion:
 		return fmt.Errorf("unsupported account history identity format version %q", version)
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return err
@@ -1841,6 +1854,34 @@ func ensureAccountHistoryIdentityFormatVersion(db *sql.DB) error {
 	}
 	if err := scheduleUsageRollupRebuild(tx, "account_history"); err != nil {
 		return err
+	}
+	var monitoringStateExists int
+	if err := tx.QueryRow(`select count(*) from sqlite_master
+		where type = 'table' and name = ?`, usageMonitoringRollupStateTable).Scan(&monitoringStateExists); err != nil {
+		return err
+	}
+	if monitoringStateExists > 0 {
+		var latestEventID int64
+		if err := tx.QueryRow(`select coalesce(max(id), 0) from usage_events`).Scan(&latestEventID); err != nil {
+			return err
+		}
+		projectionStatus := "pending"
+		if latestEventID == 0 {
+			projectionStatus = "ready"
+		}
+		if _, err := tx.Exec(`update usage_monitoring_rollup_state set
+			structure_revision = ?, status = ?, backfill_last_event_id = 0,
+			coverage_event_id = 0, target_event_id = ?, processed_events = 0,
+			last_run_started_at_ms = null, updated_at_ms = 0,
+			finished_at_ms = null, last_error = null
+			where rollup_name = ?`,
+			usageidentity.AccountHistoryStructureRevision(),
+			projectionStatus,
+			latestEventID,
+			usageMonitoringProjectionRollupName,
+		); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(`insert into settings (key, value, updated_at_ms) values (?, ?, ?)
 		on conflict(key) do update set value = excluded.value, updated_at_ms = excluded.updated_at_ms`,

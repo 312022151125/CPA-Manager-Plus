@@ -335,6 +335,7 @@ func TestAccountWindowProjectionMatchesRawAcrossCoverageTailAndIdentity(t *testi
 	first.AuthFileSnapshot = "first.json"
 	otherCredential := monitoringRepositoryEvent("window-other-credential", fromMS+1_000, "gpt-window", "key-b", "shared@example.com", "auth-shared", "source-b", false, 9_000, 9_000, 10)
 	otherCredential.AuthFileSnapshot = "second.json"
+	otherCredential.AuthProjectIDSnapshot = "project-b"
 	toBoundary := monitoringRepositoryEvent("window-to-boundary", toMS, "gpt-window", "key-a", "shared@example.com", "auth-shared", "source-a", false, 8_000, 8_000, 10)
 	toBoundary.AuthFileSnapshot = "first.json"
 	if _, err := db.InsertEvents(ctx, []usage.Event{first, otherCredential, toBoundary}); err != nil {
@@ -342,10 +343,11 @@ func TestAccountWindowProjectionMatchesRawAcrossCoverageTailAndIdentity(t *testi
 	}
 	catchUpMonitoringRepository(t, ctx, db)
 	expectedAccountKey, valid := usageidentity.AccountKey(usageidentity.Fields{
-		AuthFileSnapshot:     "first.json",
-		AuthIndex:            "auth-shared",
-		AuthProviderSnapshot: "codex",
-		AccountSnapshot:      "shared@example.com",
+		AuthFileSnapshot:      "first.json",
+		AuthIndex:             "auth-shared",
+		AuthProviderSnapshot:  "codex",
+		AuthProjectIDSnapshot: "project-a",
+		AccountSnapshot:       "shared@example.com",
 	})
 	if !valid {
 		t.Fatal("invalid expected account key")
@@ -417,6 +419,103 @@ func TestAccountWindowProjectionMatchesRawAcrossCoverageTailAndIdentity(t *testi
 	}
 }
 
+func TestCodexAccountWindowKeepsHistoryAcrossSameAccountReauth(t *testing.T) {
+	_, db := newMonitoringRepositoryStore(t)
+	ctx := context.Background()
+	dayStartMS := int64(1_800_057_600_000)
+	previousFromMS := dayStartMS
+	currentFromMS := dayStartMS + testDayMS
+	toMS := currentFromMS + testDayMS
+
+	makeEvent := func(hash string, timestampMS int64, file, authIndex, accountID string, input int64) usage.Event {
+		event := monitoringRepositoryEvent(
+			hash,
+			timestampMS,
+			"gpt-window",
+			"key-a",
+			"same@example.com",
+			authIndex,
+			file,
+			false,
+			input,
+			input/10,
+			10,
+		)
+		event.AuthFileSnapshot = file
+		event.AuthIndex = authIndex
+		event.AuthProjectIDSnapshot = accountID
+		return event
+	}
+
+	projectedEvents := []usage.Event{
+		makeEvent("previous-old-credential", previousFromMS+1_000, "codex-a-free.json", "auth-1", "account-a", 10),
+		makeEvent("previous-new-credential", previousFromMS+2_000, "codex-a-pro.json", "auth-2", "account-a", 20),
+		makeEvent("current-old-credential", currentFromMS+1_000, "codex-a-free.json", "auth-1", "account-a", 30),
+		makeEvent("different-space-same-email", currentFromMS+2_000, "codex-b.json", "auth-3", "account-b", 9_000),
+	}
+	legacyCurrentCredential := makeEvent("current-new-credential-before-account-snapshot", currentFromMS+2_500, "codex-a-pro.json", "auth-2", "", 5)
+	projectedEvents = append(projectedEvents, legacyCurrentCredential)
+	if _, err := db.InsertEvents(ctx, projectedEvents); err != nil {
+		t.Fatalf("insert projected reauth events: %v", err)
+	}
+	catchUpMonitoringRepository(t, ctx, db)
+
+	windows := []store.AccountWindowUsageQuery{
+		{
+			RequestIndex:          0,
+			FromMS:                currentFromMS,
+			ToMS:                  toMS,
+			AccountSnapshot:       "same@example.com",
+			AuthFileSnapshot:      "codex-a-pro.json",
+			AuthProviderSnapshot:  "codex",
+			AuthProjectIDSnapshot: "account-a",
+			AuthIndex:             "auth-2",
+			Source:                "codex-a-pro.json",
+		},
+		{
+			RequestIndex:          1,
+			FromMS:                previousFromMS,
+			ToMS:                  currentFromMS,
+			AccountSnapshot:       "same@example.com",
+			AuthFileSnapshot:      "codex-a-pro.json",
+			AuthProviderSnapshot:  "codex",
+			AuthProjectIDSnapshot: "account-a",
+			AuthIndex:             "auth-2",
+			Source:                "codex-a-pro.json",
+		},
+	}
+	assertStats := func(phase string, currentCalls, currentInput int64) {
+		t.Helper()
+		raw, err := db.AccountWindowModelStats(ctx, windows)
+		if err != nil {
+			t.Fatalf("%s raw window stats: %v", phase, err)
+		}
+		projected, _, available, err := db.UsageMonitoringAccountWindowStats(ctx, windows)
+		if err != nil || !available {
+			t.Fatalf("%s projected window stats: available=%v err=%v", phase, available, err)
+		}
+		if !reflect.DeepEqual(projected, raw) {
+			t.Fatalf("%s projection/raw mismatch\nprojection=%#v\nraw=%#v", phase, projected, raw)
+		}
+		if len(projected) != 2 {
+			t.Fatalf("%s stats = %#v, want current and previous", phase, projected)
+		}
+		if projected[0].RequestIndex != 0 || projected[0].Calls != currentCalls || projected[0].InputTokens != currentInput {
+			t.Fatalf("%s current stats = %#v", phase, projected[0])
+		}
+		if projected[1].RequestIndex != 1 || projected[1].Calls != 2 || projected[1].InputTokens != 30 {
+			t.Fatalf("%s previous stats = %#v", phase, projected[1])
+		}
+	}
+
+	assertStats("projection complete with daily rollup available", 2, 35)
+	rawTail := makeEvent("current-new-credential-tail", currentFromMS+3_000, "codex-a-pro.json", "auth-2", "account-a", 40)
+	if _, err := db.InsertEvents(ctx, []usage.Event{rawTail}); err != nil {
+		t.Fatalf("insert raw reauth tail: %v", err)
+	}
+	assertStats("projection plus raw tail", 3, 75)
+}
+
 func TestAccountWindowProjectionUsesDailyStatsWithEdgesAndRawTail(t *testing.T) {
 	sqlDB, db := newMonitoringRepositoryStore(t)
 	ctx := context.Background()
@@ -434,6 +533,7 @@ func TestAccountWindowProjectionUsesDailyStatsWithEdgesAndRawTail(t *testing.T) 
 	for index := range events {
 		events[index].AuthFileSnapshot = events[index].Source
 		events[index].AuthProviderSnapshot = "codex"
+		events[index].AuthProjectIDSnapshot = ""
 	}
 	if _, err := db.InsertEvents(ctx, events); err != nil {
 		t.Fatalf("insert daily account window events: %v", err)
@@ -463,6 +563,7 @@ func TestAccountWindowProjectionUsesDailyStatsWithEdgesAndRawTail(t *testing.T) 
 	)
 	tail.AuthFileSnapshot = "daily.json"
 	tail.AuthProviderSnapshot = "codex"
+	tail.AuthProjectIDSnapshot = ""
 	if _, err := db.InsertEvents(ctx, []usage.Event{tail}); err != nil {
 		t.Fatalf("insert daily account window raw tail: %v", err)
 	}
