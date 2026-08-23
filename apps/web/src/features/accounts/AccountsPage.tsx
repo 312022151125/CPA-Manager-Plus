@@ -5490,13 +5490,28 @@ export function AccountsPage() {
           );
           return;
         }
-        const verifiedCount =
-          fresh.rateLimitResetCreditsAvailableCount ?? fresh.rateLimitResetCredits.length;
-        const verifiedState = CODEX_CONFIG.buildSuccessState(fresh, row.raw);
         if (!isCurrent()) {
           endResetTransaction();
           return;
         }
+        if (
+          fresh.rateLimitResetCreditsAvailableCount === null &&
+          fresh.rateLimitResetCredits.length === 0 &&
+          fresh.rateLimitResetCreditsError
+        ) {
+          endResetTransaction();
+          showNotification(
+            t('codex_quota.reset_verify_failed', {
+              name: displayName,
+              message: fresh.rateLimitResetCreditsError,
+            }),
+            'error'
+          );
+          return;
+        }
+        const verifiedCount =
+          fresh.rateLimitResetCreditsAvailableCount ?? fresh.rateLimitResetCredits.length;
+        const verifiedState = CODEX_CONFIG.buildSuccessState(fresh, row.raw);
         commitIfQuotaCacheCurrent(cacheGeneration, () => {
           setCodexQuota((prev) => ({ ...prev, [storeKey]: verifiedState }));
         });
@@ -5530,6 +5545,10 @@ export function AccountsPage() {
               );
               return;
             }
+            const postMutationIsCurrent = beginAccountQuotaRequest(
+              quotaRequestVersionsRef.current,
+              requestKey
+            );
             // The reset mutation has happened; drop the pre-reset evidence so
             // the UI cannot keep offering it until the refreshed quota lands.
             commitIfQuotaCacheCurrent(cacheGeneration, () => {
@@ -5559,7 +5578,7 @@ export function AccountsPage() {
             try {
               const data = await CODEX_CONFIG.fetchQuota(row.raw, t, authFilesRequestScope);
               endResetTransaction();
-              if (isCurrent()) {
+              if (postMutationIsCurrent()) {
                 commitIfQuotaCacheCurrent(cacheGeneration, () => {
                   setCodexQuota((prev) => ({
                     ...prev,

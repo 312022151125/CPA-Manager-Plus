@@ -10806,6 +10806,39 @@ describe('AccountsPage replacement flows', () => {
     );
   });
 
+  it('reports a verification failure when reset-credit availability is unknown', async () => {
+    mocks.quotaState.codexQuota = {
+      'codex.json': {
+        status: 'success',
+        authFileKey: 'codex.json::auth-1',
+        windows: [],
+        rateLimitResetCreditsAvailableCount: 1,
+      },
+    };
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue({
+      ...makeCodexQuotaData(null),
+      rateLimitResetCreditsError: 'reset endpoint unavailable',
+    });
+
+    const renderer = await renderAccountsPage();
+    await openCodexQuotaTab(renderer, 'codex.json');
+    await act(async () => {
+      renderer.root.findByProps({ 'data-quota-reset-action': 'true' }).props.onClick();
+    });
+    await flushPromises();
+
+    expect(mocks.showConfirmation).not.toHaveBeenCalled();
+    expect(mocks.consumeResetCredit).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'codex_quota.reset_verify_failed:codex@example.com:reset endpoint unavailable',
+      'error'
+    );
+    expect(mocks.showNotification).not.toHaveBeenCalledWith(
+      'codex_quota.reset_no_credits:codex@example.com',
+      'info'
+    );
+  });
+
   it('confirms with the fresh verified count instead of the displayed count', async () => {
     mocks.quotaState.codexQuota = {
       'codex.json': {
@@ -11093,6 +11126,48 @@ describe('AccountsPage replacement flows', () => {
       'codex_quota.reset_success:codex@example.com',
       'success'
     );
+  });
+
+  it('discards quota refreshes started after verification but before consume completes', async () => {
+    mocks.quotaState.codexQuota = {
+      'codex.json': {
+        status: 'success',
+        authFileKey: 'codex.json::auth-1',
+        windows: [],
+        rateLimitResetCreditsAvailableCount: 1,
+      },
+    };
+    const staleQuotaResult = createDeferred<CodexQuotaData>();
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota')
+      .mockResolvedValueOnce(makeCodexQuotaData(1, [makeResetCredit('fresh-credit-1')]))
+      .mockImplementationOnce(() => staleQuotaResult.promise)
+      .mockResolvedValueOnce(makeCodexQuotaData(0));
+
+    const renderer = await renderAccountsPage();
+    await openCodexQuotaTab(renderer, 'codex.json');
+    await act(async () => {
+      renderer.root.findByProps({ 'data-quota-reset-action': 'true' }).props.onClick();
+    });
+    await flushPromises();
+    const confirmation = mocks.showConfirmation.mock.calls[0]?.[0] as {
+      onConfirm: () => Promise<void>;
+    };
+    await act(async () => {
+      void findHostButtonByText(renderer, 'accounts.refresh_quota').props.onClick();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await confirmation.onConfirm();
+    });
+    await flushPromises();
+
+    staleQuotaResult.resolve(makeCodexQuotaData(1, [makeResetCredit('stale-credit-1')]));
+    await flushPromises();
+
+    expect(mocks.consumeResetCredit).toHaveBeenCalledTimes(1);
+    const committed = applyCodexQuotaCommits();
+    expect(committed['codex.json::auth-1'].rateLimitResetCreditsAvailableCount).toBe(0);
+    expect(committed['codex.json::auth-1'].rateLimitResetCredits).toEqual([]);
   });
 
   it('keeps reset available for disabled credentials with a valid auth index', async () => {
