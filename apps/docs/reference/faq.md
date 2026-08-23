@@ -64,6 +64,21 @@ cpamp_...
 
 先停止 Manager Server 并备份数据目录，然后按 [重置管理员密钥](../operations/reset-admin-key.md) 执行。
 
+## 启动或导入提示 CPA 连接记录冲突怎么办？
+
+该提示说明 SQLite 中 `manager_config_v1` 与旧 `setup` 记录互相矛盾。Manager Server 不会自动选择任何一方，也不会猜测连接，这是刻意的安全行为。先停止 Manager Server，确认正确的 CPA URL 与 CPA Management Key，然后显式修复：
+
+```bash
+cpa-manager-plus store-cpa-connection \
+  --repair-conflict \
+  --cpa-base-url '<cpa-url>' \
+  --management-key-file '<key-file>' \
+  --db-path '<usage.sqlite>' \
+  --data-key-path '<data.key>'
+```
+
+修复会把两边记录统一为你提供的连接并加密存储，采集器设置与其他数据保持不变；随后正常启动即可。详见[备份与迁移](../operations/backup.md)。
+
 ## 只改了 CPA Panel Repository，为什么监控为空？
 
 修改 CPA panel repository 只会改变 CPA 托管的前端页面。

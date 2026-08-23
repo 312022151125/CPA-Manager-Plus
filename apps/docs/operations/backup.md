@@ -100,7 +100,20 @@ cpa-manager-plus store-cpa-connection \
   --data-key-path './data/data.key'
 ```
 
-该命令要求先停止 Manager Server；它会把密钥加密写入 SQLite，命令输出不会回显密钥。然后再启动新实例并导入其余配置：
+该命令要求先停止 Manager Server；它会把密钥加密写入 SQLite，命令输出不会回显密钥。
+
+若历史数据中 `manager_config_v1` 与旧 `setup` 记录互相冲突，上面的命令会拒绝写入并在错误信息中给出修复方式。确认要以此连接为准时，追加 `--repair-conflict` 显式修复：
+
+```bash
+cpa-manager-plus store-cpa-connection \
+  --repair-conflict \
+  --cpa-base-url 'http://cpa:8317' \
+  --management-key-file '/secure/cpa-management-key' \
+  --db-path './data/usage.sqlite' \
+  --data-key-path './data/data.key'
+```
+
+`--repair-conflict` 只用于修复解析器无法信任的历史状态：互相冲突的 `manager_config_v1`/`setup` 记录，或与请求冲突且没有权威方的 partial 记录。它把你显式提供的连接在单个事务里同时写入 `manager_config_v1` 与旧 `setup` 镜像（密钥加密存储），并保留采集器设置与其他数据；对完整且一致的已存连接仍然要求输入完全匹配，不会静默改绑。修复完成后再正常启动，连接存储迁移会照常完成。然后再启动新实例并导入其余配置：
 
 ```bash
 export NEW_CPAMP_URL='http://new-host:18317'

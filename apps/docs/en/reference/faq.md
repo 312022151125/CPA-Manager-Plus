@@ -64,6 +64,21 @@ Do not use the CPA Management Key on the CPAMP login form. If the admin key is l
 
 Stop Manager Server, back up the data directory, then follow [Reset Admin Key](../operations/reset-admin-key.md).
 
+## Startup Or Import Reports Conflicting CPA Connection Records
+
+The message means the `manager_config_v1` and legacy `setup` rows in SQLite contradict each other. Manager Server deliberately refuses to pick a side or guess a connection. Stop Manager Server, confirm the correct CPA URL and CPA Management Key, then repair explicitly:
+
+```bash
+cpa-manager-plus store-cpa-connection \
+  --repair-conflict \
+  --cpa-base-url '<cpa-url>' \
+  --management-key-file '<key-file>' \
+  --db-path '<usage.sqlite>' \
+  --data-key-path '<data.key>'
+```
+
+The repair canonicalizes both rows to the connection you provide, keeps it encrypted at rest, and preserves collector settings and other data; startup then proceeds normally. See [backup and migration](../operations/backup.md).
+
 ## I Changed CPA Panel Repository, But Monitoring Is Empty
 
 Changing the CPA panel repository only changes the frontend served by CPA.

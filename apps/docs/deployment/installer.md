@@ -124,7 +124,7 @@ data/usage.sqlite       # 加密后的 Manager 配置
 data/data.key
 ```
 
-启动后直接使用 CPAMP 管理员密钥登录，不需要再在面板里填写首次 setup。导入成功后，CPA URL 和 CPA Management Key 由 CPAMP 服务端从加密 SQLite 读取；面板不会把已保存的 CPA Key 返回浏览器。需要调整连接时，在面板中提交新的 CPA Key；离线导入命令只接受首次导入或完全一致的幂等重试，不会覆盖冲突连接。
+启动后直接使用 CPAMP 管理员密钥登录，不需要再在面板里填写首次 setup。导入成功后，CPA URL 和 CPA Management Key 由 CPAMP 服务端从加密 SQLite 读取；面板不会把已保存的 CPA Key 返回浏览器。需要调整连接时，在面板中提交新的 CPA Key；离线导入命令只接受首次导入或完全一致的幂等重试，不会覆盖冲突连接。历史数据中 `manager_config_v1` 与旧 `setup` 记录互相冲突时，启动与导入都会安全失败且不会自动选边；此时先停止 Manager Server，用 `store-cpa-connection --repair-conflict` 显式提供正确的完整连接（URL 与密钥文件）完成修复，详见[备份与迁移](../operations/backup.md)。
 
 如果选择稍后填写，脚本不会把 CPA Management Key 写入环境文件；打开面板后，在 setup 中填写：
 

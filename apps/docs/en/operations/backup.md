@@ -100,7 +100,20 @@ cpa-manager-plus store-cpa-connection \
   --data-key-path './data/data.key'
 ```
 
-Stop Manager Server before running this command. It encrypts the key into SQLite and never echoes it. Start the new instance, then import the remaining configuration:
+Stop Manager Server before running this command. It encrypts the key into SQLite and never echoes it.
+
+When historical `manager_config_v1` and legacy `setup` rows conflict with each other, the command above refuses the write and its error message explains the repair path. After confirming this connection is the correct one, append `--repair-conflict` to repair explicitly:
+
+```bash
+cpa-manager-plus store-cpa-connection \
+  --repair-conflict \
+  --cpa-base-url 'http://cpa:8317' \
+  --management-key-file '/secure/cpa-management-key' \
+  --db-path './data/usage.sqlite' \
+  --data-key-path './data/data.key'
+```
+
+`--repair-conflict` exists only for persisted state the resolver cannot trust: `manager_config_v1`/`setup` rows that conflict with each other, or authority-less partial rows that conflict with the request. It writes the connection you explicitly provide into both `manager_config_v1` and the legacy `setup` mirror in a single transaction (the key stays encrypted at rest) while preserving collector settings and other data. A complete and consistent stored connection still requires exactly matching input; repair never rebinds silently. After repairing, start normally and the connection-storage migration completes as usual. Start the new instance, then import the remaining configuration:
 
 ```bash
 export NEW_CPAMP_URL='http://new-host:18317'

@@ -124,7 +124,7 @@ data/usage.sqlite       # encrypted Manager configuration
 data/data.key
 ```
 
-After startup, log in with the CPAMP Admin Key; first setup is not required. After import, CPAMP reads the CPA URL and CPA Management Key from encrypted SQLite; the panel never returns the saved CPA Key to the browser. To change the connection, submit a new CPA Key in the panel. The offline import command accepts only a first import or an identical idempotent retry and refuses to overwrite a conflicting connection.
+After startup, log in with the CPAMP Admin Key; first setup is not required. After import, CPAMP reads the CPA URL and CPA Management Key from encrypted SQLite; the panel never returns the saved CPA Key to the browser. To change the connection, submit a new CPA Key in the panel. The offline import command accepts only a first import or an identical idempotent retry and refuses to overwrite a conflicting connection. When historical `manager_config_v1` and legacy `setup` rows conflict with each other, both startup and import fail safely without picking a side; stop Manager Server and repair explicitly with `store-cpa-connection --repair-conflict`, providing the correct complete connection (URL plus management key file). See [backup and migration](../operations/backup.md).
 
 If you choose to enter it later, the installer does not write the CPA Management Key into environment-managed config. Open the panel and complete setup with:
 
