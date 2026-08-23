@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -56,7 +57,7 @@ func main() {
 			}
 			return
 		case "manager-data-snapshot":
-			if err := managerdatasnapshot.Run(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			if err := runManagerDataSnapshotCommand(os.Args[2:], os.Stdout, os.Stderr); err != nil {
 				log.Printf("manage Manager data snapshot: %v", err)
 				os.Exit(1)
 			}
@@ -70,6 +71,12 @@ func main() {
 		}
 	}
 	runServer()
+}
+
+func runManagerDataSnapshotCommand(args []string, stdout io.Writer, stderr io.Writer) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return managerdatasnapshot.Run(ctx, args, stdout, stderr)
 }
 
 func runServer() {

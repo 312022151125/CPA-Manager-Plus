@@ -182,6 +182,10 @@ func create(ctx context.Context, dbPath string, dataKeyPath string, snapshotDir 
 	if err := writeNewFile(filepath.Join(tempDir, "manifest.json"), manifestData, 0o600); err != nil {
 		return fmt.Errorf("write snapshot manifest: %w", err)
 	}
+	beforeSnapshotPublishFn()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("snapshot canceled before publish: %w", err)
+	}
 	if err := os.Rename(tempDir, absSnapshotDir); err != nil {
 		return fmt.Errorf("publish snapshot directory %s: %w", absSnapshotDir, err)
 	}
@@ -221,6 +225,11 @@ var renameFn = os.Rename
 // a business failure. Required rollback/removal paths continue to use os.Remove
 // directly so fault injection cannot weaken recovery.
 var removeFn = os.Remove
+
+// These no-op hooks make cancellation at the two commit boundaries
+// deterministic in tests without changing production behavior.
+var beforeSnapshotPublishFn = func() {}
+var beforeRestoreCommitFn = func() {}
 
 type restoreOutcome struct {
 	cleanupWarnings []string
@@ -279,6 +288,10 @@ func restoreWithWarnings(ctx context.Context, dbPath string, dataKeyPath string,
 		}
 		staged[target] = stagedPath
 		items = append(items, restoreItem{name: item.Name, existed: true, target: target, staged: stagedPath})
+	}
+	beforeRestoreCommitFn()
+	if err := ctx.Err(); err != nil {
+		return outcome, fmt.Errorf("restore canceled before commit: %w", err)
 	}
 
 	// Commit boundary. Step 1 moves the current live set aside; step 2 switches

@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/processlock"
 )
@@ -284,6 +287,148 @@ func TestRunRestoreRejectsSymlinkedTargetBeforeStaging(t *testing.T) {
 	requireTestFile(t, outsideTarget, "outside-content")
 	requireTestFile(t, dbPath, "database-after")
 	requireNoRestoreTempFiles(t, dataDir)
+}
+
+func TestRunRestoreCompletesCommitAfterCancellationDuringSwitch(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "usage.sqlite")
+	dataKeyPath := filepath.Join(dataDir, "data.key")
+	snapshotDir := filepath.Join(dataDir, ".cpamp-manager-snapshot-test")
+	writeTestFile(t, dbPath, "database-before", 0o600)
+	writeTestFile(t, dataKeyPath, "key-before", 0o600)
+	runSnapshotCommand(t, "create", dbPath, dataKeyPath, snapshotDir)
+	writeTestFile(t, dbPath, "database-after", 0o600)
+	writeTestFile(t, dataKeyPath, "key-after", 0o600)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	previous := renameFn
+	canceled := false
+	renameFn = func(from string, to string) error {
+		err := os.Rename(from, to)
+		if err == nil && !canceled {
+			canceled = true
+			cancel()
+		}
+		return err
+	}
+	t.Cleanup(func() {
+		renameFn = previous
+		cancel()
+	})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := Run(ctx, snapshotArgs("restore", dbPath, dataKeyPath, snapshotDir), &stdout, &stderr); err != nil {
+		t.Fatalf("restore after commit-boundary cancellation: %v stderr=%s", err, stderr.String())
+	}
+	if !canceled || !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("commit cancellation was not injected: canceled=%v err=%v", canceled, ctx.Err())
+	}
+	requireTestFile(t, dbPath, "database-before")
+	requireTestFile(t, dataKeyPath, "key-before")
+	requireNoRestoreTempFiles(t, dataDir)
+}
+
+func TestManagerDataSnapshotSignalHelperProcess(t *testing.T) {
+	mode := os.Getenv("CPA_MANAGER_SNAPSHOT_SIGNAL_HELPER")
+	if mode == "" {
+		t.Skip("helper process only")
+	}
+	dbPath := os.Getenv("CPA_MANAGER_SNAPSHOT_SIGNAL_DB")
+	dataKeyPath := os.Getenv("CPA_MANAGER_SNAPSHOT_SIGNAL_DATA_KEY")
+	snapshotDir := os.Getenv("CPA_MANAGER_SNAPSHOT_SIGNAL_DIR")
+	markerPath := os.Getenv("CPA_MANAGER_SNAPSHOT_SIGNAL_MARKER")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	waitForSignal := func() {
+		if err := os.WriteFile(markerPath, []byte("ready\n"), 0o600); err != nil {
+			t.Fatalf("write signal marker: %v", err)
+		}
+		<-ctx.Done()
+	}
+	switch mode {
+	case "create":
+		beforeSnapshotPublishFn = waitForSignal
+	case "restore":
+		beforeRestoreCommitFn = waitForSignal
+	default:
+		t.Fatalf("unsupported helper mode %q", mode)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := Run(ctx, snapshotArgs(mode, dbPath, dataKeyPath, snapshotDir), &stdout, &stderr)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("signal cancellation error=%v stdout=%s stderr=%s", err, stdout.String(), stderr.String())
+	}
+}
+
+func TestManagerDataSnapshotSignalsCancelBeforeCommit(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("POSIX process signals are required")
+	}
+	for _, mode := range []string{"create", "restore"} {
+		t.Run(mode, func(t *testing.T) {
+			dataDir := t.TempDir()
+			dbPath := filepath.Join(dataDir, "usage.sqlite")
+			dataKeyPath := filepath.Join(dataDir, "data.key")
+			snapshotDir := filepath.Join(dataDir, ".cpamp-manager-snapshot-test")
+			markerPath := filepath.Join(dataDir, "signal-ready")
+			writeTestFile(t, dbPath, "database-before", 0o600)
+			writeTestFile(t, dataKeyPath, "key-before", 0o600)
+			if mode == "restore" {
+				runSnapshotCommand(t, "create", dbPath, dataKeyPath, snapshotDir)
+				writeTestFile(t, dbPath, "database-after", 0o600)
+				writeTestFile(t, dataKeyPath, "key-after", 0o600)
+			}
+
+			cmd := exec.Command(os.Args[0], "-test.run=^TestManagerDataSnapshotSignalHelperProcess$")
+			cmd.Env = append(os.Environ(),
+				"CPA_MANAGER_SNAPSHOT_SIGNAL_HELPER="+mode,
+				"CPA_MANAGER_SNAPSHOT_SIGNAL_DB="+dbPath,
+				"CPA_MANAGER_SNAPSHOT_SIGNAL_DATA_KEY="+dataKeyPath,
+				"CPA_MANAGER_SNAPSHOT_SIGNAL_DIR="+snapshotDir,
+				"CPA_MANAGER_SNAPSHOT_SIGNAL_MARKER="+markerPath,
+			)
+			var output bytes.Buffer
+			cmd.Stdout = &output
+			cmd.Stderr = &output
+			if err := cmd.Start(); err != nil {
+				t.Fatalf("start signal helper: %v", err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				if _, err := os.Stat(markerPath); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
+					t.Fatalf("signal helper did not reach boundary: %s", output.String())
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if err := cmd.Process.Signal(os.Interrupt); err != nil {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				t.Fatalf("signal helper: %v", err)
+			}
+			if err := cmd.Wait(); err != nil {
+				t.Fatalf("signal helper exit: %v\n%s", err, output.String())
+			}
+
+			if mode == "create" {
+				if _, err := os.Stat(snapshotDir); !os.IsNotExist(err) {
+					t.Fatalf("canceled create published a snapshot: %v", err)
+				}
+				requireTestFile(t, dbPath, "database-before")
+				requireTestFile(t, dataKeyPath, "key-before")
+			} else {
+				requireTestFile(t, dbPath, "database-after")
+				requireTestFile(t, dataKeyPath, "key-after")
+				requireNoRestoreTempFiles(t, dataDir)
+			}
+		})
+	}
 }
 
 func injectRestoreSwitchFailure(t testing.TB, failTarget string) {
