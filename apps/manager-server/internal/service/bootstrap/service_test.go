@@ -654,6 +654,48 @@ func unblockSetupWrites(t testing.TB, dbPath string) {
 	}
 }
 
+func TestRunDoesNotPersistAdminCredentialWhenMigrationFails(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "usage.sqlite")
+	legacyStore, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := legacyStore.SaveManagerConfig(context.Background(), store.ManagerConfig{
+		CPAConnection: store.ManagerCPAConnectionConfig{CPABaseURL: "http://manager-a.local:8317"},
+	}); err != nil {
+		_ = legacyStore.Close()
+		t.Fatalf("save partial manager config: %v", err)
+	}
+	if err := writeRawSetting(dbPath, "setup",
+		"{\"cpaBaseUrl\":\"http://manager-b.local:8317\",\"managementKey\":\"setup-key\"}"); err != nil {
+		_ = legacyStore.Close()
+		t.Fatalf("write conflicting setup: %v", err)
+	}
+	if err := legacyStore.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	protector, err := security.NewProtector([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("create protector: %v", err)
+	}
+	st, err := store.Open(dbPath, protector)
+	if err != nil {
+		t.Fatalf("open protected store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	if _, err := Run(context.Background(), config.Config{}, st, false); err == nil {
+		t.Fatal("bootstrap accepted conflicting partial authority")
+	}
+	// A generated admin credential must never be persisted when bootstrap
+	// fails before disclosing it; the next boot must be free to generate and
+	// disclose a fresh key instead of locking the operator out.
+	if _, ok, err := st.LoadAdminCredential(context.Background()); err != nil || ok {
+		t.Fatalf("failed bootstrap persisted admin credential: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestBootstrapSucceedsAfterExplicitConflictRepair(t *testing.T) {
 	t.Setenv("CPA_UPSTREAM_URL", "")
 	t.Setenv("CPA_MANAGEMENT_KEY", "")

@@ -31,12 +31,6 @@ const currentConnectionStorageMigrationVersion = 2
 
 func Run(ctx context.Context, cfg config.Config, st *store.Store, dataKeyCreated bool) (Result, error) {
 	result := Result{DataKeyCreated: dataKeyCreated}
-	adminCreated, generatedAdminKey, err := ensureAdminCredential(ctx, cfg, st)
-	if err != nil {
-		return Result{}, err
-	}
-	result.AdminCreated = adminCreated
-	result.GeneratedAdminKey = generatedAdminKey
 
 	historical, err := st.HasHistoricalData(ctx)
 	if err != nil {
@@ -91,6 +85,19 @@ func Run(ctx context.Context, cfg config.Config, st *store.Store, dataKeyCreated
 	}
 	state, _, _ = st.LoadBootstrapState(ctx)
 	result.State = state
+
+	// Admin credential persistence is deliberately the last fallible write of
+	// bootstrap: a randomly generated key must never be persisted unless every
+	// earlier step succeeded, so its plaintext can always be disclosed by the
+	// caller instead of locking the operator out with an unknown credential.
+	// A crash between the state write and this write self-heals on the next
+	// boot, which simply generates and discloses a fresh key.
+	adminCreated, generatedAdminKey, err := ensureAdminCredential(ctx, cfg, st)
+	if err != nil {
+		return Result{}, err
+	}
+	result.AdminCreated = adminCreated
+	result.GeneratedAdminKey = generatedAdminKey
 	return result, nil
 }
 
