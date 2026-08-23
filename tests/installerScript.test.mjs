@@ -347,7 +347,7 @@ if [ "\${1:-}" = "sanitize-runtime-config" ]; then
       *) exit 42 ;;
     esac
   done
-  node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); delete value.cpaUpstreamUrl; delete value.managementKeyFile; fs.writeFileSync(process.argv[2], JSON.stringify(value, null, 2)+"\\n");' "$input" "$output"
+  node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); for (const key of Object.keys(value)) { const folded=key.toLowerCase(); if (folded === "cpaupstreamurl" || folded === "managementkeyfile") delete value[key]; } fs.writeFileSync(process.argv[2], JSON.stringify(value, null, 2)+"\\n");' "$input" "$output"
   exit 0
 fi
 if [ "\${FAKE_NATIVE_IGNORE_TERM:-0}" = "1" ]; then
@@ -4498,6 +4498,310 @@ exit 22
     } finally {
       rmSync(installDir, { recursive: true, force: true });
       rmSync(fakeBin, { recursive: true, force: true });
+    }
+  });
+
+  it('retries a failed first Docker CPA import from the retained pending state', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const fakeBin = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-bin-'));
+    const dockerLog = path.join(os.tmpdir(), `cpamp-installer-docker-${process.pid}-${Date.now()}.log`);
+    const statePath = path.join(installDir, 'secrets/cpa-connection-import.pending');
+    const keyPath = path.join(installDir, 'secrets/cpa-management-key');
+
+    try {
+      writeFakeDocker(fakeBin);
+      const commonEnv = {
+        ...process.env,
+        CPAMP_NON_INTERACTIVE: '1',
+        CPAMP_CONFIRM: '1',
+        CPAMP_LANG: 'en-US',
+        CPAMP_INSTALL_DIR: installDir,
+        FAKE_DOCKER_LOG: dockerLog,
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+      };
+      const first = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...commonEnv,
+          CPAMP_INSTALL_MODE: 'cpamp',
+          CPAMP_DEPLOY_METHOD: 'docker',
+          CPAMP_CPA_CONNECTION_MODE: 'env',
+          CPAMP_CPA_URL: 'http://host.docker.internal:8317',
+          CPAMP_CPA_MANAGEMENT_KEY: 'cpa_retry_key',
+          FAKE_DOCKER_IMPORT_OK: '0',
+        },
+        encoding: 'utf8',
+      });
+
+      expect(first.status).toBe(1);
+      expect(existsSync(statePath)).toBe(true);
+      expect(statSync(statePath).mode & 0o777).toBe(0o600);
+      expect(readFileSync(statePath, 'utf8')).not.toContain('cpa_retry_key');
+      expect(readFileSync(statePath, 'utf8')).toContain('CPA_URL=http://host.docker.internal:8317');
+      expect(readFileSync(keyPath, 'utf8')).toBe('cpa_retry_key\n');
+
+      const second = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...commonEnv,
+          CPAMP_OPERATION: 'upgrade',
+          FAKE_DOCKER_IMPORT_OK: '1',
+        },
+        encoding: 'utf8',
+      });
+
+      expect(second.status).toBe(0);
+      expect(combinedOutput(second)).toContain('will be retried automatically');
+      expect((readFileSync(dockerLog, 'utf8').match(/store-cpa-connection/g) || [])).toHaveLength(2);
+      expect(existsSync(statePath)).toBe(false);
+      expect(existsSync(keyPath)).toBe(false);
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(fakeBin, { recursive: true, force: true });
+      rmSync(dockerLog, { force: true });
+    }
+  });
+
+  it('retries a failed first native CPA import from the retained pending state', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const release = writeFakeNativeRelease();
+    const commandLog = path.join(installDir, 'native-command.log');
+    const dbPath = path.join(installDir, 'data/usage.sqlite');
+    const statePath = path.join(installDir, 'secrets/cpa-connection-import.pending');
+    const keyPath = path.join(installDir, 'secrets/cpa-management-key');
+
+    try {
+      const commonEnv = {
+        ...process.env,
+        CPAMP_NON_INTERACTIVE: '1',
+        CPAMP_CONFIRM: '1',
+        CPAMP_LANG: 'en-US',
+        CPAMP_VERSION: 'vnext',
+        CPAMP_INSTALL_DIR: installDir,
+        CPAMP_FAKE_NATIVE_ARCHIVE: release.archivePath,
+        FAKE_NATIVE_COMMAND_LOG: commandLog,
+        FAKE_NATIVE_DB_PATH: dbPath,
+        PATH: `${release.fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+      };
+      const first = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...commonEnv,
+          CPAMP_INSTALL_MODE: 'cpamp',
+          CPAMP_DEPLOY_METHOD: 'native',
+          CPAMP_CPA_CONNECTION_MODE: 'env',
+          CPAMP_CPA_URL: 'http://127.0.0.1:8317',
+          CPAMP_CPA_MANAGEMENT_KEY: 'cpa_native_retry_key',
+          FAKE_NATIVE_IMPORT_OK: '0',
+        },
+        encoding: 'utf8',
+      });
+
+      expect(first.status).toBe(1);
+      expect(existsSync(statePath)).toBe(true);
+      expect(readFileSync(statePath, 'utf8')).not.toContain('cpa_native_retry_key');
+      expect(readFileSync(keyPath, 'utf8')).toBe('cpa_native_retry_key\n');
+
+      const second = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...commonEnv,
+          CPAMP_OPERATION: 'upgrade',
+          FAKE_NATIVE_IMPORT_OK: '1',
+        },
+        encoding: 'utf8',
+      });
+
+      expect(second.status).toBe(0);
+      expect(combinedOutput(second)).toContain('will be retried automatically');
+      expect(readFileSync(commandLog, 'utf8').trim().split('\n')).toHaveLength(2);
+      expect(existsSync(statePath)).toBe(false);
+      expect(existsSync(keyPath)).toBe(false);
+    } finally {
+      stopNativeFixtureProcess(installDir);
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(release.fakeBin, { recursive: true, force: true });
+      rmSync(release.fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('migrates mixed-case native CPA fields and removes every semantic variant', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const release = writeFakeNativeRelease();
+    const legacy = writeLegacyNativeInstall(installDir);
+    const commandLog = path.join(installDir, 'native-command.log');
+    const config = JSON.parse(readFileSync(legacy.configPath, 'utf8'));
+    delete config.cpaUpstreamUrl;
+    delete config.managementKeyFile;
+    config.CPAUpstreamURL = 'http://127.0.0.1:8317';
+    config.ManagementKeyFile = '../../secrets/cpa-management-key';
+    writeFileSync(legacy.configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+          CPAMP_FAKE_NATIVE_ARCHIVE: release.archivePath,
+          FAKE_NATIVE_COMMAND_LOG: commandLog,
+          FAKE_NATIVE_DB_PATH: legacy.dbPath,
+          PATH: `${release.fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(commandLog, 'utf8')).toContain('store-cpa-connection');
+      const upgraded = JSON.parse(
+        readFileSync(path.join(installDir, 'runtime', release.packageName, 'config.json'), 'utf8')
+      );
+      expect(
+        Object.keys(upgraded).some((key) =>
+          ['cpaupstreamurl', 'managementkeyfile'].includes(key.toLowerCase())
+        )
+      ).toBe(false);
+    } finally {
+      stopNativeFixtureProcess(installDir);
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(release.fakeBin, { recursive: true, force: true });
+      rmSync(release.fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects duplicate case-insensitive native CPA fields before changing the install', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const legacy = writeLegacyNativeInstall(installDir);
+    const beforeRun = readFileSync(legacy.runPath, 'utf8');
+    const config = JSON.parse(readFileSync(legacy.configPath, 'utf8'));
+    config.CPAUpstreamURL = 'http://conflicting.example:8317';
+    writeFileSync(legacy.configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_SKIP_EXECUTE: '1',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).toContain(
+        'exactly one case-insensitive cpaUpstreamUrl field'
+      );
+      expect(readFileSync(legacy.runPath, 'utf8')).toBe(beforeRun);
+      expect(existsSync(legacy.cpaKeyPath)).toBe(true);
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a pre-pending Docker failure only with an explicit CPA URL', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const fakeBin = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-bin-'));
+    const dockerLog = path.join(os.tmpdir(), `cpamp-installer-docker-${process.pid}-${Date.now()}.log`);
+    const keyPath = path.join(installDir, 'secrets/cpa-management-key');
+
+    try {
+      mkdirSync(path.join(installDir, 'secrets'), { recursive: true });
+      writeFileSync(
+        path.join(installDir, '.env'),
+        'COMPOSE_PROJECT_NAME=cpamp\nCPAMP_IMAGE=example/cpamp:v1\nCPAMP_PORT=18317\n'
+      );
+      writeFileSync(
+        path.join(installDir, 'compose.yaml'),
+        'services:\n  cpa-manager-plus:\n    image: ${CPAMP_IMAGE}\n'
+      );
+      writeFileSync(path.join(installDir, 'secrets/cpamp-admin-key'), 'cpamp_existing_admin_key\n');
+      writeFileSync(keyPath, 'cpa_legacy_failed_key\n');
+      chmodSync(keyPath, 0o600);
+      writeFakeDocker(fakeBin);
+
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_INSTALL_DIR: installDir,
+          CPAMP_CPA_CONNECTION_MODE: 'env',
+          CPAMP_CPA_URL: 'http://host.docker.internal:8317',
+          FAKE_DOCKER_LOG: dockerLog,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(dockerLog, 'utf8')).toContain('store-cpa-connection');
+      expect(existsSync(path.join(installDir, 'secrets/cpa-connection-import.pending'))).toBe(
+        false
+      );
+      expect(existsSync(keyPath)).toBe(false);
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(fakeBin, { recursive: true, force: true });
+      rmSync(dockerLog, { force: true });
+    }
+  });
+
+  it('rejects a symlinked CPA import pending state without touching its target', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const externalDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-external-state-'));
+    const externalState = path.join(externalDir, 'pending-state');
+    const pendingPath = path.join(installDir, 'secrets/cpa-connection-import.pending');
+
+    try {
+      mkdirSync(path.join(installDir, 'secrets'), { recursive: true });
+      writeFileSync(
+        path.join(installDir, '.env'),
+        'COMPOSE_PROJECT_NAME=cpamp\nCPAMP_IMAGE=example/cpamp:v1\nCPAMP_PORT=18317\n'
+      );
+      writeFileSync(
+        path.join(installDir, 'compose.yaml'),
+        'services:\n  cpa-manager-plus:\n    image: ${CPAMP_IMAGE}\n'
+      );
+      writeFileSync(path.join(installDir, 'secrets/cpamp-admin-key'), 'cpamp_existing_admin_key\n');
+      writeFileSync(externalState, 'external-state-content\n');
+      chmodSync(externalState, 0o640);
+      symlinkSync(externalState, pendingPath);
+
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_INSTALL_DIR: installDir,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).toContain('not an installer-owned regular file');
+      expect(readFileSync(externalState, 'utf8')).toBe('external-state-content\n');
+      expect(statSync(externalState).mode & 0o777).toBe(0o640);
+      expect(lstatSync(pendingPath).isSymbolicLink()).toBe(true);
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+      rmSync(externalDir, { recursive: true, force: true });
     }
   });
 });

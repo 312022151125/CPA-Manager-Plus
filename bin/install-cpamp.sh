@@ -44,6 +44,9 @@ existing_volume_name=""
 auth_validation_status="pending"
 admin_secret_missing="0"
 cpa_connection_imported="0"
+cpa_import_retry_state_required="0"
+cpa_import_retry_state_loaded="0"
+cpa_import_retry_state_file=""
 # Pending finalization from an earlier installer run: the installer-managed
 # plaintext CPA Management Key still exists while the runtime config no longer
 # references it. It is removed only after the stored SQLite connection is
@@ -221,6 +224,10 @@ text() {
     en-US:cpa_rollback_failed) printf 'Automatic CPA connection migration rollback did not fully succeed. Restore the cpa-key-migration backups, keep the temporary secret, and restart the service.' ;;
     zh-CN:cpa_key_pending_cleanup) printf '检测到上次安装遗留的临时 CPA Management Key；本次将在健康、管理员和 CPA 代理验证全部通过后删除它。' ;;
     en-US:cpa_key_pending_cleanup) printf 'A temporary CPA Management Key from a previous installer run was detected; it will be removed after health, admin, and CPA proxy validation all pass.' ;;
+    zh-CN:cpa_import_retry_loaded) printf '检测到上次失败后保留的 CPA 连接导入状态；本次将自动重试离线导入。' ;;
+    en-US:cpa_import_retry_loaded) printf 'A CPA connection import state retained after an earlier failure was detected; the offline import will be retried automatically.' ;;
+    zh-CN:cpa_import_state_cleanup_failed) printf '业务迁移已成功，但一次性 CPA 导入状态清理失败；状态和临时密钥均已保留以便安全重试。' ;;
+    en-US:cpa_import_state_cleanup_failed) printf 'The migration succeeded, but the one-time CPA import state could not be removed; the state and temporary key were retained for a safe retry.' ;;
     zh-CN:cpa_snapshot_cleanup_failed) printf '迁移已提交，但 Manager 数据快照清理失败；快照已保留，请稍后手动删除。' ;;
     en-US:cpa_snapshot_cleanup_failed) printf 'The migration was committed, but cleaning the Manager data snapshot failed; the snapshot was kept for manual removal.' ;;
     zh-CN:cpa_key_cleanup_failed) printf '业务迁移已成功，但临时 CPA Management Key 清理失败；文件已保留，请稍后手动删除。' ;;
@@ -734,7 +741,11 @@ read_json_string_value() {
   local key="$2"
   if command_exists jq; then
     jq -er --arg key "$key" '
-      if has($key) and (.[$key] | type) == "string" then .[$key] else empty end
+      [to_entries[] | select(.key | ascii_downcase == ($key | ascii_downcase))] as $matches
+      | if ($matches | length) == 1 and ($matches[0].value | type) == "string"
+        then $matches[0].value
+        else empty
+        end
     ' "$file"
     return
   fi
@@ -744,17 +755,23 @@ import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
-    value = json.load(handle).get(sys.argv[2])
-if not isinstance(value, str):
+    pairs = json.load(handle, object_pairs_hook=lambda value: value)
+if not isinstance(pairs, list):
     raise SystemExit(1)
-print(value)
+matches = [value for name, value in pairs if name.casefold() == sys.argv[2].casefold()]
+if len(matches) != 1 or not isinstance(matches[0], str):
+    raise SystemExit(1)
+print(matches[0])
 PY
     return
   fi
-  awk -v key="$key" '
-    $0 ~ "^[[:space:]]*\\\"" key "\\\"[[:space:]]*:[[:space:]]*\\\"" {
+  awk -v key="$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')" '
+    {
+      lowered = tolower($0)
+    }
+    lowered ~ "^[[:space:]]*\\\"" key "\\\"[[:space:]]*:[[:space:]]*\\\"" {
       value = $0
-      sub("^[[:space:]]*\\\"" key "\\\"[[:space:]]*:[[:space:]]*\\\"", "", value)
+      sub("^[[:space:]]*\\\"[^\\\"]+\\\"[[:space:]]*:[[:space:]]*\\\"", "", value)
       sub("\\\"[[:space:]]*,?[[:space:]]*$", "", value)
       print value
       found = 1
@@ -764,10 +781,40 @@ PY
   ' "$file"
 }
 
+json_semantic_key_count() {
+  local file="$1"
+  local key="$2"
+  if command_exists jq; then
+    jq -er --arg key "$key" '
+      [to_entries[] | select(.key | ascii_downcase == ($key | ascii_downcase))] | length
+    ' "$file"
+    return
+  fi
+  if command_exists python3; then
+    python3 - "$file" "$key" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    pairs = json.load(handle, object_pairs_hook=lambda value: value)
+if not isinstance(pairs, list):
+    raise SystemExit(1)
+print(sum(1 for name, _ in pairs if name.casefold() == sys.argv[2].casefold()))
+PY
+    return
+  fi
+  grep -oiE "\"$key\"[[:space:]]*:" "$file" | wc -l | tr -d '[:space:]'
+}
+
 require_json_string_value() {
   local file="$1"
   local key="$2"
+  local count=""
   local value=""
+  count="$(json_semantic_key_count "$file" "$key" 2>/dev/null)" ||
+    die "Existing native config is not valid JSON."
+  [ "$count" = "1" ] ||
+    die "Existing native config must declare exactly one case-insensitive $key field."
   value="$(read_json_string_value "$file" "$key" 2>/dev/null)" ||
     die "Existing native config does not declare $key as a supported string value."
   printf '%s\n' "$value"
@@ -776,22 +823,9 @@ require_json_string_value() {
 json_key_declared() {
   local file="$1"
   local key="$2"
-  if command_exists jq; then
-    jq -e --arg key "$key" 'has($key)' "$file" >/dev/null 2>&1
-    return
-  fi
-  if command_exists python3; then
-    python3 - "$file" "$key" <<'PY' >/dev/null 2>&1
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    data = json.load(handle)
-raise SystemExit(0 if sys.argv[2] in data else 1)
-PY
-    return
-  fi
-  grep -qE "\"$key\"[[:space:]]*:" "$file"
+  local count=""
+  count="$(json_semantic_key_count "$file" "$key" 2>/dev/null)" || return 1
+  [ "$count" -gt 0 ]
 }
 
 resolve_native_config_path() {
@@ -842,6 +876,167 @@ is_installer_owned_cpa_key_file() {
   fi
   canonical="$(canonical_parent_path "$candidate")" || return 1
   path_is_managed_cpa_key_file "$canonical"
+}
+
+is_installer_owned_cpa_import_input() {
+  local candidate="$1"
+  local canonical=""
+  local secrets_dir=""
+  local name=""
+  [ -n "$candidate" ] && [ -f "$candidate" ] && [ ! -L "$candidate" ] || return 1
+  canonical="$(canonical_parent_path "$candidate")" || return 1
+  secrets_dir="$(cd "$install_dir/secrets" 2>/dev/null && pwd -P)" || return 1
+  [ "$(dirname "$canonical")" = "$secrets_dir" ] || return 1
+  name="$(basename "$canonical")"
+  case "$name" in
+    cpa-management-key) return 0 ;;
+    cpa-management-key.import.*)
+      name="${name#cpa-management-key.import.}"
+      case "$name" in
+        ''|*[!0-9]*) return 1 ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+cpa_import_retry_path() {
+  printf '%s\n' "$install_dir/secrets/cpa-connection-import.pending"
+}
+
+load_cpa_import_retry_state() {
+  local state_file=""
+  local version=""
+  local key_file_name=""
+  local key_ownership=""
+  local declared_lines=""
+  local candidate=""
+
+  state_file="$(cpa_import_retry_path)"
+  if [ ! -e "$state_file" ] && [ ! -L "$state_file" ]; then
+    return 1
+  fi
+  [ -f "$state_file" ] && [ ! -L "$state_file" ] ||
+    die "CPA import retry state is not an installer-owned regular file: $state_file"
+  if [ "$dry_run" != "1" ]; then
+    chmod 600 "$state_file" || die "Unable to restrict CPA import retry state permissions: $state_file"
+  fi
+  declared_lines="$(awk '
+    /^[[:space:]]*$/ { next }
+    /^VERSION=/ { version++ ; next }
+    /^CPA_URL=/ { url++ ; next }
+    /^KEY_FILE=/ { key_file++ ; next }
+    /^KEY_OWNERSHIP=/ { ownership++ ; next }
+    { invalid++ }
+    END {
+      if (version == 1 && url == 1 && key_file == 1 && ownership == 1 && invalid == 0) print "valid"
+    }
+  ' "$state_file")"
+  [ "$declared_lines" = "valid" ] || die "CPA import retry state is invalid: $state_file"
+
+  version="$(read_env_value "$state_file" VERSION)" || die "CPA import retry state has no version."
+  cpa_url="$(read_env_value "$state_file" CPA_URL)" || die "CPA import retry state has no CPA URL."
+  key_file_name="$(read_env_value "$state_file" KEY_FILE)" || die "CPA import retry state has no key file."
+  key_ownership="$(read_env_value "$state_file" KEY_OWNERSHIP)" || die "CPA import retry state has no key ownership."
+  [ "$version" = "1" ] || die "Unsupported CPA import retry state version: $version"
+  [ "$key_ownership" = "installer" ] || die "Unsupported CPA import key ownership: $key_ownership"
+  case "$key_file_name" in
+    cpa-management-key) ;;
+    cpa-management-key.import.*)
+      case "${key_file_name#cpa-management-key.import.}" in
+        ''|*[!0-9]*) die "CPA import retry state contains an unsafe key file name: $key_file_name" ;;
+      esac
+      ;;
+    *) die "CPA import retry state contains an unsafe key file name: $key_file_name" ;;
+  esac
+  validate_url_value "$(text cpa_url)" "$cpa_url"
+  candidate="$install_dir/secrets/$key_file_name"
+  is_installer_owned_cpa_import_input "$candidate" ||
+    die "CPA import retry key is missing or is not installer-owned: $candidate"
+  cpa_management_key_file="$(canonical_parent_path "$candidate")" ||
+    die "Unable to resolve CPA import retry key: $candidate"
+  cpa_management_key="$(read_existing_secret "$cpa_management_key_file" "1")" ||
+    die "CPA import retry key is not readable: $cpa_management_key_file"
+  cpa_management_key_cleanup_allowed="1"
+  case "$key_file_name" in
+    cpa-management-key.import.*) cpa_management_key_import_copy="1" ;;
+  esac
+  cpa_connection_mode="env"
+  cpa_import_retry_state_required="1"
+  cpa_import_retry_state_loaded="1"
+  cpa_import_retry_state_file="$state_file"
+  return 0
+}
+
+load_explicit_cpa_import_recovery() {
+  local requested_mode="${CPAMP_CPA_CONNECTION_MODE:-}"
+  local managed_key="$install_dir/secrets/cpa-management-key"
+  local existing_key=""
+
+  [ -n "$requested_mode" ] || return 1
+  case "$requested_mode" in
+    env|secret|managed) ;;
+    setup|panel|later) return 1 ;;
+    *) die "Unsupported CPAMP_CPA_CONNECTION_MODE: $requested_mode" ;;
+  esac
+  [ -n "${CPAMP_CPA_URL:-}" ] ||
+    die "CPAMP_CPA_URL is required to recover an unfinished CPA connection import."
+  cpa_url="$CPAMP_CPA_URL"
+  validate_url_value "$(text cpa_url)" "$cpa_url"
+
+  cpa_management_key_file="$managed_key"
+  if is_installer_owned_cpa_key_file "$managed_key"; then
+    existing_key="$(read_existing_secret "$managed_key" "1")" ||
+      die "CPA Management Key file is not readable: $managed_key"
+    if [ -n "${CPAMP_CPA_MANAGEMENT_KEY:-}" ] && [ "$CPAMP_CPA_MANAGEMENT_KEY" != "$existing_key" ]; then
+      die "CPAMP_CPA_MANAGEMENT_KEY conflicts with the retained installer-managed key."
+    fi
+    cpa_management_key="$existing_key"
+  else
+    [ ! -e "$managed_key" ] && [ ! -L "$managed_key" ] ||
+      die "The managed CPA key path is externally owned; recovery requires restoring the original runtime reference."
+    [ -n "${CPAMP_CPA_MANAGEMENT_KEY:-}" ] ||
+      die "CPAMP_CPA_MANAGEMENT_KEY is required because no retained installer-managed key exists."
+    cpa_management_key="$CPAMP_CPA_MANAGEMENT_KEY"
+    validate_secret_value "$(text cpa_key)" "$cpa_management_key"
+    cpa_management_key_inline_input="1"
+  fi
+  cpa_management_key_cleanup_allowed="1"
+  cpa_connection_mode="env"
+  cpa_import_retry_state_required="1"
+  return 0
+}
+
+persist_cpa_import_retry_state() {
+  local state_file=""
+  local tmp=""
+  local key_file_name=""
+
+  [ "$cpa_import_retry_state_required" = "1" ] || return 0
+  is_installer_owned_cpa_import_input "$cpa_management_key_file" ||
+    die "Refusing to persist retry state for a CPA key that is not installer-owned: $cpa_management_key_file"
+  key_file_name="$(basename "$cpa_management_key_file")"
+  state_file="$(cpa_import_retry_path)"
+  tmp="${state_file}.tmp.$$"
+  if ! (umask 077 && {
+    printf 'VERSION=1\n'
+    printf 'CPA_URL=%s\n' "$cpa_url"
+    printf 'KEY_FILE=%s\n' "$key_file_name"
+    printf 'KEY_OWNERSHIP=installer\n'
+  } > "$tmp"); then
+    rm -f "$tmp"
+    die "Unable to write CPA import retry state: $state_file"
+  fi
+  chmod 600 "$tmp" || {
+    rm -f "$tmp"
+    die "Unable to restrict CPA import retry state permissions: $state_file"
+  }
+  mv -f "$tmp" "$state_file" || {
+    rm -f "$tmp"
+    die "Unable to publish CPA import retry state: $state_file"
+  }
+  cpa_import_retry_state_file="$state_file"
 }
 
 # detect_installer_managed_cpa_key_pending_cleanup recognizes an unfinished
@@ -1038,8 +1233,17 @@ load_existing_native_config() {
         die "CPA Management Key file is missing: $cpa_management_key_file"
     fi
     cpa_connection_mode="env"
+    if [ -e "$(cpa_import_retry_path)" ] || [ -L "$(cpa_import_retry_path)" ]; then
+      die "Existing native config and CPA import retry state both declare migration inputs."
+    fi
   else
-    cpa_connection_mode="stored"
+    if load_cpa_import_retry_state; then
+      :
+    elif load_explicit_cpa_import_recovery; then
+      :
+    else
+      cpa_connection_mode="stored"
+    fi
   fi
 
   for value in "$native_data_dir" "$native_db_path" "$native_data_key_path" "$native_admin_key_file"; do
@@ -1160,6 +1364,15 @@ load_existing_docker_config() {
     fi
     validate_secret_value "CPA Management Key" "$cpa_management_key"
     validate_url_value "$(text cpa_url)" "$cpa_url"
+    if [ -e "$(cpa_import_retry_path)" ] || [ -L "$(cpa_import_retry_path)" ]; then
+      die "Existing Docker config and CPA import retry state both declare migration inputs."
+    fi
+  else
+    if load_cpa_import_retry_state; then
+      :
+    elif load_explicit_cpa_import_recovery; then
+      :
+    fi
   fi
   if value="$(read_existing_secret "$install_dir/secrets/cpamp-admin-key")"; then
     admin_key="$value"
@@ -1442,6 +1655,9 @@ print_summary() {
   fi
   if [ "$installer_managed_cpa_key_pending_cleanup" = "1" ]; then
     say "$(text cpa_key_pending_cleanup)"
+  fi
+  if [ "$cpa_import_retry_state_loaded" = "1" ]; then
+    say "$(text cpa_import_retry_loaded)"
   fi
 }
 
@@ -1888,6 +2104,7 @@ generate_docker_files() {
     if is_installer_owned_cpa_key_file "$cpa_management_key_file"; then
       cpa_management_key_cleanup_allowed="1"
     fi
+    cpa_import_retry_state_required="1"
     generated_demo_client_key="sk-$(random_alnum 64)"
     demo_client_key="$(ensure_secret_file "$install_dir/secrets/cpa-demo-client-key" "$generated_demo_client_key")"
     write_cpa_config
@@ -1897,6 +2114,7 @@ generate_docker_files() {
     if is_installer_owned_cpa_key_file "$cpa_management_key_file"; then
       cpa_management_key_cleanup_allowed="1"
     fi
+    cpa_import_retry_state_required="1"
   fi
 
   write_docker_compose
@@ -1940,6 +2158,7 @@ print_docker_post_import_validation_commands() {
 run_docker_connection_import() {
   local key_file="${cpa_management_key_file:-$install_dir/secrets/cpa-management-key}"
   materialize_cpa_management_key_file
+  persist_cpa_import_retry_state
   (
     cd "$install_dir"
     docker compose run --rm --no-deps \
@@ -2243,6 +2462,15 @@ finalize_cpa_connection_import() {
     return
   fi
   if [ "$cpa_connection_imported" = "1" ]; then
+    if [ "$cpa_import_retry_state_required" = "1" ] && [ -n "$cpa_import_retry_state_file" ]; then
+      if ! rm -f "$cpa_import_retry_state_file"; then
+        printf '%s\n' "$(text cpa_import_state_cleanup_failed) File: $cpa_import_retry_state_file" >&2
+        return
+      fi
+      cpa_import_retry_state_required="0"
+      cpa_import_retry_state_loaded="0"
+      cpa_import_retry_state_file=""
+    fi
     # Only genuinely installer-owned key files may be removed: the managed
     # path re-checked through is_installer_owned_cpa_key_file, or an import
     # copy this run created next to an externally managed symlink/file.
@@ -2514,7 +2742,7 @@ write_native_upgrade_config() {
     --output "$file"; then
     die "Failed to sanitize the existing native runtime config."
   fi
-  if grep -qE '"(cpaUpstreamUrl|managementKeyFile)"[[:space:]]*:' "$file"; then
+  if grep -qiE '"(cpaUpstreamUrl|managementKeyFile)"[[:space:]]*:' "$file"; then
     die "The generated native runtime config still contains legacy CPA credentials."
   fi
 }
@@ -2696,6 +2924,7 @@ generate_native_files() {
       if is_installer_owned_cpa_key_file "$cpa_management_key_file"; then
         cpa_management_key_cleanup_allowed="1"
       fi
+      cpa_import_retry_state_required="1"
     fi
   fi
 
@@ -2771,6 +3000,7 @@ run_native_connection_import() {
     return
   fi
   materialize_cpa_management_key_file
+  persist_cpa_import_retry_state
   if [ "$operation" = "upgrade" ] && [ "$existing_install_state" = "native-managed" ]; then
     native_upgrade_data_mutated="1"
   fi
