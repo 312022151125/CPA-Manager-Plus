@@ -109,6 +109,7 @@ export const buildScopeFilteredRows = (
   const accountAuthIndices = new Set(accountCriteria.authIndices.map(normalizeScopeValue));
   const accountApiKeyHashes = new Set(accountCriteria.apiKeyHashes.map(normalizeScopeValue));
   const hasAccountSourceHashFilter = accountCriteria.sourceHashes.length > 0;
+  const accountProvider = normalizeScopeValue(accountCriteria.provider);
   const provider = normalizeScopeValue(scopeFilters.provider);
   const authFile = normalizeScopeValue(scopeFilters.authFile);
   const projectId = normalizeScopeValue(scopeFilters.projectId);
@@ -134,12 +135,22 @@ export const buildScopeFilteredRows = (
         // source_hash is only available in analytics payloads, so avoid dropping rows after
         // the backend has already applied the exact source_hash filter.
       } else {
+        if (
+          accountProvider &&
+          normalizeScopeValue(row.providerIdentity ?? row.provider) !== accountProvider
+        ) {
+          return false;
+        }
         const rowAccountValues = [
+          row.accountIdentity,
+          row.authLabelIdentity,
+          row.sourceIdentity,
           row.account,
           row.accountMasked,
           row.authLabel,
           row.source,
           row.sourceMasked,
+          row.authIndexIdentity,
           row.authIndex,
         ].map(normalizeScopeValue);
         if (!rowAccountValues.includes(account)) return false;
@@ -363,6 +374,10 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
 
   rows.forEach((row) => {
     const provider = normalizeMonitoringProvider(row.providerIdentity ?? row.provider);
+    const filterAccount =
+      [row.accountIdentity, row.authLabelIdentity, row.sourceIdentity, row.account].find(
+        (value) => Boolean(value && isEffectiveLabel(value))
+      ) || '';
     const accountKey = buildMonitoringAccountRowId({
       provider,
       account: row.accountIdentity ?? row.account,
@@ -374,7 +389,7 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
     const existing = grouped.get(accountKey) ?? {
       id: accountKey,
       account: row.account,
-      filterAccount: row.accountIdentity ?? row.account,
+      filterAccount,
       provider,
       accountMasked: row.accountMasked,
       authLabels: new Set<string>(),
