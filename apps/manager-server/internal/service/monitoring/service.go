@@ -3047,8 +3047,16 @@ type monitoringAccountIdentity struct {
 	SourceHash        string
 }
 
+// normalizeMonitoringProvider applies the minimal normalization used by the
+// monitoring account identity (trim, lowercase, '_'->'-'). It deliberately
+// does NOT fold provider aliases such as x-ai/grok -> xai, which remain
+// distinct providers in the monitoring identity scope.
+func normalizeMonitoringProvider(value string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", "-"))
+}
+
 func (identity monitoringAccountIdentity) provider() string {
-	return usageidentity.CanonicalProvider(identity.Provider)
+	return normalizeMonitoringProvider(identity.Provider)
 }
 
 func (identity monitoringAccountIdentity) key() string {

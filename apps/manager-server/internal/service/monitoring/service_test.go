@@ -1368,7 +1368,7 @@ func TestAnalyticsAccountStatsProviderScopeFallbackIdentity(t *testing.T) {
 	}
 }
 
-func TestBuildAccountStatsCanonicalizesProviderAliases(t *testing.T) {
+func TestBuildAccountStatsDoesNotMergeProviderAliasesAcrossMonitoringIdentity(t *testing.T) {
 	stats := []store.AccountModelStat{
 		{
 			AccountSnapshot:      "same@example.com",
@@ -1391,11 +1391,21 @@ func TestBuildAccountStatsCanonicalizesProviderAliases(t *testing.T) {
 	}
 
 	rows := buildAccountStats(stats, nil)
-	if len(rows) != 1 || rows[0].AuthProviderSnapshot != "xai" || rows[0].Calls != 2 || rows[0].TotalTokens != 30 {
-		t.Fatalf("canonical provider account rows = %#v", rows)
+	// Monitoring identity deliberately keeps x-ai and grok distinct (no alias
+	// folding); the persisted Account History contract (usageidentity) still
+	// folds them, but monitoring account identity does not.
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 distinct monitoring account rows, got %d: %#v", len(rows), rows)
 	}
-	if rows[0].ID != "monitoring-account:1:account:786169:73616D65406578616D706C652E636F6D" {
-		t.Fatalf("monitoring account id = %q", rows[0].ID)
+	if rows[0].ID == rows[1].ID {
+		t.Fatalf("expected distinct monitoring account ids, got duplicate %q", rows[0].ID)
+	}
+	providers := map[string]bool{}
+	for _, row := range rows {
+		providers[row.AuthProviderSnapshot] = true
+	}
+	if !providers["x-ai"] || !providers["grok"] {
+		t.Fatalf("expected x-ai and grok to remain distinct, got %#v", providers)
 	}
 }
 
