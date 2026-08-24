@@ -21,8 +21,8 @@ const mocks = vi.hoisted(() => ({
   authFiles: [] as AuthFileItem[],
   nextAuthFiles: null as AuthFileItem[] | null,
   lastAccountOverviewProps: null as null | {
-    accountQuotaStates: Record<string, AccountQuotaState>;
-    onLoadAccountQuota: (account: string, force: boolean) => void | Promise<void>;
+    accountQuotaStatesByRowId: Record<string, AccountQuotaState>;
+    onLoadAccountQuota: (rowId: string, force: boolean) => void | Promise<void>;
   },
   loadHeaderSnapshots: vi.fn(async () => undefined),
   refreshMeta: vi.fn(),
@@ -237,8 +237,8 @@ vi.mock('@/features/monitoring/model/monitoringCenterPageModel', async (importOr
 
 vi.mock('@/features/monitoring/components/AccountOverviewPanel', () => ({
   AccountOverviewPanel: (props: {
-    accountQuotaStates: Record<string, AccountQuotaState>;
-    onLoadAccountQuota: (account: string, force: boolean) => void | Promise<void>;
+    accountQuotaStatesByRowId: Record<string, AccountQuotaState>;
+    onLoadAccountQuota: (rowId: string, force: boolean) => void | Promise<void>;
   }) => {
     mocks.lastAccountOverviewProps = props;
     return null;
@@ -335,7 +335,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
     expect(mocks.requestAccountQuota.mock.calls[0]?.[0].authIndex).toBe('1');
     expect(
-      mocks.lastAccountOverviewProps?.accountQuotaStates['workspace-a']?.entries[0]?.windows[0]
+      mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.entries[0]?.windows[0]
         ?.remainingPercent
     ).toBe(10);
 
@@ -356,11 +356,11 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(1);
     expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(2);
     expect(mocks.requestAccountQuota.mock.calls[1]?.[0].authIndex).toBe('2');
-    expect(mocks.lastAccountOverviewProps?.accountQuotaStates['workspace-a']?.targetKey).toContain(
-      'codex::2::codex-new.json'
-    );
     expect(
-      mocks.lastAccountOverviewProps?.accountQuotaStates['workspace-a']?.entries[0]?.windows[0]
+      mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.targetKey
+    ).toContain('codex::2::codex-new.json');
+    expect(
+      mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.entries[0]?.windows[0]
         ?.remainingPercent
     ).toBe(90);
   });
