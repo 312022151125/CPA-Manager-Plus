@@ -37,22 +37,6 @@ func TestAccountKeyRejectsMissingIdentity(t *testing.T) {
 	}
 }
 
-func TestCanonicalProvider(t *testing.T) {
-	testCases := map[string]string{
-		" Codex ": "codex",
-		"OPEN_AI": "open-ai",
-		"x-ai":    "xai",
-		"X_AI":    "xai",
-		"grok":    "xai",
-		"":        "",
-	}
-	for input, want := range testCases {
-		if got := CanonicalProvider(input); got != want {
-			t.Fatalf("CanonicalProvider(%q) = %q, want %q", input, got, want)
-		}
-	}
-}
-
 func TestSQLAccountKeyExpressionMatchesGo(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

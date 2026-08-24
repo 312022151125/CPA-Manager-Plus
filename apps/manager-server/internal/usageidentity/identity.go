@@ -32,7 +32,7 @@ type Fields struct {
 func AccountKey(fields Fields) (string, bool) {
 	authFile := effectiveAuthFile(fields)
 	authIndex := strings.TrimSpace(fields.AuthIndex)
-	provider := CanonicalProvider(fields.AuthProviderSnapshot)
+	provider := normalizeProvider(fields.AuthProviderSnapshot)
 	projectID := strings.TrimSpace(fields.AuthProjectIDSnapshot)
 	account := strings.TrimSpace(fields.AccountSnapshot)
 	label := strings.TrimSpace(fields.AuthLabelSnapshot)
@@ -138,9 +138,9 @@ func effectiveAuthFile(fields Fields) string {
 	return source
 }
 
-// CanonicalProvider normalizes provider namespaces shared by persisted
-// credential identity and monitoring account identity.
-func CanonicalProvider(value string) string {
+// normalizeProvider normalizes provider namespaces for persisted credential
+// identity and account history identity keys.
+func normalizeProvider(value string) string {
 	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", "-"))
 	switch normalized {
 	case "x-ai", "grok":

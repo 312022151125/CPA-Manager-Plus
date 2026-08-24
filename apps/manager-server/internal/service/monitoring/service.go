@@ -3048,11 +3048,11 @@ type monitoringAccountIdentity struct {
 }
 
 // normalizeMonitoringProvider applies the minimal normalization used by the
-// monitoring account identity (trim, lowercase, '_'->'-'). It deliberately
-// does NOT fold provider aliases such as x-ai/grok -> xai, which remain
-// distinct providers in the monitoring identity scope.
+// monitoring account identity (trim, lowercase). It deliberately does NOT
+// replace '_' with '-' or fold provider aliases such as x-ai/grok -> xai,
+// matching the backend provider filter which only lowercases provider values.
 func normalizeMonitoringProvider(value string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", "-"))
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func (identity monitoringAccountIdentity) provider() string {
