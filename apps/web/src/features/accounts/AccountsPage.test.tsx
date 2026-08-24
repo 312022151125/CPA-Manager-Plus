@@ -1359,6 +1359,7 @@ describe('AccountsPage replacement flows', () => {
   it('keeps a direct re-login pending after a credential reload failure and retries it manually', async () => {
     const file = {
       ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      account_id: 'space-codex',
       status: 'error',
       statusMessage: 'token_expired',
       last_refresh: 1_000,
@@ -1439,6 +1440,7 @@ describe('AccountsPage replacement flows', () => {
   it('retries a pending direct re-login after Accounts remounts', async () => {
     const file = {
       ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      account_id: 'space-codex',
       status: 'error',
       statusMessage: 'token_expired',
       last_refresh: 1_000,
@@ -4882,10 +4884,14 @@ describe('AccountsPage replacement flows', () => {
   it('invalidates only the reauthorized shared credential and ignores its late quota response', async () => {
     const first = {
       ...makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com'),
+      account_id: 'space-first',
       last_refresh: 1_000,
       modified: 1_100,
     } as AuthFileItem;
-    const second = makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com');
+    const second = {
+      ...makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com'),
+      account_id: 'space-second',
+    } as AuthFileItem;
     mocks.files = [first, second];
     installCodexQuotaStoreMutationMock();
     mocks.quotaState.codexQuota = {
@@ -4943,6 +4949,7 @@ describe('AccountsPage replacement flows', () => {
         fileName: first.name,
         provider: 'codex',
         authIndex: first.authIndex,
+        accountId: 'space-first',
         accountSnapshot: 'first@example.com',
       });
     });
@@ -6177,10 +6184,14 @@ describe('AccountsPage replacement flows', () => {
   it('does not reattach filename-only inspection evidence after reauth or capability rechecks', async () => {
     const original = {
       ...makeCodexFile('rotated-codex.json', 'auth-before-reauth', 'before@example.com'),
+      account_id: 'space-before',
       last_refresh: 1_000,
       modified: 1_100,
     } as AuthFileItem;
-    const replacement = makeCodexFile(original.name, 'auth-after-reauth', 'after@example.com');
+    const replacement = {
+      ...makeCodexFile(original.name, 'auth-after-reauth', 'after@example.com'),
+      account_id: 'space-after',
+    } as AuthFileItem;
     mocks.files = [original];
     installCodexQuotaStoreMutationMock();
     mocks.quotaState.codexQuota = {
@@ -6250,6 +6261,7 @@ describe('AccountsPage replacement flows', () => {
         fileName: original.name,
         provider: 'codex',
         authIndex: original.authIndex,
+        accountId: 'space-before',
         accountSnapshot: 'before@example.com',
       });
     });
@@ -6395,10 +6407,14 @@ describe('AccountsPage replacement flows', () => {
   it('does not reattach filename-only inspection evidence when a shared file becomes singular after reauth', async () => {
     const first = {
       ...makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com'),
+      account_id: 'space-first',
       last_refresh: 1_000,
       modified: 1_100,
     } as AuthFileItem;
-    const second = makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com');
+    const second = {
+      ...makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com'),
+      account_id: 'space-second',
+    } as AuthFileItem;
     mocks.files = [first, second];
     const renderer = await renderAccountsPage();
 
@@ -6434,6 +6450,7 @@ describe('AccountsPage replacement flows', () => {
         fileName: first.name,
         provider: 'codex',
         authIndex: first.authIndex,
+        accountId: 'space-first',
         accountSnapshot: 'first@example.com',
       });
     });
@@ -6456,10 +6473,14 @@ describe('AccountsPage replacement flows', () => {
   it('preserves exact sibling evidence when a shared file becomes singular after reauth', async () => {
     const first = {
       ...makeCodexFile('shared-codex.json', 'auth-1', 'first@example.com'),
+      account_id: 'space-first',
       last_refresh: 1_000,
       modified: 1_100,
     } as AuthFileItem;
-    const second = makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com');
+    const second = {
+      ...makeCodexFile('shared-codex.json', 'auth-2', 'second@example.com'),
+      account_id: 'space-second',
+    } as AuthFileItem;
     const fallbackAtMs = 2_000;
     const inspectionAtMs = 3_000;
     const exactOperationalAtMs = 4_000;
@@ -6556,6 +6577,7 @@ describe('AccountsPage replacement flows', () => {
         fileName: first.name,
         provider: 'codex',
         authIndex: first.authIndex,
+        accountId: 'space-first',
         accountSnapshot: 'first@example.com',
       });
     });
