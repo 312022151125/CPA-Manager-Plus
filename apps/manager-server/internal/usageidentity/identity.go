@@ -11,7 +11,32 @@ import (
 // can be rebuilt from immutable usage_events without touching raw history.
 const FormatVersion = "3"
 
-const keyPrefix = "usage-account-history"
+const (
+	keyPrefix                    = "usage-account-history"
+	codexAccountIDSnapshotPrefix = "codex-account-id:v1:"
+)
+
+// CodexAccountIDSnapshot marks a freshly observed, explicit ChatGPT account_id
+// before it is stored in the legacy project-id snapshot column. Historical
+// values in that column predate this provenance marker and must never be
+// reinterpreted as a stable Codex account identity.
+func CodexAccountIDSnapshot(accountID string) string {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return ""
+	}
+	return codexAccountIDSnapshotPrefix + accountID
+}
+
+// CodexAccountIDFromSnapshot returns an account id only when the snapshot has
+// explicit provenance from the strict Codex account-id resolver.
+func CodexAccountIDFromSnapshot(snapshot string) string {
+	snapshot = strings.TrimSpace(snapshot)
+	if !strings.HasPrefix(snapshot, codexAccountIDSnapshotPrefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(snapshot, codexAccountIDSnapshotPrefix))
+}
 
 // Fields contains the credential snapshots available on a usage event or an
 // account-history request. Display values are deliberately lower priority than
@@ -31,9 +56,10 @@ type Fields struct {
 // correlation contract.
 func AccountKey(fields Fields) (string, bool) {
 	provider := normalizeProvider(fields.AuthProviderSnapshot)
-	projectID := strings.TrimSpace(fields.AuthProjectIDSnapshot)
-	if provider == "codex" && projectID != "" {
-		return encodeKey("codex-account", provider, projectID), true
+	if provider == "codex" {
+		if accountID := CodexAccountIDFromSnapshot(fields.AuthProjectIDSnapshot); accountID != "" {
+			return encodeKey("codex-account", provider, accountID), true
+		}
 	}
 	return LegacyAccountKey(fields)
 }
@@ -46,6 +72,9 @@ func LegacyAccountKey(fields Fields) (string, bool) {
 	authIndex := strings.TrimSpace(fields.AuthIndex)
 	provider := normalizeProvider(fields.AuthProviderSnapshot)
 	projectID := strings.TrimSpace(fields.AuthProjectIDSnapshot)
+	if provider == "codex" && CodexAccountIDFromSnapshot(projectID) != "" {
+		projectID = ""
+	}
 	account := strings.TrimSpace(fields.AccountSnapshot)
 	label := strings.TrimSpace(fields.AuthLabelSnapshot)
 
@@ -73,21 +102,14 @@ func LegacyAccountKey(fields Fields) (string, bool) {
 	}
 }
 
-// PricingStructureRevision binds the pricing rollup structure to the identity
-// format as well as model/context-tier structure.
 func PricingStructureRevision(modelPriceRevision string) string {
 	return fmt.Sprintf("model-%s:identity-%s:%s", ModelFormatVersion, FormatVersion, strings.TrimSpace(modelPriceRevision))
 }
 
-// AccountHistoryStructureRevision binds the legacy account-history rollup to
-// both credential identity and analytics model identity.
 func AccountHistoryStructureRevision() string {
 	return fmt.Sprintf("identity-%s:model-%s", FormatVersion, ModelFormatVersion)
 }
 
-// SQLAccountKeyExpression returns the SQLite expression equivalent of
-// AccountKey for a usage_events row. alias may be empty or a trusted internal
-// table alias such as "e".
 func SQLAccountKeyExpression(alias string) string {
 	column := func(name string) string {
 		if alias == "" {
@@ -112,6 +134,11 @@ func SQLAccountKeyExpression(alias string) string {
 	authFile := "case when " + authFileSnapshot + " <> '' then " + authFileSnapshot +
 		" when " + source + " <> '' and " + source + " <> " + account + " and " + source + " <> " + label +
 		" then " + source + " else '' end"
+	marker := "'" + codexAccountIDSnapshotPrefix + "'"
+	codexAccountID := "case when substr(" + projectID + ", 1, length(" + marker + ")) = " + marker +
+		" then trim(substr(" + projectID + ", length(" + marker + ") + 1)) else '' end"
+	legacyProjectID := "case when " + providerNormalized + " = 'codex' and " + codexAccountID +
+		" <> '' then '' else " + projectID + " end"
 
 	hexValue := func(value string) string { return "hex(" + value + ")" }
 	prefix := "'" + keyPrefix + ":" + FormatVersion + ":"
@@ -127,14 +154,14 @@ func SQLAccountKeyExpression(alias string) string {
 	}
 
 	return "case " +
-		"when " + providerNormalized + " = 'codex' and " + projectID + " <> '' then " + key("codex-account", providerNormalized, projectID) + " " +
+		"when " + providerNormalized + " = 'codex' and " + codexAccountID + " <> '' then " + key("codex-account", providerNormalized, codexAccountID) + " " +
 		"when " + authFile + " <> '' and " + authIndex + " <> '' then " + key("file-index", authFile, authIndex) + " " +
-		"when " + authFile + " <> '' and " + projectID + " <> '' then " + key("file-project", authFile, providerNormalized, projectID) + " " +
+		"when " + authFile + " <> '' and " + legacyProjectID + " <> '' then " + key("file-project", authFile, providerNormalized, legacyProjectID) + " " +
 		"when " + authFile + " <> '' and " + account + " <> '' then " + key("file-account", authFile, providerNormalized, account) + " " +
 		"when " + authFile + " <> '' and " + label + " <> '' then " + key("file-label", authFile, providerNormalized, label) + " " +
 		"when " + authFile + " <> '' then " + key("file", authFile, providerNormalized) + " " +
 		"when " + authIndex + " <> '' then " + key("auth-index", providerNormalized, authIndex) + " " +
-		"when " + projectID + " <> '' then " + key("project", providerNormalized, projectID) + " " +
+		"when " + legacyProjectID + " <> '' then " + key("project", providerNormalized, legacyProjectID) + " " +
 		"when " + account + " <> '' then " + key("account", providerNormalized, account) + " " +
 		"when " + label + " <> '' then " + key("label", providerNormalized, label) + " " +
 		"else '' end"
