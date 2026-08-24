@@ -10,7 +10,6 @@ import {
 import type { CodexReauthTarget } from '@/features/oauth/codexReauthModel';
 import {
   readAuthFileStatusAccountId,
-  readAuthFileStatusAccountSnapshot,
   readAuthFileStatusAuthIndex,
   readAuthFileStatusPhysicalName,
   readAuthFileStatusProvider,
@@ -336,37 +335,6 @@ export const acknowledgePendingAccountDirectReauths = (
   );
 };
 
-const fileMatchesTargetIdentity = (file: AuthFileItem, target: CodexReauthTarget): boolean => {
-  const fileName = normalizeString(target.fileName);
-  if (readAuthFileStatusProvider(file) !== normalizeProvider(target.provider)) return false;
-
-  const accountId = normalizeString(target.accountId);
-  if (accountId) return readAuthFileStatusAccountId(file) === accountId;
-
-  const accountSnapshot = normalizeString(target.accountSnapshot || target.account);
-  if (accountSnapshot && accountSnapshot !== fileName) {
-    return readAuthFileStatusAccountSnapshot(file) === accountSnapshot;
-  }
-
-  if (!fileName || readAuthFileStatusPhysicalName(file) !== fileName) return false;
-
-  const authIndex = normalizeString(
-    target.authIndex === null || target.authIndex === undefined ? '' : String(target.authIndex)
-  );
-  if (authIndex) return readAuthFileStatusAuthIndex(file) === authIndex;
-
-  const runtimeId = normalizeString(target.runtimeId);
-  return Boolean(runtimeId && readAuthFileStatusRuntimeId(file) === runtimeId);
-};
-
-const resolveTargetFile = (
-  files: readonly AuthFileItem[],
-  target: CodexReauthTarget
-): AuthFileItem | null => {
-  const matches = files.filter((file) => fileMatchesTargetIdentity(file, target));
-  return matches.length === 1 ? matches[0] : null;
-};
-
 const hasChangedCredentialEvidence = (
   current: AccountDirectReauthCredentialEvidence,
   baseline: AccountDirectReauthCredentialEvidence | undefined
@@ -389,56 +357,53 @@ export const reconcileAccountDirectReauth = (
 ): AccountDirectReauthReconciliation => {
   const providerFiles = files.filter((file) => readAuthFileStatusProvider(file) === 'codex');
   const expectedAccountId = normalizeString(pending.target.accountId);
-  if (expectedAccountId) {
-    const baselineByIdentity = new Map(
-      pending.providerCredentials.map((item) => [item.identityKey, item])
-    );
-    const matchingFiles = providerFiles.filter(
-      (file) => readAuthFileStatusAccountId(file) === expectedAccountId
-    );
-    if (matchingFiles.length > 1) return { status: 'ambiguous' };
-    if (matchingFiles.length === 1) {
-      const file = matchingFiles[0];
-      const evidence = buildProviderCredentialEvidence(file);
-      if (hasChangedCredentialEvidence(evidence, baselineByIdentity.get(evidence.identityKey))) {
-        return { status: 'confirmed', file };
-      }
-    }
 
-    const changedDifferentAccountFiles = providerFiles.filter((file) => {
-      const evidence = buildProviderCredentialEvidence(file);
-      return (
-        Boolean(evidence.accountId) &&
-        evidence.accountId !== expectedAccountId &&
-        hasChangedCredentialEvidence(evidence, baselineByIdentity.get(evidence.identityKey))
-      );
-    });
-    const observedAccountIds = new Set(
-      changedDifferentAccountFiles.map((file) => readAuthFileStatusAccountId(file))
-    );
-    if (changedDifferentAccountFiles.length === 1 && observedAccountIds.size === 1) {
-      const file = changedDifferentAccountFiles[0];
-      return {
-        status: 'identity-changed',
-        file,
-        observedAccountId: readAuthFileStatusAccountId(file),
-      };
+  // A display account/email can locate the original row in the UI, but it cannot
+  // prove that an OAuth result belongs to the same ChatGPT Space. Without a
+  // trusted baseline account_id, fail closed instead of auto-confirming by email.
+  if (!expectedAccountId) return { status: 'unconfirmed' };
+
+  const baselineByIdentity = new Map(
+    pending.providerCredentials.map((item) => [item.identityKey, item])
+  );
+  const matchingFiles = providerFiles.filter(
+    (file) => readAuthFileStatusAccountId(file) === expectedAccountId
+  );
+  if (matchingFiles.length > 1) return { status: 'ambiguous' };
+  if (matchingFiles.length === 1) {
+    const file = matchingFiles[0];
+    const evidence = buildProviderCredentialEvidence(file);
+    if (hasChangedCredentialEvidence(evidence, baselineByIdentity.get(evidence.identityKey))) {
+      return { status: 'confirmed', file };
     }
-    if (changedDifferentAccountFiles.length > 1) return { status: 'ambiguous' };
-    return { status: 'unconfirmed' };
   }
 
-  const matches = providerFiles.filter((file) => fileMatchesTargetIdentity(file, pending.target));
-  if (matches.length > 1) return { status: 'ambiguous' };
-  const file = resolveTargetFile(providerFiles, pending.target);
-  if (!file) return { status: 'unconfirmed' };
-  const evidence = buildProviderCredentialEvidence(file);
-  const baseline = pending.providerCredentials.find(
-    (item) => item.identityKey === evidence.identityKey
+  // Timestamp/status changes on another credential are not causal evidence for
+  // this reauth: CPA may refresh unrelated Codex credentials in the background.
+  // Only a structurally new credential identity (including an account_id
+  // replacement that changes the identity key) is strong enough to flag a
+  // different Space.
+  const changedDifferentAccountFiles = providerFiles.filter((file) => {
+    const evidence = buildProviderCredentialEvidence(file);
+    return (
+      Boolean(evidence.accountId) &&
+      evidence.accountId !== expectedAccountId &&
+      !baselineByIdentity.has(evidence.identityKey)
+    );
+  });
+  const observedAccountIds = new Set(
+    changedDifferentAccountFiles.map((file) => readAuthFileStatusAccountId(file))
   );
-  return hasChangedCredentialEvidence(evidence, baseline)
-    ? { status: 'confirmed', file }
-    : { status: 'unconfirmed' };
+  if (changedDifferentAccountFiles.length === 1 && observedAccountIds.size === 1) {
+    const file = changedDifferentAccountFiles[0];
+    return {
+      status: 'identity-changed',
+      file,
+      observedAccountId: readAuthFileStatusAccountId(file),
+    };
+  }
+  if (changedDifferentAccountFiles.length > 1) return { status: 'ambiguous' };
+  return { status: 'unconfirmed' };
 };
 
 export const confirmAccountDirectReauth = (
