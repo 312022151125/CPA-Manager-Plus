@@ -443,7 +443,7 @@ func TestCodexAccountWindowKeepsHistoryAcrossSameAccountReauth(t *testing.T) {
 		)
 		event.AuthFileSnapshot = file
 		event.AuthIndex = authIndex
-		event.AuthProjectIDSnapshot = accountID
+		event.AuthProjectIDSnapshot = usageidentity.CodexAccountIDSnapshot(accountID)
 		return event
 	}
 
@@ -468,7 +468,7 @@ func TestCodexAccountWindowKeepsHistoryAcrossSameAccountReauth(t *testing.T) {
 			AccountSnapshot:       "same@example.com",
 			AuthFileSnapshot:      "codex-a-pro.json",
 			AuthProviderSnapshot:  "codex",
-			AuthProjectIDSnapshot: "account-a",
+			AuthProjectIDSnapshot: usageidentity.CodexAccountIDSnapshot("account-a"),
 			AuthIndex:             "auth-2",
 			Source:                "codex-a-pro.json",
 		},
@@ -479,7 +479,7 @@ func TestCodexAccountWindowKeepsHistoryAcrossSameAccountReauth(t *testing.T) {
 			AccountSnapshot:       "same@example.com",
 			AuthFileSnapshot:      "codex-a-pro.json",
 			AuthProviderSnapshot:  "codex",
-			AuthProjectIDSnapshot: "account-a",
+			AuthProjectIDSnapshot: usageidentity.CodexAccountIDSnapshot("account-a"),
 			AuthIndex:             "auth-2",
 			Source:                "codex-a-pro.json",
 		},
