@@ -26,7 +26,8 @@ describe('monitoring account identity', () => {
 
   it('normalizes provider values without alias folding and avoids delimiter collisions', () => {
     expect(normalizeMonitoringProvider(' CODEX ')).toBe('codex');
-    expect(normalizeMonitoringProvider('foo_bar')).toBe('foo-bar');
+    expect(normalizeMonitoringProvider('foo_bar')).toBe('foo_bar');
+    expect(normalizeMonitoringProvider(' Provider_Name ')).toBe('provider_name');
     // Monitoring identity deliberately does NOT fold x-ai/grok -> xai.
     expect(normalizeMonitoringProvider('x-ai')).toBe('x-ai');
     expect(normalizeMonitoringProvider('grok')).toBe('grok');

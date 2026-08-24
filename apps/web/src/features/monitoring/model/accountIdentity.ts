@@ -10,7 +10,7 @@ export type MonitoringAccountIdentityInput = {
 const normalizeIdentityValue = (value: string | null | undefined) => String(value || '').trim();
 
 export const normalizeMonitoringProvider = (value: string | null | undefined) =>
-  normalizeIdentityValue(value).toLowerCase().replace(/_/g, '-');
+  normalizeIdentityValue(value).toLowerCase();
 
 const encodeIdentityPart = (value: string) =>
   Array.from(new TextEncoder().encode(value), (byte) => byte.toString(16).padStart(2, '0'))

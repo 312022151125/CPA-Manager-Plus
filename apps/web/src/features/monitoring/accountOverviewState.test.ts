@@ -584,7 +584,7 @@ describe('accountOverviewState', () => {
     expect(accountState?.enabledState).toBe('enabled');
   });
 
-  it('filters account auth state by the row provider namespace', () => {
+  it('resolves auth state from the row authIndices (provider-scoped by backend grouping)', () => {
     const authFilesByIndex = new Map<string, AuthFileItem>([
       [
         'codex-auth',
@@ -605,14 +605,13 @@ describe('accountOverviewState', () => {
         },
       ],
     ]);
-    const sharedAuthIndices = ['codex-auth', 'antigravity-auth'];
     const states = buildMonitoringAccountAuthStateMap(
       [
-        createAccountRow({ id: 'codex-row', provider: 'codex', authIndices: sharedAuthIndices }),
+        createAccountRow({ id: 'codex-row', provider: 'codex', authIndices: ['codex-auth'] }),
         createAccountRow({
           id: 'antigravity-row',
           provider: 'antigravity',
-          authIndices: sharedAuthIndices,
+          authIndices: ['antigravity-auth'],
         }),
       ],
       authFilesByIndex

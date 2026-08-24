@@ -1,6 +1,5 @@
 import type { AuthFileItem } from '@/types';
 import type { SourceProviderEnabledState } from '@/types/sourceInfo';
-import { readAuthFileStatusProvider } from '@/utils/authFileCredentialIdentity';
 import { isDisabledAuthFile } from '@/utils/quota';
 import { normalizeRecentRequestAuthIndex, type StatusBarData } from '@/utils/recentRequests';
 import { buildMonitoringAccountRowId, normalizeMonitoringProvider } from './model/accountIdentity';
@@ -631,8 +630,7 @@ export const buildMonitoringAccountAuthStateMap = (
             row.authIndices,
             authFilesByAuthIndex,
             row.sourceKeys ?? [],
-            sourceProviderStateBySourceKey,
-            row.provider
+            sourceProviderStateBySourceKey
           ),
         ] as const
     )
@@ -642,10 +640,8 @@ export const buildMonitoringAccountAuthState = (
   authIndices: string[],
   authFilesByAuthIndex: Map<string, AuthFileItem>,
   sourceKeys: string[] = [],
-  sourceProviderStateBySourceKey: Map<string, SourceProviderEnabledState> = new Map(),
-  provider?: string
+  sourceProviderStateBySourceKey: Map<string, SourceProviderEnabledState> = new Map()
 ): MonitoringAccountAuthState => {
-  const canonicalProvider = normalizeMonitoringProvider(provider);
   const files = Array.from(
     authIndices.reduce<Map<string, AuthFileItem>>((map, authIndex) => {
       const normalizedAuthIndex = normalizeRecentRequestAuthIndex(authIndex);
@@ -653,10 +649,6 @@ export const buildMonitoringAccountAuthState = (
 
       const file = authFilesByAuthIndex.get(normalizedAuthIndex);
       if (!file || map.has(file.name)) return map;
-      const fileProvider = normalizeMonitoringProvider(readAuthFileStatusProvider(file));
-      if (canonicalProvider && fileProvider && fileProvider !== canonicalProvider) {
-        return map;
-      }
 
       map.set(file.name, file);
       return map;

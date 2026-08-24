@@ -376,23 +376,24 @@ export const buildAnalyticsFilters = (
       accountCriteria.sourceHashes.length === 0 &&
       accountCriteria.apiKeyHashes.length === 0
     ) {
-      const legacyAccount = accountCriteria.accounts[0] || account;
-      const normalizedAccount = normalizeFilterText(legacyAccount);
-      const normalizedCriteriaProvider = normalizeFilterText(accountCriteria.provider);
-      const accountAuthIndices = Array.from(authMetaMap.entries())
-        .filter(
-          ([, meta]) =>
-            normalizeFilterText(meta.account) === normalizedAccount &&
-            (!normalizedCriteriaProvider ||
-              normalizeFilterText(meta.provider) === normalizedCriteriaProvider)
-        )
-        .map(([authIndex]) => authIndex);
-      authIndices = addAuthIndexConstraint(authIndices, accountAuthIndices);
-      if (accountAuthIndices.length === 0) {
+      if (accountCriteria.provider) {
+        // Provider-scoped logical account selector (account-provider:...).
+        // Query persisted data directly; do not re-interpret through current
+        // auth metadata, whose auth indices may differ from historical events.
         filters.accounts =
           accountCriteria.accounts.length > 0 ? accountCriteria.accounts : [account];
-        if (normalizedCriteriaProvider) {
-          filters.providers = [normalizedCriteriaProvider];
+        filters.providers = [accountCriteria.provider];
+      } else {
+        // Legacy account selector (account:...) keeps authMeta-based expansion.
+        const legacyAccount = accountCriteria.accounts[0] || account;
+        const normalizedAccount = normalizeFilterText(legacyAccount);
+        const accountAuthIndices = Array.from(authMetaMap.entries())
+          .filter(([, meta]) => normalizeFilterText(meta.account) === normalizedAccount)
+          .map(([authIndex]) => authIndex);
+        authIndices = addAuthIndexConstraint(authIndices, accountAuthIndices);
+        if (accountAuthIndices.length === 0) {
+          filters.accounts =
+            accountCriteria.accounts.length > 0 ? accountCriteria.accounts : [account];
         }
       }
     }
@@ -644,6 +645,12 @@ export const buildAccountRowsFromAnalytics = (
         firstReadableValue(row.auth_provider_snapshot, display.provider)
       );
       const displayAccount = firstReadableValue(display.primary, account);
+      const filterAccount = firstReadableValue(
+        row.account_snapshot,
+        row.auth_label_snapshot,
+        row.sources?.[0],
+        account
+      );
       const authLabels = uniqueReadableValues([
         ...authMetas.map((meta) => meta.label),
         row.auth_label_snapshot,
@@ -692,7 +699,7 @@ export const buildAccountRowsFromAnalytics = (
         recentPattern: [],
         filterValue:
           buildMonitoringAccountFilterValue({
-            account,
+            account: filterAccount,
             provider,
             authIndices: row.auth_indices,
             sourceHashes: row.source_hashes,

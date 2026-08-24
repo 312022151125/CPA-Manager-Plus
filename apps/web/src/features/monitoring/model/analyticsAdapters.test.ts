@@ -324,6 +324,60 @@ describe('buildAnalyticsFilters', () => {
     expect(filters.accounts).toEqual(['same@example.com']);
     expect(filters.providers).toEqual(['codex']);
   });
+
+  it('bypasses authMeta expansion for account-provider selectors to avoid excluding historical events', () => {
+    const codexFilter = buildMonitoringAccountFilterValue({
+      provider: 'codex',
+      account: 'same@example.com',
+    });
+    const authMetaMap = new Map([
+      [
+        'current-auth',
+        {
+          authIndex: 'current-auth',
+          label: 'Current',
+          account: 'same@example.com',
+          provider: 'codex',
+          status: 'active',
+          disabled: false,
+          unavailable: false,
+          runtimeOnly: false,
+          planType: 'pro',
+          updatedAt: '',
+        },
+      ],
+    ]);
+
+    const filters = buildAnalyticsFilters({ account: codexFilter }, authMetaMap, []);
+
+    expect(filters.accounts).toEqual(['same@example.com']);
+    expect(filters.providers).toEqual(['codex']);
+    expect(filters.auth_indices).toBeUndefined();
+  });
+
+  it('keeps legacy account: authMeta expansion for backward compatibility', () => {
+    const authMetaMap = new Map([
+      [
+        'auth-1',
+        {
+          authIndex: 'auth-1',
+          label: 'Legacy',
+          account: 'legacy@example.com',
+          provider: 'codex',
+          status: 'active',
+          disabled: false,
+          unavailable: false,
+          runtimeOnly: false,
+          planType: 'pro',
+          updatedAt: '',
+        },
+      ],
+    ]);
+
+    const filters = buildAnalyticsFilters({ account: 'account:legacy@example.com' }, authMetaMap, []);
+
+    expect(filters.auth_indices).toEqual(['auth-1']);
+  });
 });
 
 describe('buildFilterOptionsFromAnalytics', () => {
@@ -630,6 +684,46 @@ describe('buildFilterOptionsFromAnalytics', () => {
       'source:source-b',
     ]);
     expect(options.accountRows[0].sourceKeys).toContain('openai:0:0');
+  });
+
+  it('uses persisted identity for filterValue when display fallback would differ from snapshots', () => {
+    const options = buildFilterOptionsFromAnalytics(
+      {
+        account_stats: [
+          {
+            id: 'backend-row-id',
+            account_snapshot: '',
+            auth_label_snapshot: 'Shared Label',
+            auth_provider_snapshot: 'codex',
+            auth_indices: [],
+            sources: [],
+            source_hashes: [],
+            calls: 1,
+            success_calls: 1,
+            failure_calls: 0,
+            success_rate: 1,
+            input_tokens: 1,
+            output_tokens: 1,
+            cached_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            total_tokens: 2,
+            cost: 0,
+            average_latency_ms: null,
+            last_seen_ms: 1,
+            models: [],
+          },
+        ],
+      },
+      new Map(),
+      new Map(),
+      buildSourceInfoMap({}),
+      new Map(),
+      new Map()
+    );
+
+    const row = options.accountRows[0];
+    expect(row.filterValue).toBe('account-provider:codex|Shared%20Label');
   });
 });
 

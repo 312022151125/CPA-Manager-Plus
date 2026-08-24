@@ -12,7 +12,6 @@ import {
 } from '@/utils/quota';
 import type { MonitoringAccountAuthState } from './accountOverviewState';
 import type { MonitoringAccountRow } from './hooks/useMonitoringData';
-import { normalizeMonitoringProvider } from './model/accountIdentity';
 
 export type MonitoringAccountQuotaProvider = 'antigravity' | 'claude' | 'codex' | 'kimi' | 'xai';
 
@@ -63,7 +62,6 @@ const resolveActiveQuotaProvidersForRow = (
 ): Set<MonitoringAccountQuotaProvider> => {
   const activeProviders = new Set<MonitoringAccountQuotaProvider>();
   if (!authState) return activeProviders;
-  const rowProvider = normalizeMonitoringProvider(row.provider);
 
   const rowAuthIndices = new Set(
     row.authIndices
@@ -77,7 +75,7 @@ const resolveActiveQuotaProvidersForRow = (
     if (!authIndex || !rowAuthIndices.has(authIndex)) return;
 
     const provider = resolveMonitoringAccountQuotaProvider(file);
-    if (provider && (!rowProvider || provider === rowProvider)) activeProviders.add(provider);
+    if (provider) activeProviders.add(provider);
   });
 
   return activeProviders;
