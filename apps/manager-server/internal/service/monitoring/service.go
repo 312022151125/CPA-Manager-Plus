@@ -2,6 +2,7 @@ package monitoring
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2017,12 +2018,15 @@ func countAPIKeySelectors(values store.FilterSelectorValues) int {
 func buildAccountSelectorStats(values store.FilterSelectorValues) []AccountStatRow {
 	grouped := map[string]*accountStatAccumulator{}
 	for _, selector := range values.AccountSelectors {
-		id := accountGroupKey(
-			selector.AccountSnapshot,
-			selector.AuthLabelSnapshot,
-			selector.Source,
-			selector.AuthIndex,
-		)
+		identity := monitoringAccountIdentity{
+			Provider:          selector.AuthProviderSnapshot,
+			AccountSnapshot:   selector.AccountSnapshot,
+			AuthLabelSnapshot: selector.AuthLabelSnapshot,
+			Source:            selector.Source,
+			AuthIndex:         selector.AuthIndex,
+			SourceHash:        selector.SourceHash,
+		}
+		id := identity.key()
 		if id == "-" && strings.TrimSpace(selector.SourceHash) == "" {
 			continue
 		}
@@ -2033,7 +2037,7 @@ func buildAccountSelectorStats(values store.FilterSelectorValues) []AccountStatR
 					ID:                   id,
 					AccountSnapshot:      selector.AccountSnapshot,
 					AuthLabelSnapshot:    selector.AuthLabelSnapshot,
-					AuthProviderSnapshot: selector.AuthProviderSnapshot,
+					AuthProviderSnapshot: identity.provider(),
 					SuccessRate:          1,
 				},
 				authIndices:  map[string]struct{}{},
@@ -2647,7 +2651,15 @@ type credentialStatAccumulator struct {
 func buildAccountStats(stats []store.AccountModelStat, prices map[string]store.ModelPrice) []AccountStatRow {
 	grouped := map[string]*accountStatAccumulator{}
 	for _, stat := range stats {
-		id := accountGroupKey(stat.AccountSnapshot, stat.AuthLabelSnapshot, stat.Source, stat.AuthIndex)
+		identity := monitoringAccountIdentity{
+			Provider:          stat.AuthProviderSnapshot,
+			AccountSnapshot:   stat.AccountSnapshot,
+			AuthLabelSnapshot: stat.AuthLabelSnapshot,
+			Source:            stat.Source,
+			AuthIndex:         stat.AuthIndex,
+			SourceHash:        stat.SourceHash,
+		}
+		id := identity.key()
 		entry := grouped[id]
 		if entry == nil {
 			entry = &accountStatAccumulator{
@@ -2655,7 +2667,7 @@ func buildAccountStats(stats []store.AccountModelStat, prices map[string]store.M
 					ID:                   id,
 					AccountSnapshot:      stat.AccountSnapshot,
 					AuthLabelSnapshot:    stat.AuthLabelSnapshot,
-					AuthProviderSnapshot: stat.AuthProviderSnapshot,
+					AuthProviderSnapshot: identity.provider(),
 				},
 				authIndices:  map[string]struct{}{},
 				sources:      map[string]struct{}{},
@@ -3026,20 +3038,56 @@ func fillChannelShareSnapshots(row *ChannelShareRow, stat store.ChannelModelStat
 	}
 }
 
-func accountGroupKey(accountSnapshot, authLabelSnapshot, source, authIndex string) string {
-	if strings.TrimSpace(accountSnapshot) != "" {
-		return accountSnapshot
+type monitoringAccountIdentity struct {
+	Provider          string
+	AccountSnapshot   string
+	AuthLabelSnapshot string
+	Source            string
+	AuthIndex         string
+	SourceHash        string
+}
+
+// normalizeMonitoringProvider applies the minimal normalization used by the
+// monitoring account identity (trim, lowercase). It deliberately does NOT
+// replace '_' with '-' or fold provider aliases such as x-ai/grok -> xai,
+// matching the backend provider filter which only lowercases provider values.
+func normalizeMonitoringProvider(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func (identity monitoringAccountIdentity) provider() string {
+	return normalizeMonitoringProvider(identity.Provider)
+}
+
+func (identity monitoringAccountIdentity) key() string {
+	kind := ""
+	value := ""
+	for _, candidate := range []struct {
+		kind  string
+		value string
+	}{
+		{kind: "account", value: identity.AccountSnapshot},
+		{kind: "label", value: identity.AuthLabelSnapshot},
+		{kind: "source", value: identity.Source},
+		{kind: "auth", value: identity.AuthIndex},
+		{kind: "source-hash", value: identity.SourceHash},
+	} {
+		if trimmed := strings.TrimSpace(candidate.value); trimmed != "" {
+			kind = candidate.kind
+			value = trimmed
+			break
+		}
 	}
-	if strings.TrimSpace(authLabelSnapshot) != "" {
-		return authLabelSnapshot
+	if kind == "" {
+		return "-"
 	}
-	if strings.TrimSpace(source) != "" {
-		return source
-	}
-	if strings.TrimSpace(authIndex) != "" {
-		return authIndex
-	}
-	return "-"
+	return strings.Join([]string{
+		"monitoring-account",
+		"1",
+		kind,
+		strings.ToUpper(hex.EncodeToString([]byte(identity.provider()))),
+		strings.ToUpper(hex.EncodeToString([]byte(value))),
+	}, ":")
 }
 
 func apiKeyGroupKey(apiKeyHash, sourceHash, authIndex, source, provider string) string {
