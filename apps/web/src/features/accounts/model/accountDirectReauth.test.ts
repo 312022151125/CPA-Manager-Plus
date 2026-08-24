@@ -158,6 +158,70 @@ describe('accountDirectReauth', () => {
     });
   });
 
+  it('ignores timestamp-only refreshes on unrelated existing Codex credentials', () => {
+    const original = makeFile();
+    const unrelated = makeFile({
+      id: 'runtime-b',
+      name: 'codex-b.json',
+      authIndex: 'auth-b',
+      account_id: 'account-b',
+      account: 'bob@example.com',
+      last_refresh: 900,
+      modified: 950,
+      status_message: '',
+    });
+    const baseline = createAccountDirectReauthBaseline({
+      target: {
+        account: 'alice@example.com',
+        fileName: original.name,
+        runtimeId: 'runtime-1',
+        provider: 'codex',
+        authIndex: 'auth-1',
+        accountId: 'account-1',
+        accountSnapshot: 'alice@example.com',
+      },
+      file: original,
+      files: [original, unrelated],
+      resultKeys: [],
+    })!;
+
+    expect(
+      reconcileAccountDirectReauth(baseline, [
+        original,
+        { ...unrelated, last_refresh: 5_000, modified: 5_100, status_message: 'ready' },
+      ])
+    ).toEqual({ status: 'unconfirmed' });
+  });
+
+  it('does not auto-confirm by email when the baseline lacks a trusted account id', () => {
+    const original = makeFile({ account_id: undefined });
+    const baseline = createAccountDirectReauthBaseline({
+      target: {
+        account: 'alice@example.com',
+        fileName: original.name,
+        runtimeId: 'runtime-1',
+        provider: 'codex',
+        authIndex: 'auth-1',
+        accountSnapshot: 'alice@example.com',
+      },
+      file: original,
+      files: [original],
+      resultKeys: [],
+    })!;
+
+    expect(
+      reconcileAccountDirectReauth(baseline, [
+        makeFile({
+          account_id: 'space-b',
+          account: 'alice@example.com',
+          last_refresh: 5_000,
+          modified: 5_100,
+          status_message: '',
+        }),
+      ])
+    ).toEqual({ status: 'unconfirmed' });
+  });
+
   it('persists pending retries by connection and acknowledges exact records', () => {
     const storage = createStorage();
     const startedAtMs = Date.now();
