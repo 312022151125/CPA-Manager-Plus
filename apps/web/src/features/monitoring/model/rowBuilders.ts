@@ -471,6 +471,7 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
         filterValue:
           buildMonitoringAccountFilterValue({
             account: item.filterAccount,
+            provider: item.provider,
             authIndices,
             sourceHashes,
             apiKeyHashes,

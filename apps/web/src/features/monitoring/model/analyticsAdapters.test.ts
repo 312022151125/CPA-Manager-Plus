@@ -12,6 +12,7 @@ import {
   buildFailureSourceRowsFromAnalytics,
   buildFilterOptionsFromAnalytics,
   buildUsageDetailsFromAnalyticsEvents,
+  parseMonitoringAccountFilterValue,
 } from './analyticsAdapters';
 
 describe('buildUsageDetailsFromAnalyticsEvents', () => {
@@ -283,6 +284,45 @@ describe('buildAnalyticsFilters', () => {
       min_latency_ms: 10_000,
       cache_status: 'hit',
     });
+  });
+
+  it('scopes account fallback filterValue by provider so same-email rows do not collide', () => {
+    const codexFilter = buildMonitoringAccountFilterValue({
+      provider: 'codex',
+      account: 'same@example.com',
+    });
+    const antigravityFilter = buildMonitoringAccountFilterValue({
+      provider: 'antigravity',
+      account: 'same@example.com',
+    });
+
+    expect(codexFilter).not.toBe(antigravityFilter);
+    expect(codexFilter.startsWith('account-provider:')).toBe(true);
+
+    const codexCriteria = parseMonitoringAccountFilterValue(codexFilter);
+    expect(codexCriteria.provider).toBe('codex');
+    expect(codexCriteria.accounts).toEqual(['same@example.com']);
+
+    const antigravityCriteria = parseMonitoringAccountFilterValue(antigravityFilter);
+    expect(antigravityCriteria.provider).toBe('antigravity');
+    expect(antigravityCriteria.accounts).toEqual(['same@example.com']);
+  });
+
+  it('still parses legacy account: selectors without a provider', () => {
+    const criteria = parseMonitoringAccountFilterValue('account:same@example.com');
+    expect(criteria.accounts).toEqual(['same@example.com']);
+    expect(criteria.provider).toBeUndefined();
+  });
+
+  it('emits provider-scoped account AND provider backend filters when no exact selector matches', () => {
+    const codexFilter = buildMonitoringAccountFilterValue({
+      provider: 'codex',
+      account: 'same@example.com',
+    });
+    const filters = buildAnalyticsFilters({ account: codexFilter }, new Map(), []);
+
+    expect(filters.accounts).toEqual(['same@example.com']);
+    expect(filters.providers).toEqual(['codex']);
   });
 });
 

@@ -24,10 +24,14 @@ describe('monitoring account identity', () => {
     expect(codexA).toBe('monitoring-account:1:account:636F646578:73616D65406578616D706C652E636F6D');
   });
 
-  it('normalizes provider aliases and encodes fallback values without delimiter collisions', () => {
-    expect(normalizeMonitoringProvider(' X_AI ')).toBe('xai');
-    expect(normalizeMonitoringProvider('grok')).toBe('xai');
-    expect(buildMonitoringAccountRowId({ provider: 'x-ai', authLabel: 'a:b' })).toBe(
+  it('normalizes provider values without alias folding and avoids delimiter collisions', () => {
+    expect(normalizeMonitoringProvider(' CODEX ')).toBe('codex');
+    expect(normalizeMonitoringProvider('foo_bar')).toBe('foo-bar');
+    // Monitoring identity deliberately does NOT fold x-ai/grok -> xai.
+    expect(normalizeMonitoringProvider('x-ai')).toBe('x-ai');
+    expect(normalizeMonitoringProvider('grok')).toBe('grok');
+    expect(normalizeMonitoringProvider('x-ai')).not.toBe(normalizeMonitoringProvider('grok'));
+    expect(buildMonitoringAccountRowId({ provider: 'x-ai', authLabel: 'a:b' })).not.toBe(
       buildMonitoringAccountRowId({ provider: 'grok', authLabel: 'a:b' })
     );
     expect(buildMonitoringAccountRowId({ provider: 'a:b', authLabel: 'c' })).not.toBe(

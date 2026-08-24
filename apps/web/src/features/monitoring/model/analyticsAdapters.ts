@@ -107,6 +107,7 @@ const ACCOUNT_FILTER_PREFIXES = {
   source: 'source:',
   apiKey: 'api-key:',
   account: 'account:',
+  accountProvider: 'account-provider:',
 } as const;
 
 const NO_MATCH_FILTER_VALUE = '__no_matching_filter_value__';
@@ -116,6 +117,7 @@ export type MonitoringAccountFilterCriteria = {
   authIndices: string[];
   sourceHashes: string[];
   apiKeyHashes: string[];
+  provider?: string;
 };
 
 const normalizeAccountFilterValues = (values: Array<string | null | undefined> = []) =>
@@ -156,11 +158,13 @@ const buildAccountFilterToken = (prefix: string, values: string[]) =>
 
 export const buildMonitoringAccountFilterValue = ({
   account,
+  provider,
   authIndices,
   sourceHashes,
   apiKeyHashes,
 }: {
   account?: string | null;
+  provider?: string | null;
   authIndices?: Array<string | null | undefined>;
   sourceHashes?: Array<string | null | undefined>;
   apiKeyHashes?: Array<string | null | undefined>;
@@ -180,7 +184,11 @@ export const buildMonitoringAccountFilterValue = ({
     return buildAccountFilterToken(ACCOUNT_FILTER_PREFIXES.apiKey, normalizedApiKeyHashes);
   }
 
+  const normalizedProvider = normalizeMonitoringProvider(provider);
   const normalizedAccounts = normalizeAccountFilterValues([account]);
+  if (normalizedProvider && normalizedAccounts.length > 0) {
+    return `${ACCOUNT_FILTER_PREFIXES.accountProvider}${encodeURIComponent(normalizedProvider)}|${encodeAccountFilterValues(normalizedAccounts)}`;
+  }
   return buildAccountFilterToken(ACCOUNT_FILTER_PREFIXES.account, normalizedAccounts);
 };
 
@@ -220,6 +228,19 @@ export const parseMonitoringAccountFilterValue = (
       apiKeyHashes: normalizeApiKeyHashValues(
         decodeAccountFilterValues(text.slice(ACCOUNT_FILTER_PREFIXES.apiKey.length))
       ),
+    };
+  }
+
+  if (text.startsWith(ACCOUNT_FILTER_PREFIXES.accountProvider)) {
+    const body = text.slice(ACCOUNT_FILTER_PREFIXES.accountProvider.length);
+    const delimiter = body.indexOf('|');
+    const providerPart = delimiter >= 0 ? body.slice(0, delimiter) : '';
+    const accountPart = delimiter >= 0 ? body.slice(delimiter + 1) : body;
+    const provider = decodeAccountFilterValue(providerPart);
+    return {
+      ...emptyCriteria,
+      accounts: normalizeAccountFilterValues([decodeAccountFilterValue(accountPart)]),
+      provider: readString(provider),
     };
   }
 
@@ -357,13 +378,22 @@ export const buildAnalyticsFilters = (
     ) {
       const legacyAccount = accountCriteria.accounts[0] || account;
       const normalizedAccount = normalizeFilterText(legacyAccount);
+      const normalizedCriteriaProvider = normalizeFilterText(accountCriteria.provider);
       const accountAuthIndices = Array.from(authMetaMap.entries())
-        .filter(([, meta]) => normalizeFilterText(meta.account) === normalizedAccount)
+        .filter(
+          ([, meta]) =>
+            normalizeFilterText(meta.account) === normalizedAccount &&
+            (!normalizedCriteriaProvider ||
+              normalizeFilterText(meta.provider) === normalizedCriteriaProvider)
+        )
         .map(([authIndex]) => authIndex);
       authIndices = addAuthIndexConstraint(authIndices, accountAuthIndices);
       if (accountAuthIndices.length === 0) {
         filters.accounts =
           accountCriteria.accounts.length > 0 ? accountCriteria.accounts : [account];
+        if (normalizedCriteriaProvider) {
+          filters.providers = [normalizedCriteriaProvider];
+        }
       }
     }
   }
@@ -663,6 +693,7 @@ export const buildAccountRowsFromAnalytics = (
         filterValue:
           buildMonitoringAccountFilterValue({
             account,
+            provider,
             authIndices: row.auth_indices,
             sourceHashes: row.source_hashes,
           }) || account,

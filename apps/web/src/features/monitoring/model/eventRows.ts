@@ -68,8 +68,7 @@ export const buildEventRows = (
         detail.auth_provider_snapshot ?? detail.authProviderSnapshot
       );
       const eventProvider = readString(detail.provider);
-      const effectiveProvider =
-        snapshotProvider || eventProvider || authMeta?.provider || sourceMeta.type || '-';
+      const effectiveProvider = snapshotProvider || eventProvider;
       const snapshotDisplay = snapshotAccount || snapshotLabel;
       const channelMeta =
         channelByAuthIndex.get(authIndex) ||
