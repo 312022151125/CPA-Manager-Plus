@@ -48,10 +48,12 @@ const hasRequiredFileProvider = (target: MonitoringAccountHistoryTarget): boolea
   return !effectiveFile || Boolean(target.auth_provider_snapshot?.trim());
 };
 
+const normalizeProvider = (value: string): string => value.trim().toLowerCase().replace(/_/g, '-');
+
 const accountIdentitySnapshotForRequest = (provider: string, accountId: string): string => {
   const value = accountId.trim();
   if (!value) return '';
-  return provider.trim().toLowerCase().replace(/_/g, '-') === 'codex'
+  return normalizeProvider(provider) === 'codex'
     ? `${CODEX_ACCOUNT_ID_SNAPSHOT_PREFIX}${value}`
     : value;
 };
@@ -65,8 +67,14 @@ export const buildAccountHistoryTargetEntries = (rows: AccountRow[]): AccountHis
       const authFileSnapshot = identity.physicalName || readString(row.fileName);
       const rowProvider = readString(row.provider);
       const authProviderSnapshot = identity.provider || (rowProvider === 'unknown' ? '' : rowProvider);
-      const resolvedAccountId = identity.accountId || readString(row.projectId);
-      const authProjectIdSnapshot = accountIdentitySnapshotForRequest(authProviderSnapshot, resolvedAccountId);
+      const resolvedAccountId =
+        normalizeProvider(authProviderSnapshot) === 'codex'
+          ? identity.accountId
+          : identity.accountId || readString(row.projectId);
+      const authProjectIdSnapshot = accountIdentitySnapshotForRequest(
+        authProviderSnapshot,
+        resolvedAccountId
+      );
       const authIndex = identity.authIndex || readString(row.authIndex);
 
       return {
