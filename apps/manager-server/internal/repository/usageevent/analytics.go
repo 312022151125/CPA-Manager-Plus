@@ -1692,7 +1692,7 @@ func accountWindowQueryKeys(window AccountWindowUsageQuery) (string, string) {
 	accountKey := accountWindowQueryKey(window)
 	legacyAccountKey := accountKey
 	provider := strings.TrimSpace(strings.ToLower(strings.ReplaceAll(window.AuthProviderSnapshot, "_", "-")))
-	if provider == "codex" && strings.TrimSpace(window.AuthProjectIDSnapshot) != "" {
+	if provider == "codex" && usageidentity.CodexAccountIDFromSnapshot(window.AuthProjectIDSnapshot) != "" {
 		if key, valid := usageidentity.LegacyAccountKey(usageidentity.Fields{
 			AuthFileSnapshot:     window.AuthFileSnapshot,
 			AuthIndex:            window.AuthIndex,
