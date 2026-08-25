@@ -275,7 +275,9 @@ describe('useMonitoringData analytics requests', () => {
     loadMonitoringMetaPayloadMock.mockReset();
     loadMonitoringMetaPayloadMock.mockResolvedValue({
       authFiles: [],
+      authFilesLoaded: true,
       channels: [],
+      channelsLoaded: true,
       error: '',
     });
     useMonitoringAnalyticsMock.mockReset();
@@ -440,6 +442,8 @@ describe('useMonitoringData analytics requests', () => {
           modelNames: [],
         },
       ],
+      authFilesLoaded: true,
+      channelsLoaded: true,
       error: `${scope}-error`,
     });
 
@@ -473,7 +477,9 @@ describe('useMonitoringData analytics requests', () => {
     );
     const payload = (scope: 'a' | 'b'): MonitoringMetaPayload => ({
       authFiles: [{ name: `${scope}-auth.json`, auth_index: `${scope}-auth` }],
+      authFilesLoaded: true,
       channels: [],
+      channelsLoaded: true,
       error: `${scope}-error`,
     });
 
@@ -502,5 +508,43 @@ describe('useMonitoringData analytics requests', () => {
     });
     expect(latestResult?.authFiles[0]?.name).toBe('b-auth.json');
     expect(latestResult?.error).toBe('b-error');
+  });
+
+  it('keeps the newest metadata request within the same connection scope', async () => {
+    const pendingResponses: Array<(payload: MonitoringMetaPayload) => void> = [];
+    loadMonitoringMetaPayloadMock.mockImplementation(
+      () => new Promise<MonitoringMetaPayload>((resolve) => pendingResponses.push(resolve))
+    );
+    const payloadFor = (authIndex: string): MonitoringMetaPayload => ({
+      authFiles: [{ name: `${authIndex}.json`, auth_index: authIndex }],
+      authFilesLoaded: true,
+      channels: [],
+      channelsLoaded: true,
+      error: authIndex,
+    });
+
+    await renderTab('accounts', 'scope-a');
+    await act(async () => {
+      pendingResponses[0](payloadFor('auth-0'));
+      await Promise.resolve();
+    });
+
+    const oldRefresh = latestResult?.refreshMeta(false);
+    const newRefresh = latestResult?.refreshMeta(false);
+    expect(oldRefresh).toBeDefined();
+    expect(newRefresh).toBeDefined();
+    expect(pendingResponses).toHaveLength(3);
+
+    await act(async () => {
+      pendingResponses[2](payloadFor('auth-2'));
+      await newRefresh;
+    });
+    await act(async () => {
+      pendingResponses[1](payloadFor('auth-1'));
+      await oldRefresh;
+    });
+
+    expect(latestResult?.authFiles[0]?.auth_index).toBe('auth-2');
+    expect(latestResult?.error).toBe('auth-2');
   });
 });

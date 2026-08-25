@@ -323,10 +323,12 @@ export function MonitoringCenterPage() {
   const accountQuotaContextGenerationRef = useRef(0);
   const accountQuotaContextKeyRef = useRef(accountQuotaContextKey);
   const [accountQuotaRefreshQueue] = useState(() => createKeyedSerialTaskQueue());
-  const processedCredentialMutationRevisionsRef = useRef<Record<string, number>>({});
+  const requestedCredentialMutationRevisionsRef = useRef<Record<string, number>>({});
+  const coveredCredentialMutationRevisionsRef = useRef<Record<string, number>>({});
   const queuedCredentialMutationProvidersRef = useRef<Set<string>>(new Set());
   const credentialMutationRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const credentialMutationRefreshGenerationRef = useRef(0);
+  const [credentialMutationRefreshKick, setCredentialMutationRefreshKick] = useState(0);
   const [pendingCredentialMutationProviders, setPendingCredentialMutationProviders] = useState<
     string[]
   >([]);
@@ -485,7 +487,10 @@ export function MonitoringCenterPage() {
     accountQuotaStatesByRowIdRef.current = {};
     credentialMutationRefreshGenerationRef.current += 1;
     credentialMutationRefreshPromiseRef.current = null;
+    requestedCredentialMutationRevisionsRef.current = {};
+    coveredCredentialMutationRevisionsRef.current = {};
     queuedCredentialMutationProvidersRef.current.clear();
+    setCredentialMutationRefreshKick(0);
     setAccountQuotaStatesByRowId((current) => (Object.keys(current).length === 0 ? current : {}));
     setPendingCredentialMutationProviders([]);
   }, [accountQuotaContextKey]);
@@ -507,29 +512,71 @@ export function MonitoringCenterPage() {
     let hasNewRevision = false;
     Object.entries(credentialMutationRevisions).forEach(([key, event]) => {
       if (event.connectionFingerprint !== connectionFingerprint) return;
-      if ((processedCredentialMutationRevisionsRef.current[key] ?? 0) >= event.revision) return;
-      processedCredentialMutationRevisionsRef.current[key] = event.revision;
+      if ((requestedCredentialMutationRevisionsRef.current[key] ?? 0) >= event.revision) return;
+      requestedCredentialMutationRevisionsRef.current[key] = event.revision;
       queuedCredentialMutationProvidersRef.current.add(event.provider);
       hasNewRevision = true;
     });
-    if (!hasNewRevision || credentialMutationRefreshPromiseRef.current) return;
+    const hasUncoveredRevision = Object.entries(
+      requestedCredentialMutationRevisionsRef.current
+    ).some(
+      ([key, revision]) => revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0)
+    );
+    if (
+      (!hasNewRevision && !(credentialMutationRefreshKick > 0 && hasUncoveredRevision)) ||
+      credentialMutationRefreshPromiseRef.current
+    ) {
+      return;
+    }
 
     const refreshGeneration = credentialMutationRefreshGenerationRef.current;
+    const requestedAtStart = { ...requestedCredentialMutationRevisionsRef.current };
+    let coverageSucceeded = false;
     const refresh = Promise.resolve()
       .then(() => refreshMeta(false))
+      .then((payload) => {
+        if (!payload?.authFilesLoaded) return;
+        coverageSucceeded = true;
+        Object.entries(requestedAtStart).forEach(([key, revision]) => {
+          coveredCredentialMutationRevisionsRef.current[key] = Math.max(
+            coveredCredentialMutationRevisionsRef.current[key] ?? 0,
+            revision
+          );
+        });
+      })
       .finally(() => {
         if (credentialMutationRefreshGenerationRef.current !== refreshGeneration) return;
-        const providers = Array.from(queuedCredentialMutationProvidersRef.current);
-        queuedCredentialMutationProvidersRef.current.clear();
         credentialMutationRefreshPromiseRef.current = null;
-        if (providers.length > 0) {
+        const hasNewerRevision = Object.entries(requestedCredentialMutationRevisionsRef.current).some(
+          ([key, revision]) =>
+            revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0) &&
+            revision > (requestedAtStart[key] ?? 0)
+        );
+        const providers = Array.from(queuedCredentialMutationProvidersRef.current);
+        if (hasNewerRevision) {
+          setCredentialMutationRefreshKick((current) => current + 1);
+          setPendingCredentialMutationProviders((current) =>
+            Array.from(new Set([...current, ...providers]))
+          );
+          return;
+        }
+        setCredentialMutationRefreshKick(0);
+        queuedCredentialMutationProvidersRef.current.clear();
+        if (coverageSucceeded) {
+          setPendingCredentialMutationProviders([]);
+        } else if (providers.length > 0) {
           setPendingCredentialMutationProviders((current) =>
             Array.from(new Set([...current, ...providers]))
           );
         }
       });
     credentialMutationRefreshPromiseRef.current = refresh;
-  }, [connectionFingerprint, credentialMutationRevisions, refreshMeta]);
+  }, [
+    connectionFingerprint,
+    credentialMutationRefreshKick,
+    credentialMutationRevisions,
+    refreshMeta,
+  ]);
 
   const setCurrentAccountPage = useCallback(
     (page: number) => {

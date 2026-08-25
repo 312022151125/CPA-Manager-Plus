@@ -11,8 +11,6 @@ export interface AccountHistoryTargetEntry {
 }
 
 export const ACCOUNT_HISTORY_TARGET_BATCH_SIZE = 200;
-const CODEX_ACCOUNT_ID_SNAPSHOT_PREFIX = 'codex-account-id:v1:';
-
 export const retainAccountHistoryRowKeys = <T>(
   current: Map<string, T>,
   activeRowKeys: ReadonlySet<string>
@@ -50,14 +48,6 @@ const hasRequiredFileProvider = (target: MonitoringAccountHistoryTarget): boolea
 
 const normalizeProvider = (value: string): string => value.trim().toLowerCase().replace(/_/g, '-');
 
-const accountIdentitySnapshotForRequest = (provider: string, accountId: string): string => {
-  const value = accountId.trim();
-  if (!value) return '';
-  return normalizeProvider(provider) === 'codex'
-    ? `${CODEX_ACCOUNT_ID_SNAPSHOT_PREFIX}${value}`
-    : value;
-};
-
 export const buildAccountHistoryTargetEntries = (rows: AccountRow[]): AccountHistoryTargetEntry[] =>
   rows
     .map((row) => {
@@ -67,14 +57,9 @@ export const buildAccountHistoryTargetEntries = (rows: AccountRow[]): AccountHis
       const authFileSnapshot = identity.physicalName || readString(row.fileName);
       const rowProvider = readString(row.provider);
       const authProviderSnapshot = identity.provider || (rowProvider === 'unknown' ? '' : rowProvider);
-      const resolvedAccountId =
-        normalizeProvider(authProviderSnapshot) === 'codex'
-          ? identity.accountId
-          : identity.accountId || readString(row.projectId);
-      const authProjectIdSnapshot = accountIdentitySnapshotForRequest(
-        authProviderSnapshot,
-        resolvedAccountId
-      );
+      const isCodex = normalizeProvider(authProviderSnapshot) === 'codex';
+      const authAccountIdSnapshot = isCodex ? identity.accountId : '';
+      const authProjectIdSnapshot = isCodex ? '' : readString(row.projectId);
       const authIndex = identity.authIndex || readString(row.authIndex);
 
       return {
@@ -85,6 +70,7 @@ export const buildAccountHistoryTargetEntries = (rows: AccountRow[]): AccountHis
           auth_label_snapshot: authLabelSnapshot || undefined,
           auth_file_snapshot: authFileSnapshot || undefined,
           auth_provider_snapshot: authProviderSnapshot || undefined,
+          auth_account_id_snapshot: authAccountIdSnapshot || undefined,
           auth_project_id_snapshot: authProjectIdSnapshot || undefined,
           auth_index: authIndex || undefined,
           source: authFileSnapshot || undefined,
@@ -97,6 +83,7 @@ export const buildAccountHistoryTargetEntries = (rows: AccountRow[]): AccountHis
         Boolean(
           entry.target.auth_file_snapshot ||
           entry.target.auth_index ||
+          entry.target.auth_account_id_snapshot ||
           entry.target.auth_project_id_snapshot ||
           entry.target.account_snapshot ||
           entry.target.auth_label_snapshot ||

@@ -82,13 +82,21 @@ vi.mock('@/features/monitoring/hooks/useMonitoringData', async () => {
     getRangeBounds: () => ({ startMs: 0, endMs: Date.now() }),
     useMonitoringData: () => {
       const [, setRevision] = React.useState(0);
-      const refreshMeta = React.useCallback(async () => {
-        mocks.refreshMeta();
-        if (mocks.nextAuthFiles) {
-          mocks.authFiles = mocks.nextAuthFiles;
-          mocks.nextAuthFiles = null;
+      const refreshMeta = React.useCallback(() => {
+        const applyRefresh = (payload: unknown) => {
+          if (mocks.nextAuthFiles) {
+            mocks.authFiles = mocks.nextAuthFiles;
+            mocks.nextAuthFiles = null;
+          }
+          setRevision((current) => current + 1);
+          return payload;
+        };
+        const result = mocks.refreshMeta();
+        if (result && typeof (result as Promise<unknown>).then === 'function') {
+          return (result as Promise<unknown>).then(applyRefresh);
         }
-        setRevision((current) => current + 1);
+        applyRefresh(result);
+        return Promise.resolve(result);
       }, []);
       const authIndex = String(mocks.authFiles[0]?.authIndex ?? '');
       const row = {
@@ -291,6 +299,14 @@ const flushPromises = async () => {
   await Promise.resolve();
 };
 
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+};
+
 describe('MonitoringCenterPage credential quota revision lifecycle', () => {
   let renderer!: ReactTestRenderer;
 
@@ -302,7 +318,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     mocks.nextAuthFiles = null;
     mocks.lastAccountOverviewProps = null;
     mocks.loadHeaderSnapshots.mockClear();
-    mocks.refreshMeta.mockClear();
+    mocks.refreshMeta.mockReset().mockImplementation(() => undefined);
     mocks.requestAccountQuota
       .mockReset()
       .mockImplementation(async (target: MonitoringAccountQuotaTarget) => ({
@@ -380,6 +396,123 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
 
     expect(mocks.refreshMeta).not.toHaveBeenCalled();
     expect(mocks.requestAccountQuota).not.toHaveBeenCalled();
+  });
+
+  it('runs a follow-up metadata refresh when a newer revision arrives during refresh', async () => {
+    const firstRefresh = deferred<{
+      authFiles: AuthFileItem[];
+      authFilesLoaded: boolean;
+      channels: [];
+      channelsLoaded: boolean;
+      error: string;
+    }>();
+    const secondRefresh = deferred<typeof firstRefresh.promise extends Promise<infer T> ? T : never>();
+    mocks.refreshMeta.mockReset();
+    mocks.refreshMeta.mockReturnValueOnce(firstRefresh.promise).mockReturnValueOnce(secondRefresh.promise);
+
+    const fingerprint = createCodexInspectionConnectionFingerprint(
+      mocks.apiBase,
+      mocks.managementKey
+    )!;
+    await act(async () => {
+      publishAccountCredentialMutationRevision({
+        connectionFingerprint: fingerprint,
+        provider: 'codex',
+        kind: 'reauth',
+      });
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      publishAccountCredentialMutationRevision({
+        connectionFingerprint: fingerprint,
+        provider: 'codex',
+        kind: 'reauth',
+      });
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      firstRefresh.resolve({
+        authFiles: [makeCodexFile('1', 'codex-old.json')],
+        authFilesLoaded: true,
+        channels: [],
+        channelsLoaded: true,
+        error: '',
+      });
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      secondRefresh.resolve({
+        authFiles: [makeCodexFile('2', 'codex-new.json')],
+        authFilesLoaded: true,
+        channels: [],
+        channelsLoaded: true,
+        error: '',
+      });
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not mark a revision covered when auth-files failed to load', async () => {
+    const firstRefresh = deferred<{
+      authFiles: AuthFileItem[];
+      authFilesLoaded: boolean;
+      channels: [];
+      channelsLoaded: boolean;
+      error: string;
+    }>();
+    const secondRefresh = deferred<typeof firstRefresh.promise extends Promise<infer T> ? T : never>();
+    mocks.refreshMeta.mockReset();
+    mocks.refreshMeta.mockReturnValueOnce(firstRefresh.promise).mockReturnValueOnce(secondRefresh.promise);
+    const fingerprint = createCodexInspectionConnectionFingerprint(
+      mocks.apiBase,
+      mocks.managementKey
+    )!;
+
+    await act(async () => {
+      publishAccountCredentialMutationRevision({
+        connectionFingerprint: fingerprint,
+        provider: 'codex',
+        kind: 'reauth',
+      });
+      await flushPromises();
+    });
+    await act(async () => {
+      firstRefresh.resolve({
+        authFiles: [],
+        authFilesLoaded: false,
+        channels: [],
+        channelsLoaded: true,
+        error: 'auth-files unavailable',
+      });
+      await flushPromises();
+    });
+
+    await act(async () => {
+      publishAccountCredentialMutationRevision({
+        connectionFingerprint: fingerprint,
+        provider: 'codex',
+        kind: 'reauth',
+      });
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      secondRefresh.resolve({
+        authFiles: [makeCodexFile('2', 'codex-new.json')],
+        authFilesLoaded: true,
+        channels: [],
+        channelsLoaded: false,
+        error: 'channels unavailable',
+      });
+      await flushPromises();
+    });
   });
 
   afterEach(async () => {

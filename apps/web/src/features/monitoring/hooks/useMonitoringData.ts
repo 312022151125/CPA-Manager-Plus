@@ -60,6 +60,7 @@ import type {
   UseMonitoringDataParams,
   UseMonitoringDataReturn,
 } from '../model/types';
+import type { MonitoringMetaPayload } from '../model/types';
 import { loadMonitoringMetaPayload } from '../services/monitoringMetaService';
 import { useMonitoringAnalytics } from './useMonitoringAnalytics';
 
@@ -326,7 +327,9 @@ export function useMonitoringData({
     connectionScopeKeyRef.current = connectionScopeKey ?? null;
   }, [connectionScopeKey]);
   const [authFiles, setAuthFiles] = useState<AuthFileItem[]>([]);
+  const [authFilesLoaded, setAuthFilesLoaded] = useState(false);
   const [channels, setChannels] = useState<MonitoringChannelMeta[]>([]);
+  const [channelsLoaded, setChannelsLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [analyticsNowMs, setAnalyticsNowMs] = useState(() => Date.now());
@@ -338,6 +341,7 @@ export function useMonitoringData({
       cachedSnapshots: new Map(),
       lastStableSnapshot: null,
     }));
+  const metaRequestGenerationRef = useRef(0);
 
   const analyticsBounds = useMemo(() => {
     const bounds = getRangeBounds(timeRange, analyticsNowMs, customTimeRange);
@@ -349,9 +353,10 @@ export function useMonitoringData({
   }, [analyticsNowMs, customTimeRange, timeRange]);
 
   const refreshMeta = useCallback(
-    async (showLoading: boolean = true) => {
+    async (showLoading: boolean = true): Promise<MonitoringMetaPayload | null> => {
       const requestScopeKey = connectionScopeKey ?? null;
-      if (connectionScopeKeyRef.current !== requestScopeKey) return;
+      if (connectionScopeKeyRef.current !== requestScopeKey) return null;
+      const requestGeneration = ++metaRequestGenerationRef.current;
 
       if (showLoading) {
         setLoading(true);
@@ -359,10 +364,17 @@ export function useMonitoringData({
       }
 
       const payload = await loadMonitoringMetaPayload(config);
-      if (connectionScopeKeyRef.current !== requestScopeKey) return;
+      if (
+        connectionScopeKeyRef.current !== requestScopeKey ||
+        metaRequestGenerationRef.current !== requestGeneration
+      ) {
+        return null;
+      }
 
       setAuthFiles(payload.authFiles);
+      setAuthFilesLoaded(payload.authFilesLoaded);
       setChannels(payload.channels);
+      setChannelsLoaded(payload.channelsLoaded);
       setError(payload.error);
       setLoading(false);
       setEventsPageState((previous) =>
@@ -371,6 +383,7 @@ export function useMonitoringData({
           : { ...previous, beforeMs: null, beforeId: null, loadingMore: false }
       );
       setAnalyticsNowMs(Date.now());
+      return payload;
     },
     [config, connectionScopeKey]
   );
@@ -378,11 +391,20 @@ export function useMonitoringData({
   useEffect(() => {
     let cancelled = false;
     const requestScopeKey = connectionScopeKey ?? null;
+    const requestGeneration = ++metaRequestGenerationRef.current;
 
     loadMonitoringMetaPayload(config).then((payload) => {
-      if (cancelled || connectionScopeKeyRef.current !== requestScopeKey) return;
+      if (
+        cancelled ||
+        connectionScopeKeyRef.current !== requestScopeKey ||
+        metaRequestGenerationRef.current !== requestGeneration
+      ) {
+        return;
+      }
       setAuthFiles(payload.authFiles);
+      setAuthFilesLoaded(payload.authFilesLoaded);
       setChannels(payload.channels);
+      setChannelsLoaded(payload.channelsLoaded);
       setError(payload.error);
       setLoading(false);
     });
@@ -1031,7 +1053,9 @@ export function useMonitoringData({
     loading: loading || analytics.loading,
     error: [error, analytics.error, filterSelectorsAnalytics.error].filter(Boolean).join('；'),
     authFiles,
+    authFilesLoaded,
     channels,
+    channelsLoaded,
     summary: presentationSnapshot.summary,
     metadata,
     statusChips,

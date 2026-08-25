@@ -2,6 +2,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'rea
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexReauthDialog } from './CodexReauthDialog';
+import { CodexReauthReconciliationError } from './codexReauthModel';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -560,6 +561,46 @@ describe('CodexReauthDialog connection lifecycle', () => {
       'error'
     );
     expect(textContent(renderer.root)).toContain('temporary Accounts reload failure');
+
+    act(() => renderer.unmount());
+  });
+
+  it('keeps identity reconciliation failures in the error state', async () => {
+    mocks.startAuth.mockResolvedValue({ url: 'https://auth.example/codex', state: 'state-1' });
+    mocks.submitCallback.mockResolvedValue({ status: 'ok' });
+    mocks.getAuthStatus.mockResolvedValue({ status: 'ok' });
+    const onSuccess = vi.fn().mockRejectedValue(
+      new CodexReauthReconciliationError('identity_changed', 'identity changed')
+    );
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexReauthDialog
+          open
+          target={TARGET}
+          requestScope={REQUEST_SCOPE}
+          onClose={vi.fn()}
+          onSuccess={onSuccess}
+        />
+      );
+    });
+    await flushEffects();
+
+    const input = renderer.root.findByType('input');
+    act(() => input.props.onChange({ target: { value: 'http://localhost/callback?code=1' } }));
+    await act(async () => {
+      findButton(renderer, 'codex_reauth.submit_callback').props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(textContent(renderer.root)).toContain('identity changed');
+    expect(mocks.showNotification).toHaveBeenCalledWith('identity changed', 'error');
+    expect(mocks.showNotification).not.toHaveBeenCalledWith(
+      expect.stringContaining('codex_reauth.success'),
+      'warning'
+    );
 
     act(() => renderer.unmount());
   });

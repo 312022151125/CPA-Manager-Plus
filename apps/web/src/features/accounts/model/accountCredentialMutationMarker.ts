@@ -1,8 +1,5 @@
 import type { AuthFileItem } from '@/types';
-import {
-  getAuthFileStatusMessage,
-  isHealthyAuthFileStatusMessage,
-} from '@/features/authFiles/constants';
+import { getAuthFileStatusMessage } from '@/features/authFiles/constants';
 import {
   readAuthFileCredentialRefreshAtMs,
   readAuthFileUpdatedAtMs,
@@ -246,17 +243,10 @@ export const hasAccountCredentialMutationEvidence = (
     .map(buildCredentialEvidence)
     .some((current) => {
       const baseline = baselineByIdentity.get(current.identityKey);
-      const statusImproved =
-        Boolean(baseline?.statusMessage) &&
-        current.statusMessage !== baseline?.statusMessage &&
-        (current.statusMessage.length === 0 ||
-          isHealthyAuthFileStatusMessage(current.statusMessage));
-      return (
-        !baseline ||
-        current.credentialRefreshAtMs > baseline.credentialRefreshAtMs ||
-        current.updatedAtMs > baseline.updatedAtMs ||
-        statusImproved
-      );
+      // A provider-wide timestamp/status change is not attributable to the
+      // OAuth operation that created this generic marker. Only a newly
+      // observed credential identity is causal evidence without a target key.
+      return !baseline;
     });
 };
 

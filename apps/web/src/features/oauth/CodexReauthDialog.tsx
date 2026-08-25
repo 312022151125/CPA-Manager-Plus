@@ -8,7 +8,10 @@ import { oauthApi } from '@/services/api';
 import type { ApiClientRequestScope } from '@/services/api/client';
 import { useNotificationStore } from '@/stores';
 import { copyToClipboard } from '@/utils/clipboard';
-import type { CodexReauthTarget } from './codexReauthModel';
+import {
+  isCodexReauthReconciliationError,
+  type CodexReauthTarget,
+} from './codexReauthModel';
 import styles from './CodexReauthDialog.module.scss';
 
 type CodexReauthStatus =
@@ -173,6 +176,15 @@ export function CodexReauthDialog({
           return;
         }
         const message = getErrorMessage(err) || t('notification.refresh_failed');
+        if (isCodexReauthReconciliationError(err)) {
+          setStatus('error');
+          setCallbackSubmitting(false);
+          setCallbackStatus('error');
+          setCallbackError(message);
+          setError(message);
+          showNotification(message, 'error');
+          return;
+        }
         const warning = `${t('notification.refresh_failed')}: ${message}`;
         setStatus('success');
         setCallbackSubmitting(false);

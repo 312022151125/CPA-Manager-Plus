@@ -77,9 +77,13 @@ import {
 import { OAuthModelAliasCard } from '@/features/authFiles/components/OAuthModelAliasCard';
 import { CodexReauthDialog } from '@/features/oauth/CodexReauthDialog';
 import {
+  CodexReauthReconciliationError,
   createCodexReauthTargetFromAuthFile,
   type CodexReauthTarget,
 } from '@/features/oauth/codexReauthModel';
+import {
+  runCredentialVisibilityRetry,
+} from '@/features/accounts/model/accountCredentialVisibilityRetry';
 import {
   ACCOUNT_CODEX_STATUS_FILTERS,
   buildAccountInspectionBySelectionKey,
@@ -125,12 +129,13 @@ import {
 } from '@/features/accounts/model/accountCredentialMutationMarker';
 import {
   acknowledgePendingAccountDirectReauths,
-  confirmAccountDirectReauth,
   createAccountDirectReauthBaseline,
   listPendingAccountDirectReauths,
   reconcileAccountDirectReauth,
   recordPendingAccountDirectReauth,
   type AccountDirectReauthBaseline,
+  type AccountDirectReauthReconciliation,
+  type PendingAccountDirectReauth,
 } from '@/features/accounts/model/accountDirectReauth';
 import { buildAccountRecommendations } from '@/features/accounts/model/quotaRecommendations';
 import {
@@ -1302,9 +1307,11 @@ export function AccountsPage() {
   const quotaCooldownsLoadedRef = useRef(false);
   const consumedCredentialMutationMarkerIdsRef = useRef<Set<string>>(new Set());
   const credentialMutationMarkerAttemptsRef = useRef<Map<string, string>>(new Map());
+  const credentialMutationMarkerExhaustedRef = useRef<Map<string, string>>(new Map());
   const credentialMutationMarkerSynchronizationsRef = useRef<Map<string, Promise<boolean>>>(
     new Map()
   );
+  const isMountedRef = useRef(true);
   const directReauthSynchronizationsRef = useRef<Map<string, Promise<boolean>>>(new Map());
   const synchronizePendingAccountDirectReauthsRef = useRef<
     (options?: { reload?: boolean }) => Promise<boolean>
@@ -1361,6 +1368,13 @@ export function AccountsPage() {
     requestMonitoringAvailable: featureAvailability.requestMonitoringAvailable,
   });
 
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   useLayoutEffect(() => {
     const previousConnectionFingerprint = oauthEditorConnectionFingerprintRef.current;
     oauthEditorConnectionFingerprintRef.current = connectionFingerprint;
@@ -1372,6 +1386,7 @@ export function AccountsPage() {
     codexReauthBaselineRef.current = null;
     inspectionCodexReauthBaselineRef.current = null;
     credentialMutationMarkerAttemptsRef.current.clear();
+    credentialMutationMarkerExhaustedRef.current.clear();
     quotaRefreshGenerationRef.current += 1;
     quotaRefreshBatchRef.current = null;
     quotaRequestVersionsRef.current.forEach((version, key) => {
@@ -1556,92 +1571,129 @@ export function AccountsPage() {
     [loadAccountActionCandidates, loadFiles, loadQuotaCooldowns]
   );
 
-  const synchronizeExternalCredentialMutationMarkers = useCallback(async () => {
-    const markers = listAccountCredentialMutationMarkers(connectionFingerprint).filter((marker) => {
-      if (consumedCredentialMutationMarkerIdsRef.current.has(marker.id)) return false;
-      const currentEvidence = JSON.stringify(
-        createAccountCredentialMutationBaseline(files, marker.provider)
+  const synchronizeExternalCredentialMutationMarkers = useCallback(
+    async (options: { force?: boolean } = {}) => {
+      const force = options.force === true;
+      const synchronizationScopeKey = credentialEvidenceScopeKey;
+      const markers = listAccountCredentialMutationMarkers(connectionFingerprint).filter((marker) => {
+        if (consumedCredentialMutationMarkerIdsRef.current.has(marker.id)) return false;
+        if (force) return true;
+        const currentEvidence = JSON.stringify(
+          createAccountCredentialMutationBaseline(files, marker.provider)
+        );
+        const exhaustedEvidence = credentialMutationMarkerExhaustedRef.current.get(marker.id);
+        return exhaustedEvidence !== `${synchronizationScopeKey}\u001e${currentEvidence}`;
+      });
+      if (markers.length === 0) return false;
+      const pendingSynchronization = credentialMutationMarkerSynchronizationsRef.current.get(
+        synchronizationScopeKey
       );
-      return credentialMutationMarkerAttemptsRef.current.get(marker.id) !== currentEvidence;
-    });
-    if (markers.length === 0) return false;
-    const pendingSynchronization = credentialMutationMarkerSynchronizationsRef.current.get(
-      credentialEvidenceScopeKey
-    );
-    if (pendingSynchronization) return pendingSynchronization;
+      if (pendingSynchronization) return pendingSynchronization;
 
-    const synchronizationScopeKey = credentialEvidenceScopeKey;
-    const synchronization = (async () => {
-      try {
-        const markersByProvider = new Map<string, AccountCredentialMutationMarker[]>();
-        markers.forEach((marker) => {
-          const providerMarkers = markersByProvider.get(marker.provider) ?? [];
-          providerMarkers.push(marker);
-          markersByProvider.set(marker.provider, providerMarkers);
-        });
-        markersByProvider.forEach((providerMarkers, provider) => {
-          const markerAtMs = Math.max(...providerMarkers.map((marker) => marker.createdAtMs));
-          invalidateProviderCredentialEvidenceRef.current(provider, markerAtMs);
-        });
-        const reloadedFiles = await reloadInspectionCredentialArtifacts({
-          requireSuccessfulReload: true,
-          loadCredentialsLast: true,
-        });
-        if (activeCredentialEvidenceScopeKeyRef.current !== synchronizationScopeKey) return false;
-        if (!reloadedFiles) return false;
-        const consumedIds: string[] = [];
-        markersByProvider.forEach((providerMarkers, provider) => {
-          const observedEvidence = JSON.stringify(
-            createAccountCredentialMutationBaseline(reloadedFiles, provider)
-          );
-          const evidencedMarkers = providerMarkers.filter((marker) =>
-            hasAccountCredentialMutationEvidence(marker, reloadedFiles)
-          );
-          providerMarkers
-            .filter((marker) => !evidencedMarkers.includes(marker))
-            .forEach((marker) =>
-              credentialMutationMarkerAttemptsRef.current.set(marker.id, observedEvidence)
-            );
-          if (evidencedMarkers.length === 0) return;
-          const markerAtMs = Math.max(...providerMarkers.map((marker) => marker.createdAtMs));
-          const targetFiles = invalidateProviderCredentialEvidenceRef.current(
-            provider,
-            markerAtMs,
-            {
-              credentialFiles: reloadedFiles,
-              supersedeRequests: false,
-            }
-          );
-          if (targetFiles.length === 0) return;
-          evidencedMarkers.forEach((marker) => consumedIds.push(marker.id));
-          publishAccountCredentialMutationRevision({
-            connectionFingerprint,
-            provider,
-            kind: 'oauth',
+      const synchronization = (async () => {
+        try {
+          const markersByProvider = new Map<string, AccountCredentialMutationMarker[]>();
+          markers.forEach((marker) => {
+            const providerMarkers = markersByProvider.get(marker.provider) ?? [];
+            providerMarkers.push(marker);
+            markersByProvider.set(marker.provider, providerMarkers);
           });
-        });
-        if (consumedIds.length === 0) return false;
-        consumedIds.forEach((id) => consumedCredentialMutationMarkerIdsRef.current.add(id));
-        acknowledgeAccountCredentialMutationMarkers(consumedIds);
-        return true;
-      } catch {
-        // Keep the marker for the next Accounts refresh when any required reload fails.
-        return false;
-      } finally {
-        credentialMutationMarkerSynchronizationsRef.current.delete(synchronizationScopeKey);
-      }
-    })();
-    credentialMutationMarkerSynchronizationsRef.current.set(
-      synchronizationScopeKey,
-      synchronization
-    );
-    return synchronization;
-  }, [
-    connectionFingerprint,
-    credentialEvidenceScopeKey,
-    files,
-    reloadInspectionCredentialArtifacts,
-  ]);
+          markersByProvider.forEach((providerMarkers, provider) => {
+            const markerAtMs = Math.max(...providerMarkers.map((marker) => marker.createdAtMs));
+            invalidateProviderCredentialEvidenceRef.current(provider, markerAtMs);
+          });
+
+          const retry = await runCredentialVisibilityRetry<AuthFileItem[]>({
+            load: async () => {
+              const reloadedFiles = await reloadInspectionCredentialArtifacts({
+                requireSuccessfulReload: true,
+                loadCredentialsLast: true,
+              });
+              if (!reloadedFiles) throw new Error(t('notification.refresh_failed'));
+              return reloadedFiles;
+            },
+            isUnconfirmed: (reloadedFiles) =>
+              markers.some(
+                (marker) => !hasAccountCredentialMutationEvidence(marker, reloadedFiles)
+              ),
+            isActive: () =>
+              isMountedRef.current &&
+              activeCredentialEvidenceScopeKeyRef.current === synchronizationScopeKey,
+          });
+          if (
+            retry.cancelled ||
+            activeCredentialEvidenceScopeKeyRef.current !== synchronizationScopeKey ||
+            !retry.value
+          ) {
+            return false;
+          }
+          const reloadedFiles = retry.value;
+          const consumedIds: string[] = [];
+          markersByProvider.forEach((providerMarkers, provider) => {
+            const observedEvidence = JSON.stringify(
+              createAccountCredentialMutationBaseline(reloadedFiles, provider)
+            );
+            const evidencedMarkers = providerMarkers.filter((marker) =>
+              hasAccountCredentialMutationEvidence(marker, reloadedFiles)
+            );
+            providerMarkers
+              .filter((marker) => !evidencedMarkers.includes(marker))
+              .forEach((marker) => {
+                credentialMutationMarkerAttemptsRef.current.set(marker.id, observedEvidence);
+                if (retry.exhausted) {
+                  credentialMutationMarkerExhaustedRef.current.set(
+                    marker.id,
+                    `${synchronizationScopeKey}\u001e${observedEvidence}`
+                  );
+                }
+              });
+            if (evidencedMarkers.length === 0) return;
+            const markerAtMs = Math.max(...providerMarkers.map((marker) => marker.createdAtMs));
+            const targetFiles = invalidateProviderCredentialEvidenceRef.current(
+              provider,
+              markerAtMs,
+              {
+                credentialFiles: reloadedFiles,
+                supersedeRequests: false,
+              }
+            );
+            if (targetFiles.length === 0) return;
+            evidencedMarkers.forEach((marker) => {
+              consumedIds.push(marker.id);
+              credentialMutationMarkerAttemptsRef.current.delete(marker.id);
+              credentialMutationMarkerExhaustedRef.current.delete(marker.id);
+            });
+            publishAccountCredentialMutationRevision({
+              connectionFingerprint,
+              provider,
+              kind: 'oauth',
+            });
+          });
+          if (consumedIds.length === 0) return false;
+          consumedIds.forEach((id) => consumedCredentialMutationMarkerIdsRef.current.add(id));
+          acknowledgeAccountCredentialMutationMarkers(consumedIds);
+          return true;
+        } catch {
+          // Keep the marker for a future explicit refresh when auth-files is unavailable.
+          return false;
+        } finally {
+          credentialMutationMarkerSynchronizationsRef.current.delete(synchronizationScopeKey);
+        }
+      })();
+      credentialMutationMarkerSynchronizationsRef.current.set(
+        synchronizationScopeKey,
+        synchronization
+      );
+      return synchronization;
+    },
+    [
+      connectionFingerprint,
+      credentialEvidenceScopeKey,
+      files,
+      reloadInspectionCredentialArtifacts,
+      t,
+    ]
+  );
 
   const getInspectionCredentialMutationScopedKey = useCallback(
     (
@@ -1838,7 +1890,9 @@ export function AccountsPage() {
     const refreshScopeKey = credentialEvidenceScopeKey;
     const synchronizedDirectReauth = await synchronizePendingAccountDirectReauthsRef.current();
     if (activeCredentialEvidenceScopeKeyRef.current !== refreshScopeKey) return;
-    const synchronizedExternalArtifacts = await synchronizeExternalCredentialMutationMarkers();
+    const synchronizedExternalArtifacts = await synchronizeExternalCredentialMutationMarkers({
+      force: true,
+    });
     if (activeCredentialEvidenceScopeKeyRef.current !== refreshScopeKey) return;
     const snapshot = await loadInspectionSummary();
     if (activeCredentialEvidenceScopeKeyRef.current !== refreshScopeKey) return;
@@ -2888,6 +2942,65 @@ export function AccountsPage() {
     ]
   );
 
+  const reconcilePendingAccountDirectReauthsWithRetry = useCallback(
+    async (
+      pendingItems: readonly PendingAccountDirectReauth[],
+      options: { reload?: boolean } = {}
+    ): Promise<Map<string, AccountDirectReauthReconciliation> | null> => {
+      if (pendingItems.length === 0) return new Map();
+      const synchronizationScopeKey = credentialEvidenceScopeKey;
+      let firstAttempt = true;
+      const retry = await runCredentialVisibilityRetry<AuthFileItem[]>({
+        load: async () => {
+          const loadedFiles = firstAttempt && options.reload === false
+            ? files
+            : firstAttempt
+              ? await reloadInspectionCredentialArtifacts({ requireSuccessfulReload: true })
+              : await loadFiles({ throwOnError: true });
+          firstAttempt = false;
+          if (!loadedFiles) throw new Error(t('notification.refresh_failed'));
+          return loadedFiles;
+        },
+        isUnconfirmed: (loadedFiles) =>
+          pendingItems.some(
+            (pending) =>
+              Boolean(pending.target.accountId) &&
+              reconcileAccountDirectReauth(pending, loadedFiles).status === 'unconfirmed'
+          ),
+        isActive: () =>
+          isMountedRef.current &&
+          activeCredentialEvidenceScopeKeyRef.current === synchronizationScopeKey,
+      });
+      if (
+        retry.cancelled ||
+        !isMountedRef.current ||
+        activeCredentialEvidenceScopeKeyRef.current !== synchronizationScopeKey
+      ) {
+        return null;
+      }
+      if (retry.error) {
+        throw retry.error;
+      }
+      const result = new Map<string, AccountDirectReauthReconciliation>();
+      pendingItems.forEach((pending) => {
+        result.set(
+          pending.id,
+          retry.value
+            ? reconcileAccountDirectReauth(pending, retry.value)
+            : { status: 'unconfirmed' }
+        );
+      });
+      return result;
+    },
+    [
+      credentialEvidenceScopeKey,
+      files,
+      loadFiles,
+      reloadInspectionCredentialArtifacts,
+      t,
+    ]
+  );
+
   const synchronizePendingAccountDirectReauths = useCallback(
     async (options: { reload?: boolean } = {}): Promise<boolean> => {
       const pendingItems = listPendingAccountDirectReauths(connectionFingerprint);
@@ -2898,16 +3011,15 @@ export function AccountsPage() {
 
       const synchronization = (async () => {
         try {
-          const reloadedFiles =
-            options.reload === false
-              ? files
-              : await reloadInspectionCredentialArtifacts({ requireSuccessfulReload: true });
-          if (activeCredentialEvidenceScopeKeyRef.current !== synchronizationScopeKey) return false;
-          if (!reloadedFiles) return false;
+          const reconciliations = await reconcilePendingAccountDirectReauthsWithRetry(
+            pendingItems,
+            options
+          );
+          if (!reconciliations) return false;
 
           let synchronized = false;
           pendingItems.forEach((pending) => {
-            const reconciliation = reconcileAccountDirectReauth(pending, reloadedFiles);
+            const reconciliation = reconciliations.get(pending.id) ?? { status: 'unconfirmed' };
             if (reconciliation.status === 'confirmed') {
               completeConfirmedAccountDirectReauth(pending, reconciliation.file, pending.id);
               synchronized = true;
@@ -2942,8 +3054,7 @@ export function AccountsPage() {
       completeConfirmedAccountDirectReauth,
       connectionFingerprint,
       credentialEvidenceScopeKey,
-      files,
-      reloadInspectionCredentialArtifacts,
+      reconcilePendingAccountDirectReauthsWithRetry,
       showNotification,
       t,
     ]
@@ -2955,14 +3066,11 @@ export function AccountsPage() {
     if (!baseline) throw new Error(t('notification.refresh_failed'));
     const pending = recordPendingAccountDirectReauth({ connectionFingerprint, baseline });
     if (!pending) throw new Error(t('notification.refresh_failed'));
-    const reauthScopeKey = credentialEvidenceScopeKey;
-    const reloadedFiles = await reloadInspectionCredentialArtifacts({
-      requireSuccessfulReload: true,
+    const reconciliations = await reconcilePendingAccountDirectReauthsWithRetry([pending], {
+      reload: true,
     });
-    if (activeCredentialEvidenceScopeKeyRef.current !== reauthScopeKey) return;
-    const reconciliation = reloadedFiles
-      ? reconcileAccountDirectReauth(pending, reloadedFiles)
-      : { status: 'unconfirmed' as const };
+    if (!reconciliations) return;
+    const reconciliation = reconciliations.get(pending.id) ?? { status: 'unconfirmed' as const };
     if (reconciliation.status === 'confirmed') {
       completeConfirmedAccountDirectReauth(pending, reconciliation.file, pending.id);
       return;
@@ -2970,20 +3078,17 @@ export function AccountsPage() {
     if (reconciliation.status !== 'unconfirmed') {
       acknowledgePendingAccountDirectReauths([pending.id]);
     }
-    throw new Error(
-      t(
-        reconciliation.status === 'identity-changed'
-          ? 'codex_reauth.identity_changed'
-          : reconciliation.status === 'ambiguous'
-            ? 'codex_reauth.identity_ambiguous'
-            : 'codex_reauth.identity_unconfirmed'
-      )
-    );
+    const code =
+      reconciliation.status === 'identity-changed'
+        ? 'identity_changed'
+        : reconciliation.status === 'ambiguous'
+          ? 'identity_ambiguous'
+          : 'identity_unconfirmed';
+    throw new CodexReauthReconciliationError(code, t(`codex_reauth.${code}`));
   }, [
     completeConfirmedAccountDirectReauth,
     connectionFingerprint,
-    credentialEvidenceScopeKey,
-    reloadInspectionCredentialArtifacts,
+    reconcilePendingAccountDirectReauthsWithRetry,
     t,
   ]);
 
@@ -4611,15 +4716,26 @@ export function AccountsPage() {
           baseline: captured.baseline,
         });
         if (!pending) throw new Error(t('notification.refresh_failed'));
-        const reloadedFiles = await reloadInspectionCredentialArtifacts({
-          requireSuccessfulReload: true,
+        const reconciliations = await reconcilePendingAccountDirectReauthsWithRetry([pending], {
+          reload: true,
         });
-        if (activeCredentialEvidenceScopeKeyRef.current !== callbackScopeKey) return;
-        const confirmedFile = reloadedFiles
-          ? confirmAccountDirectReauth(pending, reloadedFiles)
-          : null;
-        if (!confirmedFile) throw new Error(t('notification.refresh_failed'));
-        completeConfirmedAccountDirectReauth(pending, confirmedFile, pending.id);
+        if (!reconciliations) return;
+        const reconciliation =
+          reconciliations.get(pending.id) ?? ({ status: 'unconfirmed' } as const);
+        if (reconciliation.status === 'confirmed') {
+          completeConfirmedAccountDirectReauth(pending, reconciliation.file, pending.id);
+          return;
+        }
+        if (reconciliation.status !== 'unconfirmed') {
+          acknowledgePendingAccountDirectReauths([pending.id]);
+        }
+        const code =
+          reconciliation.status === 'identity-changed'
+            ? 'identity_changed'
+            : reconciliation.status === 'ambiguous'
+              ? 'identity_ambiguous'
+              : 'identity_unconfirmed';
+        throw new CodexReauthReconciliationError(code, t(`codex_reauth.${code}`));
         return;
       }
       if (snapshot) {
@@ -4641,6 +4757,7 @@ export function AccountsPage() {
       credentialEvidenceScopeKey,
       getInspectionCredentialMutationScopedKey,
       reloadInspectionCredentialArtifacts,
+      reconcilePendingAccountDirectReauthsWithRetry,
       synchronizeInspectionCredentialMutations,
       t,
     ]

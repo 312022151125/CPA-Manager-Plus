@@ -1430,9 +1430,11 @@ describe('AccountsPage replacement flows', () => {
       return mocks.files;
     });
 
-    expect(await runCodexReauthSuccessAndCaptureError()).toEqual(
-      new Error('codex_reauth.identity_unconfirmed')
-    );
+    expect(await runCodexReauthSuccessAndCaptureError()).toMatchObject({
+      name: 'CodexReauthReconciliationError',
+      code: 'identity_unconfirmed',
+      message: 'codex_reauth.identity_unconfirmed',
+    });
 
     expect(listPendingAccountDirectReauths('http://cpa-a.local:8317:manager-key')).toHaveLength(1);
   });
