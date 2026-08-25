@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MonitoringAnalyticsEventRow } from '@/services/api/usageService';
 import type { AuthFileItem } from '@/types/authFile';
 import type { CredentialInfo } from '@/types/sourceInfo';
@@ -311,6 +311,7 @@ export const resolveMonitoringPresentationSnapshot = ({
 export function useMonitoringData({
   usage,
   config,
+  connectionScopeKey,
   modelPrices,
   apiKeyAliases,
   timeRange,
@@ -320,6 +321,10 @@ export function useMonitoringData({
   scopeFilters,
   activeDataTab = 'accounts',
 }: UseMonitoringDataParams): UseMonitoringDataReturn {
+  const connectionScopeKeyRef = useRef<string | null>(connectionScopeKey ?? null);
+  useLayoutEffect(() => {
+    connectionScopeKeyRef.current = connectionScopeKey ?? null;
+  }, [connectionScopeKey]);
   const [authFiles, setAuthFiles] = useState<AuthFileItem[]>([]);
   const [channels, setChannels] = useState<MonitoringChannelMeta[]>([]);
   const [loading, setLoading] = useState(true);
@@ -345,12 +350,17 @@ export function useMonitoringData({
 
   const refreshMeta = useCallback(
     async (showLoading: boolean = true) => {
+      const requestScopeKey = connectionScopeKey ?? null;
+      if (connectionScopeKeyRef.current !== requestScopeKey) return;
+
       if (showLoading) {
         setLoading(true);
         setError('');
       }
 
       const payload = await loadMonitoringMetaPayload(config);
+      if (connectionScopeKeyRef.current !== requestScopeKey) return;
+
       setAuthFiles(payload.authFiles);
       setChannels(payload.channels);
       setError(payload.error);
@@ -362,14 +372,15 @@ export function useMonitoringData({
       );
       setAnalyticsNowMs(Date.now());
     },
-    [config]
+    [config, connectionScopeKey]
   );
 
   useEffect(() => {
     let cancelled = false;
+    const requestScopeKey = connectionScopeKey ?? null;
 
     loadMonitoringMetaPayload(config).then((payload) => {
-      if (cancelled) return;
+      if (cancelled || connectionScopeKeyRef.current !== requestScopeKey) return;
       setAuthFiles(payload.authFiles);
       setChannels(payload.channels);
       setError(payload.error);
@@ -379,7 +390,7 @@ export function useMonitoringData({
     return () => {
       cancelled = true;
     };
-  }, [config]);
+  }, [config, connectionScopeKey]);
 
   const authMetaMap = useMemo(() => buildMonitoringAuthMetaMap(authFiles), [authFiles]);
 

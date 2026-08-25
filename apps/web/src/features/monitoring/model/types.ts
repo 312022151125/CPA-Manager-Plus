@@ -377,6 +377,7 @@ export interface MonitoringScopeFilters {
 export interface UseMonitoringDataParams {
   usage?: unknown;
   config: Config | null | undefined;
+  connectionScopeKey?: string | null;
   modelPrices: Record<string, ModelPrice>;
   apiKeyAliases?: ApiKeyAlias[];
   timeRange: MonitoringTimeRange;

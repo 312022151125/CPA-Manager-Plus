@@ -460,6 +460,7 @@ export function MonitoringCenterPage() {
     loadMoreEvents,
   } = useMonitoringData({
     config,
+    connectionScopeKey: connectionFingerprint,
     modelPrices,
     apiKeyAliases,
     timeRange,
