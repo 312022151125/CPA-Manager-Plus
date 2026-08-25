@@ -60,7 +60,7 @@ func TestAccountActionCandidateFromEventUsesSafeEvidence(t *testing.T) {
 		AuthFileSnapshot:      "codex-auth.json",
 		AuthIndex:             "7",
 		AccountSnapshot:       "user@example.com",
-		AuthProjectIDSnapshot: "acct-123",
+		AuthAccountIDSnapshot: "acct-123",
 		FailSummary:           "authentication_error: invalidated OAuth token",
 		FailBody:              `{"error":{"type":"authentication_error","code":"token_revoked","message":"secret token sk-sensitive"}}`,
 		RawJSON:               `{"authorization":"Bearer secret","raw":"payload"}`,

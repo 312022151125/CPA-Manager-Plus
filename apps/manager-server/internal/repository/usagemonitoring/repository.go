@@ -144,7 +144,7 @@ func (r *repository) catchUp(
 	if rollupName == StatsRollupName {
 		revision, err = currentStructureRevision(ctx, tx)
 	} else if rollupName == ProjectionRollupName {
-		revision = usageidentity.AccountHistoryStructureRevision()
+		revision = usageidentity.MonitoringProjectionStructureRevision()
 	} else {
 		revision = usageidentity.ModelFormatVersion
 	}

@@ -16,7 +16,6 @@ import (
 	quotasnapshotsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/quotasnapshot"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
-	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 type recordingUsageHandler struct {
@@ -230,9 +229,11 @@ func TestManagerEnrichesCodexProjectSnapshotFromAccountID(t *testing.T) {
 	if err != nil || len(events) != 1 {
 		t.Fatalf("recent events: len=%d err=%v", len(events), err)
 	}
-	want := usageidentity.CodexAccountIDSnapshot("account-a")
-	if events[0].AuthProjectIDSnapshot != want {
-		t.Fatalf("codex account snapshot = %q, want %q", events[0].AuthProjectIDSnapshot, want)
+	if events[0].AuthAccountIDSnapshot != "account-a" {
+		t.Fatalf("codex account snapshot = %q, want %q", events[0].AuthAccountIDSnapshot, "account-a")
+	}
+	if events[0].AuthProjectIDSnapshot != "unsafe-generic-project" {
+		t.Fatalf("codex project snapshot = %q, want %q", events[0].AuthProjectIDSnapshot, "unsafe-generic-project")
 	}
 }
 

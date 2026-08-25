@@ -22,7 +22,7 @@ func TestAccountWindowQueryKeysRequireExplicitCodexAccountIDForLegacyFallback(t 
 		t.Fatalf("unmarked Codex project generated a compatibility key: account=%q legacy=%q", accountKey, legacyAccountKey)
 	}
 
-	window.AuthProjectIDSnapshot = usageidentity.CodexAccountIDSnapshot("account-a")
+	window.AuthAccountIDSnapshot = "account-a"
 	accountKey, legacyAccountKey = accountWindowQueryKeys(window)
 	wantAccountKey, valid := usageidentity.AccountKey(accountWindowFields(window))
 	if !valid {
@@ -37,14 +37,14 @@ func TestAccountWindowQueryKeysRequireExplicitCodexAccountIDForLegacyFallback(t 
 	}
 
 	otherAccount := window
-	otherAccount.AuthProjectIDSnapshot = usageidentity.CodexAccountIDSnapshot("account-b")
+	otherAccount.AuthAccountIDSnapshot = "account-b"
 	otherAccountKey, _ := accountWindowQueryKeys(otherAccount)
 	if accountKey == otherAccountKey {
 		t.Fatalf("distinct Codex accounts sharing display metadata were merged: %q", accountKey)
 	}
 
 	otherCredential := window
-	otherCredential.AuthProjectIDSnapshot = usageidentity.CodexAccountIDSnapshot("account-b")
+	otherCredential.AuthAccountIDSnapshot = "account-b"
 	otherCredential.AuthFileSnapshot = "codex-b.json"
 	otherCredential.AuthIndex = "auth-b"
 	otherCredential.Source = "codex-b.json"
@@ -59,6 +59,7 @@ func accountWindowFields(window AccountWindowUsageQuery) usageidentity.Fields {
 		AuthFileSnapshot:      window.AuthFileSnapshot,
 		AuthIndex:             window.AuthIndex,
 		AuthProviderSnapshot:  window.AuthProviderSnapshot,
+		AuthAccountIDSnapshot: window.AuthAccountIDSnapshot,
 		AuthProjectIDSnapshot: window.AuthProjectIDSnapshot,
 		AccountSnapshot:       window.AccountSnapshot,
 		AuthLabelSnapshot:     window.AuthLabelSnapshot,

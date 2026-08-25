@@ -443,7 +443,7 @@ func TestCodexAccountWindowKeepsHistoryAcrossSameAccountReauth(t *testing.T) {
 		)
 		event.AuthFileSnapshot = file
 		event.AuthIndex = authIndex
-		event.AuthProjectIDSnapshot = usageidentity.CodexAccountIDSnapshot(accountID)
+		event.AuthAccountIDSnapshot = accountID
 		return event
 	}
 
@@ -468,7 +468,7 @@ func TestCodexAccountWindowKeepsHistoryAcrossSameAccountReauth(t *testing.T) {
 			AccountSnapshot:       "same@example.com",
 			AuthFileSnapshot:      "codex-a-pro.json",
 			AuthProviderSnapshot:  "codex",
-			AuthProjectIDSnapshot: usageidentity.CodexAccountIDSnapshot("account-a"),
+			AuthAccountIDSnapshot: "account-a",
 			AuthIndex:             "auth-2",
 			Source:                "codex-a-pro.json",
 		},
@@ -479,7 +479,7 @@ func TestCodexAccountWindowKeepsHistoryAcrossSameAccountReauth(t *testing.T) {
 			AccountSnapshot:       "same@example.com",
 			AuthFileSnapshot:      "codex-a-pro.json",
 			AuthProviderSnapshot:  "codex",
-			AuthProjectIDSnapshot: usageidentity.CodexAccountIDSnapshot("account-a"),
+			AuthAccountIDSnapshot: "account-a",
 			AuthIndex:             "auth-2",
 			Source:                "codex-a-pro.json",
 		},
@@ -658,6 +658,66 @@ func TestUsageMonitoringSearchIndexTracksProjectionInsertUpdateAndDelete(t *test
 	}
 	if got := countSearchEvents("updated-marker"); got != 0 {
 		t.Fatalf("deleted search count = %d, want 0", got)
+	}
+}
+
+func TestUsageMonitoringSearchDoesNotIndexHistoricalCodexProjectMarker(t *testing.T) {
+	_, db := newMonitoringRepositoryStore(t)
+	ctx := context.Background()
+	baseMS := int64(1_800_057_600_000)
+	marker := usageidentity.CodexAccountIDSnapshot("historical-account")
+	event := monitoringRepositoryEvent(
+		"search-legacy-codex-marker",
+		baseMS+1_000,
+		"gpt-search",
+		"key-search",
+		"search@example.com",
+		"auth-search",
+		"source-search",
+		false,
+		10,
+		2,
+		0,
+	)
+	event.AuthProjectIDSnapshot = marker
+	if _, err := db.InsertEvents(ctx, []usage.Event{event}); err != nil {
+		t.Fatalf("insert legacy Codex search event: %v", err)
+	}
+	catchUpMonitoringRepository(t, ctx, db)
+
+	count, _, available, err := db.UsageMonitoringEventsCount(ctx, store.AnalyticsFilter{
+		FromMS:        baseMS,
+		ToMS:          baseMS + testDayMS,
+		SearchQuery:   marker,
+		IncludeFailed: true,
+	})
+	if err != nil || !available {
+		t.Fatalf("projected marker search count: count=%d available=%v err=%v", count, available, err)
+	}
+	if count != 0 {
+		t.Fatalf("projected marker search count = %d, want 0", count)
+	}
+
+	// Leave the next event outside the projection coverage so the raw tail
+	// search path is exercised as well.
+	tail := event
+	tail.EventHash = "search-legacy-codex-marker-tail"
+	tail.TimestampMS = baseMS + 2_000
+	tail.Timestamp = time.UnixMilli(tail.TimestampMS).UTC().Format(time.RFC3339Nano)
+	if _, err := db.InsertEvents(ctx, []usage.Event{tail}); err != nil {
+		t.Fatalf("insert raw-tail Codex search event: %v", err)
+	}
+	count, _, available, err = db.UsageMonitoringEventsCount(ctx, store.AnalyticsFilter{
+		FromMS:        baseMS,
+		ToMS:          baseMS + testDayMS,
+		SearchQuery:   marker,
+		IncludeFailed: true,
+	})
+	if err != nil || !available {
+		t.Fatalf("raw-tail marker search count: count=%d available=%v err=%v", count, available, err)
+	}
+	if count != 0 {
+		t.Fatalf("raw-tail marker search count = %d, want 0", count)
 	}
 }
 

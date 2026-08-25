@@ -38,6 +38,35 @@ func CodexAccountIDFromSnapshot(snapshot string) string {
 	return strings.TrimSpace(strings.TrimPrefix(snapshot, codexAccountIDSnapshotPrefix))
 }
 
+// ProjectIDSnapshot returns only a real provider project snapshot. The
+// pre-v3 Codex account marker is retained in immutable history for audit but
+// must never be exposed as a project identifier again.
+func ProjectIDSnapshot(provider, projectID string) string {
+	projectID = strings.TrimSpace(projectID)
+	if normalizeProvider(provider) == "codex" && CodexAccountIDFromSnapshot(projectID) != "" {
+		return ""
+	}
+	return projectID
+}
+
+// SQLProjectIDSnapshotExpression mirrors ProjectIDSnapshot for SQL filters
+// and option lists. Keep this expression equivalent to the Go helper.
+func SQLProjectIDSnapshotExpression(alias string) string {
+	column := func(name string) string {
+		if alias == "" {
+			return name
+		}
+		if strings.HasSuffix(alias, ".") {
+			return alias + name
+		}
+		return alias + "." + name
+	}
+	provider := "lower(replace(trim(coalesce(nullif(" + column("auth_provider_snapshot") + ", ''), " + column("provider") + ", '')), '_', '-'))"
+	marker := "'" + codexAccountIDSnapshotPrefix + "'"
+	project := "trim(coalesce(" + column("auth_project_id_snapshot") + ", ''))"
+	return "case when " + provider + " = 'codex' and substr(" + project + ", 1, length(" + marker + ")) = " + marker + " then '' else " + project + " end"
+}
+
 // Fields contains the credential snapshots available on a usage event or an
 // account-history request. Display values are deliberately lower priority than
 // credential identity fields so two credentials sharing an email never merge.
@@ -45,6 +74,7 @@ type Fields struct {
 	AuthFileSnapshot      string
 	AuthIndex             string
 	AuthProviderSnapshot  string
+	AuthAccountIDSnapshot string
 	AuthProjectIDSnapshot string
 	AccountSnapshot       string
 	AuthLabelSnapshot     string
@@ -57,7 +87,7 @@ type Fields struct {
 func AccountKey(fields Fields) (string, bool) {
 	provider := normalizeProvider(fields.AuthProviderSnapshot)
 	if provider == "codex" {
-		if accountID := CodexAccountIDFromSnapshot(fields.AuthProjectIDSnapshot); accountID != "" {
+		if accountID := strings.TrimSpace(fields.AuthAccountIDSnapshot); accountID != "" {
 			return encodeKey("codex-account", provider, accountID), true
 		}
 	}
@@ -110,6 +140,15 @@ func AccountHistoryStructureRevision() string {
 	return fmt.Sprintf("identity-%s:model-%s", FormatVersion, ModelFormatVersion)
 }
 
+// MonitoringProjectionStructureRevision versions the derived monitoring
+// projection independently from account-history rollups. The projection's
+// search document intentionally omits the historical Codex account marker
+// from the project field, so changing that expression must rebuild only the
+// projection/search derivation from immutable usage_events.
+func MonitoringProjectionStructureRevision() string {
+	return AccountHistoryStructureRevision() + ":project-v1"
+}
+
 func SQLAccountKeyExpression(alias string) string {
 	column := func(name string) string {
 		if alias == "" {
@@ -126,6 +165,7 @@ func SQLAccountKeyExpression(alias string) string {
 	source := trimmed("source")
 	account := trimmed("account_snapshot")
 	label := trimmed("auth_label_snapshot")
+	accountID := trimmed("auth_account_id_snapshot")
 	projectID := trimmed("auth_project_id_snapshot")
 	providerSource := "coalesce(nullif(" + trimmed("auth_provider_snapshot") + ", ''), " + trimmed("provider") + ", '')"
 	providerNormalized := "case lower(replace(trim(" + providerSource + "), '_', '-')) " +
@@ -135,10 +175,10 @@ func SQLAccountKeyExpression(alias string) string {
 		" when " + source + " <> '' and " + source + " <> " + account + " and " + source + " <> " + label +
 		" then " + source + " else '' end"
 	marker := "'" + codexAccountIDSnapshotPrefix + "'"
-	codexAccountID := "case when substr(" + projectID + ", 1, length(" + marker + ")) = " + marker +
+	legacyMarkerAccountID := "case when substr(" + projectID + ", 1, length(" + marker + ")) = " + marker +
 		" then trim(substr(" + projectID + ", length(" + marker + ") + 1)) else '' end"
-	legacyProjectID := "case when " + providerNormalized + " = 'codex' and " + codexAccountID +
-		" <> '' then '' else " + projectID + " end"
+	codexAccountID := "case when " + providerNormalized + " = 'codex' then " + accountID + " else '' end"
+	legacyProjectID := "case when " + providerNormalized + " = 'codex' and (" + accountID + " <> '' or " + legacyMarkerAccountID + " <> '') then '' else " + projectID + " end"
 
 	hexValue := func(value string) string { return "hex(" + value + ")" }
 	prefix := "'" + keyPrefix + ":" + FormatVersion + ":"

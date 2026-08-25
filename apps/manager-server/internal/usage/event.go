@@ -43,6 +43,7 @@ type Event struct {
 	AuthLabelSnapshot     string `json:"auth_label_snapshot,omitempty"`
 	AuthFileSnapshot      string `json:"auth_file_snapshot,omitempty"`
 	AuthProviderSnapshot  string `json:"auth_provider_snapshot,omitempty"`
+	AuthAccountIDSnapshot string `json:"auth_account_id_snapshot,omitempty"`
 	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
 	AuthSnapshotAtMS      int64  `json:"auth_snapshot_at_ms,omitempty"`
 	// ReasoningEffort is the request-side effort setting added by CPA v7.1.18+.
@@ -136,6 +137,7 @@ type Detail struct {
 	AuthLabelSnapshot     string                  `json:"auth_label_snapshot,omitempty"`
 	AuthFileSnapshot      string                  `json:"auth_file_snapshot,omitempty"`
 	AuthProviderSnapshot  string                  `json:"auth_provider_snapshot,omitempty"`
+	AuthAccountIDSnapshot string                  `json:"auth_account_id_snapshot,omitempty"`
 	AuthProjectIDSnapshot string                  `json:"auth_project_id_snapshot,omitempty"`
 	AuthSnapshotAtMS      int64                   `json:"auth_snapshot_at_ms,omitempty"`
 	LatencyMS             *int64                  `json:"latency_ms,omitempty"`
@@ -599,6 +601,7 @@ func NormalizeRaw(raw []byte) (Event, error) {
 		AuthLabelSnapshot:             readString(record, "auth_label_snapshot", "authLabelSnapshot"),
 		AuthFileSnapshot:              readString(record, "auth_file_snapshot", "authFileSnapshot"),
 		AuthProviderSnapshot:          authProviderSnapshot,
+		AuthAccountIDSnapshot:         readString(record, "auth_account_id_snapshot", "authAccountIdSnapshot"),
 		AuthProjectIDSnapshot:         readString(record, "auth_project_id_snapshot", "authProjectIdSnapshot", "project_id", "projectId"),
 		AuthSnapshotAtMS:              readInt(record, "auth_snapshot_at_ms", "authSnapshotAtMs"),
 		ReasoningEffort:               readString(record, "reasoning_effort", "reasoningEffort"),
@@ -685,6 +688,7 @@ func BuildPayload(events []Event) Payload {
 			AuthLabelSnapshot:     event.AuthLabelSnapshot,
 			AuthFileSnapshot:      event.AuthFileSnapshot,
 			AuthProviderSnapshot:  event.AuthProviderSnapshot,
+			AuthAccountIDSnapshot: event.AuthAccountIDSnapshot,
 			AuthProjectIDSnapshot: event.AuthProjectIDSnapshot,
 			AuthSnapshotAtMS:      event.AuthSnapshotAtMS,
 			LatencyMS:             event.LatencyMS,
