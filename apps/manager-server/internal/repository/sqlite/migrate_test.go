@@ -604,6 +604,146 @@ func TestMigrateRebuildsProjectionForAccountKeyIndex(t *testing.T) {
 	}
 }
 
+func TestMigrateSeparatesCodexAccountSnapshotAndUpgradesMonitoringRollupPK(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex-account-snapshot-migration.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if _, err := db.Exec(`insert into usage_events (
+		event_hash, timestamp_ms, timestamp, provider, model, auth_project_id_snapshot,
+		created_at_ms
+	) values ('legacy-codex-marker', 1000, '1000', 'codex', 'gpt-test',
+		'codex-account-id:v1:historical-account', 1000)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("insert immutable usage event: %v", err)
+	}
+	if _, err := db.Exec(`drop table usage_monitoring_account_daily_rollups_v1`); err != nil {
+		_ = db.Close()
+		t.Fatalf("drop current account rollup: %v", err)
+	}
+	if _, err := db.Exec(`create table usage_monitoring_account_daily_rollups_v1 (
+		structure_revision text not null,
+		bucket_ms integer not null,
+		account_snapshot text not null,
+		auth_label_snapshot text not null,
+		provider text not null,
+		auth_provider_snapshot text not null,
+		auth_index text not null,
+		source text not null,
+		source_hash text not null,
+		auth_file_snapshot text not null,
+		api_key_hash text not null,
+		executor_type text not null,
+		model text not null,
+		billing_model text not null,
+		pricing_model text not null,
+		service_tier text not null,
+		context_threshold_tokens integer not null,
+		failed integer not null,
+		calls integer not null default 0,
+		input_tokens integer not null default 0,
+		output_tokens integer not null default 0,
+		reasoning_tokens integer not null default 0,
+		cached_tokens integer not null default 0,
+		cache_read_tokens integer not null default 0,
+		cache_creation_tokens integer not null default 0,
+		total_tokens integer not null default 0,
+		zero_token_calls integer not null default 0,
+		latency_sum_ms integer not null default 0,
+		latency_samples integer not null default 0,
+		last_seen_ms integer not null,
+		updated_at_ms integer not null,
+		primary key (
+			structure_revision, bucket_ms, account_snapshot, auth_label_snapshot,
+			provider, auth_provider_snapshot, auth_index, source, source_hash,
+			auth_file_snapshot, api_key_hash, executor_type, model, billing_model,
+			pricing_model, service_tier, context_threshold_tokens, failed
+		)
+	)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("create legacy account rollup: %v", err)
+	}
+	if _, err := db.Exec(`insert into usage_monitoring_account_daily_rollups_v1 (
+		structure_revision, bucket_ms, account_snapshot, auth_label_snapshot,
+		provider, auth_provider_snapshot, auth_index, source, source_hash,
+		auth_file_snapshot, api_key_hash, executor_type, model, billing_model,
+		pricing_model, service_tier, context_threshold_tokens, failed, calls,
+		last_seen_ms, updated_at_ms
+	) values ('legacy', 0, 'same@example.com', 'Same', 'codex', 'codex',
+		'auth-1', 'auth.json', 'source-hash', 'auth.json', '', '', 'gpt-test',
+		'gpt-test', 'gpt-test', '', -1, 0, 1, 1000, 1000)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("insert legacy account rollup: %v", err)
+	}
+	var beforeProject string
+	if err := db.QueryRow(`select auth_project_id_snapshot from usage_events where event_hash = 'legacy-codex-marker'`).Scan(&beforeProject); err != nil {
+		_ = db.Close()
+		t.Fatalf("read immutable event before migration: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen legacy sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := Migrate(db); err != nil {
+		t.Fatalf("repeat account snapshot migration: %v", err)
+	}
+
+	columns := migrationTableColumns(t, db, usageMonitoringAccountDailyTable)
+	if !columns["auth_account_id_snapshot"] {
+		t.Fatalf("current account rollup columns = %#v, missing auth_account_id_snapshot", columns)
+	}
+	assertTableCount(t, db, usageMonitoringAccountDailyTable, 0)
+	assertTableCount(t, db, usageMonitoringAccountLegacy, 1)
+	var primaryKeyHasAccountID bool
+	rows, err := db.Query(`pragma table_info(usage_monitoring_account_daily_rollups_v1)`)
+	if err != nil {
+		t.Fatalf("inspect current account rollup primary key: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan current account rollup schema: %v", err)
+		}
+		if name == "auth_account_id_snapshot" && primaryKey > 0 {
+			primaryKeyHasAccountID = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("inspect current account rollup schema: %v", err)
+	}
+	if !primaryKeyHasAccountID {
+		t.Fatal("current account rollup primary key does not include auth_account_id_snapshot")
+	}
+	var afterProject, accountID sql.NullString
+	if err := db.QueryRow(`select auth_project_id_snapshot, auth_account_id_snapshot
+		from usage_events where event_hash = 'legacy-codex-marker'`).Scan(&afterProject, &accountID); err != nil {
+		t.Fatalf("read immutable event after migration: %v", err)
+	}
+	if !afterProject.Valid || afterProject.String != beforeProject {
+		t.Fatalf("immutable project snapshot changed from %q to %#v", beforeProject, afterProject)
+	}
+	if accountID.Valid {
+		t.Fatalf("historical marker was backfilled into account snapshot: %#v", accountID)
+	}
+	var accountSnapshotNotNull int
+	if err := db.QueryRow(`select "notnull" from pragma_table_info('usage_events')
+		where name = 'auth_account_id_snapshot'`).Scan(&accountSnapshotNotNull); err != nil {
+		t.Fatalf("inspect usage_events account snapshot nullability: %v", err)
+	}
+	if accountSnapshotNotNull != 0 {
+		t.Fatalf("usage_events auth_account_id_snapshot notnull = %d, want nullable", accountSnapshotNotNull)
+	}
+}
+
 func TestUsageMonitoringModelFormatUpgradeRebuildsDerivedDataOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage-monitoring-model-format.sqlite")
 	db, err := Open(path)
@@ -709,7 +849,7 @@ func TestUsageMonitoringModelFormatUpgradeRebuildsDerivedDataOnce(t *testing.T) 
 		if name == usageMonitoringStatsRollupName {
 			wantRevision = ""
 		} else if name == usageMonitoringProjectionRollupName {
-			wantRevision = usageidentity.AccountHistoryStructureRevision()
+			wantRevision = usageidentity.MonitoringProjectionStructureRevision()
 		}
 		if revision != wantRevision || status != "pending" || coverage != 0 || target != 1 || processed != 0 {
 			_ = rows.Close()
@@ -2054,7 +2194,7 @@ func TestAccountHistoryIdentityFormatUpgradeRebuildsDerivedDataOnce(t *testing.T
 		Scan(&projectionRevision, &projectionStatus, &projectionCoverage, &projectionTarget); err != nil {
 		t.Fatalf("read projection identity rebuild state: %v", err)
 	}
-	if projectionRevision != usageidentity.AccountHistoryStructureRevision() || projectionStatus != "pending" || projectionCoverage != 0 || projectionTarget != 1 {
+	if projectionRevision != usageidentity.MonitoringProjectionStructureRevision() || projectionStatus != "pending" || projectionCoverage != 0 || projectionTarget != 1 {
 		t.Fatalf("projection identity rebuild state = revision:%q status:%q coverage:%d target:%d", projectionRevision, projectionStatus, projectionCoverage, projectionTarget)
 	}
 	for _, statement := range []string{
