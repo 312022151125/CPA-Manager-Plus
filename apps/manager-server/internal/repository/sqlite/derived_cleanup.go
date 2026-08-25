@@ -23,6 +23,7 @@ const (
 
 var derivedLegacyTables = []string{
 	usageAccountModelRollupsLegacy,
+	usageAccountModelIdentityLegacy,
 	usagePricingAccountLegacy,
 	usageDashboardHourlyLegacy,
 	usageHourlyAggregateLegacy,

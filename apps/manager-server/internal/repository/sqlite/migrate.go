@@ -41,6 +41,7 @@ const (
 	usageAccountModelRollupsTable         = "usage_account_model_rollups"
 	usagePricingAccountRollupsTable       = "usage_pricing_account_rollups_v1"
 	usageAccountModelRollupsLegacy        = "usage_account_model_rollups_legacy_v1120_rc2"
+	usageAccountModelIdentityLegacy       = "usage_account_model_rollups_legacy_identity_v3"
 	usagePricingAccountLegacy             = "usage_pricing_account_rollups_v1_legacy_v1120_rc2"
 	usageDashboardHourlyLegacy            = "usage_dashboard_hourly_rollups_legacy_v1120_rc2"
 	usageHourlyAggregateLegacy            = "usage_hourly_aggregate_v1_legacy_v1120_rc2"
@@ -1842,7 +1843,7 @@ func ensureAccountHistoryIdentityFormatVersion(db *sql.DB) error {
 		return err
 	}
 	if hasRows {
-		if err := parkDerivedTable(tx, usageAccountModelRollupsTable, usageAccountModelRollupsLegacy); err != nil {
+		if err := parkDerivedTable(tx, usageAccountModelRollupsTable, usageAccountModelIdentityLegacy); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(createUsageAccountModelRollupsTable); err != nil {

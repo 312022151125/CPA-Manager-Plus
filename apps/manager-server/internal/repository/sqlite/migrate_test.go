@@ -2003,6 +2003,8 @@ func TestAccountHistoryIdentityFormatUpgradeRebuildsDerivedDataOnce(t *testing.T
 		`insert into usage_account_model_rollups (
 			account_key, model, billing_model, service_tier, first_seen_ms, last_seen_ms, updated_at_ms
 		) values ('legacy', '-', '-', '', 1, 1, 1)`,
+		`create table usage_account_model_rollups_legacy_v1120_rc2 (id integer primary key)`,
+		`insert into usage_account_model_rollups_legacy_v1120_rc2 (id) values (1)`,
 		`insert into usage_dashboard_hourly_rollups (
 			bucket_ms, model, billing_model, service_tier, updated_at_ms
 		) values (0, '-', '-', '', 1)`,
@@ -2026,6 +2028,7 @@ func TestAccountHistoryIdentityFormatUpgradeRebuildsDerivedDataOnce(t *testing.T
 	assertTableCount(t, db, "usage_events", 1)
 	assertTableCount(t, db, "usage_account_model_rollups", 0)
 	assertTableCount(t, db, usageAccountModelRollupsLegacy, 1)
+	assertTableCount(t, db, usageAccountModelIdentityLegacy, 1)
 	assertTableCount(t, db, "usage_dashboard_hourly_rollups", 1)
 	var accountCheckpoints, dashboardCheckpoints int
 	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'account_history'`).Scan(&accountCheckpoints); err != nil {
@@ -2114,7 +2117,7 @@ func TestAccountHistoryIdentityFormatUpgradeDoesNotDeleteDerivedRows(t *testing.
 	}
 	assertTableCount(t, db, "usage_events", 1)
 	assertTableCount(t, db, "usage_account_model_rollups", 0)
-	assertTableCount(t, db, usageAccountModelRollupsLegacy, 1)
+	assertTableCount(t, db, usageAccountModelIdentityLegacy, 1)
 	assertTableCount(t, db, "usage_rollup_checkpoints", 1)
 	var version string
 	if err := db.QueryRow(`select value from settings where key = ?`, accountHistoryIdentityFormatVersionKey).Scan(&version); err != nil {
@@ -2132,7 +2135,7 @@ func TestAccountHistoryIdentityFormatUpgradeDoesNotDeleteDerivedRows(t *testing.
 	}
 	assertTableCount(t, db, "usage_events", 1)
 	assertTableCount(t, db, "usage_account_model_rollups", 0)
-	assertTableCount(t, db, usageAccountModelRollupsLegacy, 1)
+	assertTableCount(t, db, usageAccountModelIdentityLegacy, 1)
 	var accountCheckpoints, dashboardCheckpoints int
 	if err := db.QueryRow(`select count(*) from usage_rollup_checkpoints where name = 'account_history'`).Scan(&accountCheckpoints); err != nil {
 		t.Fatalf("read account checkpoint count: %v", err)
