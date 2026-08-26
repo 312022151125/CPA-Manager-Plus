@@ -145,6 +145,7 @@ export { AccountExpandedDetails, AccountOverviewCard };
 const MAX_CONCURRENT_ACCOUNT_QUOTA_PROVIDERS = 3;
 const MAX_CONCURRENT_ACCOUNT_QUOTA_REQUESTS_PER_PROVIDER = 1;
 const DATABASE_MAINTENANCE_LONG_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
+const CREDENTIAL_MUTATION_COVERAGE_RETRY_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000] as const;
 
 const DEFAULT_ACCOUNT_PAGE_SIZE = ACCOUNT_OVERVIEW_TABLE_PAGE_SIZE_OPTIONS[0];
 const EMPTY_STATUS_BAR_DATA: StatusBarData = {
@@ -531,44 +532,111 @@ export function MonitoringCenterPage() {
 
     const refreshGeneration = credentialMutationRefreshGenerationRef.current;
     const requestedAtStart = { ...requestedCredentialMutationRevisionsRef.current };
-    let coverageSucceeded = false;
+
+    const coverRevisions = (snapshot: Record<string, number>) => {
+      Object.entries(snapshot).forEach(([key, revision]) => {
+        coveredCredentialMutationRevisionsRef.current[key] = Math.max(
+          coveredCredentialMutationRevisionsRef.current[key] ?? 0,
+          revision
+        );
+      });
+    };
+    const generationAlive = () =>
+      credentialMutationRefreshGenerationRef.current === refreshGeneration;
+    const hasNewerRequestedRevision = () =>
+      Object.entries(requestedCredentialMutationRevisionsRef.current).some(
+        ([key, revision]) =>
+          revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0) &&
+          revision > (requestedAtStart[key] ?? 0)
+      );
+    const consumeProvidersForQuota = () => {
+      const providers = Array.from(queuedCredentialMutationProvidersRef.current);
+      queuedCredentialMutationProvidersRef.current.clear();
+      setCredentialMutationRefreshKick(0);
+      setPendingCredentialMutationProviders(providers);
+    };
+
     const refresh = Promise.resolve()
       .then(() => refreshMeta(false))
       .then((payload) => {
+        if (!generationAlive()) return;
         if (!payload?.authFilesLoaded) return;
-        coverageSucceeded = true;
-        Object.entries(requestedAtStart).forEach(([key, revision]) => {
-          coveredCredentialMutationRevisionsRef.current[key] = Math.max(
-            coveredCredentialMutationRevisionsRef.current[key] ?? 0,
-            revision
-          );
-        });
+        coverRevisions(requestedAtStart);
       })
       .finally(() => {
-        if (credentialMutationRefreshGenerationRef.current !== refreshGeneration) return;
+        if (!generationAlive()) return;
         credentialMutationRefreshPromiseRef.current = null;
-        const hasNewerRevision = Object.entries(requestedCredentialMutationRevisionsRef.current).some(
-          ([key, revision]) =>
-            revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0) &&
-            revision > (requestedAtStart[key] ?? 0)
-        );
-        const providers = Array.from(queuedCredentialMutationProvidersRef.current);
-        if (hasNewerRevision) {
+        if (hasNewerRequestedRevision()) {
           setCredentialMutationRefreshKick((current) => current + 1);
-          setPendingCredentialMutationProviders((current) =>
-            Array.from(new Set([...current, ...providers]))
-          );
           return;
         }
-        setCredentialMutationRefreshKick(0);
-        queuedCredentialMutationProvidersRef.current.clear();
-        if (coverageSucceeded) {
-          setPendingCredentialMutationProviders([]);
-        } else if (providers.length > 0) {
-          setPendingCredentialMutationProviders((current) =>
-            Array.from(new Set([...current, ...providers]))
-          );
+        const fullyCovered = !Object.entries(
+          requestedCredentialMutationRevisionsRef.current
+        ).some(
+          ([key, revision]) =>
+            revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0)
+        );
+        if (fullyCovered) {
+          consumeProvidersForQuota();
+          return;
         }
+        // Coverage failed for the current revisions. Attempt a bounded retry
+        // before leaving them stranded. Each retry is a real metadata reload.
+        let retryIndex = 0;
+        const attemptRetry = () => {
+          if (!generationAlive()) return;
+          if (retryIndex >= CREDENTIAL_MUTATION_COVERAGE_RETRY_DELAYS_MS.length) {
+            // Exhausted: leave revisions uncovered and providers queued so a
+            // later mutation, page re-entry, or explicit refresh can recover.
+            setCredentialMutationRefreshKick(0);
+            return;
+          }
+          const delayMs = CREDENTIAL_MUTATION_COVERAGE_RETRY_DELAYS_MS[retryIndex];
+          retryIndex += 1;
+          const runRetry = () => {
+            if (!generationAlive()) return;
+            if (hasNewerRequestedRevision()) {
+              setCredentialMutationRefreshKick((current) => current + 1);
+              return;
+            }
+            credentialMutationRefreshPromiseRef.current = Promise.resolve()
+              .then(() => refreshMeta(false))
+              .then((payload) => {
+                if (!generationAlive()) return;
+                if (!payload?.authFilesLoaded) return;
+                coverRevisions(requestedCredentialMutationRevisionsRef.current);
+              })
+              .finally(() => {
+                if (!generationAlive()) return;
+                credentialMutationRefreshPromiseRef.current = null;
+                if (hasNewerRequestedRevision()) {
+                  setCredentialMutationRefreshKick((current) => current + 1);
+                  return;
+                }
+                const nowCovered = !Object.entries(
+                  requestedCredentialMutationRevisionsRef.current
+                ).some(
+                  ([key, revision]) =>
+                    revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0)
+                );
+                if (nowCovered) {
+                  consumeProvidersForQuota();
+                  return;
+                }
+                attemptRetry();
+              });
+          };
+          if (delayMs <= 0) {
+            runRetry();
+          } else {
+            const timer = setTimeout(runRetry, delayMs);
+            // The generation ref bump on connection change / unmount makes any
+            // in-flight retry a no-op, but we still clear the timer to avoid a
+            // dangling wake after the component is gone.
+            if (!generationAlive()) clearTimeout(timer);
+          }
+        };
+        attemptRetry();
       });
     credentialMutationRefreshPromiseRef.current = refresh;
   }, [

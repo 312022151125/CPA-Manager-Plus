@@ -309,6 +309,16 @@ const deferred = <T,>() => {
 
 describe('MonitoringCenterPage credential quota revision lifecycle', () => {
   let renderer!: ReactTestRenderer;
+  // Use fake timers so bounded retry delays are deterministic and instant.
+  let timersActivated = false;
+
+  const successMetaPayload = (authFiles: AuthFileItem[]) => ({
+    authFiles,
+    authFilesLoaded: true as const,
+    channels: [] as const,
+    channelsLoaded: true as const,
+    error: '',
+  });
 
   beforeEach(async () => {
     useAccountCredentialMutationRevisionStore.getState().clearForTests();
@@ -318,7 +328,11 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     mocks.nextAuthFiles = null;
     mocks.lastAccountOverviewProps = null;
     mocks.loadHeaderSnapshots.mockClear();
-    mocks.refreshMeta.mockReset().mockImplementation(() => undefined);
+    // Default: refreshMeta resolves with a successful auth-files payload so the
+    // production success-coverage path is exercised, not the failure path.
+    mocks.refreshMeta
+      .mockReset()
+      .mockImplementation(() => successMetaPayload(mocks.authFiles));
     mocks.requestAccountQuota
       .mockReset()
       .mockImplementation(async (target: MonitoringAccountQuotaTarget) => ({
@@ -338,12 +352,14 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
           },
         ],
       }));
+    timersActivated = false;
     await act(async () => {
       renderer = create(<MonitoringCenterPage />);
       await flushPromises();
     });
   });
 
+  // Test 1: successful coverage triggers quota reload.
   it('invalidates mounted quota, rebuilds an authIndex-changed target, and bypasses stale cache', async () => {
     await act(async () => {
       await mocks.lastAccountOverviewProps?.onLoadAccountQuota('workspace-a', true);
@@ -356,6 +372,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     ).toBe(10);
 
     mocks.nextAuthFiles = [makeCodexFile('2', 'codex-new.json')];
+    mocks.refreshMeta.mockImplementation(() => successMetaPayload(mocks.nextAuthFiles!));
     await act(async () => {
       publishAccountCredentialMutationRevision({
         connectionFingerprint: createCodexInspectionConnectionFingerprint(
@@ -381,23 +398,68 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     ).toBe(90);
   });
 
-  it('ignores quota revisions from a different connection fingerprint', async () => {
+  // Test 2: auth-files failure does not reload quota until a retry succeeds.
+  it('does not reload quota when auth-files fail and eventually covers via bounded retry', async () => {
+    vi.useFakeTimers();
+    timersActivated = true;
+
+    // Pre-load quota so the row is mounted and the invalidation effect will
+    // trigger a reload once coverage succeeds.
+    await act(async () => {
+      await mocks.lastAccountOverviewProps?.onLoadAccountQuota('workspace-a', true);
+    });
+
+    const fingerprint = createCodexInspectionConnectionFingerprint(
+      mocks.apiBase,
+      mocks.managementKey
+    )!;
+    const failPayload = {
+      authFiles: [] as AuthFileItem[],
+      authFilesLoaded: false as const,
+      channels: [] as const,
+      channelsLoaded: true as const,
+      error: 'auth-files unavailable',
+    };
+    // The initial refresh and the 0ms retry both fail; the 1s retry succeeds.
+    mocks.refreshMeta.mockReset();
+    mocks.refreshMeta
+      .mockReturnValueOnce(failPayload)
+      .mockReturnValueOnce(failPayload);
+    mocks.nextAuthFiles = [makeCodexFile('2', 'codex-new.json')];
+    mocks.refreshMeta.mockImplementation(() => successMetaPayload(mocks.nextAuthFiles!));
+
     await act(async () => {
       publishAccountCredentialMutationRevision({
-        connectionFingerprint: createCodexInspectionConnectionFingerprint(
-          'http://cpa-b.local:8317',
-          'manager-key-b'
-        )!,
+        connectionFingerprint: fingerprint,
         provider: 'codex',
-        kind: 'quota',
+        kind: 'reauth',
+        credentialIdentity: 'workspace-a',
       });
       await flushPromises();
     });
 
-    expect(mocks.refreshMeta).not.toHaveBeenCalled();
-    expect(mocks.requestAccountQuota).not.toHaveBeenCalled();
+    // After the failed refresh, no mutation-driven quota reload should have
+    // occurred — any requestAccountQuota calls must still use the old authIndex.
+    const callsAfterFailure = mocks.requestAccountQuota.mock.calls;
+    expect(
+      callsAfterFailure.some((call) => call[0]?.authIndex === '2')
+    ).toBe(false);
+
+    // Advance through the bounded retry delays until the retry succeeds.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+
+    // Now the retry has succeeded and quota should be reloaded with authIndex=2.
+    expect(
+      mocks.requestAccountQuota.mock.calls.some((call) => call[0]?.authIndex === '2')
+    ).toBe(true);
+
+    vi.useRealTimers();
+    timersActivated = false;
   });
 
+  // Test 3: a newer revision during refresh triggers a serialized follow-up.
   it('runs a follow-up metadata refresh when a newer revision arrives during refresh', async () => {
     const firstRefresh = deferred<{
       authFiles: AuthFileItem[];
@@ -406,7 +468,13 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
       channelsLoaded: boolean;
       error: string;
     }>();
-    const secondRefresh = deferred<typeof firstRefresh.promise extends Promise<infer T> ? T : never>();
+    const secondRefresh = deferred<{
+      authFiles: AuthFileItem[];
+      authFilesLoaded: boolean;
+      channels: [];
+      channelsLoaded: boolean;
+      error: string;
+    }>();
     mocks.refreshMeta.mockReset();
     mocks.refreshMeta.mockReturnValueOnce(firstRefresh.promise).mockReturnValueOnce(secondRefresh.promise);
 
@@ -444,6 +512,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
       });
       await flushPromises();
     });
+    // First refresh covered rev1, but rev2 is still pending → follow-up.
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
 
     await act(async () => {
@@ -459,63 +528,108 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
   });
 
-  it('does not mark a revision covered when auth-files failed to load', async () => {
-    const firstRefresh = deferred<{
-      authFiles: AuthFileItem[];
-      authFilesLoaded: boolean;
-      channels: [];
-      channelsLoaded: boolean;
-      error: string;
-    }>();
-    const secondRefresh = deferred<typeof firstRefresh.promise extends Promise<infer T> ? T : never>();
-    mocks.refreshMeta.mockReset();
-    mocks.refreshMeta.mockReturnValueOnce(firstRefresh.promise).mockReturnValueOnce(secondRefresh.promise);
+  // Test 4: a mutation refresh superseded by a same-scope newer metadata request
+  // (returning null) eventually recovers via retry without a new mutation.
+  it('recovers a superseded mutation refresh via retry without a new revision', async () => {
+    vi.useFakeTimers();
+    timersActivated = true;
+
+    // Pre-load quota so the row is mounted.
+    await act(async () => {
+      await mocks.lastAccountOverviewProps?.onLoadAccountQuota('workspace-a', true);
+    });
+
     const fingerprint = createCodexInspectionConnectionFingerprint(
       mocks.apiBase,
       mocks.managementKey
     )!;
+    // First attempt returns null (superseded by generation fence). Subsequent
+    // retry returns a successful payload.
+    // The initial refresh and the 0ms retry both return null (superseded);
+    // the 1s retry succeeds.
+    mocks.refreshMeta.mockReset();
+    mocks.refreshMeta.mockReturnValueOnce(null).mockReturnValueOnce(null);
+    mocks.nextAuthFiles = [makeCodexFile('2', 'codex-new.json')];
+    mocks.refreshMeta.mockImplementation(() => successMetaPayload(mocks.nextAuthFiles!));
 
     await act(async () => {
       publishAccountCredentialMutationRevision({
         connectionFingerprint: fingerprint,
         provider: 'codex',
         kind: 'reauth',
+        credentialIdentity: 'workspace-a',
       });
       await flushPromises();
     });
+    // Superseded: no mutation-driven reload with the new authIndex yet.
+    expect(
+      mocks.requestAccountQuota.mock.calls.some((call) => call[0]?.authIndex === '2')
+    ).toBe(false);
+
     await act(async () => {
-      firstRefresh.resolve({
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+    // Retry succeeded → quota reloaded with authIndex=2.
+    expect(
+      mocks.requestAccountQuota.mock.calls.some((call) => call[0]?.authIndex === '2')
+    ).toBe(true);
+
+    vi.useRealTimers();
+    timersActivated = false;
+  });
+
+  // Test 5: connection switch cancels an in-flight retry.
+  it('cancels pending retry when the connection fingerprint changes', async () => {
+    vi.useFakeTimers();
+    timersActivated = true;
+
+    const fingerprint = createCodexInspectionConnectionFingerprint(
+      mocks.apiBase,
+      mocks.managementKey
+    )!;
+    mocks.refreshMeta
+      .mockReset()
+      .mockImplementation(() => ({
         authFiles: [],
         authFilesLoaded: false,
         channels: [],
         channelsLoaded: true,
         error: 'auth-files unavailable',
-      });
-      await flushPromises();
-    });
+      }));
 
     await act(async () => {
       publishAccountCredentialMutationRevision({
         connectionFingerprint: fingerprint,
         provider: 'codex',
         kind: 'reauth',
+        credentialIdentity: 'workspace-a',
       });
       await flushPromises();
     });
-    expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
+    expect(mocks.requestAccountQuota).not.toHaveBeenCalled();
+
+    // Switch connection — generation bumps and old retries become no-ops.
     await act(async () => {
-      secondRefresh.resolve({
-        authFiles: [makeCodexFile('2', 'codex-new.json')],
-        authFilesLoaded: true,
-        channels: [],
-        channelsLoaded: false,
-        error: 'channels unavailable',
-      });
-      await flushPromises();
+      mocks.apiBase = 'http://cpa-b.local:8317';
+      mocks.managementKey = 'manager-key-b';
+      mocks.refreshMeta.mockImplementation(() =>
+        successMetaPayload([makeCodexFile('1', 'codex-old.json')])
+      );
+      renderer.update(<MonitoringCenterPage />);
+      await vi.advanceTimersByTimeAsync(8_000);
     });
+
+    // The old mutation's quota should not have been invalidated.
+    expect(mocks.requestAccountQuota).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    timersActivated = false;
   });
 
   afterEach(async () => {
+    if (timersActivated) {
+      vi.useRealTimers();
+    }
     await act(async () => renderer.unmount());
   });
 });
