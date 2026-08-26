@@ -29,6 +29,8 @@ var derivedLegacyTables = []string{
 	usageHourlyAggregateLegacy,
 	usageMonitoringAccountLegacy,
 	usageMonitoringAPIKeyLegacy,
+	usageMonitoringAccountIdentityLegacy,
+	usageMonitoringAPIKeyIdentityLegacy,
 	usageMonitoringSelectorLegacy,
 	usageMonitoringHeaderLegacy,
 	usageMonitoringProjectionLegacy,

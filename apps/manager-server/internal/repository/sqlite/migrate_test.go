@@ -699,7 +699,7 @@ func TestMigrateSeparatesCodexAccountSnapshotAndUpgradesMonitoringRollupPK(t *te
 		t.Fatalf("current account rollup columns = %#v, missing auth_account_id_snapshot", columns)
 	}
 	assertTableCount(t, db, usageMonitoringAccountDailyTable, 0)
-	assertTableCount(t, db, usageMonitoringAccountLegacy, 1)
+	assertTableCount(t, db, usageMonitoringAccountIdentityLegacy, 1)
 	var primaryKeyHasAccountID bool
 	rows, err := db.Query(`pragma table_info(usage_monitoring_account_daily_rollups_v1)`)
 	if err != nil {
@@ -741,6 +741,256 @@ func TestMigrateSeparatesCodexAccountSnapshotAndUpgradesMonitoringRollupPK(t *te
 	}
 	if accountSnapshotNotNull != 0 {
 		t.Fatalf("usage_events auth_account_id_snapshot notnull = %d, want nullable", accountSnapshotNotNull)
+	}
+}
+
+// monitoringRollupPrimaryKeyHasColumn reports whether the monitoring rollup
+// primary key includes the given column.
+func monitoringRollupPrimaryKeyHasColumn(t *testing.T, db *sql.DB, table, column string) bool {
+	t.Helper()
+	rows, err := db.Query(`pragma table_info(` + table + `)`)
+	if err != nil {
+		t.Fatalf("inspect %s primary key: %v", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan %s schema: %v", table, err)
+		}
+		if name == column && primaryKey > 0 {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("inspect %s schema: %v", table, err)
+	}
+	return false
+}
+
+// TestMonitoringAccountIdentityUpgradeAvoidsGenericLegacyCollision verifies the
+// auth_account_id_snapshot PK upgrade parks into the identity-specific legacy
+// table even when the generic *_legacy_recovery table already exists from a
+// prior derived recovery. Without the identity-specific name, parkDerivedTable
+// would hard-error with "legacy derived table ... already exists" and Manager
+// Server could not start.
+func TestMonitoringAccountIdentityUpgradeAvoidsGenericLegacyCollision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "monitoring-account-identity-collision.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`insert into usage_events (event_hash, timestamp_ms, timestamp, model, created_at_ms)
+		values ('collision-event', 1, '1', 'gpt-test', 1)`,
+		`drop table usage_monitoring_account_daily_rollups_v1`,
+		`create table usage_monitoring_account_daily_rollups_v1 (
+			structure_revision text not null,
+			bucket_ms integer not null,
+			account_snapshot text not null,
+			auth_label_snapshot text not null,
+			provider text not null,
+			auth_provider_snapshot text not null,
+			auth_index text not null,
+			source text not null,
+			source_hash text not null,
+			auth_file_snapshot text not null,
+			api_key_hash text not null,
+			executor_type text not null,
+			model text not null,
+			billing_model text not null,
+			pricing_model text not null,
+			service_tier text not null,
+			context_threshold_tokens integer not null,
+			failed integer not null,
+			calls integer not null default 0,
+			input_tokens integer not null default 0,
+			output_tokens integer not null default 0,
+			reasoning_tokens integer not null default 0,
+			cached_tokens integer not null default 0,
+			cache_read_tokens integer not null default 0,
+			cache_creation_tokens integer not null default 0,
+			total_tokens integer not null default 0,
+			zero_token_calls integer not null default 0,
+			latency_sum_ms integer not null default 0,
+			latency_samples integer not null default 0,
+			last_seen_ms integer not null,
+			updated_at_ms integer not null,
+			primary key (
+				structure_revision, bucket_ms, account_snapshot, auth_label_snapshot,
+				provider, auth_provider_snapshot, auth_index, source, source_hash,
+				auth_file_snapshot, api_key_hash, executor_type, model, billing_model,
+				pricing_model, service_tier, context_threshold_tokens, failed
+			)
+		)`,
+		`insert into usage_monitoring_account_daily_rollups_v1 (
+			structure_revision, bucket_ms, account_snapshot, auth_label_snapshot,
+			provider, auth_provider_snapshot, auth_index, source, source_hash,
+			auth_file_snapshot, api_key_hash, executor_type, model, billing_model,
+			pricing_model, service_tier, context_threshold_tokens, failed, calls,
+			last_seen_ms, updated_at_ms
+		) values ('legacy', 0, 'same@example.com', 'Same', 'codex', 'codex',
+			'auth-1', 'auth.json', 'source-hash', 'auth.json', '', '', 'gpt-test',
+			'gpt-test', 'gpt-test', '', -1, 0, 1, 1000, 1000)`,
+		// Simulate a prior derived recovery that left the generic legacy table
+		// behind; the background cleaner has not drained it yet.
+		`create table usage_monitoring_account_daily_rollups_v1_legacy_recovery (
+			id integer primary key, marker text not null
+		)`,
+		`insert into usage_monitoring_account_daily_rollups_v1_legacy_recovery (id, marker) values (1, 'pre-recovery')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup account identity collision fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close fixture sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("upgrade account identity sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	assertTableCount(t, db, "usage_events", 1)
+	// Generic legacy recovery data must be untouched.
+	assertTableCount(t, db, usageMonitoringAccountLegacy, 1)
+	// The identity upgrade parked into the identity-specific legacy table.
+	assertTableCount(t, db, usageMonitoringAccountIdentityLegacy, 1)
+	// Current table rebuilt with auth_account_id_snapshot in the primary key.
+	assertTableCount(t, db, usageMonitoringAccountDailyTable, 0)
+	if !monitoringRollupPrimaryKeyHasColumn(t, db, usageMonitoringAccountDailyTable, "auth_account_id_snapshot") {
+		t.Fatal("account daily rollup PK missing auth_account_id_snapshot after upgrade")
+	}
+	// Immutable usage_events unchanged.
+	var eventCount int
+	if err := db.QueryRow(`select count(*) from usage_events`).Scan(&eventCount); err != nil {
+		t.Fatalf("read usage_events count: %v", err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("usage_events count = %d, want 1", eventCount)
+	}
+
+	// Re-open must succeed without a second collision.
+	if err := db.Close(); err != nil {
+		t.Fatalf("close upgraded sqlite: %v", err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen upgraded sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, usageMonitoringAccountLegacy, 1)
+	assertTableCount(t, db, usageMonitoringAccountIdentityLegacy, 1)
+	if !monitoringRollupPrimaryKeyHasColumn(t, db, usageMonitoringAccountDailyTable, "auth_account_id_snapshot") {
+		t.Fatal("account daily rollup PK missing auth_account_id_snapshot after reopen")
+	}
+}
+
+// TestMonitoringAPIKeyIdentityUpgradeAvoidsGenericLegacyCollision is the API-key
+// counterpart of the account collision test.
+func TestMonitoringAPIKeyIdentityUpgradeAvoidsGenericLegacyCollision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "monitoring-apikey-identity-collision.sqlite")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	for _, statement := range []string{
+		`insert into usage_events (event_hash, timestamp_ms, timestamp, model, created_at_ms)
+		values ('apikey-collision-event', 1, '1', 'gpt-test', 1)`,
+		`drop table usage_monitoring_api_key_daily_rollups_v1`,
+		`create table usage_monitoring_api_key_daily_rollups_v1 (
+			structure_revision text not null,
+			bucket_ms integer not null,
+			api_key_hash text not null,
+			account_snapshot text not null,
+			auth_label_snapshot text not null,
+			provider text not null,
+			auth_provider_snapshot text not null,
+			auth_index text not null,
+			source text not null,
+			source_hash text not null,
+			auth_file_snapshot text not null,
+			executor_type text not null,
+			model text not null,
+			billing_model text not null,
+			pricing_model text not null,
+			service_tier text not null,
+			context_threshold_tokens integer not null,
+			failed integer not null,
+			calls integer not null default 0,
+			input_tokens integer not null default 0,
+			output_tokens integer not null default 0,
+			reasoning_tokens integer not null default 0,
+			cached_tokens integer not null default 0,
+			cache_read_tokens integer not null default 0,
+			cache_creation_tokens integer not null default 0,
+			total_tokens integer not null default 0,
+			zero_token_calls integer not null default 0,
+			latency_sum_ms integer not null default 0,
+			latency_samples integer not null default 0,
+			last_seen_ms integer not null,
+			updated_at_ms integer not null,
+			primary key (
+				structure_revision, bucket_ms, api_key_hash, account_snapshot,
+				auth_label_snapshot, provider, auth_provider_snapshot, auth_index,
+				source, source_hash, auth_file_snapshot, executor_type, model,
+				billing_model, pricing_model, service_tier, context_threshold_tokens, failed
+			)
+		)`,
+		`insert into usage_monitoring_api_key_daily_rollups_v1 (
+			structure_revision, bucket_ms, api_key_hash, account_snapshot,
+			auth_label_snapshot, provider, auth_provider_snapshot, auth_index,
+			source, source_hash, auth_file_snapshot, executor_type, model,
+			billing_model, pricing_model, service_tier, context_threshold_tokens,
+			failed, calls, last_seen_ms, updated_at_ms
+		) values ('legacy', 0, 'key-hash', 'same@example.com', 'Same', 'codex',
+			'codex', 'auth-1', 'auth.json', 'source-hash', 'auth.json', '',
+			'gpt-test', 'gpt-test', 'gpt-test', '', -1, 0, 1, 1000, 1000)`,
+		`create table usage_monitoring_api_key_daily_rollups_v1_legacy_recovery (
+			id integer primary key, marker text not null
+		)`,
+		`insert into usage_monitoring_api_key_daily_rollups_v1_legacy_recovery (id, marker) values (1, 'pre-recovery')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("setup api-key identity collision fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close fixture sqlite: %v", err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("upgrade api-key identity sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	assertTableCount(t, db, "usage_events", 1)
+	assertTableCount(t, db, usageMonitoringAPIKeyLegacy, 1)
+	assertTableCount(t, db, usageMonitoringAPIKeyIdentityLegacy, 1)
+	assertTableCount(t, db, usageMonitoringAPIKeyDailyTable, 0)
+	if !monitoringRollupPrimaryKeyHasColumn(t, db, usageMonitoringAPIKeyDailyTable, "auth_account_id_snapshot") {
+		t.Fatal("api-key daily rollup PK missing auth_account_id_snapshot after upgrade")
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close upgraded sqlite: %v", err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen upgraded sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	assertTableCount(t, db, usageMonitoringAPIKeyLegacy, 1)
+	assertTableCount(t, db, usageMonitoringAPIKeyIdentityLegacy, 1)
+	if !monitoringRollupPrimaryKeyHasColumn(t, db, usageMonitoringAPIKeyDailyTable, "auth_account_id_snapshot") {
+		t.Fatal("api-key daily rollup PK missing auth_account_id_snapshot after reopen")
 	}
 }
 

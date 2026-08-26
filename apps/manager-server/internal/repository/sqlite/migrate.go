@@ -50,6 +50,8 @@ const (
 	usageMonitoringProjectionLegacyPrefix = "usage_monitoring_event_projection_v1_legacy_g"
 	usageMonitoringAccountLegacy          = "usage_monitoring_account_daily_rollups_v1_legacy_recovery"
 	usageMonitoringAPIKeyLegacy           = "usage_monitoring_api_key_daily_rollups_v1_legacy_recovery"
+	usageMonitoringAccountIdentityLegacy  = "usage_monitoring_account_daily_rollups_v1_legacy_identity_v3"
+	usageMonitoringAPIKeyIdentityLegacy   = "usage_monitoring_api_key_daily_rollups_v1_legacy_identity_v3"
 	usageMonitoringSelectorLegacy         = "usage_monitoring_selector_daily_rollups_v1_legacy_recovery"
 	usageMonitoringHeaderLegacy           = "usage_monitoring_header_latest_v1_legacy_recovery"
 	usageMonitoringProjectionLegacy       = "usage_monitoring_event_projection_v1_legacy_recovery"
@@ -1660,9 +1662,9 @@ func ensureUsageMonitoringProjectionIdentity(db *sql.DB) error {
 			}
 			var rebuildErr error
 			if tableName == usageMonitoringAccountDailyTable && statsNeedsIdentityUpgrade {
-				rebuildErr = parkAndRecreateMonitoringIdentityTable(tx, tableName, legacyName, "auth_provider_snapshot, auth_index")
+				rebuildErr = parkAndRecreateMonitoringIdentityTable(tx, tableName, usageMonitoringAccountIdentityLegacy, "auth_provider_snapshot, auth_index")
 			} else if tableName == usageMonitoringAPIKeyDailyTable && apiKeyStatsNeedsIdentityUpgrade {
-				rebuildErr = parkAndRecreateMonitoringIdentityTable(tx, tableName, legacyName, "auth_provider_snapshot, auth_index")
+				rebuildErr = parkAndRecreateMonitoringIdentityTable(tx, tableName, usageMonitoringAPIKeyIdentityLegacy, "auth_provider_snapshot, auth_index")
 			} else {
 				rebuildErr = parkAndRecreateDerivedTable(tx, tableName, legacyName)
 			}
