@@ -564,8 +564,13 @@ func (m *Manager) enrichAccountSnapshots(ctx context.Context, cfg RuntimeConfig,
 }
 
 func needsAccountSnapshotEnrichment(event usage.Event) bool {
+	provider := strings.TrimSpace(event.AuthProviderSnapshot)
+	if provider == "" {
+		provider = strings.TrimSpace(event.Provider)
+	}
+	isCodex := strings.EqualFold(provider, "codex")
 	return event.AccountSnapshot == "" ||
-		(strings.EqualFold(event.AuthProviderSnapshot, "codex") && event.AuthAccountIDSnapshot == "") ||
+		(isCodex && event.AuthAccountIDSnapshot == "") ||
 		event.AuthProjectIDSnapshot == ""
 }
 
