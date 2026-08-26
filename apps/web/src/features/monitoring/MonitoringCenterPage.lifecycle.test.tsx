@@ -898,6 +898,96 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     timersActivated = false;
   });
 
+  // Test 9: a newly re-armed coverage cycle invalidates older delayed retries.
+  it('invalidates an older delayed retry when a normal refresh starts a new coverage cycle', async () => {
+    vi.useFakeTimers();
+    timersActivated = true;
+
+    await act(async () => {
+      await mocks.lastAccountOverviewProps?.onLoadAccountQuota('workspace-a', true);
+    });
+
+    const fingerprint = createCodexInspectionConnectionFingerprint(
+      mocks.apiBase,
+      mocks.managementKey
+    )!;
+    const failPayload = {
+      authFiles: [] as AuthFileItem[],
+      authFilesLoaded: false as const,
+      channels: [] as const,
+      channelsLoaded: true as const,
+      error: 'auth-files unavailable',
+    };
+    const recoveryFiles = [makeCodexFile('2', 'codex-recovered.json')];
+    const cycle2Refresh = deferred<ReturnType<typeof successMetaPayload>>();
+    mocks.refreshMeta.mockReset();
+    mocks.refreshMeta
+      .mockReturnValueOnce(failPayload)
+      .mockReturnValueOnce(failPayload)
+      .mockImplementationOnce(() => {
+        mocks.nextAuthFiles = recoveryFiles;
+        return successMetaPayload(recoveryFiles);
+      })
+      .mockImplementationOnce(() => {
+        mocks.nextAuthFiles = recoveryFiles;
+        return cycle2Refresh.promise;
+      });
+
+    await act(async () => {
+      publishAccountCredentialMutationRevision({
+        connectionFingerprint: fingerprint,
+        provider: 'codex',
+        kind: 'reauth',
+        credentialIdentity: 'workspace-a',
+      });
+      await flushPromises();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+      await flushPromises();
+    });
+    // C1 initial and 0ms retry failed; its 1s retry is now delayed.
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
+
+    const refreshHeader = mocks.lastHeaderRefresh;
+    if (!refreshHeader) throw new Error('header refresh callback was not captured');
+    await act(async () => {
+      await refreshHeader();
+      await flushPromises();
+    });
+    // The normal refresh is call 3; its successful result re-arms C2, call 4.
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(4);
+    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+      await flushPromises();
+    });
+    // C1's delayed retry woke after C2 started, but its generation is stale.
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(4);
+    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      cycle2Refresh.resolve(successMetaPayload(recoveryFiles));
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(4);
+    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(2);
+    expect(mocks.requestAccountQuota.mock.calls[1]?.[0].authIndex).toBe('2');
+    expect(
+      mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.targetKey
+    ).toContain('codex::2::codex-recovered.json');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(4);
+
+    vi.useRealTimers();
+    timersActivated = false;
+  });
+
   afterEach(async () => {
     if (timersActivated) {
       vi.useRealTimers();

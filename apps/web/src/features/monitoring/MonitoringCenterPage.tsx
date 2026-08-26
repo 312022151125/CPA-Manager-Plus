@@ -545,6 +545,7 @@ export function MonitoringCenterPage() {
       return;
     }
 
+    credentialMutationRefreshGenerationRef.current += 1;
     const refreshGeneration = credentialMutationRefreshGenerationRef.current;
     const requestedAtStart = { ...requestedCredentialMutationRevisionsRef.current };
 
