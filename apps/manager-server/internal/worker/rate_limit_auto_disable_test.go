@@ -1861,9 +1861,25 @@ func TestRateLimitAutoDisableWorkerRecoversDueCooldownFromManagerRuntimeConfigAf
 
 	waitForWorkerTest(t, func() bool {
 		mu.Lock()
-		defer mu.Unlock()
-		return patches == 1 && !disabled
+		patched := patches == 1 && !disabled
+		mu.Unlock()
+		if !patched {
+			return false
+		}
+		active, err := st.QuotaCooldowns.ListActive(ctx)
+		return err == nil && len(active) == 0
 	})
+
+	mu.Lock()
+	gotPatches := patches
+	gotDisabled := disabled
+	mu.Unlock()
+	if gotPatches != 1 {
+		t.Fatalf("patches = %d, want 1", gotPatches)
+	}
+	if gotDisabled {
+		t.Fatal("credential remained disabled after cooldown recovery")
+	}
 
 	active, err := st.QuotaCooldowns.ListActive(ctx)
 	if err != nil {

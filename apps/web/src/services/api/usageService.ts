@@ -729,6 +729,7 @@ export interface DashboardRecentFailure {
   account_snapshot?: string;
   auth_label_snapshot?: string;
   auth_provider_snapshot?: string;
+  auth_account_id_snapshot?: string;
   auth_project_id_snapshot?: string;
   endpoint: string;
   duration_ms: number | null;
@@ -844,6 +845,7 @@ export interface MonitoringAccountHistoryTarget {
   auth_label_snapshot?: string;
   auth_file_snapshot?: string;
   auth_provider_snapshot?: string;
+  auth_account_id_snapshot?: string;
   auth_project_id_snapshot?: string;
   auth_index?: string;
   source?: string;
@@ -908,6 +910,7 @@ export interface MonitoringAccountWindowUsageTarget {
   auth_label_snapshot?: string;
   auth_file_snapshot?: string;
   auth_provider_snapshot?: string;
+  auth_account_id_snapshot?: string;
   auth_project_id_snapshot?: string;
   auth_index?: string;
   source?: string;
@@ -969,6 +972,7 @@ export interface AccountQuotaSnapshotTarget {
   auth_label_snapshot?: string;
   auth_file_snapshot?: string;
   auth_provider_snapshot?: string;
+  auth_account_id_snapshot?: string;
   auth_project_id_snapshot?: string;
   auth_index?: string;
   source?: string;
@@ -1466,6 +1470,7 @@ export interface MonitoringAnalyticsCredentialStatRow {
   account_snapshot?: string;
   auth_label_snapshot?: string;
   auth_provider_snapshot?: string;
+  auth_account_id_snapshot?: string;
   auth_project_id_snapshot?: string;
   calls: number;
   success_calls: number;
@@ -1493,6 +1498,7 @@ export interface MonitoringAnalyticsCredentialTimelinePoint {
   account_snapshot?: string;
   auth_label_snapshot?: string;
   auth_provider_snapshot?: string;
+  auth_account_id_snapshot?: string;
   auth_project_id_snapshot?: string;
   bucket_ms: number;
   bucket_label?: string;
@@ -1756,6 +1762,7 @@ export interface UsageHeaderSnapshot {
   account_snapshot?: string;
   auth_label_snapshot?: string;
   auth_provider_snapshot?: string;
+  auth_account_id_snapshot?: string;
   auth_project_id_snapshot?: string;
   source?: string;
   source_hash?: string;
@@ -1785,6 +1792,7 @@ export interface MonitoringAnalyticsRecentFailure {
   account_snapshot?: string;
   auth_label_snapshot?: string;
   auth_provider_snapshot?: string;
+  auth_account_id_snapshot?: string;
   auth_project_id_snapshot?: string;
   endpoint: string;
   duration_ms: number | null;
@@ -1820,6 +1828,7 @@ export interface MonitoringAnalyticsEventRow {
   auth_label_snapshot: string;
   auth_file_snapshot?: string;
   auth_provider_snapshot: string;
+  auth_account_id_snapshot?: string;
   auth_project_id_snapshot?: string;
   resolved_model?: string;
   reasoning_effort?: string;
