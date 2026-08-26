@@ -893,10 +893,7 @@ const mergeAccountQuotaWindows = (
     };
   });
 
-  return [
-    ...mergedWindows,
-    ...observedWindows.filter((_, index) => !usedObserved.has(index)),
-  ];
+  return [...mergedWindows, ...observedWindows.filter((_, index) => !usedObserved.has(index))];
 };
 
 const mergeAccountQuotaMetaLabels = (
@@ -1068,6 +1065,12 @@ export const mergeObservedAccountQuotaState = (
     failedAtMs: firstError ? state.failedAtMs : undefined,
   };
 };
+
+export const updateMonitoringAccountQuotaStateByRowId = (
+  states: Record<string, AccountQuotaState>,
+  rowId: string,
+  state: AccountQuotaState
+) => ({ ...states, [rowId]: state });
 
 const buildClaudeAccountQuotaWindows = (
   windows: ClaudeQuotaWindow[],

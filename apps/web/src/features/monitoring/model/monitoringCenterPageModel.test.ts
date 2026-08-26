@@ -10,7 +10,10 @@ import {
 import zhCN from '@/i18n/locales/zh-CN.json';
 import zhTW from '@/i18n/locales/zh-TW.json';
 import type { MonitoringAccountQuotaTarget } from '@/features/monitoring/accountOverviewQuotaTargets';
-import type { AccountQuotaEntry } from '@/features/monitoring/components/accountOverviewPresentation';
+import type {
+  AccountQuotaEntry,
+  AccountQuotaState,
+} from '@/features/monitoring/components/accountOverviewPresentation';
 import type {
   MonitoringAccountRow,
   MonitoringApiKeyRow,
@@ -29,6 +32,7 @@ import {
   mergeObservedAccountQuotaEntry,
   mergeObservedAccountQuotaState,
   requestAccountQuota,
+  updateMonitoringAccountQuotaStateByRowId,
 } from './monitoringCenterPageModel';
 import { getDefaultMonitoringCenterUiState } from '@/features/monitoring/monitoringCenterUiState';
 
@@ -291,6 +295,34 @@ describe('monitoringCenterPageModel filter options', () => {
       ).map((item) => item.value)
     ).toEqual(['all', 'auth:openai-auth']);
   });
+
+  it('renders same-email provider account options as distinct selectable scopes', () => {
+    const options = buildAccountOptions(
+      [
+        createAccountRow('same@example.com', {
+          id: 'codex-row',
+          provider: 'codex',
+          channels: ['Codex'],
+          filterValue: 'auth:codex-auth',
+        }),
+        createAccountRow('same@example.com', {
+          id: 'antigravity-row',
+          provider: 'antigravity',
+          channels: ['Antigravity'],
+          filterValue: 'auth:antigravity-auth',
+        }),
+      ],
+      'all',
+      t,
+      'full'
+    );
+
+    expect(options).toMatchObject([
+      { value: 'all' },
+      { value: 'auth:antigravity-auth', label: 'same@example.com / Antigravity' },
+      { value: 'auth:codex-auth', label: 'same@example.com / Codex' },
+    ]);
+  });
 });
 
 describe('monitoringCenterPageModel account quota', () => {
@@ -299,6 +331,44 @@ describe('monitoringCenterPageModel account quota', () => {
     vi.mocked(fetchClaudeQuota).mockReset();
     vi.mocked(fetchCodexQuota).mockReset();
     vi.mocked(fetchXaiQuota).mockReset();
+  });
+
+  it('updates quota refresh state only for the selected provider-scoped row id', () => {
+    const antigravityState: AccountQuotaState = {
+      status: 'error',
+      targetKey: 'antigravity-target',
+      entries: [],
+      error: 'antigravity-error',
+      failedAtMs: 100,
+      lastRefreshedAt: 90,
+    };
+    const states: Record<string, AccountQuotaState> = {
+      'codex-row': {
+        status: 'success',
+        targetKey: 'codex-target',
+        entries: [],
+        error: '',
+        lastRefreshedAt: 80,
+      },
+      'antigravity-row': antigravityState,
+    };
+    const codexLoadingState: AccountQuotaState = {
+      status: 'loading',
+      targetKey: 'codex-target',
+      entries: [],
+      error: '',
+    };
+
+    const next = updateMonitoringAccountQuotaStateByRowId(states, 'codex-row', codexLoadingState);
+
+    expect(next['codex-row']).toBe(codexLoadingState);
+    expect(next['antigravity-row']).toBe(antigravityState);
+    expect(next['antigravity-row']).toMatchObject({
+      status: 'error',
+      error: 'antigravity-error',
+      failedAtMs: 100,
+      lastRefreshedAt: 90,
+    });
   });
 
   it('maps Claude usage windows into account quota entries', async () => {

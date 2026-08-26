@@ -32,6 +32,7 @@ import {
   shouldResetAccountOverviewPage,
   sortAccountRows,
   readAccountOverviewUiState,
+  resolveMonitoringAccountFocusAction,
   writeAccountOverviewUiState,
   type AccountDisplayMode,
   type AccountOverviewPageResetState,
@@ -39,7 +40,7 @@ import {
   type AccountSortState,
   type MonitoringAccountOverviewMode,
 } from '@/features/monitoring/accountOverviewState';
-import { buildMonitoringAccountQuotaTargetsByAccount } from '@/features/monitoring/accountOverviewQuotaTargets';
+import { buildMonitoringAccountQuotaTargetsByRowId } from '@/features/monitoring/accountOverviewQuotaTargets';
 import {
   AccountExpandedDetails,
   AccountOverviewCard,
@@ -97,6 +98,7 @@ import {
   mergeObservedAccountQuotaState,
   parseDateTimeLocalValue,
   requestAccountQuota,
+  updateMonitoringAccountQuotaStateByRowId,
   type FocusSnapshot,
   type StatusFilter,
 } from '@/features/monitoring/model/monitoringCenterPageModel';
@@ -119,6 +121,8 @@ import { useRequestMonitoringAvailability } from '@/hooks/useRequestMonitoringAv
 import { isFileLogsAvailable } from '@/features/logs/logFeatureAvailability';
 import { useAuthStore, useConfigStore, useNotificationStore } from '@/stores';
 import { useUsageHeaderSnapshotStore } from '@/stores/useUsageHeaderSnapshotStore';
+import { useAccountCredentialMutationRevisionStore } from '@/stores/useAccountCredentialMutationRevisionStore';
+import { createCodexInspectionConnectionFingerprint } from '@/features/monitoring/codexInspection';
 import type { StatusBarData } from '@/utils/recentRequests';
 import { downloadBlob } from '@/utils/download';
 import { sha256Hex } from '@/utils/apiKeyHash';
@@ -141,6 +145,7 @@ export { AccountExpandedDetails, AccountOverviewCard };
 const MAX_CONCURRENT_ACCOUNT_QUOTA_PROVIDERS = 3;
 const MAX_CONCURRENT_ACCOUNT_QUOTA_REQUESTS_PER_PROVIDER = 1;
 const DATABASE_MAINTENANCE_LONG_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
+const CREDENTIAL_MUTATION_COVERAGE_RETRY_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000] as const;
 
 const DEFAULT_ACCOUNT_PAGE_SIZE = ACCOUNT_OVERVIEW_TABLE_PAGE_SIZE_OPTIONS[0];
 const EMPTY_STATUS_BAR_DATA: StatusBarData = {
@@ -168,6 +173,13 @@ export function MonitoringCenterPage() {
   const showNotification = useNotificationStore((state) => state.showNotification);
   const showConfirmation = useNotificationStore((state) => state.showConfirmation);
   const requestMonitoringAvailability = useRequestMonitoringAvailability();
+  const connectionFingerprint = useMemo(
+    () => createCodexInspectionConnectionFingerprint(apiBase, managementKey),
+    [apiBase, managementKey]
+  );
+  const credentialMutationRevisions = useAccountCredentialMutationRevisionStore(
+    (state) => state.events
+  );
   const accountQuotaContextKey = useMemo(
     () =>
       JSON.stringify({
@@ -264,7 +276,7 @@ export function MonitoringCenterPage() {
   );
   const [expandedAccounts, setExpandedAccounts] = useState<Record<string, boolean>>({});
   const [expandedApiKeys, setExpandedApiKeys] = useState<Record<string, boolean>>({});
-  const [focusedAccount, setFocusedAccount] = useState<string | null>(null);
+  const [focusedAccountId, setFocusedAccountId] = useState<string | null>(null);
   const [isCustomRangeModalOpen, setIsCustomRangeModalOpen] = useState(false);
   const [usageExporting, setUsageExporting] = useState(false);
   const [usageImporting, setUsageImporting] = useState(false);
@@ -273,9 +285,9 @@ export function MonitoringCenterPage() {
     file: File;
     progress: UsageImportProgress;
   } | null>(null);
-  const [accountQuotaStates, setAccountQuotaStates] = useState<Record<string, AccountQuotaState>>(
-    {}
-  );
+  const [accountQuotaStatesByRowId, setAccountQuotaStatesByRowId] = useState<
+    Record<string, AccountQuotaState>
+  >({});
   const [activeDataTab, setActiveDataTab] = useState<MonitoringDataTab>(
     initialMonitoringCenterUiState.current.activeDataTab
   );
@@ -306,11 +318,21 @@ export function MonitoringCenterPage() {
   );
   const focusSnapshotRef = useRef<FocusSnapshot | null>(null);
   const previousAccountPageResetStateRef = useRef<AccountOverviewPageResetState | null>(null);
-  const accountQuotaStatesRef = useRef<Record<string, AccountQuotaState>>({});
-  const accountQuotaRequestIdsRef = useRef<Record<string, number>>({});
+  const accountQuotaStatesByRowIdRef = useRef<Record<string, AccountQuotaState>>({});
+  const accountQuotaRequestIdsByRowIdRef = useRef<Record<string, number>>({});
+  const accountQuotaMutationRevisionsByRowIdRef = useRef<Record<string, number>>({});
   const accountQuotaContextGenerationRef = useRef(0);
   const accountQuotaContextKeyRef = useRef(accountQuotaContextKey);
   const [accountQuotaRefreshQueue] = useState(() => createKeyedSerialTaskQueue());
+  const requestedCredentialMutationRevisionsRef = useRef<Record<string, number>>({});
+  const coveredCredentialMutationRevisionsRef = useRef<Record<string, number>>({});
+  const queuedCredentialMutationProvidersRef = useRef<Set<string>>(new Set());
+  const credentialMutationRefreshPromiseRef = useRef<Promise<void> | null>(null);
+  const credentialMutationRefreshGenerationRef = useRef(0);
+  const [credentialMutationRefreshKick, setCredentialMutationRefreshKick] = useState(0);
+  const [pendingCredentialMutationProviders, setPendingCredentialMutationProviders] = useState<
+    string[]
+  >([]);
   const usageImportInputRef = useRef<HTMLInputElement | null>(null);
   const usageImportAbortRef = useRef<AbortController | null>(null);
   const usageImportCancelPendingRef = useRef(false);
@@ -441,6 +463,7 @@ export function MonitoringCenterPage() {
     loadMoreEvents,
   } = useMonitoringData({
     config,
+    connectionScopeKey: connectionFingerprint,
     modelPrices,
     apiKeyAliases,
     timeRange,
@@ -460,22 +483,185 @@ export function MonitoringCenterPage() {
     if (accountQuotaContextKeyRef.current === accountQuotaContextKey) return;
     accountQuotaContextKeyRef.current = accountQuotaContextKey;
     accountQuotaContextGenerationRef.current += 1;
-    accountQuotaRequestIdsRef.current = {};
-    accountQuotaStatesRef.current = {};
-    setAccountQuotaStates((current) => (Object.keys(current).length === 0 ? current : {}));
+    accountQuotaRequestIdsByRowIdRef.current = {};
+    accountQuotaMutationRevisionsByRowIdRef.current = {};
+    accountQuotaStatesByRowIdRef.current = {};
+    credentialMutationRefreshGenerationRef.current += 1;
+    credentialMutationRefreshPromiseRef.current = null;
+    requestedCredentialMutationRevisionsRef.current = {};
+    coveredCredentialMutationRevisionsRef.current = {};
+    queuedCredentialMutationProvidersRef.current.clear();
+    setCredentialMutationRefreshKick(0);
+    setAccountQuotaStatesByRowId((current) => (Object.keys(current).length === 0 ? current : {}));
+    setPendingCredentialMutationProviders([]);
   }, [accountQuotaContextKey]);
 
   useEffect(
     () => () => {
       accountQuotaContextGenerationRef.current += 1;
-      accountQuotaRequestIdsRef.current = {};
+      accountQuotaRequestIdsByRowIdRef.current = {};
+      credentialMutationRefreshGenerationRef.current += 1;
+      credentialMutationRefreshPromiseRef.current = null;
     },
     []
   );
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadApiKeyAliases(), refreshMeta(false), loadHeaderSnapshots()]);
+    const [, metaPayload] = await Promise.all([
+      loadApiKeyAliases(),
+      refreshMeta(false),
+      loadHeaderSnapshots(),
+    ]);
+    if (!metaPayload?.authFilesLoaded) return;
+    const hasUncoveredRevision = Object.entries(
+      requestedCredentialMutationRevisionsRef.current
+    ).some(
+      ([key, revision]) => revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0)
+    );
+    if (hasUncoveredRevision && !credentialMutationRefreshPromiseRef.current) {
+      setCredentialMutationRefreshKick((current) => current + 1);
+    }
   }, [loadApiKeyAliases, loadHeaderSnapshots, refreshMeta]);
+
+  useEffect(() => {
+    if (!connectionFingerprint) return;
+    let hasNewRevision = false;
+    Object.entries(credentialMutationRevisions).forEach(([key, event]) => {
+      if (event.connectionFingerprint !== connectionFingerprint) return;
+      if ((requestedCredentialMutationRevisionsRef.current[key] ?? 0) >= event.revision) return;
+      requestedCredentialMutationRevisionsRef.current[key] = event.revision;
+      queuedCredentialMutationProvidersRef.current.add(event.provider);
+      hasNewRevision = true;
+    });
+    const hasUncoveredRevision = Object.entries(
+      requestedCredentialMutationRevisionsRef.current
+    ).some(
+      ([key, revision]) => revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0)
+    );
+    if (
+      (!hasNewRevision && !(credentialMutationRefreshKick > 0 && hasUncoveredRevision)) ||
+      credentialMutationRefreshPromiseRef.current
+    ) {
+      return;
+    }
+
+    credentialMutationRefreshGenerationRef.current += 1;
+    const refreshGeneration = credentialMutationRefreshGenerationRef.current;
+    const requestedAtStart = { ...requestedCredentialMutationRevisionsRef.current };
+
+    const coverRevisions = (snapshot: Record<string, number>) => {
+      Object.entries(snapshot).forEach(([key, revision]) => {
+        coveredCredentialMutationRevisionsRef.current[key] = Math.max(
+          coveredCredentialMutationRevisionsRef.current[key] ?? 0,
+          revision
+        );
+      });
+    };
+    const generationAlive = () =>
+      credentialMutationRefreshGenerationRef.current === refreshGeneration;
+    const hasNewerRequestedRevision = () =>
+      Object.entries(requestedCredentialMutationRevisionsRef.current).some(
+        ([key, revision]) =>
+          revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0) &&
+          revision > (requestedAtStart[key] ?? 0)
+      );
+    const consumeProvidersForQuota = () => {
+      const providers = Array.from(queuedCredentialMutationProvidersRef.current);
+      queuedCredentialMutationProvidersRef.current.clear();
+      setCredentialMutationRefreshKick(0);
+      setPendingCredentialMutationProviders(providers);
+    };
+
+    const refresh = Promise.resolve()
+      .then(() => refreshMeta(false))
+      .then((payload) => {
+        if (!generationAlive()) return;
+        if (!payload?.authFilesLoaded) return;
+        coverRevisions(requestedAtStart);
+      })
+      .finally(() => {
+        if (!generationAlive()) return;
+        credentialMutationRefreshPromiseRef.current = null;
+        if (hasNewerRequestedRevision()) {
+          setCredentialMutationRefreshKick((current) => current + 1);
+          return;
+        }
+        const fullyCovered = !Object.entries(
+          requestedCredentialMutationRevisionsRef.current
+        ).some(
+          ([key, revision]) =>
+            revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0)
+        );
+        if (fullyCovered) {
+          consumeProvidersForQuota();
+          return;
+        }
+        // Coverage failed for the current revisions. Attempt a bounded retry
+        // before leaving them stranded. Each retry is a real metadata reload.
+        let retryIndex = 0;
+        const attemptRetry = () => {
+          if (!generationAlive()) return;
+          if (retryIndex >= CREDENTIAL_MUTATION_COVERAGE_RETRY_DELAYS_MS.length) {
+            // Exhausted: leave revisions uncovered and providers queued so a
+            // later mutation, page re-entry, or explicit refresh can recover.
+            setCredentialMutationRefreshKick(0);
+            return;
+          }
+          const delayMs = CREDENTIAL_MUTATION_COVERAGE_RETRY_DELAYS_MS[retryIndex];
+          retryIndex += 1;
+          const runRetry = () => {
+            if (!generationAlive()) return;
+            if (hasNewerRequestedRevision()) {
+              setCredentialMutationRefreshKick((current) => current + 1);
+              return;
+            }
+            const retryRequestedAtStart = {
+              ...requestedCredentialMutationRevisionsRef.current,
+            };
+            credentialMutationRefreshPromiseRef.current = Promise.resolve()
+              .then(() => refreshMeta(false))
+              .then((payload) => {
+                if (!generationAlive()) return;
+                if (!payload?.authFilesLoaded) return;
+                coverRevisions(retryRequestedAtStart);
+              })
+              .finally(() => {
+                if (!generationAlive()) return;
+                credentialMutationRefreshPromiseRef.current = null;
+                if (hasNewerRequestedRevision()) {
+                  setCredentialMutationRefreshKick((current) => current + 1);
+                  return;
+                }
+                const nowCovered = !Object.entries(
+                  requestedCredentialMutationRevisionsRef.current
+                ).some(
+                  ([key, revision]) =>
+                    revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0)
+                );
+                if (nowCovered) {
+                  consumeProvidersForQuota();
+                  return;
+                }
+                attemptRetry();
+              });
+          };
+          if (delayMs <= 0) {
+            runRetry();
+          } else {
+            setTimeout(runRetry, delayMs);
+            // A timer may wake after the generation changes; runRetry fences it
+            // before it can issue a metadata request or change state.
+          }
+        };
+        attemptRetry();
+      });
+    credentialMutationRefreshPromiseRef.current = refresh;
+  }, [
+    connectionFingerprint,
+    credentialMutationRefreshKick,
+    credentialMutationRevisions,
+    refreshMeta,
+  ]);
 
   const setCurrentAccountPage = useCallback(
     (page: number) => {
@@ -538,8 +724,8 @@ export function MonitoringCenterPage() {
   const hasPrices = Object.keys(modelPrices).length > 0;
 
   useEffect(() => {
-    accountQuotaStatesRef.current = accountQuotaStates;
-  }, [accountQuotaStates]);
+    accountQuotaStatesByRowIdRef.current = accountQuotaStatesByRowId;
+  }, [accountQuotaStatesByRowId]);
 
   useEffect(() => {
     writeAccountOverviewUiState({
@@ -684,8 +870,8 @@ export function MonitoringCenterPage() {
     ]
   );
   const accountStatusDataByRowId = useMemo(
-    () => buildMonitoringAccountStatusDataMap(scopedRows, accountStatusBounds),
-    [accountStatusBounds, scopedRows]
+    () => buildMonitoringAccountStatusDataMap(scopedRows, accountStatusBounds, accountRows),
+    [accountRows, accountStatusBounds, scopedRows]
   );
   const emptyAccountStatusData = useMemo(() => {
     const resolvedBounds = resolveMonitoringStatusRangeBounds(scopedRows, accountStatusBounds);
@@ -783,8 +969,8 @@ export function MonitoringCenterPage() {
     setCurrentAccountPage(accountPagination.currentPage);
   }, [accountPage, accountPagination.currentPage, overallLoading, setCurrentAccountPage]);
 
-  const accountQuotaTargetsByAccount = useMemo(
-    () => buildMonitoringAccountQuotaTargetsByAccount(accountRows, accountAuthStateByRowId),
+  const accountQuotaTargetsByRowId = useMemo(
+    () => buildMonitoringAccountQuotaTargetsByRowId(accountRows, accountAuthStateByRowId),
     [accountAuthStateByRowId, accountRows]
   );
   const headerSnapshotLookup = useMemo(
@@ -795,16 +981,16 @@ export function MonitoringCenterPage() {
     [headerSnapshotGeneratedAtMs, headerSnapshots]
   );
   const scopedFailureCount = scopedSummary.failureCalls;
-  const accountQuotaStatesWithObservedHeaders = useMemo(() => {
+  const accountQuotaStatesByRowIdWithObservedHeaders = useMemo(() => {
     let changed = false;
     const nextStates: Record<string, AccountQuotaState> = {};
-    const accounts = new Set([
-      ...accountQuotaTargetsByAccount.keys(),
-      ...Object.keys(accountQuotaStates),
+    const rowIds = new Set([
+      ...accountQuotaTargetsByRowId.keys(),
+      ...Object.keys(accountQuotaStatesByRowId),
     ]);
-    accounts.forEach((account) => {
-      const state = accountQuotaStates[account];
-      const targets = accountQuotaTargetsByAccount.get(account) ?? [];
+    rowIds.forEach((rowId) => {
+      const state = accountQuotaStatesByRowId[rowId];
+      const targets = accountQuotaTargetsByRowId.get(rowId) ?? [];
       const observedEntries = targets
         .map((target) =>
           buildObservedCodexAccountQuotaEntry(
@@ -815,11 +1001,11 @@ export function MonitoringCenterPage() {
         )
         .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
       const nextState = mergeObservedAccountQuotaState(state, targets, observedEntries);
-      if (nextState) nextStates[account] = nextState;
+      if (nextState) nextStates[rowId] = nextState;
       changed = changed || nextState !== state;
     });
-    return changed ? nextStates : accountQuotaStates;
-  }, [accountQuotaStates, accountQuotaTargetsByAccount, headerSnapshotLookup, t]);
+    return changed ? nextStates : accountQuotaStatesByRowId;
+  }, [accountQuotaStatesByRowId, accountQuotaTargetsByRowId, headerSnapshotLookup, t]);
 
   const hasSearchFilter = Boolean(deferredSearch.trim());
   const hasScopeFilter =
@@ -930,7 +1116,7 @@ export function MonitoringCenterPage() {
   const restoreFocusSnapshot = useCallback(() => {
     const snapshot = focusSnapshotRef.current;
     focusSnapshotRef.current = null;
-    setFocusedAccount(null);
+    setFocusedAccountId(null);
 
     if (!snapshot) {
       setSelectedAccount('all');
@@ -949,7 +1135,7 @@ export function MonitoringCenterPage() {
 
   const clearFilters = useCallback(() => {
     focusSnapshotRef.current = null;
-    setFocusedAccount(null);
+    setFocusedAccountId(null);
     setSearchInput('');
     setSelectedAccount('all');
     setSelectedProvider('all');
@@ -1027,24 +1213,26 @@ export function MonitoringCenterPage() {
     }));
   }, []);
 
-  const commitAccountQuotaState = useCallback((account: string, state: AccountQuotaState) => {
-    accountQuotaStatesRef.current = {
-      ...accountQuotaStatesRef.current,
-      [account]: state,
-    };
-    setAccountQuotaStates((previous) => {
-      const next = { ...previous, [account]: state };
-      accountQuotaStatesRef.current = next;
+  const commitAccountQuotaState = useCallback((rowId: string, state: AccountQuotaState) => {
+    accountQuotaStatesByRowIdRef.current = updateMonitoringAccountQuotaStateByRowId(
+      accountQuotaStatesByRowIdRef.current,
+      rowId,
+      state
+    );
+    setAccountQuotaStatesByRowId((previous) => {
+      const next = updateMonitoringAccountQuotaStateByRowId(previous, rowId, state);
+      accountQuotaStatesByRowIdRef.current = next;
       return next;
     });
   }, []);
 
   const loadAccountQuota = useCallback(
-    (account: string, force: boolean = false): Promise<void> => {
-      const currentState = accountQuotaStatesRef.current[account];
-      const targets = accountQuotaTargetsByAccount.get(account) ?? [];
+    (rowId: string, force: boolean = false): Promise<void> => {
+      const currentState = accountQuotaStatesByRowIdRef.current[rowId];
+      const targets = accountQuotaTargetsByRowId.get(rowId) ?? [];
       const targetKey = targets.map((target) => target.key).join('|');
-      const requestKey = `${accountQuotaContextKey}\u0000${account}\u0000${targetKey}`;
+      const mutationRevision = accountQuotaMutationRevisionsByRowIdRef.current[rowId] ?? 0;
+      const requestKey = `${accountQuotaContextKey}\u0000${rowId}\u0000${targetKey}\u0000${mutationRevision}`;
       if (accountQuotaRefreshQueue.isPending(requestKey)) {
         return accountQuotaRefreshQueue.run(requestKey, async () => undefined);
       }
@@ -1074,13 +1262,13 @@ export function MonitoringCenterPage() {
       }
 
       const contextGeneration = accountQuotaContextGenerationRef.current;
-      const requestId = (accountQuotaRequestIdsRef.current[account] ?? 0) + 1;
-      accountQuotaRequestIdsRef.current[account] = requestId;
+      const requestId = (accountQuotaRequestIdsByRowIdRef.current[rowId] ?? 0) + 1;
+      accountQuotaRequestIdsByRowIdRef.current[rowId] = requestId;
       const isCurrentRequest = () =>
         accountQuotaContextGenerationRef.current === contextGeneration &&
-        accountQuotaRequestIdsRef.current[account] === requestId;
+        accountQuotaRequestIdsByRowIdRef.current[rowId] === requestId;
 
-      commitAccountQuotaState(account, {
+      commitAccountQuotaState(rowId, {
         status: 'loading',
         targetKey,
         entries: currentState?.targetKey === targetKey ? currentState.entries : observedEntries,
@@ -1090,7 +1278,7 @@ export function MonitoringCenterPage() {
       return accountQuotaRefreshQueue.run(requestKey, async () => {
         if (!isCurrentRequest()) return;
         if (targets.length === 0) {
-          commitAccountQuotaState(account, {
+          commitAccountQuotaState(rowId, {
             status: 'success',
             targetKey,
             entries: [],
@@ -1158,7 +1346,7 @@ export function MonitoringCenterPage() {
 
         const hasSuccess = entries.some((entry) => !entry.error);
         const firstError = entries.find((entry) => entry.error)?.error;
-        commitAccountQuotaState(account, {
+        commitAccountQuotaState(rowId, {
           status: hasFailure ? 'error' : hasSuccess ? 'success' : 'error',
           targetKey,
           entries,
@@ -1171,12 +1359,49 @@ export function MonitoringCenterPage() {
     [
       accountQuotaContextKey,
       accountQuotaRefreshQueue,
-      accountQuotaTargetsByAccount,
+      accountQuotaTargetsByRowId,
       commitAccountQuotaState,
       headerSnapshotLookup,
       t,
     ]
   );
+
+  useEffect(() => {
+    if (pendingCredentialMutationProviders.length === 0) return;
+    const providers = new Set(pendingCredentialMutationProviders);
+    const affectedRowIds = new Set<string>();
+    accountQuotaTargetsByRowId.forEach((targets, rowId) => {
+      if (targets.some((target) => providers.has(target.provider))) affectedRowIds.add(rowId);
+    });
+    Object.entries(accountQuotaStatesByRowIdRef.current).forEach(([rowId, state]) => {
+      if (state.entries.some((entry) => providers.has(entry.provider))) affectedRowIds.add(rowId);
+    });
+
+    const previousStates = accountQuotaStatesByRowIdRef.current;
+    const nextStates = { ...previousStates };
+    affectedRowIds.forEach((rowId) => {
+      delete nextStates[rowId];
+      accountQuotaRequestIdsByRowIdRef.current[rowId] =
+        (accountQuotaRequestIdsByRowIdRef.current[rowId] ?? 0) + 1;
+      accountQuotaMutationRevisionsByRowIdRef.current[rowId] =
+        (accountQuotaMutationRevisionsByRowIdRef.current[rowId] ?? 0) + 1;
+    });
+    accountQuotaStatesByRowIdRef.current = nextStates;
+    setAccountQuotaStatesByRowId(nextStates);
+    setPendingCredentialMutationProviders([]);
+
+    affectedRowIds.forEach((rowId) => {
+      if (previousStates[rowId] || expandedAccounts[rowId] || focusedAccountId === rowId) {
+        void loadAccountQuota(rowId, true);
+      }
+    });
+  }, [
+    accountQuotaTargetsByRowId,
+    expandedAccounts,
+    focusedAccountId,
+    loadAccountQuota,
+    pendingCredentialMutationProviders,
+  ]);
 
   const toggleAccountExpanded = useCallback((accountId: string) => {
     setExpandedAccounts((previous) => ({
@@ -1187,9 +1412,8 @@ export function MonitoringCenterPage() {
 
   const focusAccount = useCallback(
     (row: MonitoringAccountRow) => {
-      const account = row.account;
-      const accountFilterValue = row.filterValue || row.account;
-      if (focusedAccount === account) {
+      const action = resolveMonitoringAccountFocusAction(focusedAccountId, row);
+      if (action.type === 'restore') {
         restoreFocusSnapshot();
         return;
       }
@@ -1207,11 +1431,11 @@ export function MonitoringCenterPage() {
         };
       }
 
-      setFocusedAccount(account);
-      setSelectedAccount(accountFilterValue);
+      setFocusedAccountId(action.rowId);
+      setSelectedAccount(action.filterValue);
     },
     [
-      focusedAccount,
+      focusedAccountId,
       restoreFocusSnapshot,
       searchInput,
       selectedAccount,
@@ -1228,12 +1452,12 @@ export function MonitoringCenterPage() {
     (value: string) => {
       setSelectedAccount(value);
 
-      if (focusedAccount && value !== focusedAccount) {
+      if (focusedAccountId) {
         focusSnapshotRef.current = null;
-        setFocusedAccount(null);
+        setFocusedAccountId(null);
       }
     },
-    [focusedAccount]
+    [focusedAccountId]
   );
 
   const handleAccountPageSizeChange = useCallback(
@@ -1731,11 +1955,11 @@ export function MonitoringCenterPage() {
                 accountSort={accountSort}
                 accountSortOptions={accountSortOptions}
                 expandedAccounts={expandedAccounts}
-                focusedAccount={focusedAccount}
+                focusedAccountId={focusedAccountId}
                 accountAuthStateByRowId={accountAuthStateByRowId}
                 accountStatusDataByRowId={accountStatusDataByRowId}
                 emptyAccountStatusData={emptyAccountStatusData}
-                accountQuotaStates={accountQuotaStatesWithObservedHeaders}
+                accountQuotaStatesByRowId={accountQuotaStatesByRowIdWithObservedHeaders}
                 accountPageSize={accountPageSize}
                 accountPageSizeOptions={accountPageSizeOptions}
                 accountOverviewScopeText={accountOverviewScopeText}
