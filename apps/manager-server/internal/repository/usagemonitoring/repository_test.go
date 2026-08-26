@@ -720,6 +720,7 @@ func TestUsageMonitoringSearchDoesNotIndexHistoricalCodexProjectMarker(t *testin
 	if count != 0 {
 		t.Fatalf("raw-tail marker search count = %d, want 0", count)
 	}
+}
 func TestSuccessfulResponseHeadersDoNotEnterFailureSearchStorage(t *testing.T) {
 	sqlDB, db := newMonitoringRepositoryStore(t)
 	ctx := context.Background()
