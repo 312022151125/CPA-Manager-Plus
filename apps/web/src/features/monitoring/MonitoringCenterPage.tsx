@@ -500,12 +500,27 @@ export function MonitoringCenterPage() {
     () => () => {
       accountQuotaContextGenerationRef.current += 1;
       accountQuotaRequestIdsByRowIdRef.current = {};
+      credentialMutationRefreshGenerationRef.current += 1;
+      credentialMutationRefreshPromiseRef.current = null;
     },
     []
   );
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadApiKeyAliases(), refreshMeta(false), loadHeaderSnapshots()]);
+    const [, metaPayload] = await Promise.all([
+      loadApiKeyAliases(),
+      refreshMeta(false),
+      loadHeaderSnapshots(),
+    ]);
+    if (!metaPayload?.authFilesLoaded) return;
+    const hasUncoveredRevision = Object.entries(
+      requestedCredentialMutationRevisionsRef.current
+    ).some(
+      ([key, revision]) => revision > (coveredCredentialMutationRevisionsRef.current[key] ?? 0)
+    );
+    if (hasUncoveredRevision && !credentialMutationRefreshPromiseRef.current) {
+      setCredentialMutationRefreshKick((current) => current + 1);
+    }
   }, [loadApiKeyAliases, loadHeaderSnapshots, refreshMeta]);
 
   useEffect(() => {
@@ -599,12 +614,15 @@ export function MonitoringCenterPage() {
               setCredentialMutationRefreshKick((current) => current + 1);
               return;
             }
+            const retryRequestedAtStart = {
+              ...requestedCredentialMutationRevisionsRef.current,
+            };
             credentialMutationRefreshPromiseRef.current = Promise.resolve()
               .then(() => refreshMeta(false))
               .then((payload) => {
                 if (!generationAlive()) return;
                 if (!payload?.authFilesLoaded) return;
-                coverRevisions(requestedCredentialMutationRevisionsRef.current);
+                coverRevisions(retryRequestedAtStart);
               })
               .finally(() => {
                 if (!generationAlive()) return;
@@ -629,11 +647,9 @@ export function MonitoringCenterPage() {
           if (delayMs <= 0) {
             runRetry();
           } else {
-            const timer = setTimeout(runRetry, delayMs);
-            // The generation ref bump on connection change / unmount makes any
-            // in-flight retry a no-op, but we still clear the timer to avoid a
-            // dangling wake after the component is gone.
-            if (!generationAlive()) clearTimeout(timer);
+            setTimeout(runRetry, delayMs);
+            // A timer may wake after the generation changes; runRetry fences it
+            // before it can issue a metadata request or change state.
           }
         };
         attemptRetry();

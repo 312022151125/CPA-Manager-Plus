@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     accountQuotaStatesByRowId: Record<string, AccountQuotaState>;
     onLoadAccountQuota: (rowId: string, force: boolean) => void | Promise<void>;
   },
+  lastHeaderRefresh: null as null | (() => void | Promise<void>),
   loadHeaderSnapshots: vi.fn(async () => undefined),
   refreshMeta: vi.fn(),
   requestAccountQuota: vi.fn(),
@@ -215,7 +216,11 @@ vi.mock('@/features/monitoring/hooks/useHeaderSnapshotsLoader', () => ({
   useHeaderSnapshotsLoader: () => mocks.loadHeaderSnapshots,
 }));
 
-vi.mock('@/hooks/useHeaderRefresh', () => ({ useHeaderRefresh: vi.fn() }));
+vi.mock('@/hooks/useHeaderRefresh', () => ({
+  useHeaderRefresh: (handler: (() => void | Promise<void>) | null | undefined) => {
+    mocks.lastHeaderRefresh = handler ?? null;
+  },
+}));
 vi.mock('@/hooks/useInterval', () => ({ useInterval: vi.fn() }));
 vi.mock('@/hooks/useRequestMonitoringAvailability', () => ({
   useRequestMonitoringAvailability: () => ({
@@ -309,6 +314,7 @@ const deferred = <T,>() => {
 
 describe('MonitoringCenterPage credential quota revision lifecycle', () => {
   let renderer!: ReactTestRenderer;
+  let rendererMounted = false;
   // Use fake timers so bounded retry delays are deterministic and instant.
   let timersActivated = false;
 
@@ -327,6 +333,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     mocks.authFiles = [makeCodexFile('1', 'codex-old.json')];
     mocks.nextAuthFiles = null;
     mocks.lastAccountOverviewProps = null;
+    mocks.lastHeaderRefresh = null;
     mocks.loadHeaderSnapshots.mockClear();
     // Default: refreshMeta resolves with a successful auth-files payload so the
     // production success-coverage path is exercised, not the failure path.
@@ -355,6 +362,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     timersActivated = false;
     await act(async () => {
       renderer = create(<MonitoringCenterPage />);
+      rendererMounted = true;
       await flushPromises();
     });
   });
@@ -528,7 +536,120 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
   });
 
-  // Test 4: a mutation refresh superseded by a same-scope newer metadata request
+  // Test 4: a newer revision during a retry refresh is not covered by the
+  // earlier retry request's metadata response.
+  it('does not cover a newer revision that arrives during a retry request', async () => {
+    vi.useFakeTimers();
+    timersActivated = true;
+
+    await act(async () => {
+      await mocks.lastAccountOverviewProps?.onLoadAccountQuota('workspace-a', true);
+    });
+
+    const fingerprint = createCodexInspectionConnectionFingerprint(
+      mocks.apiBase,
+      mocks.managementKey
+    )!;
+    const failPayload = {
+      authFiles: [] as AuthFileItem[],
+      authFilesLoaded: false as const,
+      channels: [] as const,
+      channelsLoaded: true as const,
+      error: 'auth-files unavailable',
+    };
+    const retryRefresh = deferred<{
+      authFiles: AuthFileItem[];
+      authFilesLoaded: boolean;
+      channels: [];
+      channelsLoaded: boolean;
+      error: string;
+    }>();
+    const finalRefresh = deferred<{
+      authFiles: AuthFileItem[];
+      authFilesLoaded: boolean;
+      channels: [];
+      channelsLoaded: boolean;
+      error: string;
+    }>();
+    const retryFiles = [makeCodexFile('2', 'codex-retry.json')];
+    const finalFiles = [makeCodexFile('3', 'codex-final.json')];
+    mocks.refreshMeta.mockReset();
+    mocks.refreshMeta
+      .mockReturnValueOnce(failPayload)
+      .mockReturnValueOnce(retryRefresh.promise)
+      .mockImplementationOnce(() => {
+        mocks.nextAuthFiles = finalFiles;
+        return finalRefresh.promise;
+      });
+
+    await act(async () => {
+      publishAccountCredentialMutationRevision({
+        connectionFingerprint: fingerprint,
+        provider: 'codex',
+        kind: 'reauth',
+        credentialIdentity: 'workspace-a',
+      });
+      await flushPromises();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+      await flushPromises();
+    });
+    // The initial failure has now entered the 0ms retry request.
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      publishAccountCredentialMutationRevision({
+        connectionFingerprint: fingerprint,
+        provider: 'codex',
+        kind: 'reauth',
+        credentialIdentity: 'workspace-a',
+      });
+      await flushPromises();
+    });
+    // rev2 arrives while retry R is still in flight; it cannot start a
+    // parallel request.
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
+    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      mocks.nextAuthFiles = retryFiles;
+      retryRefresh.resolve({
+        authFiles: retryFiles,
+        authFilesLoaded: true,
+        channels: [],
+        channelsLoaded: true,
+        error: '',
+      });
+      await flushPromises();
+    });
+    // R covered only its rev1 snapshot, so rev2 requires a serialized
+    // follow-up. Quota remains on the old target until that request completes.
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(3);
+    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finalRefresh.resolve({
+        authFiles: finalFiles,
+        authFilesLoaded: true,
+        channels: [],
+        channelsLoaded: true,
+        error: '',
+      });
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(3);
+    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(2);
+    expect(mocks.requestAccountQuota.mock.calls[1]?.[0].authIndex).toBe('3');
+    expect(
+      mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.targetKey
+    ).toContain('codex::3::codex-final.json');
+
+    vi.useRealTimers();
+    timersActivated = false;
+  });
+
+  // Test 5: a mutation refresh superseded by a same-scope newer metadata request
   // (returning null) eventually recovers via retry without a new mutation.
   it('recovers a superseded mutation refresh via retry without a new revision', async () => {
     vi.useFakeTimers();
@@ -578,7 +699,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     timersActivated = false;
   });
 
-  // Test 5: connection switch cancels an in-flight retry.
+  // Test 6: connection switch cancels an in-flight retry.
   it('cancels pending retry when the connection fingerprint changes', async () => {
     vi.useFakeTimers();
     timersActivated = true;
@@ -626,10 +747,164 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     timersActivated = false;
   });
 
+  // Test 7: unmount fences delayed mutation retries.
+  it('stops credential mutation retries after unmount', async () => {
+    vi.useFakeTimers();
+    timersActivated = true;
+
+    await act(async () => {
+      await mocks.lastAccountOverviewProps?.onLoadAccountQuota('workspace-a', true);
+    });
+
+    const fingerprint = createCodexInspectionConnectionFingerprint(
+      mocks.apiBase,
+      mocks.managementKey
+    )!;
+    const failPayload = {
+      authFiles: [] as AuthFileItem[],
+      authFilesLoaded: false as const,
+      channels: [] as const,
+      channelsLoaded: true as const,
+      error: 'auth-files unavailable',
+    };
+    mocks.refreshMeta.mockReset().mockImplementation(() => failPayload);
+
+    await act(async () => {
+      publishAccountCredentialMutationRevision({
+        connectionFingerprint: fingerprint,
+        provider: 'codex',
+        kind: 'reauth',
+        credentialIdentity: 'workspace-a',
+      });
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
+    const callsBeforeUnmount = mocks.refreshMeta.mock.calls.length;
+    const quotaCallsBeforeUnmount = mocks.requestAccountQuota.mock.calls.length;
+
+    await act(async () => renderer.unmount());
+    rendererMounted = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+      await flushPromises();
+    });
+
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(callsBeforeUnmount);
+    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(quotaCallsBeforeUnmount);
+
+    vi.useRealTimers();
+    timersActivated = false;
+  });
+
+  // Test 8: a successful normal refresh re-arms an exhausted coverage cycle.
+  it('re-arms an exhausted uncovered revision after a successful normal refresh', async () => {
+    vi.useFakeTimers();
+    timersActivated = true;
+
+    await act(async () => {
+      await mocks.lastAccountOverviewProps?.onLoadAccountQuota('workspace-a', true);
+    });
+
+    const fingerprint = createCodexInspectionConnectionFingerprint(
+      mocks.apiBase,
+      mocks.managementKey
+    )!;
+    const failPayload = {
+      authFiles: [] as AuthFileItem[],
+      authFilesLoaded: false as const,
+      channels: [] as const,
+      channelsLoaded: true as const,
+      error: 'auth-files unavailable',
+    };
+    mocks.refreshMeta.mockReset().mockImplementation(() => failPayload);
+
+    await act(async () => {
+      publishAccountCredentialMutationRevision({
+        connectionFingerprint: fingerprint,
+        provider: 'codex',
+        kind: 'reauth',
+        credentialIdentity: 'workspace-a',
+      });
+      await flushPromises();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(6);
+    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+      await flushPromises();
+    });
+    // Exhaustion is bounded; timers do not create a permanent retry loop.
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(6);
+
+    const recoveryFiles = [makeCodexFile('2', 'codex-recovered.json')];
+    const coverageRefresh = deferred<{
+      authFiles: AuthFileItem[];
+      authFilesLoaded: boolean;
+      channels: [];
+      channelsLoaded: boolean;
+      error: string;
+    }>();
+    mocks.refreshMeta.mockReset();
+    mocks.refreshMeta
+      .mockImplementationOnce(() => {
+        mocks.nextAuthFiles = recoveryFiles;
+        return successMetaPayload(recoveryFiles);
+      })
+      .mockImplementationOnce(() => {
+        mocks.nextAuthFiles = recoveryFiles;
+        return coverageRefresh.promise;
+      });
+
+    const refreshHeader = mocks.lastHeaderRefresh;
+    if (!refreshHeader) throw new Error('header refresh callback was not captured');
+    await act(async () => {
+      await refreshHeader();
+      await flushPromises();
+    });
+    // refreshAll itself only discovers the stranded revision; the dedicated
+    // coverage cycle is the second real metadata request.
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
+    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      coverageRefresh.resolve({
+        authFiles: recoveryFiles,
+        authFilesLoaded: true,
+        channels: [],
+        channelsLoaded: true,
+        error: '',
+      });
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
+    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(2);
+    expect(mocks.requestAccountQuota.mock.calls[1]?.[0].authIndex).toBe('2');
+    expect(
+      mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.targetKey
+    ).toContain('codex::2::codex-recovered.json');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+      await flushPromises();
+    });
+    expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+    timersActivated = false;
+  });
+
   afterEach(async () => {
     if (timersActivated) {
       vi.useRealTimers();
     }
-    await act(async () => renderer.unmount());
+    if (rendererMounted) {
+      await act(async () => renderer.unmount());
+      rendererMounted = false;
+    }
   });
 });
