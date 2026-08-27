@@ -82,9 +82,7 @@ import {
   createCodexReauthTargetFromAuthFile,
   type CodexReauthTarget,
 } from '@/features/oauth/codexReauthModel';
-import {
-  runCredentialVisibilityRetry,
-} from '@/features/accounts/model/accountCredentialVisibilityRetry';
+import { runCredentialVisibilityRetry } from '@/features/accounts/model/accountCredentialVisibilityRetry';
 import {
   ACCOUNT_CODEX_STATUS_FILTERS,
   buildAccountInspectionBySelectionKey,
@@ -94,6 +92,8 @@ import {
   findAccountRowForInspectionTarget,
   filterAccountRows,
   getHandledAccountInspectionResultKeys,
+  getPlanOptionLabel,
+  getPlanOptionValue,
   getPlanOptions,
   getProviderOptions,
   isAccountCodexStatusFilter,
@@ -3691,7 +3691,27 @@ export function AccountsPage() {
     [actionCandidatesByRowKey, quotaCooldownsByRowKey, requestEvidenceBySelectionKey, rows]
   );
   const providerOptions = useMemo(() => getProviderOptions(rows), [rows]);
-  const planOptions = useMemo(() => getPlanOptions(rows), [rows]);
+  const planOptions = useMemo(() => getPlanOptions(rows, t), [rows, t]);
+  const planFilterValue = useMemo(
+    () => getPlanOptionValue(rows, planFilter, t),
+    [planFilter, rows, t]
+  );
+  const effectivePlanOptions = useMemo(() => {
+    if (
+      planFilterValue === 'all' ||
+      planOptions.some((option) => option.value === planFilterValue)
+    ) {
+      return planOptions;
+    }
+
+    return [
+      ...planOptions,
+      {
+        value: planFilterValue,
+        label: getPlanOptionLabel(rows, planFilterValue, t),
+      },
+    ];
+  }, [planFilterValue, planOptions, rows, t]);
   const recommendations = useMemo(
     () => buildAccountRecommendations(rows, requestEvidenceBySelectionKey),
     [requestEvidenceBySelectionKey, rows]
@@ -3705,7 +3725,7 @@ export function AccountsPage() {
       filterAccountRows(rows, {
         provider: providerFilter,
         status: statusFilter,
-        plan: planFilter,
+        plan: planFilterValue,
         quotaBand: quotaBandFilter,
         search,
         codexStatusBySelectionKey,
@@ -3713,7 +3733,7 @@ export function AccountsPage() {
       }),
     [
       codexStatusBySelectionKey,
-      planFilter,
+      planFilterValue,
       providerFilter,
       quotaBandFilter,
       requestEvidenceBySelectionKey,
@@ -5929,11 +5949,7 @@ export function AccountsPage() {
         ? t(`auth_files.codex_status_filter_${statusFilter}`)
         : t(`accounts.status_${statusFilter}`);
   const selectedPlanFilterLabel =
-    planFilter === 'all'
-      ? t('accounts.plan_all')
-      : planFilter === 'unknown'
-        ? t('auth_files.codex_plan_filter_unknown')
-        : planFilter;
+    planFilter === 'all' ? t('accounts.plan_all') : getPlanOptionLabel(rows, planFilter, t);
   const selectedQuotaFilterLabel =
     quotaBandFilter === 'all' ? t('accounts.quota_all') : t(`accounts.quota_${quotaBandFilter}`);
   const selectedOperationalFilterLabel = t(`accounts.operational_${effectiveOperationalFilter}`);
@@ -6233,14 +6249,8 @@ export function AccountsPage() {
       </div>
       <div className={styles.filterField}>
         <Select
-          value={planFilter}
-          options={[
-            { value: 'all', label: t('accounts.plan_all') },
-            ...planOptions.map((plan) => ({
-              value: plan,
-              label: plan === 'unknown' ? t('auth_files.codex_plan_filter_unknown') : plan,
-            })),
-          ]}
+          value={planFilterValue}
+          options={[{ value: 'all', label: t('accounts.plan_all') }, ...effectivePlanOptions]}
           onChange={setPlanFilter}
           ariaLabel={t('accounts.plan_filter')}
           triggerClassName={styles.toolbarSelectTrigger}
@@ -6791,6 +6801,7 @@ export function AccountsPage() {
             const quotaCooldown = quotaCooldownsByRowKey.get(row.selectionKey)?.[0] ?? null;
             const codexStatus = codexStatusBySelectionKey.get(row.selectionKey) ?? null;
             const item = buildAccountListItem(row, {
+              t,
               recommendation,
               quotaCooldown,
               codexStatus,
@@ -6878,8 +6889,13 @@ export function AccountsPage() {
                     <span className={styles.providerPill}>
                       {getProviderLabel(item.identity.provider, t)}
                     </span>
-                    {item.identity.planType ? (
-                      <span className={styles.accountMetaPill}>{item.identity.planType}</span>
+                    {item.identity.planPresentation ? (
+                      <span
+                        className={styles.accountMetaPill}
+                        title={item.identity.planPresentation.fullLabel}
+                      >
+                        {item.identity.planPresentation.shortLabel}
+                      </span>
                     ) : null}
                   </div>
                   <div className={styles.accountIdentityCopyLine}>
@@ -7186,6 +7202,7 @@ export function AccountsPage() {
     const rowEventsRecentFailure = hasMatchingDetailEvents ? detailEventsRecentFailure : null;
     const rowEventsTotalCount = hasMatchingDetailEvents ? detailEventsTotalCount : 0;
     const detailView = buildAccountDetailViewModel(selectedRow, {
+      t,
       recommendation: recommendationBySelectionKey.get(selectedRow.selectionKey) ?? null,
       quotaCooldown: selectedQuotaCooldown,
       codexStatus: selectedCodexStatus,
@@ -7385,7 +7402,11 @@ export function AccountsPage() {
                 {getDisplayAccount(selectedRow)}
               </strong>
               <span className={styles.drawerTitleMeta}>
-                {getProviderLabel(selectedRow.provider, t)} · {selectedRow.planType ?? '-'} ·{' '}
+                {getProviderLabel(selectedRow.provider, t)} ·{' '}
+                <span title={detailView.identity.planPresentation?.fullLabel}>
+                  {detailView.identity.planPresentation?.shortLabel ?? '-'}
+                </span>{' '}
+                ·{' '}
                 <button
                   type="button"
                   className={styles.drawerFileNameCopy}

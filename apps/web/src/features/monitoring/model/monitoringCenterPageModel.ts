@@ -30,10 +30,8 @@ import type {
   AccountQuotaState,
   AccountQuotaWindow,
 } from '@/features/monitoring/components/accountOverviewPresentation';
-import {
-  formatPercent,
-  getCodexPlanLabel,
-} from '@/features/monitoring/components/accountOverviewPresentation';
+import { formatPercent } from '@/features/monitoring/components/accountOverviewPresentation';
+import { getPlanPresentation, resolveAntigravityPlanType } from '@/utils/plans';
 import type { SummaryCardProps } from '@/features/monitoring/components/MonitoringShared';
 import type {
   MonitoringAccountQuotaProvider,
@@ -1399,9 +1397,11 @@ export const buildAccountQuotaEntryFromProviderState = (
   switch (target.provider) {
     case 'antigravity': {
       const quota = state as AntigravityQuotaState;
+      const planType = resolveAntigravityPlanType(quota.subscription, target.planType);
       return applyProviderQuotaStateMetadata(
         {
-          ...buildBaseAccountQuotaEntry(target, t),
+          ...buildBaseAccountQuotaEntry({ ...target, planType }, t),
+          planType,
           windows: buildAntigravityAccountQuotaWindows(quota.groups),
         },
         quota
@@ -1410,8 +1410,10 @@ export const buildAccountQuotaEntryFromProviderState = (
     case 'claude': {
       const quota = state as ClaudeQuotaState;
       const metaLabels: string[] = [];
-      if (quota.planType) {
-        metaLabels.push(`${t('claude_quota.plan_label')}: ${t(`claude_quota.${quota.planType}`)}`);
+      const planType = quota.planType ?? target.planType;
+      const planLabel = getPlanPresentation({ provider: target.provider, planType, t })?.shortLabel;
+      if (planLabel) {
+        metaLabels.push(`${t('plans.label')}: ${planLabel}`);
       }
       if (quota.extraUsage?.is_enabled) {
         metaLabels.push(
@@ -1421,11 +1423,11 @@ export const buildAccountQuotaEntryFromProviderState = (
       return applyProviderQuotaStateMetadata(
         {
           ...buildBaseAccountQuotaEntry(
-            { ...target, planType: quota.planType ?? target.planType },
+            { ...target, planType },
             t,
             metaLabels
           ),
-          planType: quota.planType ?? target.planType,
+          planType,
           windows: buildClaudeAccountQuotaWindows(quota.windows, t),
         },
         quota
@@ -1472,13 +1474,13 @@ export const buildAccountQuotaEntryFromProviderState = (
     default: {
       const quota = state as CodexQuotaState;
       const planType = quota.planType ?? target.planType;
-      const planLabel = getCodexPlanLabel(planType, t);
+      const planLabel = getPlanPresentation({ provider: target.provider, planType, t })?.shortLabel;
       return applyProviderQuotaStateMetadata(
         {
           ...buildBaseAccountQuotaEntry(
             { ...target, planType },
             t,
-            planLabel ? [`${t('codex_quota.plan_label')}: ${planLabel}`] : []
+            planLabel ? [`${t('plans.label')}: ${planLabel}`] : []
           ),
           planType,
           windows: buildCodexAccountQuotaWindows(quota.windows, t),
@@ -1556,7 +1558,7 @@ export const buildObservedCodexAccountQuotaEntry = (
       requestedModel: snapshot?.requested_model,
       resolvedModel: snapshot?.resolved_model,
     });
-  const planLabel = getCodexPlanLabel(planType, t);
+  const planLabel = getPlanPresentation({ provider: target.provider, planType, t })?.shortLabel;
   const observedAtMs = readFiniteTimestamp(snapshot?.timestamp_ms) ?? undefined;
   const observedAt = observedAtMs ? new Date(observedAtMs).toLocaleString() : '';
   const usedPercent = getHeaderSnapshotUsedPercent(snapshot);
@@ -1565,7 +1567,7 @@ export const buildObservedCodexAccountQuotaEntry = (
   const errorCode = getHeaderSnapshotErrorCode(snapshot);
   const traceID = getHeaderSnapshotTraceId(snapshot);
   const metaLabels = [
-    planLabel ? `${t('codex_quota.plan_label')}: ${planLabel}` : '',
+    planLabel ? `${t('plans.label')}: ${planLabel}` : '',
     observedAt
       ? t('monitoring.observed_from_usage_headers_at', {
           time: observedAt,
@@ -1643,7 +1645,6 @@ export const buildObservedCodexAccountQuotaEntry = (
     observedFromUsageHeaders: true,
   };
 };
-
 export const buildRealtimeLogRows = (rows: MonitoringEventRow[]): RealtimeLogRow[] => {
   const sortedAsc = [...rows].sort(
     (left, right) => left.timestampMs - right.timestampMs || left.id.localeCompare(right.id)
