@@ -256,6 +256,8 @@ text() {
     en-US:cpa_import_state_cleanup_failed) printf 'The migration succeeded, but the one-time CPA import state could not be removed; the state and temporary key were retained for a safe retry.' ;;
     zh-CN:cpa_snapshot_cleanup_failed) printf '迁移已提交，但 Manager 数据快照清理失败；快照已保留，请稍后手动删除。' ;;
     en-US:cpa_snapshot_cleanup_failed) printf 'The migration was committed, but cleaning the Manager data snapshot failed; the snapshot was kept for manual removal.' ;;
+    zh-CN:cpa_runtime_backup_cleanup_failed) printf '迁移已提交，但本次 legacy CPA runtime rollback backup 清理失败；文件可能包含旧版 CPA secret，请手动删除。' ;;
+    en-US:cpa_runtime_backup_cleanup_failed) printf 'The migration was committed, but a legacy CPA runtime rollback backup could not be removed; it may contain a legacy CPA secret and must be deleted manually.' ;;
     zh-CN:cpa_key_cleanup_failed) printf '业务迁移已成功，但临时 CPA Management Key 清理失败；文件已保留，请稍后手动删除。' ;;
     en-US:cpa_key_cleanup_failed) printf 'The migration succeeded, but cleaning the temporary CPA Management Key failed; the file was retained for manual removal.' ;;
     zh-CN:native_upgrade_pending) printf '旧版 native CPA 配置迁移仍待执行。检查计划后，请运行下面的完整升级命令；旧运行入口和密钥不会在预览阶段被修改。' ;;
@@ -2126,6 +2128,7 @@ load_existing_docker_config() {
   local compose_has_managed_cpa_secret="0"
   local effective_key=""
   local effective_key_file=""
+  local status="0"
 
   [ -f "$install_dir/.env" ] || die "Missing existing config: $install_dir/.env"
   [ -f "$install_dir/compose.yaml" ] || die "Missing existing config: $install_dir/compose.yaml"
@@ -2172,10 +2175,25 @@ load_existing_docker_config() {
   fi
   if [ "$cpa_connection_mode" = "env" ]; then
     if [ "$compose_has_cpa_key" = "1" ]; then
-      if [ "${CPA_MANAGEMENT_KEY+x}" = "x" ]; then
-        effective_key="${CPA_MANAGEMENT_KEY-}"
+      # Read the resolved service value first so a literal Compose environment
+      # entry (not just a .env interpolation) is also migrated. The resolved
+      # value already reflects Compose's process-environment precedence for
+      # interpolated entries.
+      if effective_key="$(compose_service_environment_value CPA_MANAGEMENT_KEY)"; then
+        :
       else
-        effective_key="$(read_env_value "$install_dir/.env" CPA_MANAGEMENT_KEY 2>/dev/null || true)"
+        status=$?
+        # Status 1 means the small raw-file parser did not find a usable value;
+        # keep the existing .env/process-environment fallback for that case.
+        # Any other status is a parse or interpolation error and must remain
+        # fail-closed instead of being widened into a legacy-key fallback.
+        [ "$status" -eq 1 ] ||
+          die "Unable to resolve CPA_MANAGEMENT_KEY from the existing Docker Compose configuration."
+        if [ "${CPA_MANAGEMENT_KEY+x}" = "x" ]; then
+          effective_key="${CPA_MANAGEMENT_KEY-}"
+        else
+          effective_key="$(read_env_value "$install_dir/.env" CPA_MANAGEMENT_KEY 2>/dev/null || true)"
+        fi
       fi
     fi
     if [ -n "$effective_key" ]; then
@@ -3100,6 +3118,19 @@ delete_docker_data_snapshot() {
   docker_data_snapshot_created="0"
 }
 
+cleanup_committed_legacy_cpa_runtime_backups() {
+  local backup=""
+  local failed="0"
+  for backup in "$legacy_compose_backup" "$legacy_env_backup"; do
+    [ -n "$backup" ] || continue
+    if ! rm -f "$backup"; then
+      failed="1"
+      printf '%s\n' "$(text cpa_runtime_backup_cleanup_failed) File: $backup" >&2
+    fi
+  done
+  return "$failed"
+}
+
 backup_legacy_cpa_runtime_config() {
   local timestamp=""
   timestamp="$(date '+%Y%m%d%H%M%S')"
@@ -3342,6 +3373,9 @@ commit_legacy_cpa_runtime_config() {
   cpa_connection_rollback_pending="0"
   if ! delete_docker_data_snapshot; then
     printf '%s\n' "$(text cpa_snapshot_cleanup_failed) Snapshot: $docker_data_snapshot_dir" >&2
+  fi
+  if ! cleanup_committed_legacy_cpa_runtime_backups; then
+    :
   fi
 }
 
