@@ -4,10 +4,7 @@ import type { MonitoringAccountQuotaProvider } from '@/features/monitoring/accou
 import type { MonitoringAccountRow } from '@/features/monitoring/hooks/useMonitoringData';
 import type { QuotaModelScope, QuotaResetAccuracy } from '@/types';
 import { normalizePlanType } from '@/utils/quota';
-import {
-  formatQuotaResetTime,
-  type QuotaResetTimeFormatOptions,
-} from '@/utils/quota/formatters';
+import { formatQuotaResetTime, type QuotaResetTimeFormatOptions } from '@/utils/quota/formatters';
 import { formatCompactNumber, formatUsd } from '@/utils/usage';
 import styles from '../MonitoringCenterPage.module.scss';
 
@@ -36,8 +33,10 @@ export type AccountQuotaEntry = {
   emptyMessage?: string;
   windows: AccountQuotaWindow[];
   error?: string;
+  errorStatus?: number;
   failedAtMs?: number;
   fetchedAtMs?: number;
+  quotaInventoryObserved?: boolean;
   observedAtMs?: number;
   observedFromUsageHeaders?: boolean;
 };
