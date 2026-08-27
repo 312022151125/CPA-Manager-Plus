@@ -270,7 +270,7 @@ CPAMP_OPERATION=regenerate bash install-cpamp.sh
 
 升级旧版 env/secret Docker 部署时，脚本会先停止 Manager Server，并在数据卷内创建权限受限的离线快照。快照同时包含 `usage.sqlite`、`-wal`、`-shm`、`-journal` 和 `data.key` 的原始存在状态与内容；只有快照完整创建后才会执行导入或触发可能的 SQLite schema 迁移。健康、管理员鉴权和 CPA 代理验证全部通过后才删除快照。如果中途失败，脚本会先停止新进程、恢复数据与旧配置，再启动旧服务；恢复失败时会保留快照路径供人工处理。
 
-脚本还会保留带时间戳的 `compose.yaml.cpa-key-migration.bak.*` 和 `.env.cpa-key-migration.bak.*`。旧 CPA 输入只从 `cpa-manager-plus` Compose 配置实际引用的来源中解析，当前进程环境覆盖 `.env`；未引用的旧 `.env` 声明或遗留 secret 文件不会触发迁移。安装器管理的 `secrets/cpa-management-key` 可以被收紧权限并在成功后删除；外部 `CPA_MANAGEMENT_KEY_FILE` 只读使用，其内容、权限和文件本身均保持不变。
+迁移 rollback backup 只在迁移尚未提交或迁移失败时保留；健康检查、管理员鉴权和 strict CPA connection validation 全部成功并提交迁移后，脚本会删除本次创建的 `compose.yaml.cpa-key-migration.bak.*` 和 `.env.cpa-key-migration.bak.*` 临时副本。若提交后的清理失败，脚本不会回滚已验证的新部署，会保留并报告路径；这些文件可能包含旧版 CPA secret，应人工删除。旧 CPA 输入只从 `cpa-manager-plus` Compose 配置实际引用的来源中解析，当前进程环境覆盖 `.env`；未引用的旧 `.env` 声明或遗留 secret 文件不会触发迁移。安装器管理的 `secrets/cpa-management-key` 可以被收紧权限并在成功后删除；外部 `CPA_MANAGEMENT_KEY_FILE` 只读使用，其内容、权限和文件本身均保持不变。
 
 原生包升级同样会在切换运行入口前备份 SQLite 伴随文件和 `data.key`。旧 `config.json` 由新二进制使用 Go JSON 解析器清理，只删除 `cpaUpstreamUrl` 与 `managementKeyFile` 并保留未知字段；任何未捕获的 shell 退出也会触发统一回滚。
 
