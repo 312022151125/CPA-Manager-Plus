@@ -3765,7 +3765,7 @@ export function AccountsPage() {
       filterAccountRows(rows, {
         provider: providerFilter,
         status: statusFilter,
-        plan: planFilter,
+        plan: planFilterValue,
         quotaBand: quotaBandFilter,
         search,
         codexStatusBySelectionKey,
@@ -3773,7 +3773,7 @@ export function AccountsPage() {
       }),
     [
       codexStatusBySelectionKey,
-      planFilter,
+      planFilterValue,
       providerFilter,
       quotaBandFilter,
       requestEvidenceBySelectionKey,

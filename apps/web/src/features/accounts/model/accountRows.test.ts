@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { TFunction } from 'i18next';
 import type { AuthFileItem, CodexQuotaState, CredentialScopedQuotaState } from '@/types';
 import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import {
@@ -2765,5 +2766,69 @@ describe('accountRows', () => {
       source: 'cache',
       observedAtMs: 1_700_000_000_000,
     });
+  });
+
+  it('keeps cross-provider canonical plan filtering mutually exclusive', () => {
+    const rows = buildAccountRows(
+      [
+        { name: 'codex-pro.json', type: 'codex', planType: 'pro' },
+        { name: 'codex-prolite.json', type: 'codex', planType: 'prolite' },
+        { name: 'claude-pro.json', type: 'claude', id_token: { planType: 'plan_pro' } },
+        { name: 'antigravity-pro.json', type: 'antigravity', planType: 'pro' },
+      ],
+      emptyStores()
+    );
+
+    const planValues = getPlanOptions(rows).map((option) => option.value);
+    expect(planValues).toContain('pro');
+    expect(planValues).toContain('pro_20x');
+    expect(planValues).toContain('pro_5x');
+    expect(getPlanOptions(rows)).toEqual(
+      expect.arrayContaining([
+        { value: 'pro', label: 'Pro' },
+        { value: 'pro_20x', label: 'Pro 20x' },
+        { value: 'pro_5x', label: 'Pro 5x' },
+      ])
+    );
+
+    const baseFilters = {
+      provider: 'all',
+      status: 'all' as const,
+      quotaBand: 'all' as const,
+      search: '',
+    };
+    expect(
+      filterAccountRows(rows, { ...baseFilters, plan: 'pro' }).map((row) => row.fileName)
+    ).toEqual(['claude-pro.json', 'antigravity-pro.json']);
+    expect(
+      filterAccountRows(rows, { ...baseFilters, plan: 'pro_20x' }).map((row) => row.fileName)
+    ).toEqual(['codex-pro.json']);
+    expect(
+      filterAccountRows(rows, { ...baseFilters, plan: 'pro_5x' }).map((row) => row.fileName)
+    ).toEqual(['codex-prolite.json']);
+  });
+
+  it('keeps the unknown plan filter label stable regardless of row order', () => {
+    const zhT = ((key: string, options?: { defaultValue?: string }) =>
+      key === 'auth_files.codex_plan_filter_unknown' ? '未知套餐' : (options?.defaultValue ?? key)) as TFunction;
+
+    const baseFile = { type: 'codex' } as AuthFileItem;
+    const nullPlanRow = buildAccountRows(
+      [{ ...baseFile, name: 'missing-plan.json' }],
+      emptyStores()
+    )[0]!;
+    const explicitUnknownRow = buildAccountRows(
+      [{ ...baseFile, name: 'explicit-unknown.json', planType: 'unknown' }],
+      emptyStores()
+    )[0]!;
+
+    for (const ordered of [
+      [nullPlanRow, explicitUnknownRow],
+      [explicitUnknownRow, nullPlanRow],
+    ]) {
+      const options = getPlanOptions(ordered, zhT);
+      expect(options).toHaveLength(1);
+      expect(options[0]).toEqual({ value: 'unknown', label: '未知套餐' });
+    }
   });
 });

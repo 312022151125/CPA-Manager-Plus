@@ -649,11 +649,11 @@ export const filterAccountRows = (rows: AccountRow[], filters: AccountRowFilters
   return rows.filter((row) => {
     if (filters.provider !== 'all' && row.provider !== filters.provider) return false;
     const rowPlan = getAccountPlanFilterValue(row.provider, row.planType);
-    const selectedPlan =
-      filters.plan === 'unknown'
-        ? UNKNOWN_ACCOUNT_PLAN
-        : (getCanonicalPlanType(row.provider, filters.plan) ?? filters.plan);
-    if (filters.plan !== 'all' && rowPlan !== selectedPlan) {
+    // `filters.plan` is already a canonical filter identity (see getPlanOptionValue),
+    // so it must be compared directly against the row's canonical value. Re-canonicalizing
+    // it per row provider would re-introduce cross-provider collisions (e.g. Codex `pro`
+    // mapping to `pro_20x` while Claude/Antigravity `pro` stays `pro`).
+    if (filters.plan !== 'all' && rowPlan !== filters.plan) {
       return false;
     }
     if (
@@ -728,11 +728,15 @@ export const getPlanOptions = (rows: AccountRow[], t?: TFunction): AccountPlanOp
   const plans = new Map<string, AccountPlanOption>();
   rows.forEach((row) => {
     const plan = getAccountPlanFilterValue(row.provider, row.planType);
-    const presentation = getPlanPresentation({ provider: row.provider, planType: row.planType, t });
-    const option = {
-      value: plan,
-      label: presentation?.shortLabel ?? getUnknownPlanLabel(t),
-    };
+    // The reserved `unknown` bucket aggregates both missing plan types and explicit
+    // `unknown` raw values; its label must always be the localized "Unknown plan"
+    // regardless of which row the Map encounters first.
+    const label =
+      plan === UNKNOWN_ACCOUNT_PLAN
+        ? getUnknownPlanLabel(t)
+        : getPlanPresentation({ provider: row.provider, planType: row.planType, t })?.shortLabel ??
+          getUnknownPlanLabel(t);
+    const option = { value: plan, label };
     if (!plans.has(plan)) plans.set(plan, option);
   });
   return Array.from(plans.values()).sort((left, right) => {
