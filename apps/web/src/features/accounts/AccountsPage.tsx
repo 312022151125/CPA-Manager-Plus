@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent, SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
-import type { TFunction } from 'i18next';
 import { useLocation, useNavigate, type BlockerFunction } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
@@ -45,7 +44,9 @@ import {
   KIMI_CONFIG,
   XAI_CONFIG,
   buildObservedCodexQuotaState,
+  refreshQuotaWithConfig,
   type QuotaConfig,
+  type QuotaSetter,
 } from '@/components/quota';
 import { buildQuotaFailureState, getScopedQuotaState } from '@/components/quota/quotaConfigs';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
@@ -268,7 +269,6 @@ import {
   consumeCodexRateLimitResetCredit,
   monitoringAnalyticsApi,
   usageServiceApi,
-  type AuthFilesApiRequestScope,
   type AccountActionCandidate,
   type AccountQuotaSnapshotObservationInput,
   type AccountQuotaSnapshotWriteEntry,
@@ -326,9 +326,6 @@ import type {
 } from '@/features/monitoring/model/credentialInspectionSnapshot';
 import { getServerCredentialMutationSyncKey } from '@/features/monitoring/model/credentialInspectionSnapshot';
 import styles from './AccountsPage.module.scss';
-
-type QuotaUpdater<T> = T | ((prev: T) => T);
-type QuotaSetter<T> = (updater: QuotaUpdater<Record<string, T>>) => void;
 
 const MAX_CONCURRENT_QUOTA_REFRESHES_PER_PROVIDER = 1;
 const MAX_CONCURRENT_QUOTA_REFRESH_PROVIDERS = 3;
@@ -870,59 +867,6 @@ const getRemainingBarClass = (row: AccountRow) => {
   if (row.quota.status === 'ok') return styles.quotaBarGood;
   return styles.quotaBarNeutral;
 };
-
-async function refreshQuotaWithConfig<TState, TData>({
-  config,
-  file,
-  setQuota,
-  t,
-  isCurrent,
-  requestScope,
-}: {
-  config: QuotaConfig<TState, TData>;
-  file: AuthFileItem;
-  setQuota: QuotaSetter<TState>;
-  t: TFunction;
-  isCurrent: () => boolean;
-  requestScope?: AuthFilesApiRequestScope;
-}) {
-  const storeKey = config.getStoreKey?.(file) ?? file.name;
-  const cacheGeneration = captureQuotaCacheGeneration();
-  try {
-    const data = await config.fetchQuota(file, t, requestScope);
-    if (!isCurrent()) return null;
-    const committed = commitIfQuotaCacheCurrent(cacheGeneration, () => {
-      setQuota((prev) => ({
-        ...prev,
-        [storeKey]: config.buildSuccessState(data, file),
-      }));
-    });
-    return committed ? data : null;
-  } catch (error: unknown) {
-    if (!isCurrent()) return null;
-    const message = error instanceof Error ? error.message : t('common.unknown_error');
-    const status =
-      typeof error === 'object' && error !== null && 'status' in error
-        ? Number((error as { status?: unknown }).status)
-        : undefined;
-    commitIfQuotaCacheCurrent(cacheGeneration, () => {
-      setQuota((prev) => {
-        const previousState = getScopedQuotaState(config, prev, file);
-        return {
-          ...prev,
-          [storeKey]: buildQuotaFailureState(
-            config,
-            message,
-            Number.isFinite(status) ? status : undefined,
-            file,
-            previousState
-          ),
-        };
-      });
-    });
-    return null;
-  }
-}
 
 export function AccountsPage() {
   const { t, i18n } = useTranslation();
@@ -3752,6 +3696,22 @@ export function AccountsPage() {
     () => getPlanOptionValue(rows, planFilter, t),
     [planFilter, rows, t]
   );
+  const effectivePlanOptions = useMemo(() => {
+    if (
+      planFilterValue === 'all' ||
+      planOptions.some((option) => option.value === planFilterValue)
+    ) {
+      return planOptions;
+    }
+
+    return [
+      ...planOptions,
+      {
+        value: planFilterValue,
+        label: getPlanOptionLabel(rows, planFilterValue, t),
+      },
+    ];
+  }, [planFilterValue, planOptions, rows, t]);
   const recommendations = useMemo(
     () => buildAccountRecommendations(rows, requestEvidenceBySelectionKey),
     [requestEvidenceBySelectionKey, rows]
@@ -5429,7 +5389,8 @@ export function AccountsPage() {
       if (row.runtimeOnly) return false;
       const refreshWithConfig = <TState, TData>(
         config: QuotaConfig<TState, TData>,
-        setQuota: QuotaSetter<TState>
+        setQuota: QuotaSetter<TState>,
+        currentState?: TState
       ) => {
         const storeKey = config.getStoreKey?.(row.raw) ?? row.fileName;
         return refreshQuotaWithConfig({
@@ -5442,13 +5403,18 @@ export function AccountsPage() {
             `${config.type}:${storeKey}`
           ),
           requestScope: authFilesRequestScope,
+          currentState,
         });
       };
       switch (row.provider) {
         case CODEX_CONFIG.type: {
-          const data = await refreshWithConfig(CODEX_CONFIG, setCodexQuota);
-          if (!data) return false;
-          const refreshedQuota = CODEX_CONFIG.buildSuccessState(data, row.raw);
+          const result = await refreshWithConfig(
+            CODEX_CONFIG,
+            setCodexQuota,
+            getScopedQuotaState(CODEX_CONFIG, baseQuotaStores.codexQuota, row.raw)
+          );
+          if (!result || result.status !== 'success') return false;
+          const refreshedQuota = result.state;
           const healthyQuota = isKnownHealthyCodexQuota(refreshedQuota);
           invalidateCodexCredentialStatusForSelectionKeys([row.selectionKey], {
             supersedeAuthenticationActionEvidence: true,
@@ -5458,17 +5424,44 @@ export function AccountsPage() {
           return true;
         }
         case CLAUDE_CONFIG.type:
-          return Boolean(await refreshWithConfig(CLAUDE_CONFIG, setClaudeQuota));
+          return (
+            (
+              await refreshWithConfig(
+                CLAUDE_CONFIG,
+                setClaudeQuota,
+                getScopedQuotaState(CLAUDE_CONFIG, baseQuotaStores.claudeQuota, row.raw)
+              )
+            )?.status === 'success'
+          );
         case ANTIGRAVITY_CONFIG.type:
-          return Boolean(await refreshWithConfig(ANTIGRAVITY_CONFIG, setAntigravityQuota));
+          return (
+            (
+              await refreshWithConfig(
+                ANTIGRAVITY_CONFIG,
+                setAntigravityQuota,
+                getScopedQuotaState(ANTIGRAVITY_CONFIG, baseQuotaStores.antigravityQuota, row.raw)
+              )
+            )?.status === 'success'
+          );
         case KIMI_CONFIG.type:
-          return Boolean(await refreshWithConfig(KIMI_CONFIG, setKimiQuota));
+          return (
+            (
+              await refreshWithConfig(
+                KIMI_CONFIG,
+                setKimiQuota,
+                getScopedQuotaState(KIMI_CONFIG, baseQuotaStores.kimiQuota, row.raw)
+              )
+            )?.status === 'success'
+          );
         case XAI_CONFIG.type:
-          return Boolean(
-            await refreshWithConfig<XaiQuotaState, NonNullable<XaiQuotaState['billing']>>(
-              XAI_CONFIG,
-              setXaiQuota
-            )
+          return (
+            (
+              await refreshWithConfig<XaiQuotaState, NonNullable<XaiQuotaState['billing']>>(
+                XAI_CONFIG,
+                setXaiQuota,
+                getScopedQuotaState(XAI_CONFIG, baseQuotaStores.xaiQuota, row.raw)
+              )
+            )?.status === 'success'
           );
         default:
           return false;
@@ -5483,6 +5476,7 @@ export function AccountsPage() {
       setXaiQuota,
       t,
       authFilesRequestScope,
+      baseQuotaStores,
     ]
   );
 
@@ -5518,17 +5512,6 @@ export function AccountsPage() {
           );
           if (!isCurrentBatch()) return;
           const successCount = results.filter(Boolean).length;
-          results.forEach((succeeded, index) => {
-            if (!succeeded) return;
-            const row = taskPlan[index]?.item;
-            if (!row) return;
-            publishAccountCredentialMutationRevision({
-              connectionFingerprint,
-              provider: row.provider,
-              kind: 'quota',
-              credentialIdentity: row.selectionKey,
-            });
-          });
           showNotification(
             t('accounts.quota_refresh_result', {
               success: successCount,
@@ -6267,7 +6250,7 @@ export function AccountsPage() {
       <div className={styles.filterField}>
         <Select
           value={planFilterValue}
-          options={[{ value: 'all', label: t('accounts.plan_all') }, ...planOptions]}
+          options={[{ value: 'all', label: t('accounts.plan_all') }, ...effectivePlanOptions]}
           onChange={setPlanFilter}
           ariaLabel={t('accounts.plan_filter')}
           triggerClassName={styles.toolbarSelectTrigger}

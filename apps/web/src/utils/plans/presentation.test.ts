@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { TFunction } from 'i18next';
 import enResource from '@/i18n/locales/en.json';
-import { getCanonicalPlanType, getPlanLabel, getPlanPresentation } from './presentation';
+import {
+  getCanonicalPlanFilterLabel,
+  getCanonicalPlanType,
+  getPlanLabel,
+  getPlanPresentation,
+} from './presentation';
 import {
   ANTIGRAVITY_PLAN_DESCRIPTORS,
   CLAUDE_PLAN_DESCRIPTORS,
@@ -154,6 +159,18 @@ describe('Plan Presentation', () => {
       fullLabel: 'Antigravity Future',
       known: false,
     });
+  });
+
+  it('falls back to the plan portion for scoped unknown canonical identities', () => {
+    expect(
+      getCanonicalPlanFilterLabel('unknown:antigravity:antigravity future', t)
+    ).toBe('antigravity future');
+    expect(getCanonicalPlanFilterLabel('unknown:provider:future:premium', t)).toBe(
+      'future:premium'
+    );
+    expect(
+      getCanonicalPlanFilterLabel('unknown:antigravity:antigravity future', t)
+    ).not.toContain('unknown:antigravity:');
   });
 
   it('matches known descriptors case-insensitively without losing canonical mapping', () => {

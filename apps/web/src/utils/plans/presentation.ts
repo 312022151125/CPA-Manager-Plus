@@ -23,6 +23,26 @@ const PLAN_RESOLVERS: Readonly<Record<string, PlanResolver>> = {
 const RESERVED_UNKNOWN_PLAN = 'unknown';
 const UNKNOWN_PLAN_PREFIX = 'unknown:';
 
+type ScopedUnknownPlanIdentity = {
+  provider: string;
+  normalizedPlanType: string;
+};
+
+const parseScopedUnknownPlanIdentity = (
+  canonicalPlanType: string
+): ScopedUnknownPlanIdentity | null => {
+  if (!canonicalPlanType.startsWith(UNKNOWN_PLAN_PREFIX)) return null;
+
+  const identity = canonicalPlanType.slice(UNKNOWN_PLAN_PREFIX.length);
+  const separatorIndex = identity.indexOf(':');
+  if (separatorIndex <= 0 || separatorIndex === identity.length - 1) return null;
+
+  return {
+    provider: identity.slice(0, separatorIndex),
+    normalizedPlanType: identity.slice(separatorIndex + 1),
+  };
+};
+
 /**
  * Filter labels are keyed by canonical identity, not by the provider that
  * happened to produce the first matching row. Existing provider locale keys
@@ -99,6 +119,10 @@ export const getCanonicalPlanFilterLabel = (
   if (!normalized) return fallback ?? '';
   if (normalized === RESERVED_UNKNOWN_PLAN) {
     return translate(t, 'auth_files.codex_plan_filter_unknown', 'Unknown plan');
+  }
+  const scopedUnknown = parseScopedUnknownPlanIdentity(normalized);
+  if (scopedUnknown) {
+    return fallback ?? scopedUnknown.normalizedPlanType;
   }
   const label = CANONICAL_PLAN_FILTER_LABELS[normalized];
   return label ? translate(t, label.key, label.fallback) : (fallback ?? normalized);

@@ -2863,6 +2863,22 @@ describe('accountRows', () => {
     ).toEqual(['codex-pro.json']);
   });
 
+  it('keeps a stale known plan label without remapping it to another provider', () => {
+    const initialRows = buildAccountRows(
+      [
+        { name: 'claude-pro.json', type: 'claude', id_token: { planType: 'plan_pro' } },
+        { name: 'codex-pro.json', type: 'codex', planType: 'pro' },
+      ],
+      emptyStores()
+    );
+    const updatedRows = initialRows.filter((row) => row.provider === 'codex');
+
+    expect(getPlanOptionValue(initialRows, 'pro')).toBe('pro');
+    expect(getPlanOptionValue(updatedRows, 'pro')).toBe('pro');
+    expect(getPlanOptionLabel(updatedRows, 'pro')).toBe('Pro');
+    expect(getPlanOptionLabel(updatedRows, 'pro')).not.toBe('Pro 20x');
+  });
+
   it('normalizes legacy raw plan filter aliases without using current rows', () => {
     const rows: AccountRow[] = [];
     expect(getPlanOptionValue(rows, 'prolite')).toBe('pro_5x');
@@ -2887,6 +2903,27 @@ describe('accountRows', () => {
       { value: 'unknown:antigravity:future_plan_x', label: 'future_plan_x' },
       { value: 'unknown:kimi:future_plan_x', label: 'future_plan_x' },
     ]);
+  });
+
+  it('uses the current raw label for a scoped unknown plan', () => {
+    const rows = buildAccountRows(
+      [{ name: 'antigravity-future.json', type: 'antigravity', planType: 'Antigravity Future' }],
+      emptyStores()
+    );
+
+    expect(getPlanOptionLabel(rows, 'unknown:antigravity:antigravity future')).toBe(
+      'Antigravity Future'
+    );
+  });
+
+  it('falls back to a readable scoped unknown plan label after its row disappears', () => {
+    expect(
+      getPlanOptionLabel([], 'unknown:antigravity:antigravity future')
+    ).toBe('antigravity future');
+    expect(getPlanOptionLabel([], 'unknown:provider:future:premium')).toBe('future:premium');
+    expect(getPlanOptionLabel([], 'unknown:provider:future:premium')).not.toContain(
+      'unknown:provider:'
+    );
   });
 
   it('keeps the unknown plan filter label stable regardless of row order', () => {

@@ -30,8 +30,10 @@ export type AccountQuotaEntry = {
   emptyMessage?: string;
   windows: AccountQuotaWindow[];
   error?: string;
+  errorStatus?: number;
   failedAtMs?: number;
   fetchedAtMs?: number;
+  quotaInventoryObserved?: boolean;
   observedAtMs?: number;
   observedFromUsageHeaders?: boolean;
 };

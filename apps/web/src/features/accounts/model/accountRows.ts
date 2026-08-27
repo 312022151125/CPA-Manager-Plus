@@ -796,7 +796,7 @@ export const getPlanOptionLabel = (rows: AccountRow[], value: string, t?: TFunct
   if (normalizedValue === UNKNOWN_ACCOUNT_PLAN) return getUnknownPlanLabel(t);
   const directOption = getPlanOptions(rows, t).find((option) => option.value === normalizedValue);
   if (directOption) return directOption.label;
-  return getCanonicalPlanFilterLabel(normalizedValue, t, normalizedValue);
+  return getCanonicalPlanFilterLabel(normalizedValue, t);
 };
 
 export const getPlanOptionValue = (_rows: AccountRow[], value: string, _t?: TFunction): string => {
