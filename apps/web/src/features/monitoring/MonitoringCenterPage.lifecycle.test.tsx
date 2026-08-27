@@ -3,8 +3,8 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthFileItem } from '@/types';
 import type { AccountQuotaState } from './components/accountOverviewPresentation';
-import type { MonitoringAccountQuotaTarget } from './accountOverviewQuotaTargets';
 import { createCodexInspectionConnectionFingerprint } from './codexInspection';
+import { getQuotaCredentialStoreKey } from '@/utils/quota/credentialScope';
 import {
   publishAccountCredentialMutationRevision,
   useAccountCredentialMutationRevisionStore,
@@ -27,7 +27,19 @@ const mocks = vi.hoisted(() => ({
   lastHeaderRefresh: null as null | (() => void | Promise<void>),
   loadHeaderSnapshots: vi.fn(async () => undefined),
   refreshMeta: vi.fn(),
-  requestAccountQuota: vi.fn(),
+  refreshQuotaWithConfig: vi.fn(),
+  quotaStores: {
+    antigravityQuota: {} as Record<string, unknown>,
+    claudeQuota: {} as Record<string, unknown>,
+    codexQuota: {} as Record<string, unknown>,
+    kimiQuota: {} as Record<string, unknown>,
+    xaiQuota: {} as Record<string, unknown>,
+  },
+  setAntigravityQuota: vi.fn(),
+  setClaudeQuota: vi.fn(),
+  setCodexQuota: vi.fn(),
+  setKimiQuota: vi.fn(),
+  setXaiQuota: vi.fn(),
 }));
 
 const makeCodexFile = (authIndex: string, name: string): AuthFileItem =>
@@ -69,6 +81,20 @@ vi.mock('@/stores', () => ({
     selector({ config: {} }),
   useNotificationStore: (selector: (state: Record<string, unknown>) => unknown) =>
     selector({ showNotification: vi.fn(), showConfirmation: vi.fn() }),
+  useQuotaStore: (selector: (state: Record<string, unknown>) => unknown) =>
+    selector({
+      ...mocks.quotaStores,
+      setAntigravityQuota: mocks.setAntigravityQuota,
+      setClaudeQuota: mocks.setClaudeQuota,
+      setCodexQuota: mocks.setCodexQuota,
+      setKimiQuota: mocks.setKimiQuota,
+      setXaiQuota: mocks.setXaiQuota,
+    }),
+  captureQuotaCacheGeneration: () => 0,
+  commitIfQuotaCacheCurrent: (_generation: number, commit: () => void) => {
+    commit();
+    return true;
+  },
 }));
 
 vi.mock('@/stores/useUsageHeaderSnapshotStore', () => ({
@@ -238,14 +264,18 @@ vi.mock('@/components/common/useDatabaseMaintenance', () => ({
   useDatabaseMaintenance: () => ({ status: null }),
 }));
 
+vi.mock('@/components/quota', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/quota')>();
+  return {
+    ...actual,
+    refreshQuotaWithConfig: mocks.refreshQuotaWithConfig,
+  };
+});
+
 vi.mock('@/features/monitoring/model/monitoringCenterPageModel', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@/features/monitoring/model/monitoringCenterPageModel')>();
-  return {
-    ...actual,
-    requestAccountQuota: (target: MonitoringAccountQuotaTarget) =>
-      mocks.requestAccountQuota(target),
-  };
+  return actual;
 });
 
 vi.mock('@/features/monitoring/components/AccountOverviewPanel', () => ({
@@ -312,6 +342,16 @@ const deferred = <T,>() => {
   return { promise, resolve };
 };
 
+type MockQuotaStoreKey = keyof typeof mocks.quotaStores;
+
+const applyMockQuotaUpdate = (key: MockQuotaStoreKey, updater: unknown) => {
+  const previous = mocks.quotaStores[key];
+  mocks.quotaStores[key] =
+    typeof updater === 'function'
+      ? (updater as (state: Record<string, unknown>) => Record<string, unknown>)(previous)
+      : (updater as Record<string, unknown>);
+};
+
 describe('MonitoringCenterPage credential quota revision lifecycle', () => {
   let renderer!: ReactTestRenderer;
   let rendererMounted = false;
@@ -337,28 +377,63 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     mocks.loadHeaderSnapshots.mockClear();
     // Default: refreshMeta resolves with a successful auth-files payload so the
     // production success-coverage path is exercised, not the failure path.
-    mocks.refreshMeta
+    mocks.refreshMeta.mockReset().mockImplementation(() => successMetaPayload(mocks.authFiles));
+    Object.keys(mocks.quotaStores).forEach((key) => {
+      mocks.quotaStores[key as MockQuotaStoreKey] = {};
+    });
+    mocks.setAntigravityQuota
       .mockReset()
-      .mockImplementation(() => successMetaPayload(mocks.authFiles));
-    mocks.requestAccountQuota
+      .mockImplementation((updater: unknown) => applyMockQuotaUpdate('antigravityQuota', updater));
+    mocks.setClaudeQuota
       .mockReset()
-      .mockImplementation(async (target: MonitoringAccountQuotaTarget) => ({
-        key: target.key,
-        provider: target.provider,
-        providerLabel: target.provider,
-        authLabel: target.authLabel,
-        fileName: target.fileName,
-        planType: target.planType,
-        windows: [
-          {
-            id: 'weekly',
-            label: 'Weekly',
-            remainingPercent: target.authIndex === '1' ? 10 : 90,
-            resetLabel: '-',
-            usageLabel: null,
-          },
-        ],
-      }));
+      .mockImplementation((updater: unknown) => applyMockQuotaUpdate('claudeQuota', updater));
+    mocks.setCodexQuota
+      .mockReset()
+      .mockImplementation((updater: unknown) => applyMockQuotaUpdate('codexQuota', updater));
+    mocks.setKimiQuota
+      .mockReset()
+      .mockImplementation((updater: unknown) => applyMockQuotaUpdate('kimiQuota', updater));
+    mocks.setXaiQuota
+      .mockReset()
+      .mockImplementation((updater: unknown) => applyMockQuotaUpdate('xaiQuota', updater));
+    mocks.refreshQuotaWithConfig
+      .mockReset()
+      .mockImplementation(
+        async ({
+          config,
+          file,
+          setQuota,
+        }: {
+          config: { getStoreKey?: (authFile: AuthFileItem) => string };
+          file: AuthFileItem;
+          setQuota: (updater: unknown) => void;
+        }) => {
+          const authIndex = String(file.authIndex ?? file['auth_index'] ?? '');
+          const state = {
+            status: 'success' as const,
+            windows: [
+              {
+                id: 'weekly',
+                label: 'Weekly',
+                usedPercent: authIndex === '1' ? 90 : 10,
+                resetLabel: '-',
+              },
+            ],
+            quotaInventoryObserved: true,
+            authFileKey: getQuotaCredentialStoreKey(file),
+            authFileName: file.name,
+            authIndex,
+            authFileIdentityVerified: true,
+            fetchedAtMs: Date.now(),
+          };
+          const storeKey = config.getStoreKey?.(file) ?? file.name;
+          setQuota((previous: Record<string, unknown>) => ({
+            ...previous,
+            [storeKey]: state,
+          }));
+          return { status: 'success' as const, data: null, state };
+        }
+      );
     timersActivated = false;
     await act(async () => {
       renderer = create(<MonitoringCenterPage />);
@@ -372,11 +447,11 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     await act(async () => {
       await mocks.lastAccountOverviewProps?.onLoadAccountQuota('workspace-a', true);
     });
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
-    expect(mocks.requestAccountQuota.mock.calls[0]?.[0].authIndex).toBe('1');
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshQuotaWithConfig.mock.calls[0]?.[0].file.authIndex).toBe('1');
     expect(
-      mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.entries[0]?.windows[0]
-        ?.remainingPercent
+      mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.entries[0]
+        ?.windows[0]?.remainingPercent
     ).toBe(10);
 
     mocks.nextAuthFiles = [makeCodexFile('2', 'codex-new.json')];
@@ -395,14 +470,14 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     });
 
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(1);
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(2);
-    expect(mocks.requestAccountQuota.mock.calls[1]?.[0].authIndex).toBe('2');
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshQuotaWithConfig.mock.calls[1]?.[0].file.authIndex).toBe('2');
     expect(
       mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.targetKey
     ).toContain('codex::2::codex-new.json');
     expect(
-      mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.entries[0]?.windows[0]
-        ?.remainingPercent
+      mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.entries[0]
+        ?.windows[0]?.remainingPercent
     ).toBe(90);
   });
 
@@ -430,9 +505,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     };
     // The initial refresh and the 0ms retry both fail; the 1s retry succeeds.
     mocks.refreshMeta.mockReset();
-    mocks.refreshMeta
-      .mockReturnValueOnce(failPayload)
-      .mockReturnValueOnce(failPayload);
+    mocks.refreshMeta.mockReturnValueOnce(failPayload).mockReturnValueOnce(failPayload);
     mocks.nextAuthFiles = [makeCodexFile('2', 'codex-new.json')];
     mocks.refreshMeta.mockImplementation(() => successMetaPayload(mocks.nextAuthFiles!));
 
@@ -447,11 +520,9 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     });
 
     // After the failed refresh, no mutation-driven quota reload should have
-    // occurred — any requestAccountQuota calls must still use the old authIndex.
-    const callsAfterFailure = mocks.requestAccountQuota.mock.calls;
-    expect(
-      callsAfterFailure.some((call) => call[0]?.authIndex === '2')
-    ).toBe(false);
+    // occurred — any shared quota refresh calls must still use the old authIndex.
+    const callsAfterFailure = mocks.refreshQuotaWithConfig.mock.calls;
+    expect(callsAfterFailure.some((call) => call[0]?.authIndex === '2')).toBe(false);
 
     // Advance through the bounded retry delays until the retry succeeds.
     await act(async () => {
@@ -460,7 +531,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
 
     // Now the retry has succeeded and quota should be reloaded with authIndex=2.
     expect(
-      mocks.requestAccountQuota.mock.calls.some((call) => call[0]?.authIndex === '2')
+      mocks.refreshQuotaWithConfig.mock.calls.some((call) => call[0]?.file.authIndex === '2')
     ).toBe(true);
 
     vi.useRealTimers();
@@ -484,7 +555,9 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
       error: string;
     }>();
     mocks.refreshMeta.mockReset();
-    mocks.refreshMeta.mockReturnValueOnce(firstRefresh.promise).mockReturnValueOnce(secondRefresh.promise);
+    mocks.refreshMeta
+      .mockReturnValueOnce(firstRefresh.promise)
+      .mockReturnValueOnce(secondRefresh.promise);
 
     const fingerprint = createCodexInspectionConnectionFingerprint(
       mocks.apiBase,
@@ -610,7 +683,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     // rev2 arrives while retry R is still in flight; it cannot start a
     // parallel request.
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       mocks.nextAuthFiles = retryFiles;
@@ -626,7 +699,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     // R covered only its rev1 snapshot, so rev2 requires a serialized
     // follow-up. Quota remains on the old target until that request completes.
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(3);
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       finalRefresh.resolve({
@@ -639,8 +712,8 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
       await flushPromises();
     });
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(3);
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(2);
-    expect(mocks.requestAccountQuota.mock.calls[1]?.[0].authIndex).toBe('3');
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshQuotaWithConfig.mock.calls[1]?.[0].file.authIndex).toBe('3');
     expect(
       mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.targetKey
     ).toContain('codex::3::codex-final.json');
@@ -684,7 +757,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     });
     // Superseded: no mutation-driven reload with the new authIndex yet.
     expect(
-      mocks.requestAccountQuota.mock.calls.some((call) => call[0]?.authIndex === '2')
+      mocks.refreshQuotaWithConfig.mock.calls.some((call) => call[0]?.file.authIndex === '2')
     ).toBe(false);
 
     await act(async () => {
@@ -692,7 +765,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     });
     // Retry succeeded → quota reloaded with authIndex=2.
     expect(
-      mocks.requestAccountQuota.mock.calls.some((call) => call[0]?.authIndex === '2')
+      mocks.refreshQuotaWithConfig.mock.calls.some((call) => call[0]?.file.authIndex === '2')
     ).toBe(true);
 
     vi.useRealTimers();
@@ -708,15 +781,13 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
       mocks.apiBase,
       mocks.managementKey
     )!;
-    mocks.refreshMeta
-      .mockReset()
-      .mockImplementation(() => ({
-        authFiles: [],
-        authFilesLoaded: false,
-        channels: [],
-        channelsLoaded: true,
-        error: 'auth-files unavailable',
-      }));
+    mocks.refreshMeta.mockReset().mockImplementation(() => ({
+      authFiles: [],
+      authFilesLoaded: false,
+      channels: [],
+      channelsLoaded: true,
+      error: 'auth-files unavailable',
+    }));
 
     await act(async () => {
       publishAccountCredentialMutationRevision({
@@ -727,7 +798,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
       });
       await flushPromises();
     });
-    expect(mocks.requestAccountQuota).not.toHaveBeenCalled();
+    expect(mocks.refreshQuotaWithConfig).not.toHaveBeenCalled();
 
     // Switch connection — generation bumps and old retries become no-ops.
     await act(async () => {
@@ -741,7 +812,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     });
 
     // The old mutation's quota should not have been invalidated.
-    expect(mocks.requestAccountQuota).not.toHaveBeenCalled();
+    expect(mocks.refreshQuotaWithConfig).not.toHaveBeenCalled();
 
     vi.useRealTimers();
     timersActivated = false;
@@ -780,7 +851,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     });
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
     const callsBeforeUnmount = mocks.refreshMeta.mock.calls.length;
-    const quotaCallsBeforeUnmount = mocks.requestAccountQuota.mock.calls.length;
+    const quotaCallsBeforeUnmount = mocks.refreshQuotaWithConfig.mock.calls.length;
 
     await act(async () => renderer.unmount());
     rendererMounted = false;
@@ -790,7 +861,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     });
 
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(callsBeforeUnmount);
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(quotaCallsBeforeUnmount);
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(quotaCallsBeforeUnmount);
 
     vi.useRealTimers();
     timersActivated = false;
@@ -832,7 +903,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
       await flushPromises();
     });
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(6);
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20_000);
@@ -869,7 +940,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     // refreshAll itself only discovers the stranded revision; the dedicated
     // coverage cycle is the second real metadata request.
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       coverageRefresh.resolve({
@@ -882,8 +953,8 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
       await flushPromises();
     });
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(2);
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(2);
-    expect(mocks.requestAccountQuota.mock.calls[1]?.[0].authIndex).toBe('2');
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshQuotaWithConfig.mock.calls[1]?.[0].file.authIndex).toBe('2');
     expect(
       mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.targetKey
     ).toContain('codex::2::codex-recovered.json');
@@ -957,7 +1028,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     });
     // The normal refresh is call 3; its successful result re-arms C2, call 4.
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(4);
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
@@ -965,15 +1036,15 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     });
     // C1's delayed retry woke after C2 started, but its generation is stale.
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(4);
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       cycle2Refresh.resolve(successMetaPayload(recoveryFiles));
       await flushPromises();
     });
     expect(mocks.refreshMeta).toHaveBeenCalledTimes(4);
-    expect(mocks.requestAccountQuota).toHaveBeenCalledTimes(2);
-    expect(mocks.requestAccountQuota.mock.calls[1]?.[0].authIndex).toBe('2');
+    expect(mocks.refreshQuotaWithConfig).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshQuotaWithConfig.mock.calls[1]?.[0].file.authIndex).toBe('2');
     expect(
       mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.targetKey
     ).toContain('codex::2::codex-recovered.json');
