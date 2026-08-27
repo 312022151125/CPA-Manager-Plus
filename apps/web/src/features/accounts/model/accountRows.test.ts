@@ -15,6 +15,7 @@ import {
   filterAccountRows,
   getAccountInspectionResultSnapshotKey,
   getHandledAccountInspectionResultKeys,
+  getPlanOptionLabel,
   getPlanOptions,
   sortAccountRows,
   type AccountInspectionResult,
@@ -2486,13 +2487,13 @@ describe('accountRows', () => {
     plusRow.planType = ' plus ';
 
     expect(getPlanOptions(rows)).toEqual([
-      'enterprise',
-      'free',
-      'plus',
-      'team',
-      'prolite',
-      'pro',
-      'unknown',
+      { value: 'enterprise', label: 'Enterprise' },
+      { value: 'free', label: 'Free' },
+      { value: 'plus', label: 'Plus' },
+      { value: 'pro_5x', label: 'Pro 5x' },
+      { value: 'pro_20x', label: 'Pro 20x' },
+      { value: 'team', label: 'Team' },
+      { value: 'unknown', label: 'Unknown plan' },
     ]);
     expect(
       sortAccountRows(rows, { key: 'plan', direction: 'asc' }).map((row) => row.fileName)
@@ -2525,6 +2526,45 @@ describe('accountRows', () => {
         search: '',
       }).map((row) => row.fileName)
     ).toEqual(['plus.json']);
+  });
+
+  it('reads non-Codex planType values from nested token metadata', () => {
+    const [row] = buildAccountRows(
+      [
+        {
+          name: 'claude.json',
+          type: 'claude',
+          id_token: { planType: 'plan_pro' },
+        },
+      ],
+      emptyStores()
+    );
+
+    expect(row.planType).toBe('plan_pro');
+    expect(row.canonicalPlanType).toBe('pro');
+  });
+
+  it('aggregates Codex plan aliases by canonical identity for filtering', () => {
+    const rows = buildAccountRows(
+      [
+        { name: 'prolite.json', type: 'codex', planType: 'prolite' },
+        { name: 'pro-lite.json', type: 'codex', planType: 'pro-lite' },
+        { name: 'pro_lite.json', type: 'codex', planType: 'pro_lite' },
+      ],
+      emptyStores()
+    );
+
+    expect(getPlanOptions(rows)).toEqual([{ value: 'pro_5x', label: 'Pro 5x' }]);
+    expect(getPlanOptionLabel(rows, 'pro-lite')).toBe('Pro 5x');
+    expect(
+      filterAccountRows(rows, {
+        provider: 'all',
+        status: 'all',
+        plan: 'pro_5x',
+        quotaBand: 'all',
+        search: '',
+      }).map((row) => row.fileName)
+    ).toEqual(['prolite.json', 'pro-lite.json', 'pro_lite.json']);
   });
 
   it('sorts rows by priority, recent requests, and reset label', () => {

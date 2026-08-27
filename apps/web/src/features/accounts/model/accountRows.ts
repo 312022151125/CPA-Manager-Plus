@@ -1,5 +1,6 @@
 import type { AuthFileItem } from '@/types';
 import type { CodexInspectionResult } from '@/services/api/usageService';
+import type { TFunction } from 'i18next';
 import {
   normalizeRecentRequestBuckets,
   sumRecentRequests,
@@ -15,7 +16,6 @@ import {
   hasActiveCodexInspectionAuthenticationFailure,
   type AuthFileCodexStatusSummary,
 } from '@/features/authFiles/model/credentialStatus';
-import { resolveCodexPlanType } from '@/utils/quota/resolvers';
 import {
   compareQuotaResetLabels,
   compareQuotaResets,
@@ -49,6 +49,7 @@ import {
   type AccountInspectionSummary,
 } from '@/features/accounts/model/accountCredentialEvidence';
 import { getCredentialScopedQuotaState } from '@/utils/quota/credentialScope';
+import { getCanonicalPlanType, getPlanPresentation, resolveAuthFilePlanType } from '@/utils/plans';
 
 export {
   compareQuotaResetLabels,
@@ -172,6 +173,8 @@ export interface AccountRow {
   accountLabel: string;
   provider: string;
   planType: string | null;
+  /** Canonical plan identity used by filtering/grouping; planType remains raw data. */
+  canonicalPlanType?: string | null;
   disabled: boolean;
   runtimeOnly: boolean;
   statusMessage: string;
@@ -222,13 +225,17 @@ export interface AccountRowFilters {
   requestEvidenceBySelectionKey?: AccountRequestEvidenceBySelectionKey;
 }
 
+export interface AccountPlanOption {
+  value: string;
+  label: string;
+}
+
 const QUOTA_LOW_THRESHOLD = 20;
 const QUOTA_OK_THRESHOLD = 50;
 const UNKNOWN_ACCOUNT_PLAN = 'unknown';
 const ACCOUNT_CODEX_STATUS_FILTER_SET = new Set<AccountCodexStatusFilter>(
   ACCOUNT_CODEX_STATUS_FILTERS
 );
-const PREMIUM_CODEX_PLAN_TYPES = new Set(['prolite', 'pro-lite', 'pro_lite']);
 
 export const isAccountCodexStatusFilter = (
   status: AccountStatusFilter
@@ -250,8 +257,8 @@ const readNumber = (value: unknown): number | null => {
   return null;
 };
 
-const getAccountPlanFilterValue = (planType: string | null): string =>
-  planType?.trim() || UNKNOWN_ACCOUNT_PLAN;
+const getAccountPlanFilterValue = (provider: string, planType: string | null): string =>
+  getCanonicalPlanType(provider, planType) || UNKNOWN_ACCOUNT_PLAN;
 
 const readAuthIndex = (file: AuthFileItem): string =>
   readString(file.authIndex ?? file['auth_index']);
@@ -262,18 +269,7 @@ const readProjectId = (file: AuthFileItem): string =>
   );
 
 const readPlanType = (file: AuthFileItem): string | null => {
-  if (normalizeAccountProvider(file) === 'codex') {
-    const codexPlanType = resolveCodexPlanType(file);
-    if (codexPlanType) return codexPlanType;
-  }
-  const idToken = file.id_token;
-  const idTokenPlan =
-    idToken && typeof idToken === 'object' && !Array.isArray(idToken)
-      ? readString((idToken as Record<string, unknown>).plan_type)
-      : '';
-  const raw =
-    idTokenPlan || readString(file.planType ?? file.plan_type ?? file.tier ?? file.subscription);
-  return raw ? raw.toLowerCase() : null;
+  return resolveAuthFilePlanType(file);
 };
 
 const resolveAccountLabel = (file: AuthFileItem): string =>
@@ -453,6 +449,7 @@ export const buildAccountRows = (
       accountLabel: resolveAccountLabel(file),
       provider,
       planType: quota.planType ?? readPlanType(file),
+      canonicalPlanType: getCanonicalPlanType(provider, quota.planType ?? readPlanType(file)),
       disabled: effectiveFile.disabled === true,
       runtimeOnly:
         file.runtimeOnly === true || file.runtimeOnly === 'true' || file.runtime_only === true,
@@ -651,7 +648,12 @@ export const filterAccountRows = (rows: AccountRow[], filters: AccountRowFilters
     : null;
   return rows.filter((row) => {
     if (filters.provider !== 'all' && row.provider !== filters.provider) return false;
-    if (filters.plan !== 'all' && getAccountPlanFilterValue(row.planType) !== filters.plan) {
+    const rowPlan = getAccountPlanFilterValue(row.provider, row.planType);
+    const selectedPlan =
+      filters.plan === 'unknown'
+        ? UNKNOWN_ACCOUNT_PLAN
+        : (getCanonicalPlanType(row.provider, filters.plan) ?? filters.plan);
+    if (filters.plan !== 'all' && rowPlan !== selectedPlan) {
       return false;
     }
     if (
@@ -671,6 +673,7 @@ export const filterAccountRows = (rows: AccountRow[], filters: AccountRowFilters
       row.fileName,
       row.provider,
       row.planType,
+      row.canonicalPlanType,
       row.authIndex,
       row.projectId,
       row.note,
@@ -718,25 +721,81 @@ export const sortAccountRows = (
 export const getProviderOptions = (rows: AccountRow[]) =>
   Array.from(new Set(rows.map((row) => row.provider))).sort();
 
-export const getPlanOptions = (rows: AccountRow[]) => {
-  const plans = new Set<string>();
-  let hasUnknownPlan = false;
+const getUnknownPlanLabel = (t?: TFunction): string =>
+  t?.('auth_files.codex_plan_filter_unknown', { defaultValue: 'Unknown plan' }) ?? 'Unknown plan';
+
+export const getPlanOptions = (rows: AccountRow[], t?: TFunction): AccountPlanOption[] => {
+  const plans = new Map<string, AccountPlanOption>();
   rows.forEach((row) => {
-    const plan = getAccountPlanFilterValue(row.planType);
-    if (plan === UNKNOWN_ACCOUNT_PLAN) {
-      hasUnknownPlan = true;
-      return;
-    }
-    plans.add(plan);
+    const plan = getAccountPlanFilterValue(row.provider, row.planType);
+    const presentation = getPlanPresentation({ provider: row.provider, planType: row.planType, t });
+    const option = {
+      value: plan,
+      label: presentation?.shortLabel ?? getUnknownPlanLabel(t),
+    };
+    if (!plans.has(plan)) plans.set(plan, option);
   });
-  const sortedPlans = Array.from(plans).sort((left, right) =>
-    compareAccountPlanTypes(left, right, 'asc')
+  return Array.from(plans.values()).sort((left, right) => {
+    if (left.value === UNKNOWN_ACCOUNT_PLAN) return 1;
+    if (right.value === UNKNOWN_ACCOUNT_PLAN) return -1;
+    return left.label.localeCompare(right.label, undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    });
+  });
+};
+
+export const getPlanOptionLabel = (rows: AccountRow[], value: string, t?: TFunction): string => {
+  if (value === UNKNOWN_ACCOUNT_PLAN) return getUnknownPlanLabel(t);
+  const directOption = getPlanOptions(rows, t).find((option) => option.value === value);
+  if (directOption) return directOption.label;
+
+  const normalizedValue = value.trim().toLowerCase();
+  if (!normalizedValue) return value;
+  const matchingPresentation = rows
+    .map((row) => {
+      const presentation = getPlanPresentation({
+        provider: row.provider,
+        planType: normalizedValue,
+        t,
+      });
+      return presentation &&
+        getAccountPlanFilterValue(row.provider, row.planType) === presentation.canonicalPlanType
+        ? presentation
+        : null;
+    })
+    .find(
+      (presentation): presentation is NonNullable<typeof presentation> => presentation !== null
+    );
+  return (
+    matchingPresentation?.shortLabel ??
+    normalizedValue
   );
-  if (hasUnknownPlan) {
-    const withoutUnknown = sortedPlans.filter((plan) => plan !== UNKNOWN_ACCOUNT_PLAN);
-    return [...withoutUnknown, UNKNOWN_ACCOUNT_PLAN];
+};
+
+export const getPlanOptionValue = (rows: AccountRow[], value: string, t?: TFunction): string => {
+  const normalizedValue = value.trim().toLowerCase();
+  if (!normalizedValue || normalizedValue === 'all' || normalizedValue === UNKNOWN_ACCOUNT_PLAN) {
+    return normalizedValue || value;
   }
-  return sortedPlans;
+  const directOption = getPlanOptions(rows, t).find((option) => option.value === normalizedValue);
+  if (directOption) return directOption.value;
+
+  return (
+    rows
+      .map((row) => {
+        const presentation = getPlanPresentation({
+          provider: row.provider,
+          planType: normalizedValue,
+          t,
+        });
+        return presentation &&
+          getAccountPlanFilterValue(row.provider, row.planType) === presentation.canonicalPlanType
+          ? presentation.canonicalPlanType
+          : null;
+      })
+      .find((canonical): canonical is string => canonical !== null) ?? normalizedValue
+  );
 };
 
 const matchesStatusFilter = (
@@ -835,11 +894,12 @@ const compareDefaultAccountRows = (
   });
 };
 
-const getAccountPlanSortRank = (planType: string | null): number | null => {
-  const normalized = planType?.trim().toLowerCase();
-  if (!normalized) return null;
-  if (normalized === 'pro') return 50;
-  if (PREMIUM_CODEX_PLAN_TYPES.has(normalized)) return 40;
+const getAccountPlanSortRank = (provider: string, planType: string | null): number | null => {
+  const presentation = getPlanPresentation({ provider, planType });
+  if (!presentation?.known || !presentation.canonicalPlanType) return null;
+  const normalized = presentation.canonicalPlanType;
+  if (normalized === 'pro_20x') return 50;
+  if (normalized === 'pro_5x') return 40;
   if (normalized === 'team') return 30;
   if (normalized === 'plus') return 20;
   if (normalized === 'free') return 10;
@@ -847,19 +907,23 @@ const getAccountPlanSortRank = (planType: string | null): number | null => {
 };
 
 const compareAccountPlanTypes = (
+  leftProvider: string,
   left: string | null,
+  rightProvider: string,
   right: string | null,
   direction: AccountRowSortDirection
 ) => {
-  const leftRank = getAccountPlanSortRank(left);
-  const rightRank = getAccountPlanSortRank(right);
+  const leftCanonical = getCanonicalPlanType(leftProvider, left);
+  const rightCanonical = getCanonicalPlanType(rightProvider, right);
+  const leftRank = getAccountPlanSortRank(leftProvider, left);
+  const rightRank = getAccountPlanSortRank(rightProvider, right);
   const leftKnown = leftRank !== null;
   const rightKnown = rightRank !== null;
   if (!leftKnown && !rightKnown) return 0;
   if (!leftKnown) return 1;
   if (!rightKnown) return -1;
   const rankComparison = compareNumbers(leftRank, rightRank, direction);
-  return rankComparison || compareText(left ?? '', right ?? '', direction);
+  return rankComparison || compareText(leftCanonical ?? '', rightCanonical ?? '', direction);
 };
 
 const compareAccountRowsBySort = (left: AccountRow, right: AccountRow, sort: AccountRowSort) => {
@@ -868,7 +932,13 @@ const compareAccountRowsBySort = (left: AccountRow, right: AccountRow, sort: Acc
     return accountComparison || compareText(left.fileName, right.fileName, sort.direction);
   }
   if (sort.key === 'plan') {
-    return compareAccountPlanTypes(left.planType, right.planType, sort.direction);
+    return compareAccountPlanTypes(
+      left.provider,
+      left.planType,
+      right.provider,
+      right.planType,
+      sort.direction
+    );
   }
   if (sort.key === 'note') {
     return compareText(left.note ?? '', right.note ?? '', sort.direction, true);

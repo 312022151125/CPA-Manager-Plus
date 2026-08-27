@@ -81,9 +81,7 @@ import {
   createCodexReauthTargetFromAuthFile,
   type CodexReauthTarget,
 } from '@/features/oauth/codexReauthModel';
-import {
-  runCredentialVisibilityRetry,
-} from '@/features/accounts/model/accountCredentialVisibilityRetry';
+import { runCredentialVisibilityRetry } from '@/features/accounts/model/accountCredentialVisibilityRetry';
 import {
   ACCOUNT_CODEX_STATUS_FILTERS,
   buildAccountInspectionBySelectionKey,
@@ -93,6 +91,8 @@ import {
   findAccountRowForInspectionTarget,
   filterAccountRows,
   getHandledAccountInspectionResultKeys,
+  getPlanOptionLabel,
+  getPlanOptionValue,
   getPlanOptions,
   getProviderOptions,
   isAccountCodexStatusFilter,
@@ -1575,19 +1575,20 @@ export function AccountsPage() {
     async (options: { force?: boolean } = {}) => {
       const force = options.force === true;
       const synchronizationScopeKey = credentialEvidenceScopeKey;
-      const markers = listAccountCredentialMutationMarkers(connectionFingerprint).filter((marker) => {
-        if (consumedCredentialMutationMarkerIdsRef.current.has(marker.id)) return false;
-        if (force) return true;
-        const currentEvidence = JSON.stringify(
-          createAccountCredentialMutationBaseline(files, marker.provider)
-        );
-        const exhaustedEvidence = credentialMutationMarkerExhaustedRef.current.get(marker.id);
-        return exhaustedEvidence !== `${synchronizationScopeKey}\u001e${currentEvidence}`;
-      });
-      if (markers.length === 0) return false;
-      const pendingSynchronization = credentialMutationMarkerSynchronizationsRef.current.get(
-        synchronizationScopeKey
+      const markers = listAccountCredentialMutationMarkers(connectionFingerprint).filter(
+        (marker) => {
+          if (consumedCredentialMutationMarkerIdsRef.current.has(marker.id)) return false;
+          if (force) return true;
+          const currentEvidence = JSON.stringify(
+            createAccountCredentialMutationBaseline(files, marker.provider)
+          );
+          const exhaustedEvidence = credentialMutationMarkerExhaustedRef.current.get(marker.id);
+          return exhaustedEvidence !== `${synchronizationScopeKey}\u001e${currentEvidence}`;
+        }
       );
+      if (markers.length === 0) return false;
+      const pendingSynchronization =
+        credentialMutationMarkerSynchronizationsRef.current.get(synchronizationScopeKey);
       if (pendingSynchronization) return pendingSynchronization;
 
       const synchronization = (async () => {
@@ -2952,11 +2953,12 @@ export function AccountsPage() {
       let firstAttempt = true;
       const retry = await runCredentialVisibilityRetry<AuthFileItem[]>({
         load: async () => {
-          const loadedFiles = firstAttempt && options.reload === false
-            ? files
-            : firstAttempt
-              ? await reloadInspectionCredentialArtifacts({ requireSuccessfulReload: true })
-              : await loadFiles({ throwOnError: true });
+          const loadedFiles =
+            firstAttempt && options.reload === false
+              ? files
+              : firstAttempt
+                ? await reloadInspectionCredentialArtifacts({ requireSuccessfulReload: true })
+                : await loadFiles({ throwOnError: true });
           firstAttempt = false;
           if (!loadedFiles) throw new Error(t('notification.refresh_failed'));
           return loadedFiles;
@@ -2992,13 +2994,7 @@ export function AccountsPage() {
       });
       return result;
     },
-    [
-      credentialEvidenceScopeKey,
-      files,
-      loadFiles,
-      reloadInspectionCredentialArtifacts,
-      t,
-    ]
+    [credentialEvidenceScopeKey, files, loadFiles, reloadInspectionCredentialArtifacts, t]
   );
 
   const synchronizePendingAccountDirectReauths = useCallback(
@@ -3751,7 +3747,11 @@ export function AccountsPage() {
     [actionCandidatesByRowKey, quotaCooldownsByRowKey, requestEvidenceBySelectionKey, rows]
   );
   const providerOptions = useMemo(() => getProviderOptions(rows), [rows]);
-  const planOptions = useMemo(() => getPlanOptions(rows), [rows]);
+  const planOptions = useMemo(() => getPlanOptions(rows, t), [rows, t]);
+  const planFilterValue = useMemo(
+    () => getPlanOptionValue(rows, planFilter, t),
+    [planFilter, rows, t]
+  );
   const recommendations = useMemo(
     () => buildAccountRecommendations(rows, requestEvidenceBySelectionKey),
     [requestEvidenceBySelectionKey, rows]
@@ -5966,11 +5966,7 @@ export function AccountsPage() {
         ? t(`auth_files.codex_status_filter_${statusFilter}`)
         : t(`accounts.status_${statusFilter}`);
   const selectedPlanFilterLabel =
-    planFilter === 'all'
-      ? t('accounts.plan_all')
-      : planFilter === 'unknown'
-        ? t('auth_files.codex_plan_filter_unknown')
-        : planFilter;
+    planFilter === 'all' ? t('accounts.plan_all') : getPlanOptionLabel(rows, planFilter, t);
   const selectedQuotaFilterLabel =
     quotaBandFilter === 'all' ? t('accounts.quota_all') : t(`accounts.quota_${quotaBandFilter}`);
   const selectedOperationalFilterLabel = t(`accounts.operational_${effectiveOperationalFilter}`);
@@ -6270,14 +6266,8 @@ export function AccountsPage() {
       </div>
       <div className={styles.filterField}>
         <Select
-          value={planFilter}
-          options={[
-            { value: 'all', label: t('accounts.plan_all') },
-            ...planOptions.map((plan) => ({
-              value: plan,
-              label: plan === 'unknown' ? t('auth_files.codex_plan_filter_unknown') : plan,
-            })),
-          ]}
+          value={planFilterValue}
+          options={[{ value: 'all', label: t('accounts.plan_all') }, ...planOptions]}
           onChange={setPlanFilter}
           ariaLabel={t('accounts.plan_filter')}
           triggerClassName={styles.toolbarSelectTrigger}
@@ -6828,6 +6818,7 @@ export function AccountsPage() {
             const quotaCooldown = quotaCooldownsByRowKey.get(row.selectionKey)?.[0] ?? null;
             const codexStatus = codexStatusBySelectionKey.get(row.selectionKey) ?? null;
             const item = buildAccountListItem(row, {
+              t,
               recommendation,
               quotaCooldown,
               codexStatus,
@@ -6915,8 +6906,13 @@ export function AccountsPage() {
                     <span className={styles.providerPill}>
                       {getProviderLabel(item.identity.provider, t)}
                     </span>
-                    {item.identity.planType ? (
-                      <span className={styles.accountMetaPill}>{item.identity.planType}</span>
+                    {item.identity.planPresentation ? (
+                      <span
+                        className={styles.accountMetaPill}
+                        title={item.identity.planPresentation.fullLabel}
+                      >
+                        {item.identity.planPresentation.shortLabel}
+                      </span>
                     ) : null}
                   </div>
                   <div className={styles.accountIdentityCopyLine}>
@@ -7223,6 +7219,7 @@ export function AccountsPage() {
     const rowEventsRecentFailure = hasMatchingDetailEvents ? detailEventsRecentFailure : null;
     const rowEventsTotalCount = hasMatchingDetailEvents ? detailEventsTotalCount : 0;
     const detailView = buildAccountDetailViewModel(selectedRow, {
+      t,
       recommendation: recommendationBySelectionKey.get(selectedRow.selectionKey) ?? null,
       quotaCooldown: selectedQuotaCooldown,
       codexStatus: selectedCodexStatus,
@@ -7422,7 +7419,11 @@ export function AccountsPage() {
                 {getDisplayAccount(selectedRow)}
               </strong>
               <span className={styles.drawerTitleMeta}>
-                {getProviderLabel(selectedRow.provider, t)} · {selectedRow.planType ?? '-'} ·{' '}
+                {getProviderLabel(selectedRow.provider, t)} ·{' '}
+                <span title={detailView.identity.planPresentation?.fullLabel}>
+                  {detailView.identity.planPresentation?.shortLabel ?? '-'}
+                </span>{' '}
+                ·{' '}
                 <button
                   type="button"
                   className={styles.drawerFileNameCopy}

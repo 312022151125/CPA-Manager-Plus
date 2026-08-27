@@ -477,6 +477,7 @@ const { mocks } = vi.hoisted(() => {
         setXaiQuota: vi.fn(),
       },
       t: (key: string, options?: Record<string, unknown>) => {
+        if (key === 'auth_files.codex_plan_filter_unknown') return 'Unknown plan';
         if (!options) return key;
         const parts: string[] = [];
         if (typeof options.name === 'string') parts.push(options.name);
@@ -3520,7 +3521,7 @@ describe('AccountsPage replacement flows', () => {
 
     expect(planSelect.props.options).toContainEqual({
       value: 'unknown',
-      label: 'auth_files.codex_plan_filter_unknown',
+      label: 'Unknown plan',
     });
     await act(async () => {
       planSelect.props.onChange('unknown');

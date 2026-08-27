@@ -175,6 +175,29 @@ const makeMonitoringValue = (
 });
 
 describe('accountDetailViewModel', () => {
+  it('uses the full unified plan label for credential details', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        provider: 'codex',
+        planType: 'self_serve_business_prolite',
+      })
+    );
+
+    expect(viewModel.identity.planPresentation).toMatchObject({
+      rawPlanType: 'self_serve_business_prolite',
+      canonicalPlanType: 'business_premium_5x',
+      shortLabel: 'Business 5x',
+      fullLabel: 'Business Premium 5x',
+      known: true,
+    });
+    expect(viewModel.overview.credential.fields).toContainEqual(
+      expect.objectContaining({
+        key: 'planType',
+        value: 'Business Premium 5x',
+      })
+    );
+  });
+
   it('keeps credential identity fields focused and hides missing values', () => {
     const populated = buildAccountDetailViewModel(
       makeRow({
