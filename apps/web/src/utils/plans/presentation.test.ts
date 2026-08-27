@@ -1,11 +1,43 @@
 import { describe, expect, it } from 'vitest';
 import type { TFunction } from 'i18next';
+import enResource from '@/i18n/locales/en.json';
 import { getCanonicalPlanType, getPlanLabel, getPlanPresentation } from './presentation';
+import {
+  ANTIGRAVITY_PLAN_DESCRIPTORS,
+  CLAUDE_PLAN_DESCRIPTORS,
+  CODEX_PLAN_DESCRIPTORS,
+} from './providers';
 import { resolveAntigravityPlanType } from './providers/antigravity';
 import { resolveAuthFilePlanType } from './source';
 
 const t = ((key: string, options?: { defaultValue?: string }) =>
   options?.defaultValue ?? key) as TFunction;
+
+/**
+ * Strict translator backed by the real English locale resource: it resolves a
+ * dotted key path only when it points at a string leaf, and otherwise throws so
+ * malformed descriptor label keys (e.g. pointing at a nested object) surface as
+ * test failures instead of silently falling back to the default value.
+ */
+const resolveResourceKey = (key: string): string => {
+  const segments = key.split('.');
+  let node: unknown = enResource;
+  for (const segment of segments) {
+    if (typeof node !== 'object' || node === null || Array.isArray(node)) {
+      throw new Error(`i18n key "${key}" is not a string leaf in the locale resource`);
+    }
+    node = (node as Record<string, unknown>)[segment];
+    if (node === undefined) {
+      throw new Error(`i18n key "${key}" is missing from the locale resource`);
+    }
+  }
+  if (typeof node !== 'string') {
+    throw new Error(`i18n key "${key}" resolves to a non-string node in the locale resource`);
+  }
+  return node;
+};
+
+const strictT = ((key: string) => resolveResourceKey(key)) as TFunction;
 
 describe('Plan Presentation', () => {
   it.each([
@@ -158,5 +190,35 @@ describe('Plan Presentation', () => {
         },
       })
     ).toBe('pro');
+  });
+
+  it('points every descriptor label key at a real locale string leaf', () => {
+    const descriptors = [
+      ...Object.values(CODEX_PLAN_DESCRIPTORS),
+      ...Object.values(CLAUDE_PLAN_DESCRIPTORS),
+      ...Object.values(ANTIGRAVITY_PLAN_DESCRIPTORS),
+    ];
+    const seen = new Set<string>();
+    descriptors.forEach((descriptor) => {
+      [descriptor.shortLabelKey, descriptor.fullLabelKey ?? descriptor.shortLabelKey].forEach(
+        (key) => {
+          if (seen.has(key)) return;
+          seen.add(key);
+          expect(() => resolveResourceKey(key)).not.toThrow();
+        }
+      );
+    });
+  });
+
+  it('resolves Codex education plans through nested short/full locale tokens', () => {
+    for (const raw of ['edu', 'education']) {
+      const presentation = getPlanPresentation({ provider: 'codex', planType: raw, t: strictT });
+      expect(presentation).toMatchObject({
+        canonicalPlanType: 'edu',
+        shortLabel: 'Edu',
+        fullLabel: 'Education',
+        known: true,
+      });
+    }
   });
 });

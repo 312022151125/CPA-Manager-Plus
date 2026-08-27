@@ -87,8 +87,14 @@ export const CODEX_PLAN_DESCRIPTORS: Readonly<Record<string, PlanResolverDescrip
     'plans.codex.enterprise_usage_based.full',
     'Enterprise Usage-based'
   ),
-  edu: descriptor('edu', 'plans.codex.edu', 'Edu', 'plans.codex.edu.full', 'Education'),
-  education: descriptor('edu', 'plans.codex.edu', 'Edu', 'plans.codex.edu.full', 'Education'),
+  edu: descriptor('edu', 'plans.codex.edu.short', 'Edu', 'plans.codex.edu.full', 'Education'),
+  education: descriptor(
+    'edu',
+    'plans.codex.edu.short',
+    'Edu',
+    'plans.codex.edu.full',
+    'Education'
+  ),
   edu_plus: descriptor(
     'edu_plus',
     'plans.codex.edu_plus.short',
