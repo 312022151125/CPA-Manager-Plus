@@ -94,6 +94,14 @@ func runServer() {
 		}
 	}()
 	cfg.DBPath = databaseLock.DatabasePath()
+	if err := sqliterepo.RequireExistingDataKeyForEncryptedCPAConnection(
+		context.Background(),
+		cfg.DBPath,
+		cfg.DataKey,
+		cfg.DataKeyPath,
+	); err != nil {
+		log.Fatalf("validate data key availability: %v", err)
+	}
 	dataKey, dataKeyCreated, err := security.LoadOrCreateDataKey(cfg.DataKey, cfg.DataKeyPath)
 	if err != nil {
 		log.Fatalf("load data key: %v", err)

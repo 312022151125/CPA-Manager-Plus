@@ -260,17 +260,6 @@ func TestMigrateLegacyPartialConnectionRowsNormalizeSecretsWithoutCombiningRows(
 			wantManager:    true,
 			wantManagerKey: keyA,
 		},
-		{
-			name: "different partial keys are both normalized without guessing authority",
-			manager: &store.ManagerConfig{CPAConnection: store.ManagerCPAConnectionConfig{
-				ManagementKey: keyA,
-			}},
-			setup:          &store.Setup{ManagementKey: keyB},
-			wantManager:    true,
-			wantSetup:      true,
-			wantManagerKey: keyA,
-			wantSetupKey:   keyB,
-		},
 	}
 
 	for _, tt := range tests {
@@ -356,6 +345,92 @@ func TestMigrateLegacyPartialConnectionRowsNormalizeSecretsWithoutCombiningRows(
 				raw := rawBootstrapSettingValue(t, dbPath, "manager_config_v1")
 				if !strings.Contains(raw, "enc:v1:") {
 					t.Fatalf("manager secret is not encrypted: %s", raw)
+				}
+			}
+		})
+	}
+}
+
+func TestMigrateLegacyConfigRejectsOverlappingPartialConflicts(t *testing.T) {
+	tests := []struct {
+		name          string
+		manager       store.ManagerConfig
+		setup         store.Setup
+		managerSecret string
+		setupSecret   string
+	}{
+		{
+			name: "URL conflict",
+			manager: store.ManagerConfig{CPAConnection: store.ManagerCPAConnectionConfig{
+				CPABaseURL: "http://manager-cpa.local:8317",
+			}},
+			setup: store.Setup{
+				CPAUpstreamURL: "http://setup-cpa.local:8317",
+			},
+		},
+		{
+			name: "Management Key conflict",
+			manager: store.ManagerConfig{CPAConnection: store.ManagerCPAConnectionConfig{
+				ManagementKey: "manager-key",
+			}},
+			setup: store.Setup{
+				ManagementKey: "setup-key",
+			},
+			managerSecret: "manager-key",
+			setupSecret:   "setup-key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "usage.sqlite")
+			legacyStore, err := store.Open(dbPath)
+			if err != nil {
+				t.Fatalf("open legacy store: %v", err)
+			}
+			if err := legacyStore.SaveManagerConfig(context.Background(), tt.manager); err != nil {
+				_ = legacyStore.Close()
+				t.Fatalf("save partial manager config: %v", err)
+			}
+			if err := legacyStore.Close(); err != nil {
+				t.Fatalf("close legacy store: %v", err)
+			}
+			setupData, err := json.Marshal(tt.setup)
+			if err != nil {
+				t.Fatalf("marshal partial setup: %v", err)
+			}
+			if err := writeRawSetting(dbPath, "setup", string(setupData)); err != nil {
+				t.Fatalf("write partial setup: %v", err)
+			}
+
+			protector, err := security.NewProtector([]byte("0123456789abcdef0123456789abcdef"))
+			if err != nil {
+				t.Fatalf("create protector: %v", err)
+			}
+			st, err := store.Open(dbPath, protector)
+			if err != nil {
+				t.Fatalf("open protected store: %v", err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+
+			if _, err := migrateLegacyConfig(context.Background(), config.Config{}, st); err == nil || !strings.Contains(err.Error(), "conflict") {
+				t.Fatalf("overlapping partial migration error = %v", err)
+			}
+
+			// Even though migration refuses to choose an authority, it still
+			// normalizes both historical keys before returning the conflict.
+			for _, key := range []string{"setup", "manager_config_v1"} {
+				raw := rawBootstrapSettingValue(t, dbPath, key)
+				if tt.managerSecret != "" || tt.setupSecret != "" {
+					if !strings.Contains(raw, "enc:v1:") {
+						t.Fatalf("%s was not normalized to an encrypted value: %s", key, raw)
+					}
+				}
+				if tt.managerSecret != "" && strings.Contains(raw, tt.managerSecret) {
+					t.Fatalf("%s retained manager plaintext key: %s", key, raw)
+				}
+				if tt.setupSecret != "" && strings.Contains(raw, tt.setupSecret) {
+					t.Fatalf("%s retained setup plaintext key: %s", key, raw)
 				}
 			}
 		})
@@ -772,5 +847,95 @@ func TestBootstrapSucceedsAfterExplicitConflictRepair(t *testing.T) {
 	if managerCfg.CPAConnection.CPABaseURL != "http://cpa-c.local:8317" ||
 		managerCfg.CPAConnection.ManagementKey != "repaired-key" {
 		t.Fatalf("manager config after bootstrap = %#v", managerCfg.CPAConnection)
+	}
+}
+
+// TestRunReEncryptsLegacyPlaintextPrefixedWithEnvelopePrefix proves that a
+// historical database whose plaintext CPA Management Key legitimately starts
+// with "enc:v1:" (and therefore collides with the encrypted-value prefix) is
+// migrated correctly: bootstrap reads it as legacy plaintext, re-encrypts it
+// with the real data key, and the persisted raw setting no longer contains the
+// original plaintext. See P0-2 in PR #585.
+func TestRunReEncryptsLegacyPlaintextPrefixedWithEnvelopePrefix(t *testing.T) {
+	const legacyPlaintextKey = "enc:v1:legacy-real-cpa-key"
+
+	dbPath := filepath.Join(t.TempDir(), "usage.sqlite")
+	legacyStore, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if err := legacyStore.SaveManagerConfig(context.Background(), store.ManagerConfig{
+		CPAConnection: store.ManagerCPAConnectionConfig{
+			CPABaseURL:    "http://cpa-legacy.local:8317",
+			ManagementKey: legacyPlaintextKey,
+		},
+	}); err != nil {
+		_ = legacyStore.Close()
+		t.Fatalf("write prefix-colliding legacy manager config: %v", err)
+	}
+	// Write the legacy setup directly as a raw plaintext JSON row so the
+	// migration boundary sees the same prefix-colliding plaintext exactly as an
+	// older release would have persisted it in both connection rows.
+	if err := writeRawSetting(dbPath, "setup",
+		`{"cpaBaseUrl":"http://cpa-legacy.local:8317","managementKey":"`+legacyPlaintextKey+`","queue":"usage","popSide":"right"}`); err != nil {
+		_ = legacyStore.Close()
+		t.Fatalf("write prefix-colliding legacy setup: %v", err)
+	}
+	if err := legacyStore.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	protector, err := security.NewProtector([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("create protector: %v", err)
+	}
+	st, err := store.Open(dbPath, protector)
+	if err != nil {
+		t.Fatalf("open protected store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	cfg := config.Config{Queue: "usage", PopSide: "right"}
+	if _, err := Run(context.Background(), cfg, st, false); err != nil {
+		t.Fatalf("bootstrap with prefix-colliding legacy key: %v", err)
+	}
+
+	// The loader must return the original plaintext value, proving the
+	// prefix-colliding key survived the migration instead of being misread as
+	// ciphertext.
+	setup, ok, err := st.LoadSetup(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("load migrated setup ok=%v err=%v", ok, err)
+	}
+	if setup.CPAUpstreamURL != "http://cpa-legacy.local:8317" || setup.ManagementKey != legacyPlaintextKey {
+		t.Fatalf("migrated setup = %#v", setup)
+	}
+	managerCfg, ok, err := st.LoadManagerConfig(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("load migrated manager config ok=%v err=%v", ok, err)
+	}
+	if managerCfg.CPAConnection.ManagementKey != legacyPlaintextKey {
+		t.Fatalf("migrated manager config key = %q", managerCfg.CPAConnection.ManagementKey)
+	}
+
+	// The raw persisted rows must not contain the original plaintext key and
+	// must contain a real encrypted envelope.
+	for _, key := range []string{"setup", "manager_config_v1"} {
+		raw := rawBootstrapSettingValue(t, dbPath, key)
+		if strings.Contains(raw, legacyPlaintextKey) {
+			t.Fatalf("%s raw setting retained the prefix-colliding plaintext: %s", key, raw)
+		}
+		if !strings.Contains(raw, "enc:v1:") {
+			t.Fatalf("%s raw setting is not encrypted: %s", key, raw)
+		}
+	}
+
+	// A second bootstrap must still read the re-encrypted value correctly.
+	if _, err := Run(context.Background(), cfg, st, false); err != nil {
+		t.Fatalf("second bootstrap: %v", err)
+	}
+	managerCfg2, ok, err := st.LoadManagerConfig(context.Background())
+	if err != nil || !ok || managerCfg2.CPAConnection.ManagementKey != legacyPlaintextKey {
+		t.Fatalf("second bootstrap manager config = %#v ok=%v err=%v", managerCfg2, ok, err)
 	}
 }

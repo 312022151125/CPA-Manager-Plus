@@ -233,13 +233,22 @@ func TestRunRejectsEncryptedSettingsOnlyHistoryWhenDataKeyIsMissing(t *testing.T
 	dbPath := filepath.Join(dir, "usage.sqlite")
 	dataKeyPath := filepath.Join(dir, "missing-data.key")
 	managementKeyPath := writeManagementKeyFile(t, dir, testCPAManagementKey)
+	otherProtector, err := security.NewProtector([]byte("abcdef0123456789abcdef0123456789"))
+	if err != nil {
+		t.Fatalf("create fixture protector: %v", err)
+	}
+	protectedKey, err := otherProtector.ProtectString("protected-history")
+	if err != nil {
+		t.Fatalf("protect fixture key: %v", err)
+	}
+	managerConfigJSON := `{"cpaConnection":{"cpaBaseUrl":"http://cpa.local:8317","managementKey":"` + protectedKey + `"}}`
 	createSQLiteDatabase(t, dbPath,
 		`create table settings (key text primary key, value text not null, updated_at_ms integer not null)`,
-		`insert into settings (key, value, updated_at_ms) values ('manager_config_v1', 'enc:v1:protected-history', 1)`,
+		`insert into settings (key, value, updated_at_ms) values ('manager_config_v1', '`+managerConfigJSON+`', 1)`,
 	)
 
 	var stdout, stderr bytes.Buffer
-	err := Run(context.Background(), []string{
+	err = Run(context.Background(), []string{
 		"--db-path", dbPath,
 		"--data-key-path", dataKeyPath,
 		"--cpa-base-url", testCPABaseURL,

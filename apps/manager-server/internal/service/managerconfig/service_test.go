@@ -102,6 +102,22 @@ func TestResolveLegacyConnectionAuthorityMatrix(t *testing.T) {
 			setupURL:      urlA,
 			wantAuthority: LegacyConnectionAuthorityNone,
 		},
+		{
+			name:       "overlapping partial URLs conflict",
+			managerOK:  true,
+			managerURL: urlA,
+			setupOK:    true,
+			setupURL:   urlB,
+			wantErr:    true,
+		},
+		{
+			name:       "overlapping partial keys conflict",
+			managerOK:  true,
+			managerKey: "key-manager",
+			setupOK:    true,
+			setupKey:   "key-setup",
+			wantErr:    true,
+		},
 	}
 
 	for _, tt := range tests {

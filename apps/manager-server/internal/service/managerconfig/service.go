@@ -77,6 +77,38 @@ func (s *Service) Get(ctx context.Context) (Response, error) {
 	}, nil
 }
 
+// CPAConnectionValidation is the result of a strict server-side validation of
+// the persisted CPA connection. Unlike Get, it propagates every CPA Management
+// API failure so callers (the installer) cannot mistake a tolerant config read
+// for a real connection check.
+type CPAConnectionValidation struct {
+	Configured bool   `json:"configured"`
+	Source     string `json:"source,omitempty"`
+	CPABaseURL string `json:"cpaBaseUrl,omitempty"`
+}
+
+// ValidateCPAConnection resolves the persisted CPA connection Manager Server
+// must use after import and performs a strict
+// cpa.ValidateManagementAPI call against it. It never accepts a client-supplied
+// management key and never swallows upstream auth/network/5xx failures: any
+// non-success response from CPA is returned as an error so the caller fails
+// closed instead of committing a migration on a false positive.
+func (s *Service) ValidateCPAConnection(ctx context.Context) (CPAConnectionValidation, error) {
+	connection, source, found, err := s.ResolvePersistedCPAConnection(ctx)
+	if err != nil {
+		return CPAConnectionValidation{}, err
+	}
+	baseURL := cpa.NormalizeBaseURL(connection.BaseURL)
+	key := strings.TrimSpace(connection.ManagementKey)
+	if !found || baseURL == "" || key == "" {
+		return CPAConnectionValidation{Configured: false, Source: string(source)}, nil
+	}
+	if err := cpa.ValidateManagementAPI(ctx, baseURL, key); err != nil {
+		return CPAConnectionValidation{Configured: true, Source: string(source), CPABaseURL: baseURL}, err
+	}
+	return CPAConnectionValidation{Configured: true, Source: string(source), CPABaseURL: baseURL}, nil
+}
+
 func (s *Service) Update(ctx context.Context, submitted store.ManagerConfig) (Response, error) {
 	current, source, _, err := s.ResolveManagerConfigWithSource(ctx)
 	if err != nil {
@@ -172,14 +204,42 @@ func (s *Service) ResolveSetupWithSource(ctx context.Context) (store.Setup, Sour
 	return setup, SourceDB, true, nil
 }
 
+// ResolvePersistedCPAConnection resolves only the connection persisted in the
+// settings rows. Environment variables intentionally do not participate: the
+// installer calls this endpoint after importing the final connection and must
+// prove that Manager Server can use that persisted value rather than a stale or
+// otherwise valid environment override.
+func (s *Service) ResolvePersistedCPAConnection(ctx context.Context) (LegacyConnection, Source, bool, error) {
+	managerCfg, managerOK, err := s.store.LoadManagerConfig(ctx)
+	if err != nil {
+		return LegacyConnection{}, SourceNone, false, err
+	}
+	setup, setupOK, err := s.store.LoadSetup(ctx)
+	if err != nil {
+		return LegacyConnection{}, SourceNone, false, err
+	}
+	resolution, err := ResolveLegacyConnectionAuthority(managerCfg, managerOK, setup, setupOK)
+	if err != nil {
+		return LegacyConnection{}, SourceDB, false, err
+	}
+	if resolution.Authority == LegacyConnectionAuthorityNone {
+		return LegacyConnection{}, SourceDB, false, nil
+	}
+	return resolution.Connection, SourceDB, true, nil
+}
+
 func (s *Service) ResolveManagerConfigWithSource(ctx context.Context) (store.ManagerConfig, Source, bool, error) {
 	cfg := s.DefaultManagerConfig()
 	source := SourceNone
 	found := false
+	var saved store.ManagerConfig
+	managerOK := false
 
-	if saved, ok, err := s.store.LoadManagerConfig(ctx); err != nil {
+	if loaded, ok, err := s.store.LoadManagerConfig(ctx); err != nil {
 		return cfg, source, false, err
 	} else if ok {
+		saved = loaded
+		managerOK = true
 		cfg = s.MergeSubmittedManagerConfig(cfg, saved)
 		source = SourceDB
 		found = true
@@ -187,11 +247,27 @@ func (s *Service) ResolveManagerConfigWithSource(ctx context.Context) (store.Man
 
 	if setup, ok, err := s.store.LoadSetup(ctx); err != nil {
 		return cfg, source, false, err
-	} else if ok && cfg.CPAConnection.CPABaseURL == "" && cfg.CPAConnection.ManagementKey == "" {
-		cfg.CPAConnection.CPABaseURL = cpa.NormalizeBaseURL(setup.CPAUpstreamURL)
-		cfg.CPAConnection.ManagementKey = setup.ManagementKey
-		cfg.Collector.Queue = ValueOr(setup.Queue, cfg.Collector.Queue)
-		cfg.Collector.PopSide = NormalizePopSide(setup.PopSide, cfg.Collector.PopSide)
+	} else if ok {
+		resolution, err := ResolveLegacyConnectionAuthority(saved, managerOK, setup, true)
+		if err != nil {
+			return cfg, source, false, err
+		}
+		if !managerOK {
+			// A lone legacy setup row remains the fallback even when it is
+			// partial; the setup page needs to see that state and report
+			// needs_setup rather than silently replacing it with defaults.
+			cfg.CPAConnection.CPABaseURL = cpa.NormalizeBaseURL(setup.CPAUpstreamURL)
+			cfg.CPAConnection.ManagementKey = strings.TrimSpace(setup.ManagementKey)
+		} else if resolution.Authority == LegacyConnectionAuthoritySetup {
+			cfg.CPAConnection.CPABaseURL = resolution.Connection.BaseURL
+			cfg.CPAConnection.ManagementKey = resolution.Connection.ManagementKey
+		}
+		if !managerOK || strings.TrimSpace(saved.Collector.Queue) == "" {
+			cfg.Collector.Queue = ValueOr(setup.Queue, cfg.Collector.Queue)
+		}
+		if !managerOK || strings.TrimSpace(saved.Collector.PopSide) == "" {
+			cfg.Collector.PopSide = NormalizePopSide(setup.PopSide, cfg.Collector.PopSide)
+		}
 		source = SourceDB
 		found = true
 	}
@@ -361,6 +437,20 @@ func ResolveLegacyConnectionAuthority(
 		return resolution, nil
 	}
 	if !setupComplete {
+		// Two partial rows do not establish an authority, but overlapping
+		// values still have to agree. Otherwise the normal setup flow could
+		// silently replace one side of an explicitly conflicting history.
+		if manager.BaseURL != "" && legacySetup.BaseURL != "" && manager.BaseURL != legacySetup.BaseURL {
+			return LegacyConnectionResolution{}, errors.New(
+				"manager_config_v1 contains a partial CPA connection whose URL conflicts with the legacy setup",
+			)
+		}
+		if manager.ManagementKey != "" && legacySetup.ManagementKey != "" &&
+			!security.EqualHMAC(manager.ManagementKey, legacySetup.ManagementKey) {
+			return LegacyConnectionResolution{}, errors.New(
+				"manager_config_v1 contains a partial CPA connection whose key conflicts with the legacy setup",
+			)
+		}
 		return resolution, nil
 	}
 	if manager.BaseURL != "" && manager.BaseURL != legacySetup.BaseURL {

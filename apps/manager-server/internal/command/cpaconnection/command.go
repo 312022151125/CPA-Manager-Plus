@@ -3,6 +3,7 @@ package cpaconnection
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -211,17 +212,38 @@ func inspectExistingDatabase(ctx context.Context, dbPath string) (databaseInspec
 		return inspection, nil
 	}
 
-	rows, err = db.QueryContext(ctx, `select value from settings where key in ('setup', 'manager_config_v1')`)
+	rows, err = db.QueryContext(ctx, `select key, value from settings where key in ('setup', 'manager_config_v1')`)
 	if err != nil {
 		return databaseInspection{}, fmt.Errorf("inspect encrypted CPA connection in %s: %w", dbPath, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
+		var key string
 		var raw string
-		if err := rows.Scan(&raw); err != nil {
+		if err := rows.Scan(&key, &raw); err != nil {
 			return databaseInspection{}, err
 		}
-		if strings.Contains(raw, "enc:v1:") {
+		var managementKey string
+		switch key {
+		case "setup":
+			var setup store.Setup
+			if err := json.Unmarshal([]byte(raw), &setup); err != nil {
+				continue
+			}
+			managementKey = setup.ManagementKey
+		case "manager_config_v1":
+			var cfg store.ManagerConfig
+			if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+				continue
+			}
+			managementKey = cfg.CPAConnection.ManagementKey
+		}
+		// Only a complete, structurally valid envelope requires the existing
+		// data.key before the command may proceed. A legacy plaintext value that
+		// merely starts with enc:v1: must remain migratable; a valid-shaped value
+		// that cannot be authenticated will fail closed when the protected store
+		// loads it.
+		if security.IsValidProtectedEnvelope(managementKey) {
 			inspection.ProtectedConnection = true
 		}
 	}
@@ -233,11 +255,13 @@ func inspectExistingDatabase(ctx context.Context, dbPath string) (databaseInspec
 
 // storeConnection imports the requested connection into the encrypted
 // manager_config_v1 row and its legacy setup mirror in one transaction.
-// Without --repair-conflict, persisted authority rules reject any conflicting
-// historical state fail-closed. With an explicit repair, only state the shared
-// resolver judged conflicting (rows contradicting each other, or partial rows
-// without an authority that contradict the request) may be canonicalized; a
-// complete and consistent stored connection still requires matching input.
+// Without --repair-conflict, persisted authority rules reject only state the
+// shared resolver cannot trust. A complete manager_config_v1 row is authoritative
+// over stale setup data; a complete setup can fill a compatible partial manager
+// row. With an explicit repair, only state the resolver judged conflicting (rows
+// contradicting each other, or partial rows without an authority that contradict
+// the request) may be canonicalized; a complete and consistent stored connection
+// still requires matching input.
 func storeConnection(ctx context.Context, cfg config.Config, st *store.Store, baseURL string, managementKey string, repairConflict bool) error {
 	input := connection{BaseURL: baseURL, ManagementKey: managementKey}
 	if err := validateConnection("environment", cfg.CPAUpstreamURL, cfg.ManagementKey, input); err != nil {
