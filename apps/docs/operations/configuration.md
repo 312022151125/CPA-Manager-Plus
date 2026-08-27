@@ -49,6 +49,8 @@ CPA Management Key 用于访问 CPA 管理接口。
 
 配置 API 只返回 `managementKeyConfigured` 状态，不返回可逆解密后的 CPA Management Key。CPAMP 服务端在代理请求时读取并解密该密钥；浏览器和第三方 iframe 不需要接触它。
 
+连接记录的 authority 规则是：完整的 `manager_config_v1` 权威，并会覆盖过期的旧 `setup` 镜像；manager partial 而 setup 完整且兼容时，setup 可以补全 manager。没有完整 authority 且 partial 记录互相冲突时，服务端会拒绝猜测并要求使用 `store-cpa-connection --repair-conflict` 显式修复。
+
 CPAMP 轻量面板由 CPA 托管，仍遵循 CPA 端口访问方式；它与 Manager Server 的服务端密钥存储是两条独立链路。
 
 ## 采集配置

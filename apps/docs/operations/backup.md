@@ -102,7 +102,7 @@ cpa-manager-plus store-cpa-connection \
 
 该命令要求先停止 Manager Server；它会把密钥加密写入 SQLite，命令输出不会回显密钥。
 
-若历史数据中 `manager_config_v1` 与旧 `setup` 记录互相冲突，上面的命令会拒绝写入并在错误信息中给出修复方式。确认要以此连接为准时，追加 `--repair-conflict` 显式修复：
+连接记录的 authority 规则是：完整的 `manager_config_v1` 权威；它与过期或冲突的旧 `setup` 同时存在时，启动和导入会保留 manager 连接并 canonicalize setup，不需要修复。manager 只有 partial 数据而完整的旧 setup 与其已有字段兼容时，setup 会补全 manager。只有在没有完整 authority 且 partial 记录彼此冲突，或解析器无法判断持久化状态时，上面的命令才会拒绝写入并在错误信息中给出修复方式。确认要以显式提供的连接为准时，追加 `--repair-conflict` 修复：
 
 ```bash
 cpa-manager-plus store-cpa-connection \

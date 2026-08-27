@@ -102,7 +102,7 @@ cpa-manager-plus store-cpa-connection \
 
 Stop Manager Server before running this command. It encrypts the key into SQLite and never echoes it.
 
-When historical `manager_config_v1` and legacy `setup` rows conflict with each other, the command above refuses the write and its error message explains the repair path. After confirming this connection is the correct one, append `--repair-conflict` to repair explicitly:
+Connection records follow these authority rules: a complete `manager_config_v1` is authoritative; if it coexists with stale or conflicting legacy `setup` data, startup and import keep the manager connection and canonicalize setup without repair. If manager data is partial and legacy setup is complete and compatible with its existing fields, setup completes manager. The command above refuses the write and explains the repair path only when no complete authority exists and partial records conflict, or when the persisted state cannot be resolved. After confirming this explicit connection is correct, append `--repair-conflict` to repair explicitly:
 
 ```bash
 cpa-manager-plus store-cpa-connection \

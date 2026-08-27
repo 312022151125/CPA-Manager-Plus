@@ -66,7 +66,7 @@ cpamp_...
 
 ## 启动或导入提示 CPA 连接记录冲突怎么办？
 
-该提示说明 SQLite 中 `manager_config_v1` 与旧 `setup` 记录互相矛盾。Manager Server 不会自动选择任何一方，也不会猜测连接，这是刻意的安全行为。先停止 Manager Server，确认正确的 CPA URL 与 CPA Management Key，然后显式修复：
+该提示表示连接解析器无法从 SQLite 中的历史记录安全得出唯一连接，通常是没有完整 authority 的 partial 记录彼此冲突。完整的 `manager_config_v1` 始终优先；它与过期的旧 `setup` 不一致时会保留 manager 并 canonicalize setup，不需要修复；完整且兼容的旧 setup 也可以补全 partial manager。若确实收到无法解析的冲突错误，先停止 Manager Server，确认正确的 CPA URL 与 CPA Management Key，然后显式修复：
 
 ```bash
 cpa-manager-plus store-cpa-connection \

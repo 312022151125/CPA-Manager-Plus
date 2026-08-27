@@ -49,6 +49,8 @@ Where it is stored depends on the configuration source:
 
 The configuration API returns only the `managementKeyConfigured` status; it never returns a reversibly decrypted CPA Management Key. Manager Server decrypts the key only when proxying requests, so the browser and third-party iframes do not need to receive it.
 
+Connection records follow these authority rules: a complete `manager_config_v1` is authoritative and canonicalizes a stale legacy `setup` mirror; a complete compatible setup can complete a partial manager row. When no complete authority exists and partial records conflict, the server refuses to guess and requires an explicit `store-cpa-connection --repair-conflict` repair.
+
 The CPAMP Lightweight Panel is hosted by CPA and continues to follow CPA-port access semantics; its browser-held key path is separate from Manager Server's server-side storage.
 
 ## Collection Configuration

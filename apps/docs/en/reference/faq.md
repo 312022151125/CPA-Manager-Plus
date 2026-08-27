@@ -66,7 +66,7 @@ Stop Manager Server, back up the data directory, then follow [Reset Admin Key](.
 
 ## Startup Or Import Reports Conflicting CPA Connection Records
 
-The message means the `manager_config_v1` and legacy `setup` rows in SQLite contradict each other. Manager Server deliberately refuses to pick a side or guess a connection. Stop Manager Server, confirm the correct CPA URL and CPA Management Key, then repair explicitly:
+The message means the connection resolver cannot safely derive one connection from the historical SQLite rows, usually because partial records without a complete authority conflict. A complete `manager_config_v1` always wins; if it differs from stale legacy `setup`, Manager keeps the manager connection and canonicalizes setup without repair. A complete compatible legacy setup can also complete a partial manager row. If the resolver reports an unresolvable conflict, stop Manager Server, confirm the correct CPA URL and CPA Management Key, then repair explicitly:
 
 ```bash
 cpa-manager-plus store-cpa-connection \
