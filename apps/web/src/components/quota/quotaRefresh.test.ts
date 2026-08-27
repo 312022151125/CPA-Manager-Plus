@@ -80,6 +80,14 @@ const runRefresh = <TState, TData>(
     currentState,
   });
 
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+};
+
 describe('refreshQuotaWithConfig', () => {
   beforeEach(() => {
     useQuotaStore.getState().clearQuotaCache();
@@ -155,7 +163,8 @@ describe('refreshQuotaWithConfig', () => {
   });
 
   it('does not commit a response from an invalidated cache generation', async () => {
-    vi.mocked(fetchCodexQuota).mockResolvedValue(codexData(60));
+    const response = deferred<ReturnType<typeof codexData>>();
+    vi.mocked(fetchCodexQuota).mockReturnValue(response.promise);
 
     const resultPromise = runRefresh(
       CODEX_CONFIG,
@@ -163,9 +172,121 @@ describe('refreshQuotaWithConfig', () => {
       useQuotaStore.getState().setCodexQuota
     );
     useQuotaStore.getState().activateQuotaCacheScope('new-connection');
+    response.resolve(codexData(60));
     const result = await resultPromise;
 
     expect(result).toBeNull();
     expect(useQuotaStore.getState().codexQuota).toEqual({});
+  });
+
+  it('keeps the later same-credential refresh when the earlier response arrives last', async () => {
+    const first = deferred<ReturnType<typeof codexData>>();
+    const second = deferred<ReturnType<typeof codexData>>();
+    vi.mocked(fetchCodexQuota)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    const firstPromise = runRefresh(
+      CODEX_CONFIG,
+      codexFile,
+      useQuotaStore.getState().setCodexQuota
+    );
+    const secondPromise = runRefresh(
+      CODEX_CONFIG,
+      codexFile,
+      useQuotaStore.getState().setCodexQuota
+    );
+
+    second.resolve(codexData(50));
+    const secondResult = await secondPromise;
+    expect(secondResult).toMatchObject({ status: 'success' });
+    expect(
+      useQuotaStore.getState().codexQuota[getQuotaCredentialStoreKey(codexFile)]
+    ).toMatchObject({
+      windows: [{ usedPercent: 50 }],
+    });
+
+    first.resolve(codexData(40));
+    const firstResult = await firstPromise;
+
+    expect(firstResult).toBeNull();
+    expect(
+      useQuotaStore.getState().codexQuota[getQuotaCredentialStoreKey(codexFile)]
+    ).toMatchObject({
+      windows: [{ usedPercent: 50 }],
+    });
+  });
+
+  it('does not supersede a refresh for a different credential', async () => {
+    const firstFile = { ...codexFile, name: 'shared.json', authIndex: '1' };
+    const secondFile = { ...codexFile, name: 'shared.json', authIndex: '2' };
+    const first = deferred<ReturnType<typeof codexData>>();
+    const second = deferred<ReturnType<typeof codexData>>();
+    vi.mocked(fetchCodexQuota)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    const firstPromise = runRefresh(
+      CODEX_CONFIG,
+      firstFile,
+      useQuotaStore.getState().setCodexQuota
+    );
+    const secondPromise = runRefresh(
+      CODEX_CONFIG,
+      secondFile,
+      useQuotaStore.getState().setCodexQuota
+    );
+
+    second.resolve(codexData(50));
+    first.resolve(codexData(40));
+    const [firstResult, secondResult] = await Promise.all([firstPromise, secondPromise]);
+
+    expect(firstResult).toMatchObject({ status: 'success' });
+    expect(secondResult).toMatchObject({ status: 'success' });
+    expect(useQuotaStore.getState().codexQuota).toMatchObject({
+      [getQuotaCredentialStoreKey(firstFile)]: { windows: [{ usedPercent: 40 }] },
+      [getQuotaCredentialStoreKey(secondFile)]: { windows: [{ usedPercent: 50 }] },
+    });
+  });
+
+  it('does not supersede a refresh for a different Provider', async () => {
+    const codexProviderFile = { ...codexFile, name: 'shared.json' };
+    const claudeProviderFile = {
+      ...claudeFile,
+      name: 'shared.json',
+      authIndex: '1',
+    };
+    const codexRequest = deferred<ReturnType<typeof codexData>>();
+    const claudeRequest = deferred<typeof claudeData>();
+    vi.mocked(fetchCodexQuota).mockReturnValueOnce(codexRequest.promise);
+    vi.mocked(fetchClaudeQuota).mockReturnValueOnce(claudeRequest.promise);
+
+    const codexPromise = runRefresh(
+      CODEX_CONFIG,
+      codexProviderFile,
+      useQuotaStore.getState().setCodexQuota
+    );
+    const claudePromise = runRefresh(
+      CLAUDE_CONFIG,
+      claudeProviderFile,
+      useQuotaStore.getState().setClaudeQuota
+    );
+
+    claudeRequest.resolve(claudeData);
+    codexRequest.resolve(codexData(50));
+    const [codexResult, claudeResult] = await Promise.all([codexPromise, claudePromise]);
+
+    expect(codexResult).toMatchObject({ status: 'success' });
+    expect(claudeResult).toMatchObject({ status: 'success' });
+    expect(
+      useQuotaStore.getState().codexQuota[getQuotaCredentialStoreKey(codexProviderFile)]
+    ).toMatchObject({
+      status: 'success',
+    });
+    expect(
+      useQuotaStore.getState().claudeQuota[getQuotaCredentialStoreKey(claudeProviderFile)]
+    ).toMatchObject({
+      status: 'success',
+    });
   });
 });
