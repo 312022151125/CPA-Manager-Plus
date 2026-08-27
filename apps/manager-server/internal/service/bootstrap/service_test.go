@@ -896,8 +896,12 @@ func TestRunReEncryptsLegacyPlaintextPrefixedWithEnvelopePrefix(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	cfg := config.Config{Queue: "usage", PopSide: "right"}
-	if _, err := Run(context.Background(), cfg, st, false); err != nil {
+	result, err := Run(context.Background(), cfg, st, false)
+	if err != nil {
 		t.Fatalf("bootstrap with prefix-colliding legacy key: %v", err)
+	}
+	if result.State.ConnectionStorageMigrationVersion != currentConnectionStorageMigrationVersion {
+		t.Fatalf("connection storage migration version = %d, want %d", result.State.ConnectionStorageMigrationVersion, currentConnectionStorageMigrationVersion)
 	}
 
 	// The loader must return the original plaintext value, proving the

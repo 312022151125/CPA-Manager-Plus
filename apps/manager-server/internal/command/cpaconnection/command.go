@@ -3,7 +3,6 @@ package cpaconnection
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/processlock"
+	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
@@ -212,44 +212,11 @@ func inspectExistingDatabase(ctx context.Context, dbPath string) (databaseInspec
 		return inspection, nil
 	}
 
-	rows, err = db.QueryContext(ctx, `select key, value from settings where key in ('setup', 'manager_config_v1')`)
+	storageInspection, err := sqliterepo.InspectPersistedCPAConnectionStorage(ctx, dbPath)
 	if err != nil {
-		return databaseInspection{}, fmt.Errorf("inspect encrypted CPA connection in %s: %w", dbPath, err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var key string
-		var raw string
-		if err := rows.Scan(&key, &raw); err != nil {
-			return databaseInspection{}, err
-		}
-		var managementKey string
-		switch key {
-		case "setup":
-			var setup store.Setup
-			if err := json.Unmarshal([]byte(raw), &setup); err != nil {
-				continue
-			}
-			managementKey = setup.ManagementKey
-		case "manager_config_v1":
-			var cfg store.ManagerConfig
-			if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-				continue
-			}
-			managementKey = cfg.CPAConnection.ManagementKey
-		}
-		// Only a complete, structurally valid envelope requires the existing
-		// data.key before the command may proceed. A legacy plaintext value that
-		// merely starts with enc:v1: must remain migratable; a valid-shaped value
-		// that cannot be authenticated will fail closed when the protected store
-		// loads it.
-		if security.IsValidProtectedEnvelope(managementKey) {
-			inspection.ProtectedConnection = true
-		}
-	}
-	if err := rows.Err(); err != nil {
 		return databaseInspection{}, err
 	}
+	inspection.ProtectedConnection = storageInspection.HasEncryptedConnection
 	return inspection, nil
 }
 

@@ -244,6 +244,7 @@ func TestRunRejectsEncryptedSettingsOnlyHistoryWhenDataKeyIsMissing(t *testing.T
 	managerConfigJSON := `{"cpaConnection":{"cpaBaseUrl":"http://cpa.local:8317","managementKey":"` + protectedKey + `"}}`
 	createSQLiteDatabase(t, dbPath,
 		`create table settings (key text primary key, value text not null, updated_at_ms integer not null)`,
+		`insert into settings (key, value, updated_at_ms) values ('bootstrap_state_v1', '{"connectionStorageMigrationVersion":2}', 1)`,
 		`insert into settings (key, value, updated_at_ms) values ('manager_config_v1', '`+managerConfigJSON+`', 1)`,
 	)
 
@@ -259,6 +260,54 @@ func TestRunRejectsEncryptedSettingsOnlyHistoryWhenDataKeyIsMissing(t *testing.T
 	}
 	if _, statErr := os.Stat(dataKeyPath); !os.IsNotExist(statErr) {
 		t.Fatalf("missing data key was unexpectedly recreated: %v", statErr)
+	}
+}
+
+func TestRunRejectsInvalidPostV2CPAConnectionBeforeCreatingDataKey(t *testing.T) {
+	tests := []struct {
+		name          string
+		settingKey    string
+		managementKey string
+	}{
+		{name: "setup malformed envelope", settingKey: "setup", managementKey: "enc:v1:broken"},
+		{name: "manager config malformed envelope", settingKey: "manager_config_v1", managementKey: "enc:v1:broken"},
+		{name: "setup plaintext", settingKey: "setup", managementKey: "plain-old-key"},
+		{name: "manager config plaintext", settingKey: "manager_config_v1", managementKey: "plain-old-key"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearConnectionEnvironment(t)
+			dir := t.TempDir()
+			dbPath := filepath.Join(dir, "usage.sqlite")
+			dataKeyPath := filepath.Join(dir, "missing-data.key")
+			managementKeyPath := writeManagementKeyFile(t, dir, testCPAManagementKey)
+			var rawConnection string
+			if tt.settingKey == "setup" {
+				rawConnection = `{"cpaBaseUrl":"http://cpa.local:8317","managementKey":"` + tt.managementKey + `"}`
+			} else {
+				rawConnection = `{"cpaConnection":{"cpaBaseUrl":"http://cpa.local:8317","managementKey":"` + tt.managementKey + `"}}`
+			}
+			createSQLiteDatabase(t, dbPath,
+				`create table settings (key text primary key, value text not null, updated_at_ms integer not null)`,
+				`insert into settings (key, value, updated_at_ms) values ('bootstrap_state_v1', '{"connectionStorageMigrationVersion":2}', 1)`,
+				"insert into settings (key, value, updated_at_ms) values ('"+tt.settingKey+"', '"+rawConnection+"', 1)",
+			)
+
+			var stdout, stderr bytes.Buffer
+			err := Run(context.Background(), []string{
+				"--db-path", dbPath,
+				"--data-key-path", dataKeyPath,
+				"--cpa-base-url", testCPABaseURL,
+				"--management-key-file", managementKeyPath,
+			}, &stdout, &stderr)
+			if err == nil || !strings.Contains(err.Error(), "corrupted persisted CPA connection") {
+				t.Fatalf("error = %v, want corrupted persisted CPA connection", err)
+			}
+			if _, statErr := os.Stat(dataKeyPath); !os.IsNotExist(statErr) {
+				t.Fatalf("invalid post-v2 connection unexpectedly created data key: %v", statErr)
+			}
+		})
 	}
 }
 
@@ -375,6 +424,7 @@ func TestRunRejectsEncryptedHistoryWhenDataKeyIsMissing(t *testing.T) {
 	dbPath := filepath.Join(dir, "usage.sqlite")
 	dataKeyPath := filepath.Join(dir, "data.key")
 	runStoreCommand(t, dbPath, dataKeyPath, testCPABaseURL, testCPAManagementKey)
+	writeRawSettingValue(t, dbPath, "bootstrap_state_v1", `{"connectionStorageMigrationVersion":2}`)
 	managementKeyPath := writeManagementKeyFile(t, dir, testCPAManagementKey)
 	if err := os.Remove(dataKeyPath); err != nil {
 		t.Fatalf("remove data key: %v", err)
@@ -401,6 +451,7 @@ func TestRunRejectsWrongDataKeyWithoutOverwritingEncryptedHistory(t *testing.T) 
 	dbPath := filepath.Join(dir, "usage.sqlite")
 	dataKeyPath := filepath.Join(dir, "data.key")
 	runStoreCommand(t, dbPath, dataKeyPath, testCPABaseURL, testCPAManagementKey)
+	writeRawSettingValue(t, dbPath, "bootstrap_state_v1", `{"connectionStorageMigrationVersion":2}`)
 	before := rawSettingValue(t, dbPath, "manager_config_v1")
 	otherKeyPath := filepath.Join(dir, "other-data.key")
 	if _, _, err := security.LoadOrCreateDataKey("", otherKeyPath); err != nil {
@@ -512,6 +563,19 @@ func rawSettingValue(t testing.TB, dbPath string, key string) string {
 		t.Fatalf("load raw setting %s: %v", key, err)
 	}
 	return raw
+}
+
+func writeRawSettingValue(t testing.TB, dbPath string, key string, value string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`insert into settings (key, value, updated_at_ms) values (?, ?, 1)
+		on conflict(key) do update set value = excluded.value`, key, value); err != nil {
+		t.Fatalf("write raw setting %s: %v", key, err)
+	}
 }
 
 func createSQLiteDatabase(t testing.TB, dbPath string, statements ...string) {
