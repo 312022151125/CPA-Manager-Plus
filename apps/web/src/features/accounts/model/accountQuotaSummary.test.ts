@@ -130,6 +130,6 @@ describe('resolveAccountQuota', () => {
       },
     };
 
-    expect(resolveAccountQuota(file, stores).planType).toBe('antigravity future');
+    expect(resolveAccountQuota(file, stores).planType).toBe('Antigravity Future');
   });
 });

@@ -950,7 +950,7 @@ export const resolveAccountQuota = (
     const quota = getCredentialScopedQuotaState(stores.antigravityQuota, file);
     if (!quota) return emptyQuota(filePlanType);
     const antigravityPlanType = resolveAntigravityPlanType(quota.subscription, filePlanType);
-    const planType = antigravityPlanType?.toLowerCase() ?? null;
+    const planType = antigravityPlanType;
     if (quota.status === 'loading') return loadingQuota(planType);
     if (quota.status === 'error') {
       return quotaFromError(quota.error, planType, quota.errorStatus, quota.failedAtMs);

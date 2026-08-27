@@ -198,6 +198,30 @@ describe('accountDetailViewModel', () => {
     );
   });
 
+  it('preserves unknown plan casing in credential details', () => {
+    const viewModel = buildAccountDetailViewModel(
+      makeRow({
+        provider: 'antigravity',
+        planType: 'Antigravity Future',
+        quota: { planType: 'Antigravity Future' },
+      })
+    );
+
+    expect(viewModel.identity.planPresentation).toMatchObject({
+      rawPlanType: 'Antigravity Future',
+      canonicalPlanType: 'unknown:antigravity:antigravity future',
+      shortLabel: 'Antigravity Future',
+      fullLabel: 'Antigravity Future',
+      known: false,
+    });
+    expect(viewModel.overview.credential.fields).toContainEqual(
+      expect.objectContaining({
+        key: 'planType',
+        value: 'Antigravity Future',
+      })
+    );
+  });
+
   it('keeps credential identity fields focused and hides missing values', () => {
     const populated = buildAccountDetailViewModel(
       makeRow({

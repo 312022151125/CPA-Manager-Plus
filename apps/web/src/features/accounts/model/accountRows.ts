@@ -49,7 +49,12 @@ import {
   type AccountInspectionSummary,
 } from '@/features/accounts/model/accountCredentialEvidence';
 import { getCredentialScopedQuotaState } from '@/utils/quota/credentialScope';
-import { getCanonicalPlanType, getPlanPresentation, resolveAuthFilePlanType } from '@/utils/plans';
+import {
+  getCanonicalPlanFilterLabel,
+  getCanonicalPlanType,
+  getPlanPresentation,
+  resolveAuthFilePlanType,
+} from '@/utils/plans';
 
 export {
   compareQuotaResetLabels,
@@ -724,82 +729,82 @@ export const getProviderOptions = (rows: AccountRow[]) =>
 const getUnknownPlanLabel = (t?: TFunction): string =>
   t?.('auth_files.codex_plan_filter_unknown', { defaultValue: 'Unknown plan' }) ?? 'Unknown plan';
 
+/** Explicit compatibility aliases for values persisted before canonical filters. */
+const LEGACY_PLAN_FILTER_ALIASES: Readonly<Record<string, string>> = {
+  prolite: 'pro_5x',
+  'pro-lite': 'pro_5x',
+  pro_lite: 'pro_5x',
+  plan_free: 'free',
+  plan_pro: 'pro',
+  plan_max: 'max',
+  plan_max5: 'max_5x',
+  plan_max20: 'max_20x',
+  plan_team: 'team',
+  max5: 'max_5x',
+  max20: 'max_20x',
+  self_serve_business_prolite: 'business_premium_5x',
+  self_serve_business_usage_based: 'business_usage_based',
+  ent26: 'enterprise',
+  hc: 'enterprise',
+  enterprise_cbp_automation: 'enterprise_automation',
+  enterprise_cbp_usage_based: 'enterprise_usage_based',
+  education: 'edu',
+  ultra_lite: 'ultra-lite',
+};
+
+const normalizePlanFilterValue = (value: string): string => {
+  const normalized = value.trim().toLowerCase();
+  return LEGACY_PLAN_FILTER_ALIASES[normalized] ?? normalized;
+};
+
+const comparePlanOptions = (left: AccountPlanOption, right: AccountPlanOption): number => {
+  if (left.value === UNKNOWN_ACCOUNT_PLAN) return 1;
+  if (right.value === UNKNOWN_ACCOUNT_PLAN) return -1;
+  const byLabel = left.label.localeCompare(right.label, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+  return byLabel || left.value.localeCompare(right.value, undefined, { numeric: true });
+};
+
 export const getPlanOptions = (rows: AccountRow[], t?: TFunction): AccountPlanOption[] => {
-  const plans = new Map<string, AccountPlanOption>();
+  const labels = new Map<string, string>();
   rows.forEach((row) => {
     const plan = getAccountPlanFilterValue(row.provider, row.planType);
     // The reserved `unknown` bucket aggregates both missing plan types and explicit
     // `unknown` raw values; its label must always be the localized "Unknown plan"
     // regardless of which row the Map encounters first.
-    const label =
-      plan === UNKNOWN_ACCOUNT_PLAN
-        ? getUnknownPlanLabel(t)
-        : getPlanPresentation({ provider: row.provider, planType: row.planType, t })?.shortLabel ??
-          getUnknownPlanLabel(t);
-    const option = { value: plan, label };
-    if (!plans.has(plan)) plans.set(plan, option);
+    if (plan === UNKNOWN_ACCOUNT_PLAN) {
+      labels.set(plan, getUnknownPlanLabel(t));
+      return;
+    }
+    const presentation = getPlanPresentation({ provider: row.provider, planType: row.planType, t });
+    const label = getCanonicalPlanFilterLabel(
+      plan,
+      t,
+      presentation?.shortLabel ?? plan
+    );
+    const previousLabel = labels.get(plan);
+    if (!previousLabel || label < previousLabel) labels.set(plan, label);
   });
-  return Array.from(plans.values()).sort((left, right) => {
-    if (left.value === UNKNOWN_ACCOUNT_PLAN) return 1;
-    if (right.value === UNKNOWN_ACCOUNT_PLAN) return -1;
-    return left.label.localeCompare(right.label, undefined, {
-      numeric: true,
-      sensitivity: 'base',
-    });
-  });
+  return Array.from(labels, ([value, label]) => ({ value, label })).sort(comparePlanOptions);
 };
 
 export const getPlanOptionLabel = (rows: AccountRow[], value: string, t?: TFunction): string => {
-  if (value === UNKNOWN_ACCOUNT_PLAN) return getUnknownPlanLabel(t);
-  const directOption = getPlanOptions(rows, t).find((option) => option.value === value);
-  if (directOption) return directOption.label;
-
-  const normalizedValue = value.trim().toLowerCase();
+  const normalizedValue = normalizePlanFilterValue(value);
   if (!normalizedValue) return value;
-  const matchingPresentation = rows
-    .map((row) => {
-      const presentation = getPlanPresentation({
-        provider: row.provider,
-        planType: normalizedValue,
-        t,
-      });
-      return presentation &&
-        getAccountPlanFilterValue(row.provider, row.planType) === presentation.canonicalPlanType
-        ? presentation
-        : null;
-    })
-    .find(
-      (presentation): presentation is NonNullable<typeof presentation> => presentation !== null
-    );
-  return (
-    matchingPresentation?.shortLabel ??
-    normalizedValue
-  );
+  if (normalizedValue === UNKNOWN_ACCOUNT_PLAN) return getUnknownPlanLabel(t);
+  const directOption = getPlanOptions(rows, t).find((option) => option.value === normalizedValue);
+  if (directOption) return directOption.label;
+  return getCanonicalPlanFilterLabel(normalizedValue, t, normalizedValue);
 };
 
-export const getPlanOptionValue = (rows: AccountRow[], value: string, t?: TFunction): string => {
-  const normalizedValue = value.trim().toLowerCase();
+export const getPlanOptionValue = (_rows: AccountRow[], value: string, _t?: TFunction): string => {
+  const normalizedValue = normalizePlanFilterValue(value);
   if (!normalizedValue || normalizedValue === 'all' || normalizedValue === UNKNOWN_ACCOUNT_PLAN) {
     return normalizedValue || value;
   }
-  const directOption = getPlanOptions(rows, t).find((option) => option.value === normalizedValue);
-  if (directOption) return directOption.value;
-
-  return (
-    rows
-      .map((row) => {
-        const presentation = getPlanPresentation({
-          provider: row.provider,
-          planType: normalizedValue,
-          t,
-        });
-        return presentation &&
-          getAccountPlanFilterValue(row.provider, row.planType) === presentation.canonicalPlanType
-          ? presentation.canonicalPlanType
-          : null;
-      })
-      .find((canonical): canonical is string => canonical !== null) ?? normalizedValue
-  );
+  return normalizedValue;
 };
 
 const matchesStatusFilter = (

@@ -12,7 +12,7 @@ import type {
   QuotaCooldownInfo,
 } from '@/services/api';
 import type { AuthFileCodexStatusSummary } from '@/features/authFiles/model/credentialStatus';
-import { normalizePlanType, parseIdTokenPayload } from '@/utils/quota/parsers';
+import { normalizeStringValue, parseIdTokenPayload } from '@/utils/quota/parsers';
 import { isValidQuotaResetAtMs } from '@/utils/quota/formatters';
 import { isCodexMainQuotaWindow } from '@/utils/quota/codexQuota';
 import { parseTimestampMs } from '@/utils/timestamp';
@@ -1161,7 +1161,7 @@ const buildOverviewCredential = (
     if (!Number.isFinite(parsed) || parsed <= 0) return null;
     return Number.isNaN(new Date(parsed).getTime()) ? null : parsed;
   };
-  const effectivePlanType = normalizePlanType(
+  const effectivePlanType = normalizeStringValue(
     codexQuota?.planType ?? row.planType ?? resolveAuthFilePlanType(row.raw)
   );
   const planPresentation = getPlanPresentation({
