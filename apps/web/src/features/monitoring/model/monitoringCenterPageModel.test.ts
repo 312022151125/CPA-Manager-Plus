@@ -52,15 +52,14 @@ const t = ((key: string, options?: Record<string, unknown>) => {
   const copy: Record<string, string> = {
     'antigravity_quota.title': 'Antigravity Quota',
     'claude_quota.title': 'Claude Quota',
-    'claude_quota.plan_label': 'Plan',
-    'claude_quota.plan_pro': 'Pro',
+    'plans.label': 'Plan',
+    'plans.claude.pro': 'Pro',
     'claude_quota.extra_usage_label': 'Extra Usage',
     'claude_quota.empty_windows': 'No Claude quota data',
     'claude_quota.five_hour': '5-hour limit',
     'codex_quota.title': 'Codex Quota',
     'codex_quota.empty_windows': 'No Codex quota data',
-    'codex_quota.plan_label': 'Plan',
-    'codex_quota.plan_free': 'Free',
+    'plans.codex.free': 'Free',
     'codex_quota.monthly_window': 'Monthly limit',
     'codex_quota.window_usage_duration': '{{used}} / {{total}} used',
     'kimi_quota.title': 'Kimi Quota',
@@ -1266,6 +1265,11 @@ describe('monitoringCenterPageModel account quota', () => {
     vi.mocked(fetchAntigravityQuota).mockResolvedValue({
       quotaInventoryObserved: true,
       serverTimeOffsetMs: null,
+      subscription: {
+        plan: 'pro',
+        tierName: 'Antigravity Pro',
+        tierId: 'g1-pro-tier',
+      },
       groups: [
         {
           id: 'agent',
@@ -1299,6 +1303,7 @@ describe('monitoringCenterPageModel account quota', () => {
       t
     );
 
+    expect(entry.planType).toBe('pro');
     expect(entry.metaLabels).toEqual(['Antigravity Quota']);
     expect(entry.windows).toMatchObject([
       {
@@ -1316,6 +1321,30 @@ describe('monitoringCenterPageModel account quota', () => {
         usageLabel: null,
       },
     ]);
+  });
+
+  it('falls back to Antigravity tier metadata when the normalized plan is unknown', async () => {
+    vi.mocked(fetchAntigravityQuota).mockResolvedValue({
+      quotaInventoryObserved: true,
+      serverTimeOffsetMs: null,
+      subscription: {
+        plan: 'unknown',
+        tierName: 'Antigravity Future',
+        tierId: 'future-tier',
+      },
+      groups: [],
+    });
+
+    const entry = await requestAccountQuota(
+      createTarget({
+        provider: 'antigravity',
+        authIndex: '2',
+        fileName: 'antigravity.json',
+      }),
+      t
+    );
+
+    expect(entry.planType).toBe('Antigravity Future');
   });
 
   it('maps Kimi quota rows without amount labels in account quota entries', async () => {

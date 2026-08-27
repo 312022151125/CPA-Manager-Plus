@@ -25,10 +25,8 @@ import type {
   AccountQuotaState,
   AccountQuotaWindow,
 } from '@/features/monitoring/components/accountOverviewPresentation';
-import {
-  formatPercent,
-  getCodexPlanLabel,
-} from '@/features/monitoring/components/accountOverviewPresentation';
+import { formatPercent } from '@/features/monitoring/components/accountOverviewPresentation';
+import { getPlanPresentation, resolveAntigravityPlanType } from '@/utils/plans';
 import type { SummaryCardProps } from '@/features/monitoring/components/MonitoringShared';
 import type {
   MonitoringAccountQuotaProvider,
@@ -1308,7 +1306,7 @@ export const buildObservedCodexAccountQuotaEntry = (
       requestedModel: snapshot?.requested_model,
       resolvedModel: snapshot?.resolved_model,
     });
-  const planLabel = getCodexPlanLabel(planType, t);
+  const planLabel = getPlanPresentation({ provider: target.provider, planType, t })?.shortLabel;
   const observedAtMs = readFiniteTimestamp(snapshot?.timestamp_ms) ?? undefined;
   const observedAt = observedAtMs ? new Date(observedAtMs).toLocaleString() : '';
   const usedPercent = getHeaderSnapshotUsedPercent(snapshot);
@@ -1317,7 +1315,7 @@ export const buildObservedCodexAccountQuotaEntry = (
   const errorCode = getHeaderSnapshotErrorCode(snapshot);
   const traceID = getHeaderSnapshotTraceId(snapshot);
   const metaLabels = [
-    planLabel ? `${t('codex_quota.plan_label')}: ${planLabel}` : '',
+    planLabel ? `${t('plans.label')}: ${planLabel}` : '',
     observedAt
       ? t('monitoring.observed_from_usage_headers_at', {
           time: observedAt,
@@ -1402,17 +1400,21 @@ export const requestAccountQuota = async (
 ): Promise<AccountQuotaEntry> => {
   switch (target.provider) {
     case 'antigravity': {
-      const { groups } = await fetchAntigravityQuota(target.file, t);
+      const { groups, subscription } = await fetchAntigravityQuota(target.file, t);
+      const planType = resolveAntigravityPlanType(subscription, target.planType);
       return stampAccountQuotaFetchTime({
-        ...buildBaseAccountQuotaEntry(target, t),
+        ...buildBaseAccountQuotaEntry({ ...target, planType }, t),
+        planType,
         windows: buildAntigravityAccountQuotaWindows(groups),
       });
     }
     case 'claude': {
       const quota = await fetchClaudeQuota(target.file, t);
       const metaLabels: string[] = [];
-      if (quota.planType) {
-        metaLabels.push(`${t('claude_quota.plan_label')}: ${t(`claude_quota.${quota.planType}`)}`);
+      const planType = quota.planType ?? target.planType;
+      const planLabel = getPlanPresentation({ provider: target.provider, planType, t })?.shortLabel;
+      if (planLabel) {
+        metaLabels.push(`${t('plans.label')}: ${planLabel}`);
       }
       if (quota.extraUsage?.is_enabled) {
         metaLabels.push(
@@ -1421,7 +1423,7 @@ export const requestAccountQuota = async (
       }
       return stampAccountQuotaFetchTime({
         ...buildBaseAccountQuotaEntry(target, t, metaLabels),
-        planType: quota.planType ?? target.planType,
+        planType,
         windows: buildClaudeAccountQuotaWindows(quota.windows, t),
       });
     }
@@ -1457,17 +1459,18 @@ export const requestAccountQuota = async (
     case 'codex':
     default: {
       const quota = await fetchCodexQuota(target.file, t);
-      const planLabel = getCodexPlanLabel(quota.planType ?? target.planType, t);
+      const planType = quota.planType ?? target.planType;
+      const planLabel = getPlanPresentation({ provider: target.provider, planType, t })?.shortLabel;
       return stampAccountQuotaFetchTime({
         ...buildBaseAccountQuotaEntry(
           {
             ...target,
-            planType: quota.planType ?? target.planType,
+            planType,
           },
           t,
-          planLabel ? [`${t('codex_quota.plan_label')}: ${planLabel}`] : []
+          planLabel ? [`${t('plans.label')}: ${planLabel}`] : []
         ),
-        planType: quota.planType ?? target.planType,
+        planType,
         windows: buildCodexAccountQuotaWindows(quota.windows, t),
       });
     }
