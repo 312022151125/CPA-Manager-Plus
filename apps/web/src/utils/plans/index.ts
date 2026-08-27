@@ -1,6 +1,11 @@
-export { normalizePlanProvider, normalizeRawPlanType } from './normalize';
+export { normalizePlanProvider, normalizeRawPlanType, readRawPlanType } from './normalize';
 export { resolveAuthFilePlanType } from './source';
-export { getCanonicalPlanType, getPlanLabel, getPlanPresentation } from './presentation';
+export {
+  getCanonicalPlanFilterLabel,
+  getCanonicalPlanType,
+  getPlanLabel,
+  getPlanPresentation,
+} from './presentation';
 export type {
   GetPlanPresentationInput,
   PlanDisplayMode,

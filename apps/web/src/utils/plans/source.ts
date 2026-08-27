@@ -1,7 +1,7 @@
 import type { AuthFileItem } from '@/types/authFile';
 import { parseIdTokenPayload } from '@/utils/quota/parsers';
 import { resolveCodexPlanType } from '@/utils/quota/resolvers';
-import { normalizePlanProvider, normalizeRawPlanType } from './normalize';
+import { normalizePlanProvider, normalizeRawPlanType, readRawPlanType } from './normalize';
 import { resolveAntigravityPlanType } from './providers/antigravity';
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
@@ -9,11 +9,13 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
     ? (value as Record<string, unknown>)
     : null;
 
+const isUnknownPlan = (value: string): boolean => normalizeRawPlanType(value) === 'unknown';
+
 const firstMeaningfulPlan = (values: unknown[]): string | null => {
-  const normalized = values
-    .map(normalizeRawPlanType)
+  const rawValues = values
+    .map(readRawPlanType)
     .filter((value): value is string => value !== null);
-  return normalized.find((value) => value !== 'unknown') ?? normalized[0] ?? null;
+  return rawValues.find((value) => !isUnknownPlan(value)) ?? rawValues[0] ?? null;
 };
 
 const readTokenPlanType = (value: unknown): string | null => {
@@ -24,7 +26,7 @@ const readTokenPlanType = (value: unknown): string | null => {
 
 const readNestedSubscriptionPlanType = (value: unknown): string | null => {
   const record = asRecord(value);
-  if (!record) return normalizeRawPlanType(value);
+  if (!record) return readRawPlanType(value);
   return firstMeaningfulPlan([record.plan, record.tierName, record.tierId]);
 };
 
@@ -32,13 +34,13 @@ const readNestedSubscriptionPlanType = (value: unknown): string | null => {
 export const resolveAuthFilePlanType = (file: AuthFileItem): string | null => {
   const provider = normalizePlanProvider(file.provider ?? file.type);
   const codexPlanType = provider === 'codex' ? resolveCodexPlanType(file) : null;
-  if (codexPlanType && codexPlanType !== 'unknown') return codexPlanType;
+  if (codexPlanType && !isUnknownPlan(codexPlanType)) return codexPlanType;
 
   const metadata = asRecord(file.metadata);
   const attributes = asRecord(file.attributes);
   const tokenCandidates = [file.id_token, metadata?.id_token, attributes?.id_token];
   const tokenPlanType = firstMeaningfulPlan(tokenCandidates.map(readTokenPlanType));
-  if (tokenPlanType && tokenPlanType !== 'unknown') return tokenPlanType;
+  if (tokenPlanType && !isUnknownPlan(tokenPlanType)) return tokenPlanType;
 
   const directPlanType = firstMeaningfulPlan([
     file.plan_type,
@@ -53,7 +55,7 @@ export const resolveAuthFilePlanType = (file: AuthFileItem): string | null => {
     file.subscriptionType,
     file.accountType,
   ]);
-  if (directPlanType && directPlanType !== 'unknown') return directPlanType;
+  if (directPlanType && !isUnknownPlan(directPlanType)) return directPlanType;
 
   const subscriptionPlanType = firstMeaningfulPlan([
     provider === 'antigravity'

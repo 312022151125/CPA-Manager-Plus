@@ -117,7 +117,7 @@ describe('Plan Presentation', () => {
     expect(presentation).toEqual({
       provider,
       rawPlanType: raw,
-      canonicalPlanType: raw,
+      canonicalPlanType: `unknown:${provider}:${raw}`,
       shortLabel: raw,
       fullLabel: raw,
       known: false,
@@ -137,6 +137,39 @@ describe('Plan Presentation', () => {
     });
     expect(getPlanLabel(presentation, 'compact')).toBe('Business 5x');
     expect(getPlanLabel(presentation, 'full')).toBe('Business Premium 5x');
+  });
+
+  it('preserves unknown plan display casing while using normalized lookup values', () => {
+    expect(
+      getPlanPresentation({
+        provider: 'antigravity',
+        planType: 'Antigravity Future',
+        t,
+      })
+    ).toEqual({
+      provider: 'antigravity',
+      rawPlanType: 'Antigravity Future',
+      canonicalPlanType: 'unknown:antigravity:antigravity future',
+      shortLabel: 'Antigravity Future',
+      fullLabel: 'Antigravity Future',
+      known: false,
+    });
+  });
+
+  it('matches known descriptors case-insensitively without losing canonical mapping', () => {
+    expect(
+      getPlanPresentation({
+        provider: 'codex',
+        planType: ' PRO ',
+        t,
+      })
+    ).toMatchObject({
+      rawPlanType: 'PRO',
+      canonicalPlanType: 'pro_20x',
+      shortLabel: 'Pro 20x',
+      fullLabel: 'Pro 20x',
+      known: true,
+    });
   });
 
   it('resolves non-Codex plan aliases from nested token fields', () => {
@@ -161,7 +194,7 @@ describe('Plan Presentation', () => {
           tierId: 'future-tier',
         },
       })
-    ).toBe('antigravity future');
+    ).toBe('Antigravity Future');
   });
 
   it('keeps a known Antigravity credential plan ahead of unknown tier metadata', () => {
