@@ -61,13 +61,39 @@ legacy_env_backup=""
 legacy_cpa_runtime_config_modified="0"
 docker_data_snapshot_dir=""
 docker_data_snapshot_created="0"
+docker_db_path="/data/usage.sqlite"
+docker_data_key_path="/data/data.key"
+docker_data_volume_root="/data"
+docker_compose_config_loaded="0"
+docker_compose_config_source=""
 native_binary_dir=""
 native_existing_binary_dir=""
 native_existing_config_file=""
+native_existing_config_dir=""
 native_data_dir=""
 native_db_path=""
 native_data_key_path=""
 native_admin_key_file=""
+native_config_data_dir=""
+native_config_db_path=""
+native_config_data_key_path=""
+native_config_db_declared="0"
+native_config_data_key_declared="0"
+native_run_data_dir=""
+native_run_db_path=""
+native_run_data_key_path=""
+native_run_data_dir_declared="0"
+native_run_db_path_declared="0"
+native_run_data_key_path_declared="0"
+native_service_data_dir=""
+native_service_db_path=""
+native_service_data_key_path=""
+native_service_data_dir_declared="0"
+native_service_db_path_declared="0"
+native_service_data_key_path_declared="0"
+native_effective_data_dir=""
+native_effective_db_path=""
+native_effective_data_key_path=""
 native_upgrade_backup_dir=""
 native_upgrade_snapshot_dir=""
 native_upgrade_snapshot_created="0"
@@ -845,11 +871,365 @@ resolve_native_config_path() {
   printf '%s/%s\n' "$parent" "$(basename "$candidate")"
 }
 
+decode_native_entry_value() {
+  local value="$1"
+  local source="$2"
+  local result=""
+  local char=""
+  local index=0
+
+  value="${value#${value%%[!$' \t']*}}"
+  value="${value%${value##*[!$' \t']}}"
+  case "$value" in
+    \"*)
+      [ "${value: -1}" = '"' ] || return 1
+      value="${value:1:${#value}-2}"
+      ;;
+    \'*)
+      [ "${value: -1}" = "'" ] || return 1
+      value="${value:1:${#value}-2}"
+      ;;
+  esac
+
+  while [ "$index" -lt "${#value}" ]; do
+    char="${value:index:1}"
+    if [ "$char" = "\\" ]; then
+      index=$((index + 1))
+      [ "$index" -lt "${#value}" ] || return 1
+      result+="${value:index:1}"
+    else
+      result+="$char"
+    fi
+    index=$((index + 1))
+  done
+  if [ "$source" = "systemd" ]; then
+    result="${result//%%/%}"
+  fi
+  printf '%s\n' "$result"
+}
+
+record_native_entry_path() {
+  local source="$1"
+  local variable="$2"
+  local value="$3"
+  local declared="0"
+  local current=""
+
+  case "$source:$variable" in
+    run:USAGE_DATA_DIR)
+      declared="$native_run_data_dir_declared"
+      current="$native_run_data_dir"
+      ;;
+    run:USAGE_DB_PATH)
+      declared="$native_run_db_path_declared"
+      current="$native_run_db_path"
+      ;;
+    run:CPA_MANAGER_DATA_KEY_PATH)
+      declared="$native_run_data_key_path_declared"
+      current="$native_run_data_key_path"
+      ;;
+    systemd:USAGE_DATA_DIR)
+      declared="$native_service_data_dir_declared"
+      current="$native_service_data_dir"
+      ;;
+    systemd:USAGE_DB_PATH)
+      declared="$native_service_db_path_declared"
+      current="$native_service_db_path"
+      ;;
+    systemd:CPA_MANAGER_DATA_KEY_PATH)
+      declared="$native_service_data_key_path_declared"
+      current="$native_service_data_key_path"
+      ;;
+    *) die "Unsupported native runtime path variable: $variable" ;;
+  esac
+
+  if [ "$declared" = "1" ]; then
+    [ "$current" = "$value" ] ||
+      die "Native $source runtime declares conflicting $variable values."
+    return
+  fi
+
+  case "$source:$variable" in
+    run:USAGE_DATA_DIR)
+      native_run_data_dir="$value"
+      native_run_data_dir_declared="1"
+      ;;
+    run:USAGE_DB_PATH)
+      native_run_db_path="$value"
+      native_run_db_path_declared="1"
+      ;;
+    run:CPA_MANAGER_DATA_KEY_PATH)
+      native_run_data_key_path="$value"
+      native_run_data_key_path_declared="1"
+      ;;
+    systemd:USAGE_DATA_DIR)
+      native_service_data_dir="$value"
+      native_service_data_dir_declared="1"
+      ;;
+    systemd:USAGE_DB_PATH)
+      native_service_db_path="$value"
+      native_service_db_path_declared="1"
+      ;;
+    systemd:CPA_MANAGER_DATA_KEY_PATH)
+      native_service_data_key_path="$value"
+      native_service_data_key_path_declared="1"
+      ;;
+  esac
+}
+
+normalize_native_entry_path() {
+  local source="$1"
+  local variable="$2"
+  local raw_value="$3"
+  local value=""
+
+  value="$(decode_native_entry_value "$raw_value" "$source")" ||
+    die "Unable to parse $variable from the native $source runtime entry."
+  validate_single_line "$variable" "$value"
+  if [ -n "$value" ]; then
+    case "$value" in
+      /*) ;;
+      *) die "$variable in the native $source runtime entry must be an absolute path." ;;
+    esac
+    case "$value" in
+      */../*|*/..|*/./*|*/.)
+        die "$variable in the native $source runtime entry contains an unsupported relative path segment."
+        ;;
+    esac
+    value="$(resolve_native_config_path "$value" "$native_existing_config_dir")"
+  fi
+  record_native_entry_path "$source" "$variable" "$value"
+}
+
+parse_native_run_paths() {
+  local line=""
+  local variable=""
+  local raw_value=""
+
+  native_run_data_dir=""
+  native_run_db_path=""
+  native_run_data_key_path=""
+  native_run_data_dir_declared="0"
+  native_run_db_path_declared="0"
+  native_run_data_key_path_declared="0"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      [[:space:]]*\#*) continue ;;
+    esac
+    if [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?(USAGE_DATA_DIR|USAGE_DB_PATH|CPA_MANAGER_DATA_KEY_PATH)[[:space:]]*=(.*)$ ]]; then
+      variable="${BASH_REMATCH[2]}"
+      raw_value="${BASH_REMATCH[3]}"
+      normalize_native_entry_path run "$variable" "$raw_value"
+      continue
+    fi
+    if [[ "$line" == *USAGE_DATA_DIR* || "$line" == *USAGE_DB_PATH* || "$line" == *CPA_MANAGER_DATA_KEY_PATH* ]]; then
+      if [[ "$line" == *"unset USAGE_DATA_DIR"* ||
+            "$line" == *"unset USAGE_DB_PATH"* ||
+            "$line" == *"unset CPA_MANAGER_DATA_KEY_PATH"* ]]; then
+        continue
+      fi
+      die "Unable to determine the effective Manager data path from the native run.sh entry."
+    fi
+  done < "$install_dir/run.sh"
+}
+
+parse_native_systemd_paths() {
+  local service_file="$install_dir/cpa-manager-plus.service"
+  local line=""
+  local raw_value=""
+  local variable=""
+  local value=""
+
+  native_service_data_dir=""
+  native_service_db_path=""
+  native_service_data_key_path=""
+  native_service_data_dir_declared="0"
+  native_service_db_path_declared="0"
+  native_service_data_key_path_declared="0"
+  [ -f "$service_file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      [[:space:]]*\#*|'') continue ;;
+    esac
+    if [[ "$line" =~ ^[[:space:]]*EnvironmentFile= ]]; then
+      die "The existing native systemd service uses EnvironmentFile; refusing to guess Manager data paths."
+    fi
+    if [[ "$line" =~ ^[[:space:]]*Environment=(.*)$ ]]; then
+      raw_value="${BASH_REMATCH[1]}"
+      value="$(decode_native_entry_value "$raw_value" systemd)" ||
+        die "Unable to parse an Environment entry from the existing native systemd service."
+      if [[ "$value" =~ ^(USAGE_DATA_DIR|USAGE_DB_PATH|CPA_MANAGER_DATA_KEY_PATH)=(.*)$ ]]; then
+        variable="${BASH_REMATCH[1]}"
+        raw_value="${BASH_REMATCH[2]}"
+        normalize_native_entry_path systemd "$variable" "$raw_value"
+      elif [[ "$value" == *USAGE_DATA_DIR* || "$value" == *USAGE_DB_PATH* || "$value" == *CPA_MANAGER_DATA_KEY_PATH* ]]; then
+        die "Unable to determine the effective Manager data path from the native systemd service."
+      fi
+      continue
+    fi
+    if [[ "$line" == *USAGE_DATA_DIR* || "$line" == *USAGE_DB_PATH* || "$line" == *CPA_MANAGER_DATA_KEY_PATH* ]]; then
+      die "Unable to determine the effective Manager data path from the native systemd service."
+    fi
+  done < "$service_file"
+}
+
+compute_native_entry_paths() {
+  local source="$1"
+  local data_dir="$native_config_data_dir"
+  local db_path="$native_config_db_path"
+  local data_key_path="$native_config_data_key_path"
+  local data_declared="0"
+  local db_declared="0"
+  local data_key_declared="0"
+  local data_value=""
+  local db_value=""
+  local data_key_value=""
+
+  case "$source" in
+    run)
+      data_declared="$native_run_data_dir_declared"
+      db_declared="$native_run_db_path_declared"
+      data_key_declared="$native_run_data_key_path_declared"
+      data_value="$native_run_data_dir"
+      db_value="$native_run_db_path"
+      data_key_value="$native_run_data_key_path"
+      ;;
+    systemd)
+      data_declared="$native_service_data_dir_declared"
+      db_declared="$native_service_db_path_declared"
+      data_key_declared="$native_service_data_key_path_declared"
+      data_value="$native_service_data_dir"
+      db_value="$native_service_db_path"
+      data_key_value="$native_service_data_key_path"
+      ;;
+    config) ;;
+    *) die "Unsupported native runtime path source: $source" ;;
+  esac
+
+  if [ "$data_declared" = "1" ] && [ -n "$data_value" ]; then
+    data_dir="$data_value"
+  fi
+  if [ "$db_declared" = "1" ] && [ -n "$db_value" ]; then
+    db_path="$db_value"
+  elif [ "$data_declared" = "1" ] && [ -n "$data_value" ]; then
+    db_path="$data_dir/usage.sqlite"
+  fi
+  if [ "$data_key_declared" = "1" ] && [ -n "$data_key_value" ]; then
+    data_key_path="$data_key_value"
+  elif [ "$data_declared" = "1" ] && [ -n "$data_value" ] && [ "$native_config_data_key_declared" != "1" ]; then
+    data_key_path="$data_dir/data.key"
+  fi
+
+  native_effective_data_dir="$data_dir"
+  native_effective_db_path="$db_path"
+  native_effective_data_key_path="$data_key_path"
+}
+
+resolve_native_runtime_paths() {
+  local run_data_dir=""
+  local run_db_path=""
+  local run_data_key_path=""
+  local service_data_dir=""
+  local service_db_path=""
+  local service_data_key_path=""
+  local run_present="0"
+  local service_present="0"
+
+  parse_native_run_paths
+  if [ -f "$install_dir/cpa-manager-plus.service" ]; then
+    service_present="1"
+    parse_native_systemd_paths
+  fi
+
+  if [ -f "$install_dir/run.sh" ]; then
+    run_present="1"
+    compute_native_entry_paths run
+    run_data_dir="$native_effective_data_dir"
+    run_db_path="$native_effective_db_path"
+    run_data_key_path="$native_effective_data_key_path"
+  fi
+  if [ "$service_present" = "1" ]; then
+    compute_native_entry_paths systemd
+    service_data_dir="$native_effective_data_dir"
+    service_db_path="$native_effective_db_path"
+    service_data_key_path="$native_effective_data_key_path"
+  fi
+
+  if [ "$run_present" = "1" ] && [ "$service_present" = "1" ]; then
+    [ "$run_data_dir" = "$service_data_dir" ] &&
+      [ "$run_db_path" = "$service_db_path" ] &&
+      [ "$run_data_key_path" = "$service_data_key_path" ] ||
+      die "Native run.sh and systemd service resolve different Manager data paths."
+    native_data_dir="$run_data_dir"
+    native_db_path="$run_db_path"
+    native_data_key_path="$run_data_key_path"
+  elif [ "$run_present" = "1" ]; then
+    native_data_dir="$run_data_dir"
+    native_db_path="$run_db_path"
+    native_data_key_path="$run_data_key_path"
+  elif [ "$service_present" = "1" ]; then
+    native_data_dir="$service_data_dir"
+    native_db_path="$service_db_path"
+    native_data_key_path="$service_data_key_path"
+  else
+    native_data_dir="$native_config_data_dir"
+    native_db_path="$native_config_db_path"
+    native_data_key_path="$native_config_data_key_path"
+  fi
+}
+
+require_native_manager_data_files() {
+  local label=""
+  local file=""
+  for label in "Manager database" "Manager data key"; do
+    if [ "$label" = "Manager database" ]; then
+      file="$native_db_path"
+    else
+      file="$native_data_key_path"
+    fi
+    [ -f "$file" ] || die "$label is missing or is not a regular file: $file"
+    [ -r "$file" ] || die "$label is not readable: $file"
+  done
+}
+
 path_is_managed_cpa_key_file() {
   local candidate="$1"
   local secrets_dir=""
   secrets_dir="$(cd "$install_dir/secrets" 2>/dev/null && pwd -P)" || return 1
   [ "$candidate" = "$secrets_dir/cpa-management-key" ]
+}
+
+cpa_management_key_external_marker_path() {
+  local secrets_dir=""
+  secrets_dir="$(cd "$install_dir/secrets" 2>/dev/null && pwd -P)" || return 1
+  printf '%s\n' "$secrets_dir/.cpa-management-key.external"
+}
+
+mark_cpa_management_key_external() {
+  local marker=""
+  local tmp=""
+  marker="$(cpa_management_key_external_marker_path)" || return 1
+  # An existing marker, including a symlink, is already a safe refusal to
+  # classify the canonical key as installer-owned. Never follow or replace it.
+  if [ -e "$marker" ] || [ -L "$marker" ]; then
+    return 0
+  fi
+  if [ "$dry_run" = "1" ]; then
+    return 0
+  fi
+  tmp="${marker}.tmp.$$"
+  if ! (umask 077 && printf 'EXTERNAL=1\n' > "$tmp"); then
+    rm -f "$tmp"
+    return 1
+  fi
+  chmod 600 "$tmp" || {
+    rm -f "$tmp"
+    return 1
+  }
+  if ! mv -f "$tmp" "$marker"; then
+    rm -f "$tmp"
+    return 1
+  fi
 }
 
 canonical_parent_path() {
@@ -865,23 +1245,30 @@ canonical_parent_path() {
 # may be chmod-ed, marked cleanup-eligible, or removed by the installer. A
 # symlink at the managed path is treated as an externally managed secret: its
 # content may be read as migration input, but the symlink, its target, and the
-# target's permissions must never be touched.
+# target's permissions must never be touched. A regular file supplied through
+# an external CPA_MANAGEMENT_KEY_FILE is recorded with a small ownership marker
+# before the runtime reference is removed, so a later rerun cannot mistake it
+# for an installer-created leftover.
 is_installer_owned_cpa_key_file() {
   local candidate="$1"
   local canonical=""
+  local marker=""
   [ -n "$candidate" ] || return 1
   [ -f "$candidate" ] || return 1
   if [ -L "$candidate" ]; then
     return 1
   fi
   canonical="$(canonical_parent_path "$candidate")" || return 1
-  path_is_managed_cpa_key_file "$canonical"
+  path_is_managed_cpa_key_file "$canonical" || return 1
+  marker="$(cpa_management_key_external_marker_path)" || return 1
+  [ ! -e "$marker" ] && [ ! -L "$marker" ]
 }
 
 is_installer_owned_cpa_import_input() {
   local candidate="$1"
   local canonical=""
   local secrets_dir=""
+  local marker=""
   local name=""
   [ -n "$candidate" ] && [ -f "$candidate" ] && [ ! -L "$candidate" ] || return 1
   canonical="$(canonical_parent_path "$candidate")" || return 1
@@ -889,7 +1276,10 @@ is_installer_owned_cpa_import_input() {
   [ "$(dirname "$canonical")" = "$secrets_dir" ] || return 1
   name="$(basename "$canonical")"
   case "$name" in
-    cpa-management-key) return 0 ;;
+    cpa-management-key)
+      marker="$(cpa_management_key_external_marker_path)" || return 1
+      [ ! -e "$marker" ] && [ ! -L "$marker" ]
+      ;;
     cpa-management-key.import.*)
       name="${name#cpa-management-key.import.}"
       case "$name" in
@@ -903,6 +1293,18 @@ is_installer_owned_cpa_import_input() {
 
 cpa_import_retry_path() {
   printf '%s\n' "$install_dir/secrets/cpa-connection-import.pending"
+}
+
+normalize_cpa_url_value() {
+  local value="$1"
+  value="${value#"${value%%[!$' \t']*}"}"
+  value="${value%"${value##*[!$' \t']}"}"
+  while [[ "$value" == */ ]]; do value="${value%/}"; done
+  case "$value" in
+    */v0/management) value="${value%/v0/management}" ;;
+    */v0) value="${value%/v0}" ;;
+  esac
+  printf '%s\n' "$value"
 }
 
 load_cpa_import_retry_state() {
@@ -969,6 +1371,18 @@ load_cpa_import_retry_state() {
   return 0
 }
 
+load_and_validate_cpa_import_retry_state() {
+  local runtime_url="$cpa_url"
+  local runtime_key="$cpa_management_key"
+
+  load_cpa_import_retry_state ||
+    die "CPA import retry state could not be loaded for the existing runtime configuration."
+  if [ "$(normalize_cpa_url_value "$runtime_url")" != "$(normalize_cpa_url_value "$cpa_url")" ] ||
+     [ "$runtime_key" != "$cpa_management_key" ]; then
+    die "Existing runtime CPA connection does not match the retained CPA import retry state; refusing to choose between migration inputs."
+  fi
+}
+
 load_explicit_cpa_import_recovery() {
   local requested_mode="${CPAMP_CPA_CONNECTION_MODE:-}"
   local managed_key="$install_dir/secrets/cpa-management-key"
@@ -1014,6 +1428,14 @@ persist_cpa_import_retry_state() {
   local key_file_name=""
 
   [ "$cpa_import_retry_state_required" = "1" ] || return 0
+  # External CPA_MANAGEMENT_KEY_FILE inputs remain owned by the operator. They
+  # do not need installer retry state because they are never eligible for
+  # cleanup; persisting them as KEY_OWNERSHIP=installer would let a later retry
+  # mistake a canonical external file for a temporary installer secret.
+  if [ "$cpa_management_key_cleanup_allowed" != "1" ]; then
+    cpa_import_retry_state_required="0"
+    return 0
+  fi
   is_installer_owned_cpa_import_input "$cpa_management_key_file" ||
     die "Refusing to persist retry state for a CPA key that is not installer-owned: $cpa_management_key_file"
   key_file_name="$(basename "$cpa_management_key_file")"
@@ -1105,6 +1527,436 @@ compose_service_references_token() {
   ' token="$token" "$install_dir/compose.yaml"
 }
 
+# load_docker_compose_config uses Docker Compose's resolved configuration when
+# it is available. The raw file remains the fallback for dry-runs and older or
+# test Compose shims; the small parser below only handles the two environment
+# forms and volume forms supported by the installer contract.
+load_docker_compose_config() {
+  local rendered=""
+  local status=0
+  if [ "$docker_compose_config_loaded" = "1" ]; then
+    return 0
+  fi
+  [ -f "$install_dir/compose.yaml" ] || return 1
+  if [ "$dry_run" != "1" ] && [ "$skip_execute" != "1" ] && command_exists docker; then
+    if rendered="$(cd "$install_dir" && docker compose config 2>/dev/null)"; then
+      if [ -n "$rendered" ]; then
+        docker_compose_config_source="$rendered"
+      fi
+    else
+      status=$?
+      printf '%s\n' "Unable to resolve the existing Docker Compose configuration (exit status $status)." >&2
+      return 2
+    fi
+  fi
+  if [ -z "$docker_compose_config_source" ]; then
+    docker_compose_config_source="$(< "$install_dir/compose.yaml")"
+  fi
+  docker_compose_config_loaded="1"
+}
+
+compose_variable_value() {
+  local variable_name="$1"
+  local value=""
+  local status=0
+  if [ "${!variable_name+x}" = "x" ]; then
+    printf '%s' "${!variable_name}"
+    return 0
+  fi
+  if value="$(read_env_value "$install_dir/.env" "$variable_name" 2>/dev/null)"; then
+    printf '%s' "$value"
+    return 0
+  else
+    status=$?
+    if [ "$status" -eq 1 ]; then
+      return 1
+    fi
+    return "$status"
+  fi
+}
+
+interpolate_docker_compose_value() {
+  local value="$1"
+  local prefix=""
+  local suffix=""
+  local variable_name=""
+  local operator=""
+  local fallback=""
+  local replacement=""
+  local variable_set="0"
+  local iterations=0
+  local status=0
+
+  while [[ "$value" =~ ^(.*)\$\{([A-Za-z_][A-Za-z0-9_]*)(:-|-)?([^}]*)\}(.*)$ ]]; do
+    iterations=$((iterations + 1))
+    if [ "$iterations" -gt 32 ]; then
+      printf '%s\n' "Docker Compose path interpolation is too deeply nested." >&2
+      return 2
+    fi
+    prefix="${BASH_REMATCH[1]}"
+    variable_name="${BASH_REMATCH[2]}"
+    operator="${BASH_REMATCH[3]}"
+    fallback="${BASH_REMATCH[4]}"
+    suffix="${BASH_REMATCH[5]}"
+    if replacement="$(compose_variable_value "$variable_name")"; then
+      variable_set="1"
+    else
+      status=$?
+      if [ "$status" -ne 1 ]; then
+        printf '%s\n' "Unable to read Docker Compose interpolation variable $variable_name." >&2
+        return "$status"
+      fi
+      replacement=""
+      variable_set="0"
+    fi
+    if [ -z "$operator" ] && [ -n "$fallback" ]; then
+      printf '%s\n' "Unsupported Docker Compose interpolation syntax for $variable_name." >&2
+      return 2
+    fi
+    if [ "$operator" = ":-" ] && [ -z "$replacement" ]; then
+      replacement="$fallback"
+    elif [ "$operator" = "-" ] && [ "$variable_set" = "0" ]; then
+      replacement="$fallback"
+    fi
+    value="${prefix}${replacement}${suffix}"
+  done
+  if [[ "$value" == *'${'* ]]; then
+    printf '%s\n' "Unsupported or incomplete Docker Compose path interpolation." >&2
+    return 2
+  fi
+  value="${value//\$\$/$}"
+  printf '%s\n' "$value"
+}
+
+compose_service_environment_value() {
+  local key="$1"
+  local value=""
+  local status=0
+  load_docker_compose_config || return $?
+  value="$(printf '%s\n' "$docker_compose_config_source" | awk -v wanted_key="$key" '
+    function indentation(value) {
+      match(value, /^[[:space:]]*/)
+      return RLENGTH
+    }
+    function trim(value) {
+      sub(/^[[:space:]]*/, "", value)
+      sub(/[[:space:]]*$/, "", value)
+      return value
+    }
+    function clean(value) {
+      value = trim(value)
+      # docker compose config renders YAML null values as the unquoted scalar
+      # `null` (and some Compose versions preserve `~`). Both mean that the
+      # service environment value is empty, so the Manager Server should use
+      # its own default path. Quoted "null"/"~" remain literal strings.
+      if (value == "null" || value == "~") return ""
+      if (value ~ /^".*"$/ || value ~ /^\047.*\047$/) {
+        value = substr(value, 2, length(value) - 2)
+      }
+      return value
+    }
+    function mapping_name(value, position) {
+      position = index(value, ":")
+      if (position == 0) return ""
+      return clean(substr(value, 1, position - 1))
+    }
+    function mapping_value(value, position) {
+      position = index(value, ":")
+      if (position == 0) return ""
+      return clean(substr(value, position + 1))
+    }
+    BEGIN {
+      in_services = 0
+      in_service = 0
+      in_environment = 0
+      services_indent = -1
+      service_indent = -1
+      environment_indent = -1
+      found = 0
+      result = ""
+    }
+    {
+      line = $0
+      indent = indentation(line)
+      if (in_environment && line !~ /^[[:space:]]*$/ && indent <= environment_indent) {
+        in_environment = 0
+      }
+      if (in_service && line !~ /^[[:space:]]*$/ && indent <= service_indent) {
+        in_service = 0
+        in_environment = 0
+      }
+      if (line ~ /^[[:space:]]*services:[[:space:]]*$/) {
+        in_services = 1
+        services_indent = indent
+        next
+      }
+      if (in_services && line !~ /^[[:space:]]*$/ && indent <= services_indent) {
+        in_services = 0
+        in_service = 0
+        in_environment = 0
+      }
+      if (in_services && line ~ /^[[:space:]]*["\047]?cpa-manager-plus["\047]?:[[:space:]]*$/) {
+        in_service = 1
+        service_indent = indent
+        next
+      }
+      if (!in_service) next
+      if (!in_environment && line ~ /^[[:space:]]*environment:[[:space:]]*$/) {
+        in_environment = 1
+        environment_indent = indent
+        next
+      }
+      if (!in_environment || line ~ /^[[:space:]]*$/ || line ~ /^[[:space:]]*#/) next
+      if (indent <= environment_indent) next
+
+      candidate = line
+      sub(/^[[:space:]]*/, "", candidate)
+      if (substr(candidate, 1, 1) == "-") {
+        sub(/^-[[:space:]]*/, "", candidate)
+        candidate = clean(candidate)
+        equals = index(candidate, "=")
+        if (equals > 0) {
+          name = clean(substr(candidate, 1, equals - 1))
+          value = substr(candidate, equals + 1)
+        } else {
+          name = candidate
+          value = "__CPAMP_COMPOSE_PASSTHROUGH__"
+        }
+      } else {
+        name = mapping_name(candidate)
+        value = mapping_value(candidate)
+      }
+      if (name == wanted_key) {
+        found++
+        result = clean(value)
+      }
+    }
+    END {
+      if (found > 1) exit 2
+      if (found == 1) {
+        print result
+        exit 0
+      }
+      exit 1
+    }
+  ')" || status=$?
+  case "$status" in
+    0)
+      if [ "$value" = "__CPAMP_COMPOSE_PASSTHROUGH__" ]; then
+        if value="$(compose_variable_value "$key")"; then
+          [ -n "$value" ] || return 0
+          printf '%s\n' "$value"
+          return 0
+        else
+          status=$?
+          [ "$status" -eq 1 ] && return 1
+          return "$status"
+        fi
+      fi
+      interpolate_docker_compose_value "$value"
+      return $?
+      ;;
+    1) return 1 ;;
+    *)
+      if [ "$status" -eq 2 ]; then
+        printf '%s\n' "Existing Docker Compose contains duplicate $key environment entries." >&2
+      fi
+      return "$status"
+      ;;
+  esac
+}
+
+docker_compose_volume_targets() {
+  load_docker_compose_config || return 0
+  printf '%s\n' "$docker_compose_config_source" | awk '
+    function indentation(value) {
+      match(value, /^[[:space:]]*/)
+      return RLENGTH
+    }
+    function trim(value) {
+      sub(/^[[:space:]]*/, "", value)
+      sub(/[[:space:]]*$/, "", value)
+      return value
+    }
+    function clean(value) {
+      value = trim(value)
+      if (value ~ /^".*"$/ || value ~ /^\047.*\047$/) {
+        value = substr(value, 2, length(value) - 2)
+      }
+      return value
+    }
+    function short_target(value, parts, count) {
+      value = clean(value)
+      count = split(value, parts, ":")
+      if (count < 2) return ""
+      if (parts[2] ~ /^\//) return parts[2]
+      if (count >= 3 && parts[3] ~ /^\//) return parts[3]
+      return ""
+    }
+    BEGIN {
+      in_services = 0
+      in_service = 0
+      in_volumes = 0
+      services_indent = -1
+      service_indent = -1
+      volumes_indent = -1
+    }
+    {
+      line = $0
+      indent = indentation(line)
+      if (in_volumes && line !~ /^[[:space:]]*$/ && indent <= volumes_indent) {
+        in_volumes = 0
+      }
+      if (in_service && line !~ /^[[:space:]]*$/ && indent <= service_indent) {
+        in_service = 0
+        in_volumes = 0
+      }
+      if (line ~ /^[[:space:]]*services:[[:space:]]*$/) {
+        in_services = 1
+        services_indent = indent
+        next
+      }
+      if (in_services && line !~ /^[[:space:]]*$/ && indent <= services_indent) {
+        in_services = 0
+        in_service = 0
+        in_volumes = 0
+      }
+      if (in_services && line ~ /^[[:space:]]*["\047]?cpa-manager-plus["\047]?:[[:space:]]*$/) {
+        in_service = 1
+        service_indent = indent
+        next
+      }
+      if (!in_service) next
+      if (line ~ /^[[:space:]]*volumes:[[:space:]]*$/) {
+        in_volumes = 1
+        volumes_indent = indent
+        next
+      }
+      if (!in_volumes || line ~ /^[[:space:]]*$/ || line ~ /^[[:space:]]*#/) next
+      if (indent <= volumes_indent) next
+      candidate = line
+      sub(/^[[:space:]]*/, "", candidate)
+      if (substr(candidate, 1, 1) == "-") {
+        sub(/^-[[:space:]]*/, "", candidate)
+        target = short_target(candidate)
+        if (target != "") print target
+        next
+      }
+      name = candidate
+      position = index(name, ":")
+      if (position > 0 && clean(substr(name, 1, position - 1)) == "target") {
+        target = clean(substr(name, position + 1))
+        if (target ~ /^\//) print target
+      }
+    }
+  '
+}
+
+docker_path_is_under_mount() {
+  local path="$1"
+  local mount="$2"
+  case "$path" in
+    /) return 0 ;;
+    "$mount") return 0 ;;
+    "$mount"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_docker_container_path() {
+  local label="$1"
+  local value="$2"
+  validate_single_line "$label" "$value"
+  case "$value" in
+    /*) ;;
+    *) die "$label must be an absolute container path: $value" ;;
+  esac
+  case "$value" in
+    */../*|*/..|*/./*|*/.) die "$label contains an unsupported relative path segment: $value" ;;
+  esac
+}
+
+# resolve_docker_container_paths sets the paths used by every Docker database
+# mutation. Compose itself is asked for the resolved service config first, so
+# mapping/list environment syntax and .env interpolation follow the running
+# deployment. The static volume check is intentionally limited to custom paths;
+# legacy files without a volume declaration may still use the default /data
+# path, while a custom path must prove that it is mounted.
+resolve_docker_container_paths() {
+  local value=""
+  local mount_targets=""
+  local target=""
+  local db_mount=""
+  local key_mount=""
+  local db_covered="0"
+  local key_covered="0"
+  local status=0
+
+  docker_db_path="/data/usage.sqlite"
+  docker_data_key_path="/data/data.key"
+  docker_data_volume_root=""
+  docker_compose_config_loaded="0"
+  docker_compose_config_source=""
+  [ -f "$install_dir/compose.yaml" ] || return 0
+  if load_docker_compose_config; then
+    :
+  else
+    status=$?
+    die "Unable to read the existing Docker Compose configuration; refusing to resolve Manager data paths (exit status $status)."
+  fi
+
+  # Only a variable declared for the cpa-manager-plus service is part of the
+  # container's effective environment. A same-named value that exists only in
+  # the project .env is merely an interpolation candidate; treating it as an
+  # implicit container variable could make an upgrade operate on a database
+  # the running Manager Server never opened.
+  if value="$(compose_service_environment_value USAGE_DB_PATH)"; then
+    [ -n "$value" ] && docker_db_path="$value"
+  else
+    status=$?
+    [ "$status" -eq 1 ] || die "Unable to resolve USAGE_DB_PATH from the existing Docker Compose configuration."
+  fi
+  if value="$(compose_service_environment_value CPA_MANAGER_DATA_KEY_PATH)"; then
+    [ -n "$value" ] && docker_data_key_path="$value"
+  else
+    status=$?
+    [ "$status" -eq 1 ] || die "Unable to resolve CPA_MANAGER_DATA_KEY_PATH from the existing Docker Compose configuration."
+  fi
+  validate_docker_container_path "USAGE_DB_PATH" "$docker_db_path"
+  validate_docker_container_path "CPA_MANAGER_DATA_KEY_PATH" "$docker_data_key_path"
+
+  mount_targets="$(docker_compose_volume_targets || true)"
+  while IFS= read -r target; do
+    [ -n "$target" ] || continue
+    if docker_path_is_under_mount "$docker_db_path" "$target"; then
+      db_covered="1"
+      if [ -z "$db_mount" ] && [ "$target" != "$docker_db_path" ] && [ "$target" != "$docker_data_key_path" ]; then
+        db_mount="$target"
+      fi
+    fi
+    if docker_path_is_under_mount "$docker_data_key_path" "$target"; then
+      key_covered="1"
+      if [ -z "$key_mount" ] && [ "$target" != "$docker_db_path" ] && [ "$target" != "$docker_data_key_path" ]; then
+        key_mount="$target"
+      fi
+    fi
+  done <<< "$mount_targets"
+
+  if [ "$docker_db_path" != "/data/usage.sqlite" ] || [ "$docker_data_key_path" != "/data/data.key" ]; then
+    [ "$db_covered" = "1" ] || die "USAGE_DB_PATH ($docker_db_path) is not covered by a cpa-manager-plus volume mount; refusing to operate on an unmounted database."
+    [ "$key_covered" = "1" ] || die "CPA_MANAGER_DATA_KEY_PATH ($docker_data_key_path) is not covered by a cpa-manager-plus volume mount; refusing to operate on an unmounted data key."
+    [ -n "$db_mount" ] || [ -n "$key_mount" ] ||
+      die "Custom Docker database and data-key paths are covered only by exact file mounts; a directory volume mount is required for the migration snapshot."
+  fi
+  if [ -n "$db_mount" ]; then
+    docker_data_volume_root="$db_mount"
+  elif [ -n "$key_mount" ]; then
+    docker_data_volume_root="$key_mount"
+  else
+    docker_data_volume_root="/data"
+  fi
+}
+
 locate_existing_native_config() {
   local run_binary_dir=""
   local runtime_package=""
@@ -1178,6 +2030,7 @@ load_existing_native_config() {
   validate_version_value "$(text version)" "$cpamp_version"
   locate_existing_native_config
   config_dir="$(dirname "$native_existing_config_file")"
+  native_existing_config_dir="$config_dir"
 
   if json_key_declared "$native_existing_config_file" httpAddr; then
     http_addr="$(require_json_string_value "$native_existing_config_file" httpAddr)"
@@ -1194,17 +2047,26 @@ load_existing_native_config() {
   fi
   native_data_dir="$(resolve_native_config_path "$raw_data_dir" "$config_dir")"
   if json_key_declared "$native_existing_config_file" dbPath; then
+    native_config_db_declared="1"
     raw_db_path="$(require_json_string_value "$native_existing_config_file" dbPath)"
     native_db_path="$(resolve_native_config_path "$raw_db_path" "$config_dir")"
   else
+    native_config_db_declared="0"
     native_db_path="$native_data_dir/usage.sqlite"
   fi
   if json_key_declared "$native_existing_config_file" dataKeyPath; then
+    native_config_data_key_declared="1"
     raw_data_key_path="$(require_json_string_value "$native_existing_config_file" dataKeyPath)"
     native_data_key_path="$(resolve_native_config_path "$raw_data_key_path" "$config_dir")"
   else
+    native_config_data_key_declared="0"
     native_data_key_path="$native_data_dir/data.key"
   fi
+  native_config_data_dir="$native_data_dir"
+  native_config_db_path="$native_db_path"
+  native_config_data_key_path="$native_data_key_path"
+  resolve_native_runtime_paths
+  require_native_manager_data_files
 
   raw_admin_key_file="$(require_json_string_value "$native_existing_config_file" adminKeyFile)"
   native_admin_key_file="$(resolve_native_config_path "$raw_admin_key_file" "$config_dir")"
@@ -1226,6 +2088,7 @@ load_existing_native_config() {
     cpa_management_key_file="$(resolve_native_config_path "$raw_cpa_key_file" "$config_dir")"
     if is_installer_owned_cpa_key_file "$cpa_management_key_file"; then
       cpa_management_key_cleanup_allowed="1"
+      cpa_import_retry_state_required="1"
       cpa_management_key="$(read_existing_secret "$cpa_management_key_file" "1")" ||
         die "CPA Management Key file is missing: $cpa_management_key_file"
     else
@@ -1234,7 +2097,7 @@ load_existing_native_config() {
     fi
     cpa_connection_mode="env"
     if [ -e "$(cpa_import_retry_path)" ] || [ -L "$(cpa_import_retry_path)" ]; then
-      die "Existing native config and CPA import retry state both declare migration inputs."
+      load_and_validate_cpa_import_retry_state
     fi
   else
     if load_cpa_import_retry_state; then
@@ -1256,6 +2119,7 @@ load_existing_docker_config() {
   local value=""
   local legacy_key_file=""
   local legacy_key_dir=""
+  local legacy_key_file_external="0"
   local compose_has_cpa_url="0"
   local compose_has_cpa_key="0"
   local compose_has_cpa_key_file="0"
@@ -1266,6 +2130,7 @@ load_existing_docker_config() {
   [ -f "$install_dir/.env" ] || die "Missing existing config: $install_dir/.env"
   [ -f "$install_dir/compose.yaml" ] || die "Missing existing config: $install_dir/compose.yaml"
   deploy_method="docker"
+  resolve_docker_container_paths
   cpamp_image="$(read_env_value "$install_dir/.env" CPAMP_IMAGE 2>/dev/null || printf '%s' "$default_cpamp_image")"
   validate_image_ref "$(text cpamp_image)" "$cpamp_image"
   cpamp_port="$(read_env_value "$install_dir/.env" CPAMP_PORT 2>/dev/null || printf '18317')"
@@ -1326,6 +2191,7 @@ load_existing_docker_config() {
       else
         cpa_management_key_file="$install_dir/secrets/cpa-management-key"
       fi
+      cpa_import_retry_state_required="1"
     else
       if [ "$compose_has_cpa_key_file" = "1" ]; then
         if [ "${CPA_MANAGEMENT_KEY_FILE+x}" = "x" ]; then
@@ -1336,6 +2202,7 @@ load_existing_docker_config() {
       fi
       if [ -n "$effective_key_file" ]; then
         legacy_key_file="$effective_key_file"
+        legacy_key_file_external="1"
       elif [ "$compose_has_managed_cpa_secret" = "1" ]; then
         legacy_key_file="$install_dir/secrets/cpa-management-key"
       fi
@@ -1350,10 +2217,15 @@ load_existing_docker_config() {
       legacy_key_file="$legacy_key_dir/$(basename "$legacy_key_file")"
       cpa_management_key_file="$legacy_key_file"
       cpa_management_key_cleanup_allowed="0"
-      if is_installer_owned_cpa_key_file "$legacy_key_file"; then
+      if [ "$legacy_key_file_external" = "1" ] && path_is_managed_cpa_key_file "$legacy_key_file"; then
+        mark_cpa_management_key_external ||
+          die "Unable to record external CPA Management Key ownership: $legacy_key_file"
+      fi
+      if [ "$legacy_key_file_external" != "1" ] && is_installer_owned_cpa_key_file "$legacy_key_file"; then
         cpa_management_key_cleanup_allowed="1"
         cpa_management_key="$(read_existing_secret "$legacy_key_file" "1")" ||
           die "CPA Management Key is referenced by the existing Docker configuration but the key file is not readable: $legacy_key_file"
+        cpa_import_retry_state_required="1"
       else
         cpa_management_key="$(read_existing_secret "$legacy_key_file" "0")" ||
           die "CPA Management Key is referenced by the existing Docker configuration but the key file is not readable: $legacy_key_file"
@@ -1365,7 +2237,7 @@ load_existing_docker_config() {
     validate_secret_value "CPA Management Key" "$cpa_management_key"
     validate_url_value "$(text cpa_url)" "$cpa_url"
     if [ -e "$(cpa_import_retry_path)" ] || [ -L "$(cpa_import_retry_path)" ]; then
-      die "Existing Docker config and CPA import retry state both declare migration inputs."
+      load_and_validate_cpa_import_retry_state
     fi
   else
     if load_cpa_import_retry_state; then
@@ -2126,7 +2998,7 @@ needs_cpa_connection_import() {
 
 print_docker_connection_import_command() {
   local key_file="${cpa_management_key_file:-$install_dir/secrets/cpa-management-key}"
-  say "cd \"$install_dir\" && docker compose run --rm --no-deps -e CPA_UPSTREAM_URL= -e CPA_MANAGEMENT_KEY= -e CPA_MANAGEMENT_KEY_FILE=/dev/null -v \"$key_file:/run/cpamp-import/cpa-management-key:ro\" cpa-manager-plus store-cpa-connection --cpa-base-url \"$cpa_url\" --management-key-file /run/cpamp-import/cpa-management-key --db-path /data/usage.sqlite --data-key-path /data/data.key"
+  say "cd \"$install_dir\" && docker compose run --rm --no-deps -e CPA_UPSTREAM_URL= -e CPA_MANAGEMENT_KEY= -e CPA_MANAGEMENT_KEY_FILE=/dev/null -v \"$key_file:/run/cpamp-import/cpa-management-key:ro\" cpa-manager-plus store-cpa-connection --cpa-base-url \"$cpa_url\" --management-key-file /run/cpamp-import/cpa-management-key --db-path \"$docker_db_path\" --data-key-path \"$docker_data_key_path\""
 }
 
 print_full_upgrade_command() {
@@ -2149,7 +3021,7 @@ print_docker_post_import_validation_commands() {
   local key_file="${cpa_management_key_file:-$install_dir/secrets/cpa-management-key}"
   say "cd \"$install_dir\" && docker compose exec -T cpa-manager-plus wget -qO- http://127.0.0.1:18317/health"
   say "cd \"$install_dir\" && CPAMP_ADMIN_KEY=\"\$(< \"$install_dir/secrets/cpamp-admin-key\")\" && docker compose exec -T cpa-manager-plus wget -qO- --header=\"Authorization: Bearer \$CPAMP_ADMIN_KEY\" http://127.0.0.1:18317/status"
-  say "cd \"$install_dir\" && CPAMP_ADMIN_KEY=\"\$(< \"$install_dir/secrets/cpamp-admin-key\")\" && docker compose exec -T cpa-manager-plus wget -qO- --header=\"Authorization: Bearer \$CPAMP_ADMIN_KEY\" http://127.0.0.1:18317/v0/management/config"
+  say "cd \"$install_dir\" && CPAMP_ADMIN_KEY=\"\$(< \"$install_dir/secrets/cpamp-admin-key\")\" && docker compose exec -T cpa-manager-plus wget -qO- --post-data='' --header=\"Authorization: Bearer \$CPAMP_ADMIN_KEY\" http://127.0.0.1:18317/v0/management/cpa-connection/validate"
   if [ "$cpa_management_key_cleanup_allowed" = "1" ] && [ -n "$key_file" ]; then
     say "rm -f \"$key_file\""
   fi
@@ -2169,8 +3041,8 @@ run_docker_connection_import() {
       cpa-manager-plus store-cpa-connection \
       --cpa-base-url "$cpa_url" \
       --management-key-file /run/cpamp-import/cpa-management-key \
-      --db-path /data/usage.sqlite \
-      --data-key-path /data/data.key
+      --db-path "$docker_db_path" \
+      --data-key-path "$docker_data_key_path"
   )
 }
 
@@ -2192,8 +3064,8 @@ run_docker_data_snapshot() {
         -e CPA_MANAGEMENT_KEY_FILE=/dev/null \
         cpa-manager-plus manager-data-snapshot "$action" \
         --snapshot-dir "$docker_data_snapshot_dir" \
-        --db-path /data/usage.sqlite \
-        --data-key-path /data/data.key
+        --db-path "$docker_db_path" \
+        --data-key-path "$docker_data_key_path"
     fi
   )
 }
@@ -2201,9 +3073,25 @@ run_docker_data_snapshot() {
 prepare_docker_data_snapshot() {
   local timestamp=""
   timestamp="$(date '+%Y%m%d%H%M%S')"
-  docker_data_snapshot_dir="/data/.cpamp-manager-snapshot-$timestamp-$$"
+  docker_data_snapshot_dir="${docker_data_volume_root:-/data}/.cpamp-manager-snapshot-$timestamp-$$"
   run_docker_data_snapshot create || return 1
   docker_data_snapshot_created="1"
+}
+
+verify_docker_container_paths() {
+  if [ "$operation" != "upgrade" ] || [ "$existing_install_state" != "managed" ]; then
+    return 0
+  fi
+  if [ "$dry_run" = "1" ] || [ "$skip_execute" = "1" ]; then
+    return 0
+  fi
+  (
+    cd "$install_dir"
+    docker compose run --rm --no-deps --entrypoint /bin/sh cpa-manager-plus \
+      -c 'test -f "$1" && test -r "$1"' sh "$docker_db_path" &&
+      docker compose run --rm --no-deps --entrypoint /bin/sh cpa-manager-plus \
+        -c 'test -f "$1" && test -r "$1"' sh "$docker_data_key_path"
+  )
 }
 
 delete_docker_data_snapshot() {
@@ -2517,7 +3405,7 @@ run_docker_install() {
     if needs_cpa_connection_import; then
       if [ "$operation" = "upgrade" ]; then
         say "$(text run_command): cd \"$install_dir\" && docker compose stop cpa-manager-plus"
-        say "$(text run_command): create a protected Manager data snapshot in /data before import"
+        say "$(text run_command): create a protected Manager data snapshot in ${docker_data_volume_root:-/data} before import"
       fi
       print_docker_connection_import_command
     fi
@@ -2547,6 +3435,9 @@ run_docker_install() {
   )
   if needs_cpa_connection_import; then
     if [ "$operation" = "upgrade" ]; then
+      if ! verify_docker_container_paths; then
+        die "Configured Docker database or data key path is not readable inside the cpa-manager-plus container; refusing to migrate an unverified data set."
+      fi
       cpa_connection_rollback_pending="1"
       if ! (
         cd "$install_dir"
@@ -2643,8 +3534,9 @@ verify_docker_cpa_connection() {
   (
     cd "$install_dir"
     docker compose exec -T cpa-manager-plus wget -qO- \
+      --post-data='' \
       --header="Authorization: Bearer $admin_key" \
-      http://127.0.0.1:18317/v0/management/config >/dev/null 2>&1
+      http://127.0.0.1:18317/v0/management/cpa-connection/validate >/dev/null 2>&1
   )
 }
 
@@ -2976,7 +3868,7 @@ print_native_connection_import_command() {
 print_native_post_import_validation_commands() {
   say "curl -fsS \"http://127.0.0.1:${cpamp_port}/health\""
   say "CPAMP_ADMIN_KEY=\"\$(< \"$install_dir/secrets/cpamp-admin-key\")\" && curl -fsS -H \"Authorization: Bearer \$CPAMP_ADMIN_KEY\" \"http://127.0.0.1:${cpamp_port}/status\""
-  say "CPAMP_ADMIN_KEY=\"\$(< \"$install_dir/secrets/cpamp-admin-key\")\" && curl -fsS -H \"Authorization: Bearer \$CPAMP_ADMIN_KEY\" \"http://127.0.0.1:${cpamp_port}/v0/management/config\""
+  say "CPAMP_ADMIN_KEY=\"\$(< \"$install_dir/secrets/cpamp-admin-key\")\" && curl -fsS -X POST -H \"Authorization: Bearer \$CPAMP_ADMIN_KEY\" \"http://127.0.0.1:${cpamp_port}/v0/management/cpa-connection/validate\""
   if [ "$cpa_management_key_cleanup_allowed" = "1" ] && [ -n "$cpa_management_key_file" ]; then
     say "rm -f \"$cpa_management_key_file\""
   fi
@@ -3456,9 +4348,9 @@ verify_native_cpa_connection() {
      [ -z "$installer_managed_cpa_key_pending_import_copies" ]; then
     return 0
   fi
-  curl -fsS \
+  curl -fsS -X POST \
     -H "Authorization: Bearer $admin_key" \
-    "http://127.0.0.1:${cpamp_port}/v0/management/config" >/dev/null 2>&1
+    "http://127.0.0.1:${cpamp_port}/v0/management/cpa-connection/validate" >/dev/null 2>&1
 }
 
 run_native_install() {
