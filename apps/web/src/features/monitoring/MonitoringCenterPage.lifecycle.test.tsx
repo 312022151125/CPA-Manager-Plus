@@ -9,6 +9,7 @@ import {
   publishAccountCredentialMutationRevision,
   useAccountCredentialMutationRevisionStore,
 } from '@/stores/useAccountCredentialMutationRevisionStore';
+import { useQuotaStore } from '@/stores/useQuotaStore';
 import { MonitoringCenterPage } from './MonitoringCenterPage';
 
 (
@@ -28,18 +29,6 @@ const mocks = vi.hoisted(() => ({
   loadHeaderSnapshots: vi.fn(async () => undefined),
   refreshMeta: vi.fn(),
   refreshQuotaWithConfig: vi.fn(),
-  quotaStores: {
-    antigravityQuota: {} as Record<string, unknown>,
-    claudeQuota: {} as Record<string, unknown>,
-    codexQuota: {} as Record<string, unknown>,
-    kimiQuota: {} as Record<string, unknown>,
-    xaiQuota: {} as Record<string, unknown>,
-  },
-  setAntigravityQuota: vi.fn(),
-  setClaudeQuota: vi.fn(),
-  setCodexQuota: vi.fn(),
-  setKimiQuota: vi.fn(),
-  setXaiQuota: vi.fn(),
 }));
 
 const makeCodexFile = (authIndex: string, name: string): AuthFileItem =>
@@ -70,32 +59,27 @@ vi.mock('react-i18next', async (importOriginal) => {
   };
 });
 
-vi.mock('@/stores', () => ({
-  useAuthStore: (selector: (state: Record<string, unknown>) => unknown) =>
-    selector({
-      apiBase: mocks.apiBase,
-      managementKey: mocks.managementKey,
-      connectionStatus: 'connected',
-    }),
-  useConfigStore: (selector: (state: Record<string, unknown>) => unknown) =>
-    selector({ config: {} }),
-  useNotificationStore: (selector: (state: Record<string, unknown>) => unknown) =>
-    selector({ showNotification: vi.fn(), showConfirmation: vi.fn() }),
-  useQuotaStore: (selector: (state: Record<string, unknown>) => unknown) =>
-    selector({
-      ...mocks.quotaStores,
-      setAntigravityQuota: mocks.setAntigravityQuota,
-      setClaudeQuota: mocks.setClaudeQuota,
-      setCodexQuota: mocks.setCodexQuota,
-      setKimiQuota: mocks.setKimiQuota,
-      setXaiQuota: mocks.setXaiQuota,
-    }),
-  captureQuotaCacheGeneration: () => 0,
-  commitIfQuotaCacheCurrent: (_generation: number, commit: () => void) => {
-    commit();
-    return true;
-  },
-}));
+vi.mock('@/stores', async () => {
+  const quotaStore = await import('@/stores/useQuotaStore');
+  return {
+    useAuthStore: (selector: (state: Record<string, unknown>) => unknown) =>
+      selector({
+        apiBase: mocks.apiBase,
+        managementKey: mocks.managementKey,
+        connectionStatus: 'connected',
+      }),
+    useConfigStore: (selector: (state: Record<string, unknown>) => unknown) =>
+      selector({ config: {} }),
+    useNotificationStore: (selector: (state: Record<string, unknown>) => unknown) =>
+      selector({ showNotification: vi.fn(), showConfirmation: vi.fn() }),
+    useQuotaStore: quotaStore.useQuotaStore,
+    captureQuotaCacheGeneration: () => 0,
+    commitIfQuotaCacheCurrent: (_generation: number, commit: () => void) => {
+      commit();
+      return true;
+    },
+  };
+});
 
 vi.mock('@/stores/useUsageHeaderSnapshotStore', () => ({
   useUsageHeaderSnapshotStore: (selector: (state: Record<string, unknown>) => unknown) =>
@@ -342,16 +326,6 @@ const deferred = <T,>() => {
   return { promise, resolve };
 };
 
-type MockQuotaStoreKey = keyof typeof mocks.quotaStores;
-
-const applyMockQuotaUpdate = (key: MockQuotaStoreKey, updater: unknown) => {
-  const previous = mocks.quotaStores[key];
-  mocks.quotaStores[key] =
-    typeof updater === 'function'
-      ? (updater as (state: Record<string, unknown>) => Record<string, unknown>)(previous)
-      : (updater as Record<string, unknown>);
-};
-
 describe('MonitoringCenterPage credential quota revision lifecycle', () => {
   let renderer!: ReactTestRenderer;
   let rendererMounted = false;
@@ -368,6 +342,7 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
 
   beforeEach(async () => {
     useAccountCredentialMutationRevisionStore.getState().clearForTests();
+    useQuotaStore.getState().clearQuotaCache();
     mocks.apiBase = 'http://cpa-a.local:8317';
     mocks.managementKey = 'manager-key-a';
     mocks.authFiles = [makeCodexFile('1', 'codex-old.json')];
@@ -378,24 +353,6 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
     // Default: refreshMeta resolves with a successful auth-files payload so the
     // production success-coverage path is exercised, not the failure path.
     mocks.refreshMeta.mockReset().mockImplementation(() => successMetaPayload(mocks.authFiles));
-    Object.keys(mocks.quotaStores).forEach((key) => {
-      mocks.quotaStores[key as MockQuotaStoreKey] = {};
-    });
-    mocks.setAntigravityQuota
-      .mockReset()
-      .mockImplementation((updater: unknown) => applyMockQuotaUpdate('antigravityQuota', updater));
-    mocks.setClaudeQuota
-      .mockReset()
-      .mockImplementation((updater: unknown) => applyMockQuotaUpdate('claudeQuota', updater));
-    mocks.setCodexQuota
-      .mockReset()
-      .mockImplementation((updater: unknown) => applyMockQuotaUpdate('codexQuota', updater));
-    mocks.setKimiQuota
-      .mockReset()
-      .mockImplementation((updater: unknown) => applyMockQuotaUpdate('kimiQuota', updater));
-    mocks.setXaiQuota
-      .mockReset()
-      .mockImplementation((updater: unknown) => applyMockQuotaUpdate('xaiQuota', updater));
     mocks.refreshQuotaWithConfig
       .mockReset()
       .mockImplementation(
@@ -479,6 +436,43 @@ describe('MonitoringCenterPage credential quota revision lifecycle', () => {
       mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.entries[0]
         ?.windows[0]?.remainingPercent
     ).toBe(90);
+  });
+
+  it('rerenders a mounted row from a shared Provider store update without refetching', async () => {
+    const file = mocks.authFiles[0];
+    if (!file) throw new Error('expected a mounted Codex credential');
+    const storeKey = getQuotaCredentialStoreKey(file);
+
+    expect(mocks.refreshQuotaWithConfig).not.toHaveBeenCalled();
+
+    await act(async () => {
+      useQuotaStore.getState().setCodexQuota({
+        [storeKey]: {
+          status: 'success',
+          windows: [
+            {
+              id: 'weekly',
+              label: 'Weekly',
+              usedPercent: 40,
+              resetLabel: 'tomorrow',
+            },
+          ],
+          quotaInventoryObserved: true,
+          authFileKey: storeKey,
+          authFileName: file.name,
+          authIndex: String(file.authIndex),
+          authFileIdentityVerified: true,
+          fetchedAtMs: 2_000,
+        },
+      });
+      await flushPromises();
+    });
+
+    expect(mocks.refreshQuotaWithConfig).not.toHaveBeenCalled();
+    expect(
+      mocks.lastAccountOverviewProps?.accountQuotaStatesByRowId['workspace-a']?.entries[0]
+        ?.windows[0]?.remainingPercent
+    ).toBe(60);
   });
 
   // Test 2: auth-files failure does not reload quota until a retry succeeds.

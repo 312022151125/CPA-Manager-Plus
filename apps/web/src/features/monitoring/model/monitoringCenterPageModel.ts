@@ -935,6 +935,20 @@ const getMergeableAccountQuotaEntry = (
   return mergeableEntry;
 };
 
+const isObservedAccountQuotaEvidenceNewer = (
+  activeEntry: AccountQuotaEntry,
+  observedEntry: AccountQuotaEntry
+) => {
+  const observedTime = readFiniteTimestamp(observedEntry.observedAtMs);
+  if (observedTime === null) return true;
+
+  const failureTime = readFiniteTimestamp(activeEntry.failedAtMs);
+  if (failureTime !== null) return observedTime > failureTime;
+
+  const providerTime = readFiniteTimestamp(activeEntry.fetchedAtMs);
+  return providerTime === null || observedTime > providerTime;
+};
+
 export const mergeObservedAccountQuotaEntry = (
   activeEntry: AccountQuotaEntry | undefined,
   observedEntry: AccountQuotaEntry | null
@@ -942,6 +956,9 @@ export const mergeObservedAccountQuotaEntry = (
   const mergeableActiveEntry = getMergeableAccountQuotaEntry(activeEntry);
   if (!mergeableActiveEntry) return observedEntry;
   if (!observedEntry || observedEntry.error) return mergeableActiveEntry;
+  if (!isObservedAccountQuotaEvidenceNewer(activeEntry ?? mergeableActiveEntry, observedEntry)) {
+    return mergeableActiveEntry;
+  }
 
   return {
     ...mergeableActiveEntry,

@@ -673,6 +673,48 @@ describe('monitoringCenterPageModel account quota', () => {
     expect(stores.codexQuota[getQuotaCredentialStoreKey(file)]?.windows).toHaveLength(2);
   });
 
+  it('does not let an older Header overwrite a newer Provider quota', () => {
+    const activeEntry: AccountQuotaEntry = {
+      ...createMergeAccountQuotaEntry('-', null),
+      fetchedAtMs: 2_000,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly limit',
+          remainingPercent: 50,
+          resetLabel: 'tomorrow',
+          usageLabel: 'Used 50%',
+        },
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 80,
+          resetLabel: 'next month',
+          usageLabel: 'Used 20%',
+        },
+      ],
+    };
+    const observedEntry: AccountQuotaEntry = {
+      ...activeEntry,
+      observedAtMs: 1_000,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly limit',
+          remainingPercent: 80,
+          resetLabel: 'later today',
+          usageLabel: 'Used 20%',
+        },
+      ],
+    };
+
+    const merged = mergeObservedAccountQuotaEntry(activeEntry, observedEntry);
+
+    expect(merged).toBe(activeEntry);
+    expect(merged?.windows).toEqual(activeEntry.windows);
+  });
+
   it('keeps a shared refresh failure visible with the previous Provider quota', () => {
     const file = {
       name: 'claude-failure.json',
@@ -1340,7 +1382,7 @@ describe('monitoringCenterPageModel account quota', () => {
     });
   });
 
-  it('merges older header entries into failed account quota state without clearing the failure', () => {
+  it('does not let older Header evidence overwrite a newer Provider failure', () => {
     const target = createTarget({
       provider: 'codex',
       key: 'codex::2::codex.json',
@@ -1412,14 +1454,14 @@ describe('monitoringCenterPageModel account quota', () => {
       failedAtMs: 2_000,
       entries: [
         {
-          planType: 'plus',
+          planType: 'free',
           error: '502 bad gateway',
           failedAtMs: 2_000,
           windows: [
             {
               id: 'monthly',
-              remainingPercent: 55,
-              resetLabel: '07/01 02:00',
+              remainingPercent: 95,
+              resetLabel: '06/30 12:00',
             },
             {
               id: 'spark-five-hour-0',
