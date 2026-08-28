@@ -1336,6 +1336,7 @@
     "detail_forecast_basis_previous": "基於上一個視窗實際值",
     "detail_forecast_unavailable": "暫無可用預測依據，暫不預測",
     "detail_window_boundary_incomplete": "缺少完整視窗邊界，因此未計算區間用量",
+    "detail_current_window_boundary_unconfirmed": "週期邊界尚未確認",
     "detail_scope_incomplete": "模型範圍用量可能不完整（未匹配 {{count}} 個請求）",
     "detail_scope_unknown": "Provider 未提供完整模型範圍，因此未計算該區間用量",
     "detail_quota_snapshot_stale": "額度快照已過期，請重新整理後再參考",
