@@ -645,6 +645,20 @@ describe('accountDetailViewModel', () => {
           cycleEndMs: nowMs + 23 * 60 * 60 * 1000,
           modelScope,
           availability: 'active',
+          currentCycle: {
+            id: 2,
+            activationId: 1,
+            state: 'active',
+            scheduledStartMs: nowMs - 60 * 60 * 1000,
+            scheduledEndMs: nowMs + 23 * 60 * 60 * 1000,
+            actualStartMs: nowMs - 60 * 60 * 1000,
+            actualEndMs: null,
+            durationSeconds: 24 * 60 * 60,
+            boundaryAccuracy: 'exact',
+            endReason: '',
+            parentCycleId: null,
+            forecastEligible: true,
+          },
           previousCycle: {
             id: 1,
             activationId: 1,
@@ -676,7 +690,7 @@ describe('accountDetailViewModel', () => {
     });
   });
 
-  it('does not use dynamic quota progress when the current cycle is not forecast eligible', () => {
+  it('does not forecast from the previous cycle when the current cycle is not forecast eligible', () => {
     const row = makeRow({ provider: 'codex' });
     const nowMs = Date.now();
     const currentKey = accountWindowUsageRequestKey(row.selectionKey, 'weekly', 'current');
@@ -755,12 +769,7 @@ describe('accountDetailViewModel', () => {
       windowUsageByKey,
     });
 
-    expect(viewModel.quota.windows[0].forecast).toEqual({
-      basis: 'previous',
-      requests: 20,
-      tokens: 200_000,
-      cost: 2,
-    });
+    expect(viewModel.quota.windows[0].forecast).toBeNull();
   });
 
   it('does not use stale quota progress without matched previous usage', () => {
