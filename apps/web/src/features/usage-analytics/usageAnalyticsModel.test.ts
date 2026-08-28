@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { MonitoringAnalyticsResponse } from '@/services/api/usageService';
+import type {
+  MonitoringAnalyticsApiKeyStatRow,
+  MonitoringAnalyticsResponse,
+} from '@/services/api/usageService';
 import { buildSourceInfoMap } from '@/utils/sourceResolver';
 import type { UsageRankRow } from './usageAnalyticsModel';
 import {
@@ -783,6 +786,46 @@ describe('usage analytics adapters', () => {
       sourceHash: 'source-hash-a',
     });
     expect(maskApiKeyHash('sk-live-raw-secret-value')).toBe('sk-****alue');
+  });
+
+  it('ranks API keys by cost before request count', () => {
+    const createRow = (
+      id: string,
+      calls: number,
+      cost: number
+    ): MonitoringAnalyticsApiKeyStatRow => ({
+      id,
+      api_key_hash: id,
+      calls,
+      success_calls: calls,
+      failure_calls: 0,
+      success_rate: 1,
+      input_tokens: 0,
+      output_tokens: 0,
+      cached_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      total_tokens: 0,
+      cost,
+      average_latency_ms: null,
+      last_seen_ms: NOW_MS,
+    });
+
+    const rows = buildApiKeyRows([
+      createRow('key-a', 1000, 1),
+      createRow('key-b', 100, 20),
+      createRow('key-c', 50, 20),
+    ]);
+
+    expect(rows.map(({ apiKeyHash, requestCount, estimatedCost }) => ({
+      apiKeyHash,
+      requestCount,
+      estimatedCost,
+    }))).toEqual([
+      { apiKeyHash: 'key-b', requestCount: 100, estimatedCost: 20 },
+      { apiKeyHash: 'key-c', requestCount: 50, estimatedCost: 20 },
+      { apiKeyHash: 'key-a', requestCount: 1000, estimatedCost: 1 },
+    ]);
   });
 
   it('resolves API key aliases by hash across analytics views', () => {
