@@ -15,6 +15,7 @@ import {
   IconSearch,
 } from '@/components/ui/icons';
 import { VisualConfigEditor } from '@/components/config/VisualConfigEditor';
+import type { ApiKeyMutation } from '@/components/config/ApiKeysCardEditor';
 import { DiffModal } from '@/components/config/DiffModal';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { useVisualConfig } from '@/hooks/useVisualConfig';
@@ -26,6 +27,7 @@ import {
   useUsageServiceStore,
 } from '@/stores';
 import { configFileApi } from '@/services/api/configFile';
+import { apiKeysApi } from '@/services/api/apiKeys';
 import {
   getUsageServiceErrorCode,
   isUsageServiceId,
@@ -220,6 +222,25 @@ function isManagerAuthErrorCode(code: string): boolean {
   return code === 'invalid_admin_key' || code === 'invalid_management_key';
 }
 
+// API-key persistence is allowed alongside ordinary Visual drafts, but not alongside
+// an unsaved Source draft or another operation that could write the same config state.
+// eslint-disable-next-line react-refresh/only-export-components
+export function resolveApiKeyOperationBlockReason({
+  sourceDirty,
+  saving,
+  apiKeyMutationInFlight,
+  diffModalOpen,
+}: {
+  sourceDirty: boolean;
+  saving: boolean;
+  apiKeyMutationInFlight: boolean;
+  diffModalOpen: boolean;
+}): 'source_config_dirty' | 'operation_busy' | null {
+  if (saving || apiKeyMutationInFlight || diffModalOpen) return 'operation_busy';
+  if (sourceDirty) return 'source_config_dirty';
+  return null;
+}
+
 const LazyConfigSourceEditor = lazy(() => import('@/components/config/ConfigSourceEditor'));
 
 function readCommercialModeFromYaml(yamlContent: string): boolean {
@@ -262,6 +283,7 @@ export function ConfigPage() {
     loadVisualValuesFromYaml,
     applyVisualChangesToYaml,
     setVisualValues,
+    commitApiKeysText,
   } = useVisualConfig();
 
   const [activeTab, setActiveTab] = useState<ConfigEditorTab>(() => {
@@ -274,6 +296,7 @@ export function ConfigPage() {
   const [sourceConfigLoaded, setSourceConfigLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [apiKeyMutationInFlight, setApiKeyMutationInFlight] = useState(false);
   const [error, setError] = useState('');
   const [dirty, setDirty] = useState(false);
   const [diffModalOpen, setDiffModalOpen] = useState(false);
@@ -314,6 +337,8 @@ export function ConfigPage() {
   const [lastSearchedQuery, setLastSearchedQuery] = useState('');
   const editorRef = useRef<ReactCodeMirrorRef | null>(null);
   const floatingActionsRef = useRef<HTMLDivElement>(null);
+  const savingRef = useRef(false);
+  const apiKeyMutationInFlightRef = useRef(false);
 
   const disableControls = connectionStatus !== 'connected';
   const showManagerTab = panelHostedByUsageService === true;
@@ -462,6 +487,115 @@ export function ConfigPage() {
   const managerCanSave = managerSaveState.canSave;
   const isDirty = isManagerTab ? managerHasPendingSave : sourceDirty;
 
+  const beginApiKeyOperation = useCallback(() => {
+    const blockReason = resolveApiKeyOperationBlockReason({
+      sourceDirty: dirty,
+      saving: savingRef.current || saving,
+      apiKeyMutationInFlight: apiKeyMutationInFlightRef.current,
+      diffModalOpen,
+    });
+    if (blockReason) {
+      const error = new Error(
+        t(
+          blockReason === 'source_config_dirty'
+            ? 'config_management.visual.api_keys.source_dirty_guard'
+            : 'config_management.visual.api_keys.operation_busy'
+        )
+      ) as Error & { code?: string };
+      error.code = blockReason;
+      throw error;
+    }
+
+    apiKeyMutationInFlightRef.current = true;
+    setApiKeyMutationInFlight(true);
+  }, [diffModalOpen, dirty, saving, t]);
+
+  const endApiKeyOperation = useCallback(() => {
+    apiKeyMutationInFlightRef.current = false;
+    setApiKeyMutationInFlight(false);
+  }, []);
+
+  const refreshCleanSourceSnapshot = useCallback(async () => {
+    // A clean source buffer is a server snapshot, so refresh it after CPA updates.
+    // Never rewrite a source draft that the user has already changed.
+    if (dirty) return;
+    try {
+      const latestYaml = await configFileApi.fetchConfigYaml();
+      if (dirty) return;
+      setContent(latestYaml);
+      setServerYaml(latestYaml);
+      setMergedYaml(latestYaml);
+      setPreviewServerYaml(latestYaml);
+    } catch {
+      // The canonical API-key list has already been obtained. A snapshot refresh is best effort.
+    }
+  }, [dirty]);
+
+  const persistApiKeyMutation = useCallback(
+    async (
+      mutation: ApiKeyMutation
+    ): Promise<string[]> => {
+      if (!apiKeyMutationInFlightRef.current) {
+        const error = new Error(t('config_management.visual.api_keys.operation_busy')) as Error & {
+          code?: string;
+        };
+        error.code = 'api_key_operation_busy';
+        throw error;
+      }
+      if (dirty) {
+        const error = new Error(
+          t('config_management.visual.api_keys.source_dirty_guard')
+        ) as Error & { code?: string };
+        error.code = 'source_config_dirty';
+        throw error;
+      }
+
+      if (mutation.type === 'create') {
+        const normalizedApiKey = mutation.apiKey.trim();
+        const currentKeys = await apiKeysApi.list();
+        if (currentKeys.some((key) => key.trim() === normalizedApiKey)) {
+          const error = new Error(
+            t('config_management.visual.api_keys.error_duplicate')
+          ) as Error & { code?: string };
+          error.code = 'api_key_duplicate';
+          throw error;
+        }
+        await apiKeysApi.replace([...currentKeys, normalizedApiKey]);
+      } else if (mutation.type === 'replace') {
+        await apiKeysApi.replaceValue(mutation.oldApiKey, mutation.newApiKey);
+      } else {
+        await apiKeysApi.deleteValue(mutation.apiKey.trim());
+      }
+
+      const canonicalKeys = await apiKeysApi.list();
+      commitApiKeysText(canonicalKeys.join('\n'));
+      await refreshCleanSourceSnapshot();
+      return canonicalKeys;
+    },
+    [commitApiKeysText, dirty, refreshCleanSourceSnapshot, t]
+  );
+
+  const refreshApiKeys = useCallback(async (): Promise<string[]> => {
+    if (!apiKeyMutationInFlightRef.current) {
+      const error = new Error(t('config_management.visual.api_keys.operation_busy')) as Error & {
+        code?: string;
+      };
+      error.code = 'api_key_operation_busy';
+      throw error;
+    }
+    if (dirty) {
+      const error = new Error(
+        t('config_management.visual.api_keys.source_dirty_guard')
+      ) as Error & { code?: string };
+      error.code = 'source_config_dirty';
+      throw error;
+    }
+    const canonicalKeys = await apiKeysApi.list();
+    commitApiKeysText(canonicalKeys.join('\n'));
+    await refreshCleanSourceSnapshot();
+    return canonicalKeys;
+  }, [commitApiKeysText, dirty, refreshCleanSourceSnapshot, t]);
+
   const syncEmbeddedManagerBootstrap = useCallback(
     (serviceBase: string) => {
       if (panelHostedByUsageService !== true) return;
@@ -590,6 +724,8 @@ export function ConfigPage() {
   }, [activeTab, loadManagerConfig]);
 
   const handleConfirmSave = async () => {
+    if (savingRef.current || apiKeyMutationInFlightRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       const latestServerYaml = await configFileApi.fetchConfigYaml();
@@ -652,6 +788,7 @@ export function ConfigPage() {
       const message = err instanceof Error ? err.message : '';
       showNotification(`${t('notification.save_failed')}: ${message}`, 'error');
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -680,6 +817,7 @@ export function ConfigPage() {
   );
 
   const handleManagerSave = async () => {
+    if (apiKeyMutationInFlightRef.current) return;
     if (disableControls) return;
     if (panelHostedByUsageService !== true) return;
     const serviceBase = resolveManagerServiceBase();
@@ -802,11 +940,14 @@ export function ConfigPage() {
       return;
     }
 
+    if (savingRef.current || apiKeyMutationInFlightRef.current) return;
+
     if (activeTab === 'visual' && visualParseError) {
       showNotification(t('config_management.visual_mode_save_blocked'), 'error');
       return;
     }
 
+    savingRef.current = true;
     setSaving(true);
     try {
       const latestServerYaml = await configFileApi.fetchConfigYaml();
@@ -875,6 +1016,7 @@ export function ConfigPage() {
       const message = err instanceof Error ? err.message : '';
       showNotification(`${t('notification.save_failed')}: ${message}`, 'error');
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -887,6 +1029,7 @@ export function ConfigPage() {
   const handleTabChange = useCallback(
     (tab: ConfigEditorTab) => {
       if (tab === activeTab) return;
+      if (apiKeyMutationInFlightRef.current) return;
 
       if (tab === 'manager') {
         setActiveTab(tab);
@@ -1129,6 +1272,7 @@ export function ConfigPage() {
   };
 
   const handleReload = useCallback(() => {
+    if (apiKeyMutationInFlightRef.current || savingRef.current) return;
     if (isManagerTab) {
       if (!managerDirty) {
         void loadManagerConfig();
@@ -1178,7 +1322,7 @@ export function ConfigPage() {
           type="button"
           className={styles.floatingActionButton}
           onClick={handleReload}
-          disabled={loading || saving}
+          disabled={loading || saving || apiKeyMutationInFlight}
           title={t('config_management.reload')}
           aria-label={t('config_management.reload')}
         >
@@ -1190,10 +1334,15 @@ export function ConfigPage() {
           onClick={handleSave}
           disabled={
             isManagerTab
-              ? disableControls || managerLoading || managerSaving || !managerCanSave
+              ? disableControls ||
+                managerLoading ||
+                managerSaving ||
+                apiKeyMutationInFlight ||
+                !managerCanSave
               : disableControls ||
                 loading ||
                 saving ||
+                apiKeyMutationInFlight ||
                 !isDirty ||
                 diffModalOpen ||
                 hasVisualModeError ||
@@ -1226,24 +1375,24 @@ export function ConfigPage() {
       {
         id: 'visual',
         label: t('config_management.tabs.visual'),
-        disabled: saving || loading,
+        disabled: saving || loading || apiKeyMutationInFlight,
       },
       {
         id: 'source',
         label: t('config_management.tabs.source'),
-        disabled: saving || loading,
+        disabled: saving || loading || apiKeyMutationInFlight,
       },
       ...(showManagerTab
         ? [
             {
               id: 'manager' as const,
               label: t('config_management.tabs.manager'),
-              disabled: managerSaving || managerLoading,
+              disabled: managerSaving || managerLoading || apiKeyMutationInFlight,
             },
           ]
         : []),
     ],
-    [loading, managerLoading, managerSaving, saving, showManagerTab, t]
+    [apiKeyMutationInFlight, loading, managerLoading, managerSaving, saving, showManagerTab, t]
   );
 
   return (
@@ -1330,8 +1479,14 @@ export function ConfigPage() {
               values={visualValues}
               validationErrors={visualValidationErrors}
               hasPayloadValidationErrors={visualHasPayloadValidationErrors}
-              disabled={disableControls || loading}
+              disabled={
+                disableControls || loading || saving || diffModalOpen || apiKeyMutationInFlight
+              }
               onChange={setVisualValues}
+              onPersistApiKeyMutation={persistApiKeyMutation}
+              onRefreshApiKeys={refreshApiKeys}
+              onApiKeyOperationStart={beginApiKeyOperation}
+              onApiKeyOperationEnd={endApiKeyOperation}
             />
           ) : (
             <div className={styles.sourceWorkspace}>
@@ -1400,7 +1555,13 @@ export function ConfigPage() {
                     value={content}
                     onChange={handleChange}
                     theme={resolvedTheme}
-                    editable={!disableControls && !loading}
+                    editable={
+                      !disableControls &&
+                      !loading &&
+                      !saving &&
+                      !apiKeyMutationInFlight &&
+                      !diffModalOpen
+                    }
                     placeholder={t('config_management.editor_placeholder')}
                   />
                 </Suspense>

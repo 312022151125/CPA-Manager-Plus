@@ -15,5 +15,10 @@ export const apiKeysApi = {
 
   update: (index: number, value: string) => apiClient.patch('/api-keys', { index, value }),
 
-  delete: (index: number) => apiClient.delete(`/api-keys?index=${index}`)
+  replaceValue: (oldValue: string, newValue: string) =>
+    apiClient.patch('/api-keys', { old: oldValue, new: newValue }),
+
+  delete: (index: number) => apiClient.delete(`/api-keys?index=${index}`),
+
+  deleteValue: (value: string) => apiClient.delete(`/api-keys?value=${encodeURIComponent(value)}`),
 };

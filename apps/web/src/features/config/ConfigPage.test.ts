@@ -6,6 +6,7 @@ import {
   resolveManagerFormDirty,
   resolveManagerRequestAuthKey,
   resolveManagerSaveState,
+  resolveApiKeyOperationBlockReason,
 } from './ConfigPage';
 
 const buildManagerConfig = (overrides: Partial<ManagerConfig> = {}): ManagerConfig => ({
@@ -325,5 +326,42 @@ describe('resolveManagerSaveState', () => {
       hasPendingSave: false,
       canSave: false,
     });
+  });
+});
+
+describe('resolveApiKeyOperationBlockReason', () => {
+  it('blocks API key CRUD for an unsaved Source draft', () => {
+    expect(
+      resolveApiKeyOperationBlockReason({
+        sourceDirty: true,
+        saving: false,
+        apiKeyMutationInFlight: false,
+        diffModalOpen: false,
+      })
+    ).toBe('source_config_dirty');
+  });
+
+  it('allows API key CRUD alongside ordinary Visual dirty state', () => {
+    expect(
+      resolveApiKeyOperationBlockReason({
+        sourceDirty: false,
+        saving: false,
+        apiKeyMutationInFlight: false,
+        diffModalOpen: false,
+      })
+    ).toBeNull();
+  });
+
+  it.each([
+    { saving: true, apiKeyMutationInFlight: false, diffModalOpen: false },
+    { saving: false, apiKeyMutationInFlight: true, diffModalOpen: false },
+    { saving: false, apiKeyMutationInFlight: false, diffModalOpen: true },
+  ])('blocks concurrent operations: %j', (state) => {
+    expect(
+      resolveApiKeyOperationBlockReason({
+        sourceDirty: false,
+        ...state,
+      })
+    ).toBe('operation_busy');
   });
 });
