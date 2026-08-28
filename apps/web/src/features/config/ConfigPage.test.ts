@@ -337,6 +337,7 @@ describe('resolveApiKeyOperationBlockReason', () => {
       resolveApiKeyOperationBlockReason({
         sourceDirty: true,
         saving: false,
+        managerSaving: false,
         apiKeyMutationInFlight: false,
         diffModalOpen: false,
       })
@@ -348,6 +349,7 @@ describe('resolveApiKeyOperationBlockReason', () => {
       resolveApiKeyOperationBlockReason({
         sourceDirty: false,
         saving: false,
+        managerSaving: false,
         apiKeyMutationInFlight: false,
         diffModalOpen: false,
       })
@@ -355,9 +357,10 @@ describe('resolveApiKeyOperationBlockReason', () => {
   });
 
   it.each([
-    { saving: true, apiKeyMutationInFlight: false, diffModalOpen: false },
-    { saving: false, apiKeyMutationInFlight: true, diffModalOpen: false },
-    { saving: false, apiKeyMutationInFlight: false, diffModalOpen: true },
+    { saving: true, managerSaving: false, apiKeyMutationInFlight: false, diffModalOpen: false },
+    { saving: false, managerSaving: true, apiKeyMutationInFlight: false, diffModalOpen: false },
+    { saving: false, managerSaving: false, apiKeyMutationInFlight: true, diffModalOpen: false },
+    { saving: false, managerSaving: false, apiKeyMutationInFlight: false, diffModalOpen: true },
   ])('blocks concurrent operations: %j', (state) => {
     expect(
       resolveApiKeyOperationBlockReason({

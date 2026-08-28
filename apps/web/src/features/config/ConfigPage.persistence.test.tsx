@@ -2,6 +2,11 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiKeyMutation } from '@/components/config/ApiKeysCardEditor';
+import type { ManagerConfigResponse } from '@/services/api/usageService';
+
+vi.mock('react-dom', () => ({
+  createPortal: (children: ReactNode) => children,
+}));
 
 const mocks = vi.hoisted(() => ({
   fetchConfigYaml: vi.fn(),
@@ -21,14 +26,21 @@ const mocks = vi.hoisted(() => ({
   clearCache: vi.fn(),
   fetchGlobalConfig: vi.fn(),
   setUsageServiceConfig: vi.fn(),
+  getManagerConfig: vi.fn(),
+  saveManagerConfig: vi.fn(),
+  capturedApiKeyOperationStart: null as (() => void) | null,
+  capturedApiKeyOperationEnd: null as (() => void) | null,
+  translate: (key: string) => key,
   visualState: {
     apiKeysText: 'sk-old',
     dirty: false,
   },
 }));
 
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: mocks.translate }),
 }));
 
 vi.mock('@/components/common/PageTransitionLayer', () => ({
@@ -49,6 +61,8 @@ vi.mock('@/components/config/VisualConfigEditor', () => ({
     onApiKeyOperationStart: () => void;
     onApiKeyOperationEnd: () => void;
   }) => {
+    mocks.capturedApiKeyOperationStart = onApiKeyOperationStart;
+    mocks.capturedApiKeyOperationEnd = onApiKeyOperationEnd;
     const runMutation = async (mutation: ApiKeyMutation) => {
       try {
         onApiKeyOperationStart();
@@ -83,8 +97,23 @@ vi.mock('@/components/config/VisualConfigEditor', () => ({
   },
 }));
 
-vi.mock('@/components/config/ManagerConfigPanel', () => ({
-  ManagerConfigPanel: () => <div data-test="manager-panel" />,
+vi.mock('./components/ManagerConfigPanel', () => ({
+  ManagerConfigPanel: ({
+    managerSaving,
+    onCollectorModeChange,
+  }: {
+    managerSaving: boolean;
+    onCollectorModeChange: (value: string) => void;
+  }) => (
+    <div data-test="manager-panel">
+      <button
+        type="button"
+        data-test="manager-dirty"
+        disabled={managerSaving}
+        onClick={() => onCollectorModeChange('http')}
+      />
+    </div>
+  ),
 }));
 
 vi.mock('@/components/config/DiffModal', () => ({
@@ -199,10 +228,12 @@ vi.mock('@/services/api/apiKeys', () => ({
 
 vi.mock('@/services/api/usageService', () => ({
   getUsageServiceErrorCode: () => '',
-  isUsageServiceId: () => false,
+  isUsageServiceId: (service?: string) => service === 'test-manager',
   normalizeUsageServiceBase: (value: string) => value,
   usageServiceApi: {
     getInfo: mocks.getInfo,
+    getManagerConfig: mocks.getManagerConfig,
+    saveManagerConfig: mocks.saveManagerConfig,
   },
 }));
 
@@ -214,9 +245,52 @@ const { ConfigPage } = await import('./ConfigPage');
 
 const INITIAL_YAML = 'api-keys:\n  - sk-old\n';
 const LATEST_WITHOUT_OLD_KEY = 'api-keys: []\n';
+const MANAGER_CONFIG_RESPONSE: ManagerConfigResponse = {
+  config: {
+    cpaConnection: {
+      cpaBaseUrl: 'http://cpa.local:8317',
+      managementKeyConfigured: true,
+    },
+    collector: {
+      enabled: true,
+      collectorMode: 'auto',
+      queue: 'usage',
+      popSide: 'right',
+      batchSize: 100,
+      pollIntervalMs: 500,
+      queryLimit: 50000,
+    },
+    externalUsageService: {
+      enabled: false,
+      serviceBase: '',
+    },
+  },
+  source: 'db',
+  cpaUsage: {
+    usageStatisticsEnabled: true,
+    redisUsageQueueRetentionSeconds: 60,
+  },
+};
 
 let renderer: ReactTestRenderer | null = null;
 const originalLocalStorage = globalThis.localStorage;
+const originalDocument = globalThis.document;
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+};
+
+const createDeferred = <T,>(): Deferred<T> => {
+  let resolve!: Deferred<T>['resolve'];
+  let reject!: Deferred<T>['reject'];
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+};
 
 const flush = async () => {
   await act(async () => {
@@ -253,6 +327,32 @@ const clickTab = async (tab: string) => {
   await flush();
 };
 
+const startPendingSave = async () => {
+  const target = renderer?.root.findByProps({ 'aria-label': 'config_management.save' });
+  if (!target) throw new Error('Save button not found');
+  let pending!: Promise<unknown>;
+  await act(async () => {
+    pending = target.props.onClick() as Promise<unknown>;
+    await Promise.resolve();
+  });
+  await flush();
+  return { pending };
+};
+
+const clickSave = async () => {
+  const target = renderer?.root.findByProps({ 'aria-label': 'config_management.save' });
+  if (!target) throw new Error('Save button not found');
+  await act(async () => {
+    await target.props.onClick();
+  });
+  await flush();
+};
+
+const configureManagerMode = () => {
+  mocks.getInfo.mockResolvedValue({ service: 'test-manager' });
+  mocks.getManagerConfig.mockResolvedValue(MANAGER_CONFIG_RESPONSE);
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   Object.defineProperty(globalThis, 'localStorage', {
@@ -270,6 +370,10 @@ beforeEach(() => {
   mocks.apiKeysDeleteValue.mockResolvedValue(undefined);
   mocks.apiKeyMutationErrors.length = 0;
   mocks.getInfo.mockRejectedValue(new Error('not a Manager Server panel'));
+  mocks.getManagerConfig.mockResolvedValue(MANAGER_CONFIG_RESPONSE);
+  mocks.saveManagerConfig.mockResolvedValue(MANAGER_CONFIG_RESPONSE);
+  mocks.capturedApiKeyOperationStart = null;
+  mocks.capturedApiKeyOperationEnd = null;
   mocks.loadVisualValuesFromYaml.mockReturnValue({ ok: true });
   mocks.applyVisualChangesToYaml.mockImplementation((yaml: string) => yaml);
   mocks.commitApiKeysText.mockImplementation((apiKeysText: string) => {
@@ -278,6 +382,10 @@ beforeEach(() => {
   });
   mocks.visualState.apiKeysText = 'sk-old';
   mocks.visualState.dirty = false;
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: { body: {} },
+  });
 });
 
 afterEach(() => {
@@ -291,6 +399,14 @@ afterEach(() => {
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
       value: originalLocalStorage,
+    });
+  }
+  if (originalDocument === undefined) {
+    Reflect.deleteProperty(globalThis, 'document');
+  } else {
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: originalDocument,
     });
   }
 });
@@ -461,5 +577,107 @@ describe('ConfigPage API-key replace preflight', () => {
 
     expect(events).toEqual(['get', 'patch', 'get']);
     expect(mocks.apiKeysReplaceValue).toHaveBeenCalledWith('sk-old', 'sk-new');
+  });
+});
+
+describe('ConfigPage Manager/API-key operation lock', () => {
+  it('blocks API-key operation and tab changes while Manager Save is pending', async () => {
+    configureManagerMode();
+    await mountPage();
+    await clickTab('manager');
+    await click('manager-dirty');
+
+    const saveDeferred = createDeferred<ManagerConfigResponse>();
+    mocks.saveManagerConfig.mockReturnValueOnce(saveDeferred.promise);
+    const { pending: savePromise } = await startPendingSave();
+
+    expect(renderer?.root.findByProps({ 'data-tab': 'visual' }).props.disabled).toBe(true);
+    expect(renderer?.root.findByProps({ 'data-tab': 'source' }).props.disabled).toBe(true);
+    expect(renderer?.root.findByProps({ 'data-tab': 'manager' }).props.disabled).toBe(true);
+    expect(renderer?.root.findByProps({ 'data-tab': 'manager' }).props['data-active']).toBe(true);
+
+    expect(mocks.capturedApiKeyOperationStart).toEqual(expect.any(Function));
+    expect(() => mocks.capturedApiKeyOperationStart!()).toThrow();
+    expect(mocks.apiKeysList).not.toHaveBeenCalled();
+    expect(mocks.apiKeysReplace).not.toHaveBeenCalled();
+    expect(mocks.apiKeysReplaceValue).not.toHaveBeenCalled();
+    expect(mocks.apiKeysDeleteValue).not.toHaveBeenCalled();
+
+    saveDeferred.resolve(MANAGER_CONFIG_RESPONSE);
+    await act(async () => {
+      await savePromise;
+    });
+    await flush();
+
+    expect(renderer?.root.findByProps({ 'data-tab': 'visual' }).props.disabled).toBe(false);
+  });
+
+  it('blocks Manager Save while an API-key operation is in flight', async () => {
+    configureManagerMode();
+    await mountPage();
+    await clickTab('manager');
+    await click('manager-dirty');
+
+    expect(mocks.capturedApiKeyOperationStart).toEqual(expect.any(Function));
+    act(() => {
+      mocks.capturedApiKeyOperationStart!();
+    });
+    await flush();
+
+    await clickSave();
+
+    expect(mocks.saveManagerConfig).not.toHaveBeenCalled();
+
+    expect(mocks.capturedApiKeyOperationEnd).toEqual(expect.any(Function));
+    act(() => {
+      mocks.capturedApiKeyOperationEnd!();
+    });
+    await flush();
+  });
+
+  it('releases the Manager Save lock after a successful request', async () => {
+    configureManagerMode();
+    await mountPage();
+    await clickTab('manager');
+    await click('manager-dirty');
+
+    const saveDeferred = createDeferred<ManagerConfigResponse>();
+    mocks.saveManagerConfig.mockReturnValueOnce(saveDeferred.promise);
+    const { pending: savePromise } = await startPendingSave();
+
+    saveDeferred.resolve(MANAGER_CONFIG_RESPONSE);
+    await act(async () => {
+      await savePromise;
+    });
+    await flush();
+
+    await clickTab('visual');
+    await click('create-key');
+
+    expect(mocks.apiKeysList).toHaveBeenCalled();
+    expect(mocks.apiKeysReplace).toHaveBeenCalledWith(['sk-new']);
+  });
+
+  it('releases the Manager Save lock after a failed request', async () => {
+    configureManagerMode();
+    await mountPage();
+    await clickTab('manager');
+    await click('manager-dirty');
+
+    const saveDeferred = createDeferred<ManagerConfigResponse>();
+    mocks.saveManagerConfig.mockReturnValueOnce(saveDeferred.promise);
+    const { pending: savePromise } = await startPendingSave();
+
+    saveDeferred.reject(new Error('Manager save failed'));
+    await act(async () => {
+      await savePromise;
+    });
+    await flush();
+
+    await clickTab('visual');
+    await click('create-key');
+
+    expect(mocks.apiKeysList).toHaveBeenCalled();
+    expect(mocks.apiKeysReplace).toHaveBeenCalledWith(['sk-new']);
   });
 });

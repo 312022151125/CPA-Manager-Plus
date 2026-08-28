@@ -228,15 +228,19 @@ function isManagerAuthErrorCode(code: string): boolean {
 export function resolveApiKeyOperationBlockReason({
   sourceDirty,
   saving,
+  managerSaving,
   apiKeyMutationInFlight,
   diffModalOpen,
 }: {
   sourceDirty: boolean;
   saving: boolean;
+  managerSaving: boolean;
   apiKeyMutationInFlight: boolean;
   diffModalOpen: boolean;
 }): 'source_config_dirty' | 'operation_busy' | null {
-  if (saving || apiKeyMutationInFlight || diffModalOpen) return 'operation_busy';
+  if (saving || managerSaving || apiKeyMutationInFlight || diffModalOpen) {
+    return 'operation_busy';
+  }
   if (sourceDirty) return 'source_config_dirty';
   return null;
 }
@@ -378,6 +382,7 @@ export function ConfigPage() {
   const editorRef = useRef<ReactCodeMirrorRef | null>(null);
   const floatingActionsRef = useRef<HTMLDivElement>(null);
   const savingRef = useRef(false);
+  const managerSavingRef = useRef(false);
   const apiKeyMutationInFlightRef = useRef(false);
   const sourceSnapshotStaleRef = useRef(false);
 
@@ -538,6 +543,7 @@ export function ConfigPage() {
     const blockReason = resolveApiKeyOperationBlockReason({
       sourceDirty: dirty,
       saving: savingRef.current || saving,
+      managerSaving: managerSavingRef.current || managerSaving,
       apiKeyMutationInFlight: apiKeyMutationInFlightRef.current,
       diffModalOpen,
     });
@@ -555,7 +561,7 @@ export function ConfigPage() {
 
     apiKeyMutationInFlightRef.current = true;
     setApiKeyMutationInFlight(true);
-  }, [diffModalOpen, dirty, saving, t]);
+  }, [diffModalOpen, dirty, managerSaving, saving, t]);
 
   const endApiKeyOperation = useCallback(() => {
     apiKeyMutationInFlightRef.current = false;
@@ -828,7 +834,13 @@ export function ConfigPage() {
       showNotification(t('notification.refresh_failed'), 'error');
       return;
     }
-    if (savingRef.current || apiKeyMutationInFlightRef.current) return;
+    if (
+      savingRef.current ||
+      managerSavingRef.current ||
+      apiKeyMutationInFlightRef.current
+    ) {
+      return;
+    }
     savingRef.current = true;
     setSaving(true);
     try {
@@ -922,7 +934,7 @@ export function ConfigPage() {
   );
 
   const handleManagerSave = async () => {
-    if (apiKeyMutationInFlightRef.current) return;
+    if (managerSavingRef.current || apiKeyMutationInFlightRef.current) return;
     if (disableControls) return;
     if (panelHostedByUsageService !== true) return;
     const serviceBase = resolveManagerServiceBase();
@@ -996,6 +1008,8 @@ export function ConfigPage() {
         savedCPABase !== nextCPABase || managerCPAManagementKeyInput.trim() !== '';
 
       const runSave = async (notifyOnError: boolean) => {
+        if (managerSavingRef.current || apiKeyMutationInFlightRef.current) return;
+        managerSavingRef.current = true;
         setManagerSaving(true);
         try {
           await saveManagerConfigPayload(serviceBase, nextConfig, requestAuthKey);
@@ -1009,6 +1023,7 @@ export function ConfigPage() {
           }
           throw error;
         } finally {
+          managerSavingRef.current = false;
           setManagerSaving(false);
         }
       };
@@ -1045,7 +1060,13 @@ export function ConfigPage() {
       return;
     }
 
-    if (savingRef.current || apiKeyMutationInFlightRef.current) return;
+    if (
+      savingRef.current ||
+      managerSavingRef.current ||
+      apiKeyMutationInFlightRef.current
+    ) {
+      return;
+    }
 
     if (
       shouldBlockStaleSourceSave({
@@ -1145,7 +1166,7 @@ export function ConfigPage() {
   const handleTabChange = useCallback(
     async (tab: ConfigEditorTab) => {
       if (tab === activeTab) return;
-      if (apiKeyMutationInFlightRef.current) return;
+      if (apiKeyMutationInFlightRef.current || managerSavingRef.current) return;
 
       if (tab === 'manager') {
         setActiveTab(tab);
@@ -1416,7 +1437,13 @@ export function ConfigPage() {
   };
 
   const handleReload = useCallback(() => {
-    if (apiKeyMutationInFlightRef.current || savingRef.current) return;
+    if (
+      apiKeyMutationInFlightRef.current ||
+      savingRef.current ||
+      managerSavingRef.current
+    ) {
+      return;
+    }
     if (isManagerTab) {
       if (!managerDirty) {
         void loadManagerConfig();
@@ -1466,7 +1493,7 @@ export function ConfigPage() {
           type="button"
           className={styles.floatingActionButton}
           onClick={handleReload}
-          disabled={loading || saving || apiKeyMutationInFlight}
+          disabled={loading || saving || managerSaving || apiKeyMutationInFlight}
           title={t('config_management.reload')}
           aria-label={t('config_management.reload')}
         >
@@ -1486,6 +1513,7 @@ export function ConfigPage() {
               : disableControls ||
                 loading ||
                 saving ||
+                managerSaving ||
                 apiKeyMutationInFlight ||
                 !isDirty ||
                 diffModalOpen ||
@@ -1519,12 +1547,12 @@ export function ConfigPage() {
       {
         id: 'visual',
         label: t('config_management.tabs.visual'),
-        disabled: saving || loading || apiKeyMutationInFlight,
+        disabled: saving || loading || managerSaving || apiKeyMutationInFlight,
       },
       {
         id: 'source',
         label: t('config_management.tabs.source'),
-        disabled: saving || loading || apiKeyMutationInFlight,
+        disabled: saving || loading || managerSaving || apiKeyMutationInFlight,
       },
       ...(showManagerTab
         ? [
@@ -1624,7 +1652,12 @@ export function ConfigPage() {
               validationErrors={visualValidationErrors}
               hasPayloadValidationErrors={visualHasPayloadValidationErrors}
               disabled={
-                disableControls || loading || saving || diffModalOpen || apiKeyMutationInFlight
+                disableControls ||
+                loading ||
+                saving ||
+                managerSaving ||
+                diffModalOpen ||
+                apiKeyMutationInFlight
               }
               onChange={setVisualValues}
               onPersistApiKeyMutation={persistApiKeyMutation}
@@ -1703,6 +1736,7 @@ export function ConfigPage() {
                       !disableControls &&
                       !loading &&
                       !saving &&
+                      !managerSaving &&
                       !apiKeyMutationInFlight &&
                       !diffModalOpen
                     }
