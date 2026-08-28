@@ -2522,8 +2522,17 @@ function UsageAnalyticsPageInner() {
   const noData = !usage.loading && !usage.error && !hasUsageData(usage.summary, usage.timeline);
   const rankRowLimit = 8;
   const credentialRankRowLimit = 10;
+  const apiKeyRankContext =
+    usage.apiKeyRows.length > rankRowLimit
+      ? t('usage_analytics.api_key_rank_context_top', {
+          limit: rankRowLimit,
+          total: usage.apiKeyRows.length,
+        })
+      : t('usage_analytics.api_key_rank_context_total', {
+          total: usage.apiKeyRows.length,
+        });
   const visibleModelRows = showAllModels ? usage.modelRows : usage.modelRows.slice(0, rankRowLimit);
-  const visibleApiKeyRows = usage.apiKeyRows.slice(0, 8);
+  const visibleApiKeyRows = usage.apiKeyRows.slice(0, rankRowLimit);
   const visibleCredentialRows = usage.credentialRows.slice(0, credentialRankRowLimit);
   const selectedModelKeyDistribution = useMemo(
     () =>
@@ -3193,7 +3202,10 @@ function UsageAnalyticsPageInner() {
           <section className={styles.apiKeyAnalysisGrid}>
             <div className={styles.tablePanel}>
               <div className={styles.panelHeader}>
-                <h2>{t('usage_analytics.api_key_rank_title')}</h2>
+                <div>
+                  <h2>{t('usage_analytics.api_key_rank_title')}</h2>
+                  <p>{apiKeyRankContext}</p>
+                </div>
                 <div className={styles.apiSearchBar}>
                   <IconSearch size={16} />
                   <input
