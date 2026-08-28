@@ -16,6 +16,7 @@ const { mocks } = vi.hoisted(() => ({
   mocks: {
     navigate: vi.fn(),
     copyToClipboard: vi.fn(async () => true),
+    translationCalls: [] as Array<[string, Record<string, unknown> | undefined]>,
     usageState: null as unknown,
   },
 }));
@@ -29,6 +30,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     i18n: { language: 'en' },
     t: (key: string, options?: Record<string, unknown>) => {
+      mocks.translationCalls.push([key, options]);
       if (!options) return key;
       return Object.entries(options).reduce(
         (value, [name, replacement]) => value.replace(`{{${name}}}`, String(replacement)),
@@ -120,6 +122,21 @@ const createRankRow = (overrides: Partial<UsageRankRow> = {}): UsageRankRow => (
   share: 1,
   ...overrides,
 });
+
+const createApiKeyRows = (count: number): UsageRankRow[] =>
+  Array.from({ length: count }, (_, index) =>
+    createRankRow({
+      id: `api-key-${index + 1}`,
+      label: `client-key-${index + 1}`,
+      apiKeyHash: `api-key-${index + 1}`,
+      apiKeyCopyValue: undefined,
+      model: undefined,
+      provider: 'codex',
+      requestCount: count - index,
+      contexts: [],
+      models: [],
+    })
+  );
 
 const createDrilldownEvent = (
   overrides: Partial<UsageDrilldownEvent> = {}
@@ -523,6 +540,7 @@ beforeEach(() => {
   mocks.navigate.mockReset();
   mocks.copyToClipboard.mockReset();
   mocks.copyToClipboard.mockResolvedValue(true);
+  mocks.translationCalls.length = 0;
   mocks.usageState = createUsageState();
 });
 
@@ -830,6 +848,79 @@ describe('UsageAnalyticsPage', () => {
       apiKeyHash: 'abcdef1234567890',
     });
     expect(usageState.setActiveTab).toHaveBeenCalledWith('heatmap');
+  });
+
+  it('caps API key ranking at the shared limit and exposes the filtered total', () => {
+    const apiKeyRows = createApiKeyRows(23);
+    mocks.usageState = createUsageState({
+      activeTab: 'apiKeys',
+      apiKeyRows,
+      keyAnomalies: [],
+      selectedApiKey: apiKeyRows[0],
+      selectedApiKeyTrendSeries: [],
+    });
+    const renderer = renderPage();
+    const rankSection = renderer.root.findAllByType('section').find((section) =>
+      section
+        .findAllByType('h2')
+        .some((heading) => getText(heading) === 'usage_analytics.api_key_rank_title')
+    );
+    if (!rankSection) throw new Error('API key rank section not found');
+    const rankBody = rankSection.findAllByType('tbody')[0];
+    if (!rankBody) throw new Error('API key rank body not found');
+
+    const rankRows = rankBody.findAllByType('tr');
+    const text = getText(renderer.root);
+    expect(rankRows).toHaveLength(8);
+    expect(getText(rankRows[7])).toContain('client-key-8');
+    expect(getText(rankRows[7])).not.toContain('client-key-9');
+    expect(text).toContain('usage_analytics.api_key_rank_context_top');
+    expect(mocks.translationCalls).toContainEqual([
+      'usage_analytics.api_key_rank_context_top',
+      { limit: 8, total: 23 },
+    ]);
+    expect(text).not.toContain('usage_analytics.rank_show_all');
+    expect(text).not.toContain('usage_analytics.rank_collapse');
+  });
+
+  it.each([5, 8])('shows all %s API keys without a misleading Top-8 label', (total) => {
+    const apiKeyRows = createApiKeyRows(total);
+    mocks.usageState = createUsageState({
+      activeTab: 'apiKeys',
+      filters: {
+        ...USAGE_ANALYTICS_DEFAULT_FILTERS,
+        apiKeyKeyword: 'client-key',
+      },
+      apiKeyRows,
+      filterOptions: {
+        models: ['gpt-4o'],
+        api_key_hashes: createApiKeyRows(23).map((row) => row.apiKeyHash || row.id),
+        providers: ['codex'],
+        auth_files: ['auth.json'],
+      },
+      keyAnomalies: [],
+      selectedApiKey: apiKeyRows[0],
+      selectedApiKeyTrendSeries: [],
+    });
+    const renderer = renderPage();
+    const rankSection = renderer.root.findAllByType('section').find((section) =>
+      section
+        .findAllByType('h2')
+        .some((heading) => getText(heading) === 'usage_analytics.api_key_rank_title')
+    );
+    if (!rankSection) throw new Error('API key rank section not found');
+    const rankBody = rankSection.findAllByType('tbody')[0];
+    if (!rankBody) throw new Error('API key rank body not found');
+
+    const text = getText(renderer.root);
+    expect(rankBody.findAllByType('tr')).toHaveLength(total);
+    expect(text).toContain('usage_analytics.api_key_rank_context_total');
+    expect(text).not.toContain('usage_analytics.api_key_rank_context_top');
+    expect(mocks.translationCalls).toContainEqual([
+      'usage_analytics.api_key_rank_context_total',
+      { total },
+    ]);
+    expect(text).not.toContain('usage_analytics.rank_show_all');
   });
 
   it('renders the models tab with unit-economics columns and no insights panel', () => {

@@ -3900,6 +3900,8 @@
     "api_key_compare_title": "客戶端 Key 趨勢",
     "api_key_keyword_placeholder": "搜尋客戶端 Key、帳號或認證標籤",
     "api_key_rank_title": "客戶端 Key 消耗排行",
+    "api_key_rank_context_top": "Top {{limit}} · 共 {{total}} 個客戶端 Key · 按請求數排序",
+    "api_key_rank_context_total": "共 {{total}} 個客戶端 Key · 按請求數排序",
     "api_key_warning_title": "異常客戶端 Key 預警",
     "credential_rank_title": "憑證消耗排行",
     "credential_warning_title": "異常憑證預警",

@@ -3902,6 +3902,8 @@
     "api_key_compare_title": "Client Key Trend",
     "api_key_keyword_placeholder": "Search client key, account, or auth label",
     "api_key_rank_title": "Client Key Usage Ranking",
+    "api_key_rank_context_top": "Top {{limit}} · {{total}} total client keys · sorted by requests",
+    "api_key_rank_context_total": "{{total}} total client keys · sorted by requests",
     "api_key_warning_title": "Anomalous Client Key Alerts",
     "credential_rank_title": "Credential Usage Ranking",
     "credential_warning_title": "Anomalous Credential Alerts",
