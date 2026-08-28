@@ -673,7 +673,8 @@ const buildQuotaWindows = (
     const currentForecastEligible = window.currentCycle
       ? window.currentCycle.forecastEligible
       : !hasLifecycleEvidence;
-    const canForecastCurrentWindow = !hasLifecycleEvidence || currentForecastEligible;
+    const canForecastCurrentWindow =
+      !hasLifecycleEvidence || (currentForecastEligible && window.stale !== true);
     const quotaObservedAtMs =
       typeof window.observedAtMs === 'number' &&
       Number.isFinite(window.observedAtMs) &&

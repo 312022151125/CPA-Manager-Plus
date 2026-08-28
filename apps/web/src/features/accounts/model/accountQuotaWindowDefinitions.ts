@@ -175,6 +175,7 @@ export const buildAccountQuotaUsageRanges = (
       (isReliableBoundary(definition.boundaryAccuracy) ? definition.cycleEndMs : null);
     if (
       currentCycle &&
+      !definition.stale &&
       (definition.availability === undefined || definition.availability === 'active') &&
       currentCycle.state === 'active' &&
       currentCycle.actualEndMs === null &&

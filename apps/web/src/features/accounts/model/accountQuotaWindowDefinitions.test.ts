@@ -127,6 +127,34 @@ describe('accountQuotaWindowDefinitions', () => {
     ]);
   });
 
+  it('keeps reliable previous usage but rejects a stale lifecycle current cycle', () => {
+    const [definition] = buildAccountQuotaWindowDefinitions([makeWindow({})], 30_000);
+    definition.stale = true;
+    definition.availability = 'active';
+    definition.currentCycle = makeCycle({
+      state: 'active',
+      scheduledStartMs: 10_000,
+      scheduledEndMs: 20_000,
+      actualStartMs: 10_000,
+      boundaryAccuracy: 'exact',
+    });
+    definition.previousCycle = makeCycle({
+      id: 1,
+      state: 'closed',
+      scheduledStartMs: 1_000,
+      scheduledEndMs: 8_000,
+      actualStartMs: 1_000,
+      actualEndMs: 8_000,
+      boundaryAccuracy: 'exact',
+      endReason: 'scheduled',
+      forecastEligible: false,
+    });
+
+    expect(buildAccountQuotaUsageRanges(definition, 30_000)).toEqual([
+      { period: 'previous', fromMs: 1_000, toMs: 8_000 },
+    ]);
+  });
+
   it('rejects both lifecycle ranges when both cycles have unreliable boundaries', () => {
     const [definition] = buildAccountQuotaWindowDefinitions([makeWindow({})], 30_000_000);
     definition.boundaryAccuracy = 'unknown';
