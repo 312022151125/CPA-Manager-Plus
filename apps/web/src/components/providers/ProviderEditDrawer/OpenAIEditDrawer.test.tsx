@@ -3,6 +3,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@/i18n';
 import { CoolingPolicySelect } from '@/components/providers/CoolingPolicySelect';
+import styles from '@/features/aiProviders/AiProvidersPage.module.scss';
 
 const authState = vi.hoisted(() => ({
   serverVersion: 'v7.2.93' as string | null,
@@ -123,6 +124,33 @@ describe('OpenAIEditDrawer model discovery', () => {
       'auth-second',
       'socks5://proxy.example:1080'
     );
+
+    act(() => renderer!.unmount());
+  });
+
+  it('keeps an action cell for the header and every API key row', async () => {
+    mocks.getOpenAIProviders.mockResolvedValueOnce([
+      {
+        name: 'openai-example',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [{ apiKey: 'first-key' }, { apiKey: 'second-key' }],
+        models: [],
+      },
+    ]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <OpenAIEditDrawer open editIndex={0} disabled={false} onClose={vi.fn()} onSaved={vi.fn()} />
+      );
+    });
+
+    const actionCells = renderer!.root.findAllByProps({ className: styles.keyTableColAction });
+    expect(actionCells).toHaveLength(3);
+    expect(actionCells[0]?.findAllByType('button')).toHaveLength(0);
+    expect(
+      actionCells.slice(1).map((cell) => cell.findAllByType('button').length)
+    ).toEqual([2, 2]);
 
     act(() => renderer!.unmount());
   });
