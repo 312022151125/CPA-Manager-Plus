@@ -241,6 +241,45 @@ export function resolveApiKeyOperationBlockReason({
   return null;
 }
 
+// CPA appends the replacement value when the old value is missing. Keep replace
+// semantics explicit at the UI boundary so a stale edit cannot become a create.
+// eslint-disable-next-line react-refresh/only-export-components
+export function resolveApiKeyReplacePreflight({
+  currentKeys,
+  oldApiKey,
+  newApiKey,
+}: {
+  currentKeys: string[];
+  oldApiKey: string;
+  newApiKey: string;
+}): 'api_key_stale' | 'api_key_duplicate' | null {
+  const normalizedOldApiKey = oldApiKey.trim();
+  const normalizedNewApiKey = newApiKey.trim();
+  const hasOldApiKey = currentKeys.some((key) => key.trim() === normalizedOldApiKey);
+  if (!hasOldApiKey) return 'api_key_stale';
+
+  if (
+    normalizedOldApiKey !== normalizedNewApiKey &&
+    currentKeys.some((key) => key.trim() === normalizedNewApiKey)
+  ) {
+    return 'api_key_duplicate';
+  }
+
+  return null;
+}
+
+// A stale source buffer must never be used as the payload for a config save.
+// eslint-disable-next-line react-refresh/only-export-components
+export function shouldBlockStaleSourceSave({
+  activeTab,
+  sourceSnapshotStale,
+}: {
+  activeTab: ConfigEditorTab;
+  sourceSnapshotStale: boolean;
+}): boolean {
+  return activeTab === 'source' && sourceSnapshotStale;
+}
+
 const LazyConfigSourceEditor = lazy(() => import('@/components/config/ConfigSourceEditor'));
 
 function readCommercialModeFromYaml(yamlContent: string): boolean {
@@ -297,6 +336,7 @@ export function ConfigPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [apiKeyMutationInFlight, setApiKeyMutationInFlight] = useState(false);
+  const [sourceSnapshotStale, setSourceSnapshotStale] = useState(false);
   const [error, setError] = useState('');
   const [dirty, setDirty] = useState(false);
   const [diffModalOpen, setDiffModalOpen] = useState(false);
@@ -339,6 +379,12 @@ export function ConfigPage() {
   const floatingActionsRef = useRef<HTMLDivElement>(null);
   const savingRef = useRef(false);
   const apiKeyMutationInFlightRef = useRef(false);
+  const sourceSnapshotStaleRef = useRef(false);
+
+  const updateSourceSnapshotStale = useCallback((stale: boolean) => {
+    sourceSnapshotStaleRef.current = stale;
+    setSourceSnapshotStale(stale);
+  }, []);
 
   const disableControls = connectionStatus !== 'connected';
   const showManagerTab = panelHostedByUsageService === true;
@@ -403,6 +449,7 @@ export function ConfigPage() {
       setServerYaml(data);
       setMergedYaml(data);
       setPreviewServerYaml(data);
+      updateSourceSnapshotStale(false);
       setSourceConfigLoaded(true);
       loadVisualValuesFromYaml(data);
     } catch (err: unknown) {
@@ -411,7 +458,7 @@ export function ConfigPage() {
     } finally {
       setLoading(false);
     }
-  }, [loadVisualValuesFromYaml, t]);
+  }, [loadVisualValuesFromYaml, t, updateSourceSnapshotStale]);
 
   useEffect(() => {
     if (activeTab === 'manager') {
@@ -518,18 +565,29 @@ export function ConfigPage() {
   const refreshCleanSourceSnapshot = useCallback(async () => {
     // A clean source buffer is a server snapshot, so refresh it after CPA updates.
     // Never rewrite a source draft that the user has already changed.
-    if (dirty) return;
+    if (dirty) {
+      updateSourceSnapshotStale(true);
+      return false;
+    }
     try {
       const latestYaml = await configFileApi.fetchConfigYaml();
-      if (dirty) return;
+      if (dirty) {
+        updateSourceSnapshotStale(true);
+        return false;
+      }
       setContent(latestYaml);
       setServerYaml(latestYaml);
       setMergedYaml(latestYaml);
       setPreviewServerYaml(latestYaml);
+      updateSourceSnapshotStale(false);
+      return true;
     } catch {
-      // The canonical API-key list has already been obtained. A snapshot refresh is best effort.
+      // The canonical API-key list has already been obtained. Keep the successful
+      // API-key mutation, but prevent a stale source buffer from being saved later.
+      updateSourceSnapshotStale(true);
+      return false;
     }
-  }, [dirty]);
+  }, [dirty, updateSourceSnapshotStale]);
 
   const persistApiKeyMutation = useCallback(
     async (
@@ -562,7 +620,31 @@ export function ConfigPage() {
         }
         await apiKeysApi.replace([...currentKeys, normalizedApiKey]);
       } else if (mutation.type === 'replace') {
-        await apiKeysApi.replaceValue(mutation.oldApiKey, mutation.newApiKey);
+        const normalizedOldApiKey = mutation.oldApiKey.trim();
+        const normalizedNewApiKey = mutation.newApiKey.trim();
+        const currentKeys = await apiKeysApi.list();
+        const preflightError = resolveApiKeyReplacePreflight({
+          currentKeys,
+          oldApiKey: normalizedOldApiKey,
+          newApiKey: normalizedNewApiKey,
+        });
+        if (preflightError === 'api_key_stale') {
+          commitApiKeysText(currentKeys.join('\n'));
+          await refreshCleanSourceSnapshot();
+          const error = new Error(
+            t('config_management.visual.api_keys.stale_key_refreshed')
+          ) as Error & { code?: string };
+          error.code = preflightError;
+          throw error;
+        }
+        if (preflightError === 'api_key_duplicate') {
+          const error = new Error(
+            t('config_management.visual.api_keys.error_duplicate')
+          ) as Error & { code?: string };
+          error.code = preflightError;
+          throw error;
+        }
+        await apiKeysApi.replaceValue(normalizedOldApiKey, normalizedNewApiKey);
       } else {
         await apiKeysApi.deleteValue(mutation.apiKey.trim());
       }
@@ -724,6 +806,15 @@ export function ConfigPage() {
   }, [activeTab, loadManagerConfig]);
 
   const handleConfirmSave = async () => {
+    if (
+      shouldBlockStaleSourceSave({
+        activeTab,
+        sourceSnapshotStale: sourceSnapshotStale || sourceSnapshotStaleRef.current,
+      })
+    ) {
+      showNotification(t('notification.refresh_failed'), 'error');
+      return;
+    }
     if (savingRef.current || apiKeyMutationInFlightRef.current) return;
     savingRef.current = true;
     setSaving(true);
@@ -761,6 +852,7 @@ export function ConfigPage() {
       setServerYaml(latestContent);
       setMergedYaml(latestContent);
       setPreviewServerYaml(latestContent);
+      updateSourceSnapshotStale(false);
       loadVisualValuesFromYaml(latestContent);
 
       // Keep the global config store in sync so sidebar / other pages reflect YAML changes immediately.
@@ -942,6 +1034,16 @@ export function ConfigPage() {
 
     if (savingRef.current || apiKeyMutationInFlightRef.current) return;
 
+    if (
+      shouldBlockStaleSourceSave({
+        activeTab,
+        sourceSnapshotStale: sourceSnapshotStale || sourceSnapshotStaleRef.current,
+      })
+    ) {
+      showNotification(t('notification.refresh_failed'), 'error');
+      return;
+    }
+
     if (activeTab === 'visual' && visualParseError) {
       showNotification(t('config_management.visual_mode_save_blocked'), 'error');
       return;
@@ -1002,6 +1104,7 @@ export function ConfigPage() {
         setServerYaml(latestServerYaml);
         setMergedYaml(nextMergedYaml);
         setPreviewServerYaml(latestServerYaml);
+        updateSourceSnapshotStale(false);
         loadVisualValuesFromYaml(latestServerYaml);
         showNotification(t('config_management.diff.no_changes'), 'info');
         return;
@@ -1027,7 +1130,7 @@ export function ConfigPage() {
   }, []);
 
   const handleTabChange = useCallback(
-    (tab: ConfigEditorTab) => {
+    async (tab: ConfigEditorTab) => {
       if (tab === activeTab) return;
       if (apiKeyMutationInFlightRef.current) return;
 
@@ -1044,8 +1147,34 @@ export function ConfigPage() {
       }
 
       if (tab === 'source') {
-        // Only rewrite YAML when there are pending visual changes; otherwise preserve raw YAML + comments.
-        if (visualDirty) {
+        if (sourceSnapshotStaleRef.current) {
+          try {
+            const latestYaml = await configFileApi.fetchConfigYaml();
+            if (dirty) {
+              updateSourceSnapshotStale(true);
+              showNotification(t('notification.refresh_failed'), 'error');
+              return;
+            }
+            setContent(latestYaml);
+            setServerYaml(latestYaml);
+            setMergedYaml(latestYaml);
+            setPreviewServerYaml(latestYaml);
+            updateSourceSnapshotStale(false);
+
+            if (visualDirty) {
+              const nextContent = applyVisualChangesToYaml(latestYaml);
+              if (nextContent !== latestYaml) {
+                setContent(nextContent);
+                setDirty(true);
+              }
+            }
+          } catch {
+            updateSourceSnapshotStale(true);
+            showNotification(t('notification.refresh_failed'), 'error');
+            return;
+          }
+        } else if (visualDirty) {
+          // Only rewrite YAML when there are pending visual changes; otherwise preserve raw YAML + comments.
           const nextContent = applyVisualChangesToYaml(content);
           if (nextContent !== content) {
             setContent(nextContent);
@@ -1070,10 +1199,12 @@ export function ConfigPage() {
       activeTab,
       applyVisualChangesToYaml,
       content,
+      dirty,
       loadVisualValuesFromYaml,
       showNotification,
       sourceConfigLoaded,
       t,
+      updateSourceSnapshotStale,
       visualDirty,
     ]
   );

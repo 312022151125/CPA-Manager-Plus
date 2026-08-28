@@ -309,7 +309,7 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
     );
   });
 
-  it('migrates a changed key alias by writing the new hash before deleting the old hash', async () => {
+  it('migrates a same-value alias without redundantly deleting the old hash', async () => {
     const events: string[] = [];
     const oldHash = sha256Hex('sk-old');
     const onPersistApiKeyMutation = vi.fn(async () => {
@@ -334,7 +334,7 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
     setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
     await clickButton(editor.renderer, 'config_management.visual.common.update');
 
-    expect(events).toEqual(['cpa-patch', 'alias-save', 'alias-delete']);
+    expect(events).toEqual(['cpa-patch', 'alias-save']);
     expect(mocks.saveApiKeyAliases).toHaveBeenCalledWith(
       'http://manager.local',
       [{ apiKeyHash: sha256Hex('sk-new'), alias: 'MacBook' }],
@@ -342,6 +342,36 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
       [sha256Hex('sk-new')],
       true
     );
+    expect(mocks.deleteApiKeyAlias).not.toHaveBeenCalled();
+  });
+
+  it('deletes the old hash after a changed alias migration', async () => {
+    const events: string[] = [];
+    const oldHash = sha256Hex('sk-old');
+    const onPersistApiKeyMutation = vi.fn(async () => {
+      events.push('cpa-patch');
+      editor.updateValue('sk-new');
+      return ['sk-new'];
+    });
+    mocks.saveApiKeyAliases.mockImplementation(async (_base, items) => {
+      events.push('alias-save');
+      return { items };
+    });
+    mocks.deleteApiKeyAlias.mockImplementation(async () => {
+      events.push('alias-delete');
+    });
+    const editor = mountEditor('sk-old', {
+      aliases: [{ apiKeyHash: oldHash, alias: 'MacBook' }],
+      onPersistApiKeyMutation,
+    });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.edit');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    setInput(editor.renderer, ALIAS_PLACEHOLDER, 'Server');
+    await clickButton(editor.renderer, 'config_management.visual.common.update');
+
+    expect(events).toEqual(['cpa-patch', 'alias-save', 'alias-delete']);
     expect(mocks.deleteApiKeyAlias).toHaveBeenCalledWith(
       'http://manager.local',
       oldHash,
@@ -381,6 +411,26 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
       'config_management.visual.api_keys.update_partial_success',
       'warning'
     );
+  });
+
+  it('closes with a stale warning when replace preflight rejects a missing old key', async () => {
+    const staleError = new Error('stale key') as Error & { code?: string };
+    staleError.code = 'api_key_stale';
+    const onPersistApiKeyMutation = vi.fn(async () => {
+      throw staleError;
+    });
+    const editor = mountEditor('sk-old', { onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.edit');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    await clickButton(editor.renderer, 'config_management.visual.common.update');
+
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'config_management.visual.api_keys.stale_key_refreshed',
+      'warning'
+    );
+    expect(editor.renderer.root.findAllByProps({ 'data-test-modal': 'open' })).toHaveLength(0);
   });
 
   it('deletes CPA before cleaning up the alias', async () => {

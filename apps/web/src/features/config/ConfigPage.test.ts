@@ -7,6 +7,8 @@ import {
   resolveManagerRequestAuthKey,
   resolveManagerSaveState,
   resolveApiKeyOperationBlockReason,
+  resolveApiKeyReplacePreflight,
+  shouldBlockStaleSourceSave,
 } from './ConfigPage';
 
 const buildManagerConfig = (overrides: Partial<ManagerConfig> = {}): ManagerConfig => ({
@@ -363,5 +365,51 @@ describe('resolveApiKeyOperationBlockReason', () => {
         ...state,
       })
     ).toBe('operation_busy');
+  });
+});
+
+describe('resolveApiKeyReplacePreflight', () => {
+  it('rejects a replace when the old key is no longer in CPA', () => {
+    expect(
+      resolveApiKeyReplacePreflight({
+        currentKeys: ['sk-other'],
+        oldApiKey: ' sk-old ',
+        newApiKey: ' sk-new ',
+      })
+    ).toBe('api_key_stale');
+  });
+
+  it('rejects a replace when the new key already exists in CPA', () => {
+    expect(
+      resolveApiKeyReplacePreflight({
+        currentKeys: ['sk-old', 'sk-new'],
+        oldApiKey: 'sk-old',
+        newApiKey: 'sk-new',
+      })
+    ).toBe('api_key_duplicate');
+  });
+
+  it('allows a replace only when the old key exists and the new key is unique', () => {
+    expect(
+      resolveApiKeyReplacePreflight({
+        currentKeys: ['sk-old'],
+        oldApiKey: ' sk-old ',
+        newApiKey: ' sk-new ',
+      })
+    ).toBeNull();
+  });
+});
+
+describe('shouldBlockStaleSourceSave', () => {
+  it('blocks a Source save while the snapshot is stale', () => {
+    expect(shouldBlockStaleSourceSave({ activeTab: 'source', sourceSnapshotStale: true })).toBe(
+      true
+    );
+  });
+
+  it('does not block Visual save because of a stale Source snapshot', () => {
+    expect(shouldBlockStaleSourceSave({ activeTab: 'visual', sourceSnapshotStale: true })).toBe(
+      false
+    );
   });
 });

@@ -362,7 +362,13 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
         ? String((error as { code?: unknown }).code || '')
         : '';
     const message = error instanceof Error ? error.message : String(error);
-    if (code === 'source_config_dirty' || code === 'api_key_operation_busy') return message;
+    if (
+      code === 'source_config_dirty' ||
+      code === 'api_key_operation_busy' ||
+      code === 'api_key_duplicate'
+    ) {
+      return message;
+    }
     return `${t('config_management.visual.api_keys.save_failed')}: ${message}`;
   };
 
@@ -559,7 +565,14 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
         } else if (isReplace && oldApiKeyHash && oldAlias) {
           await deleteAliasForHash(oldApiKeyHash);
         }
-        if (isReplace && oldApiKeyHash && oldApiKeyHash !== newApiKeyHash && trimmedAlias) {
+        if (
+          isReplace &&
+          oldApiKeyHash &&
+          oldAlias &&
+          oldApiKeyHash !== newApiKeyHash &&
+          trimmedAlias &&
+          !isExpectedAliasMigration
+        ) {
           await deleteAliasForHash(oldApiKeyHash);
         }
       } catch {
@@ -583,6 +596,15 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
       );
       closeModal();
     } catch (error) {
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: unknown }).code || '')
+          : '';
+      if (code === 'api_key_stale') {
+        showNotification(t('config_management.visual.api_keys.stale_key_refreshed'), 'warning');
+        closeModal();
+        return;
+      }
       setFormError(getPersistenceErrorMessage(error));
     } finally {
       endMutation();
