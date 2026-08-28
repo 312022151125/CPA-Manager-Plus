@@ -619,6 +619,7 @@ export function ConfigPage() {
           throw error;
         }
         await apiKeysApi.replace([...currentKeys, normalizedApiKey]);
+        updateSourceSnapshotStale(true);
       } else if (mutation.type === 'replace') {
         const normalizedOldApiKey = mutation.oldApiKey.trim();
         const normalizedNewApiKey = mutation.newApiKey.trim();
@@ -645,16 +646,28 @@ export function ConfigPage() {
           throw error;
         }
         await apiKeysApi.replaceValue(normalizedOldApiKey, normalizedNewApiKey);
+        updateSourceSnapshotStale(true);
       } else {
         await apiKeysApi.deleteValue(mutation.apiKey.trim());
+        updateSourceSnapshotStale(true);
       }
 
-      const canonicalKeys = await apiKeysApi.list();
+      let canonicalKeys: string[];
+      try {
+        canonicalKeys = await apiKeysApi.list();
+      } catch (error) {
+        const refreshError = new Error(
+          t('config_management.visual.api_keys.state_refresh_failed')
+        ) as Error & { cause?: unknown; code?: string };
+        refreshError.code = 'api_key_state_refresh_failed';
+        refreshError.cause = error;
+        throw refreshError;
+      }
       commitApiKeysText(canonicalKeys.join('\n'));
       await refreshCleanSourceSnapshot();
       return canonicalKeys;
     },
-    [commitApiKeysText, dirty, refreshCleanSourceSnapshot, t]
+    [commitApiKeysText, dirty, refreshCleanSourceSnapshot, t, updateSourceSnapshotStale]
   );
 
   const refreshApiKeys = useCallback(async (): Promise<string[]> => {

@@ -3573,6 +3573,7 @@
         "delete_partial_success": "API 密钥已删除，但别名清理失败。",
         "stale_key_refreshed": "该 API 密钥已不在 CPA 中，列表已刷新。",
         "canonical_key_missing": "刷新后的 CPA API 密钥列表中未找到刚保存的密钥。",
+        "state_refresh_failed": "API 密钥变更已提交，但最新状态刷新失败。请重新加载页面以确认当前状态。",
         "source_dirty_guard": "源配置存在未保存修改。请先保存或撤销源配置修改，再管理 API 密钥。",
         "operation_busy": "另一个 API 密钥操作或配置保存正在进行，请稍候。"
       },

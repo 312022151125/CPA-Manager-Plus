@@ -3575,6 +3575,7 @@
         "delete_partial_success": "API key was deleted, but alias cleanup failed.",
         "stale_key_refreshed": "This API key is no longer in CPA; the list has been refreshed.",
         "canonical_key_missing": "CPA did not return the saved API key after refreshing the list.",
+        "state_refresh_failed": "The API key change was submitted, but the latest state could not be refreshed. Reload the page to confirm the current state.",
         "source_dirty_guard": "The source configuration has unsaved changes. Save or discard the source changes before managing API keys.",
         "operation_busy": "Another API key or configuration save is in progress. Please wait."
       },

@@ -365,7 +365,8 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
     if (
       code === 'source_config_dirty' ||
       code === 'api_key_operation_busy' ||
-      code === 'api_key_duplicate'
+      code === 'api_key_duplicate' ||
+      code === 'api_key_state_refresh_failed'
     ) {
       return message;
     }

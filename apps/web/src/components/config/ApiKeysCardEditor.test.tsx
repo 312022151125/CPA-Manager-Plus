@@ -244,6 +244,27 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
     ).toContain('CPA unavailable');
   });
 
+  it('reports an unknown API-key state after CPA succeeds but canonical refresh fails', async () => {
+    const refreshError = new Error('state refresh failed') as Error & { code?: string };
+    refreshError.code = 'api_key_state_refresh_failed';
+    const onPersistApiKeyMutation = vi.fn(async () => {
+      throw refreshError;
+    });
+    const editor = mountEditor('', { onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.api_keys.add');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    setInput(editor.renderer, ALIAS_PLACEHOLDER, 'MacBook');
+    await clickButton(editor.renderer, 'config_management.visual.common.add');
+
+    expect(mocks.saveApiKeyAliases).not.toHaveBeenCalled();
+    expect(editor.renderer.root.findAllByProps({ 'data-test-modal': 'open' })).toHaveLength(1);
+    expect(
+      editor.renderer.root.findByProps({ className: 'error-box' }).children.join('')
+    ).toContain('state refresh failed');
+  });
+
   it('keeps a CPA-created key when alias persistence fails and reports partial success', async () => {
     const onPersistApiKeyMutation = vi.fn(async () => {
       editor.updateValue('sk-new');

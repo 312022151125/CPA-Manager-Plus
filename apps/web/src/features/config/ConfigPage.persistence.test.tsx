@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   apiKeysReplace: vi.fn(),
   apiKeysReplaceValue: vi.fn(),
   apiKeysDeleteValue: vi.fn(),
+  apiKeyMutationErrors: [] as unknown[],
   getInfo: vi.fn(),
   showNotification: vi.fn(),
   showConfirmation: vi.fn(),
@@ -52,8 +53,9 @@ vi.mock('@/components/config/VisualConfigEditor', () => ({
       try {
         onApiKeyOperationStart();
         await onPersistApiKeyMutation(mutation);
-      } catch {
+      } catch (error) {
         // The real editor renders mutation errors. This harness only observes the page contract.
+        mocks.apiKeyMutationErrors.push(error);
       } finally {
         onApiKeyOperationEnd();
       }
@@ -70,6 +72,11 @@ vi.mock('@/components/config/VisualConfigEditor', () => ({
           type="button"
           data-test="replace-key"
           onClick={() => runMutation({ type: 'replace', oldApiKey: 'sk-old', newApiKey: 'sk-new' })}
+        />
+        <button
+          type="button"
+          data-test="delete-key"
+          onClick={() => runMutation({ type: 'delete', apiKey: 'sk-old' })}
         />
       </div>
     );
@@ -261,6 +268,7 @@ beforeEach(() => {
   mocks.apiKeysReplace.mockResolvedValue(undefined);
   mocks.apiKeysReplaceValue.mockResolvedValue(undefined);
   mocks.apiKeysDeleteValue.mockResolvedValue(undefined);
+  mocks.apiKeyMutationErrors.length = 0;
   mocks.getInfo.mockRejectedValue(new Error('not a Manager Server panel'));
   mocks.loadVisualValuesFromYaml.mockReturnValue({ ok: true });
   mocks.applyVisualChangesToYaml.mockImplementation((yaml: string) => yaml);
@@ -288,6 +296,79 @@ afterEach(() => {
 });
 
 describe('ConfigPage API-key source snapshot safety', () => {
+  it('marks Source stale after delete succeeds but canonical key refresh fails', async () => {
+    mocks.apiKeysList.mockRejectedValueOnce(new Error('canonical refresh failed'));
+    mocks.fetchConfigYaml
+      .mockResolvedValueOnce(INITIAL_YAML)
+      .mockRejectedValueOnce(new Error('source refresh failed'));
+    await mountPage();
+
+    await click('delete-key');
+
+    expect(mocks.apiKeysDeleteValue).toHaveBeenCalledWith('sk-old');
+    expect(mocks.commitApiKeysText).not.toHaveBeenCalled();
+    expect(mocks.apiKeyMutationErrors).toHaveLength(1);
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).toBe(
+      'api_key_state_refresh_failed'
+    );
+
+    await clickTab('source');
+
+    expect(mocks.fetchConfigYaml).toHaveBeenCalledTimes(2);
+    expect(renderer?.root.findByProps({ 'data-tab': 'visual' }).props['data-active']).toBe(true);
+    expect(renderer?.root.findAllByProps({ 'data-test': 'source-editor' })).toHaveLength(0);
+    expect(mocks.saveConfigYaml).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith('notification.refresh_failed', 'error');
+  });
+
+  it('keeps Source stale and skips Alias-dependent completion after create canonical refresh fails', async () => {
+    mocks.apiKeysList
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('canonical refresh failed'));
+    mocks.fetchConfigYaml
+      .mockResolvedValueOnce(INITIAL_YAML)
+      .mockRejectedValueOnce(new Error('source refresh failed'));
+    await mountPage();
+
+    await click('create-key');
+
+    expect(mocks.apiKeysReplace).toHaveBeenCalledWith(['sk-new']);
+    expect(mocks.commitApiKeysText).not.toHaveBeenCalled();
+    expect(mocks.apiKeyMutationErrors).toHaveLength(1);
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).toBe(
+      'api_key_state_refresh_failed'
+    );
+
+    await clickTab('source');
+
+    expect(mocks.fetchConfigYaml).toHaveBeenCalledTimes(2);
+    expect(renderer?.root.findByProps({ 'data-tab': 'visual' }).props['data-active']).toBe(true);
+  });
+
+  it('keeps Source stale and skips alias migration after replace canonical refresh fails', async () => {
+    mocks.apiKeysList
+      .mockResolvedValueOnce(['sk-old'])
+      .mockRejectedValueOnce(new Error('canonical refresh failed'));
+    mocks.fetchConfigYaml
+      .mockResolvedValueOnce(INITIAL_YAML)
+      .mockRejectedValueOnce(new Error('source refresh failed'));
+    await mountPage();
+
+    await click('replace-key');
+
+    expect(mocks.apiKeysReplaceValue).toHaveBeenCalledWith('sk-old', 'sk-new');
+    expect(mocks.commitApiKeysText).not.toHaveBeenCalled();
+    expect(mocks.apiKeyMutationErrors).toHaveLength(1);
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).toBe(
+      'api_key_state_refresh_failed'
+    );
+
+    await clickTab('source');
+
+    expect(mocks.fetchConfigYaml).toHaveBeenCalledTimes(2);
+    expect(renderer?.root.findByProps({ 'data-tab': 'visual' }).props['data-active']).toBe(true);
+  });
+
   it('keeps a successful API-key commit when the source snapshot refresh fails', async () => {
     mocks.fetchConfigYaml
       .mockReset()
