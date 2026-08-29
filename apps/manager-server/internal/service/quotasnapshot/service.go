@@ -1030,13 +1030,7 @@ func mergeLifecycleWindows(
 		window.CurrentCycle = quotaCycleResponse(state.CurrentCycle, true)
 		window.PreviousCycle = quotaCycleResponse(state.PreviousCycle, false)
 		if state.CurrentCycle != nil {
-			// The window exposes the provider's canonical scheduled boundary.
-			// actual_start_ms may carry a confirmed counter-reset transition
-			// that differs from the scheduled start and is not a display start.
 			start := state.CurrentCycle.ActualStartMS
-			if state.CurrentCycle.ScheduledStartMS != nil {
-				start = *state.CurrentCycle.ScheduledStartMS
-			}
 			window.CycleStartMS = &start
 			window.CycleEndMS = copyInt64Pointer(state.CurrentCycle.ScheduledEndMS)
 			window.DurationSeconds = copyInt64Pointer(state.CurrentCycle.DurationSeconds)

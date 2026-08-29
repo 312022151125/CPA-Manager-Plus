@@ -1063,6 +1063,14 @@ func reconcileCycle(
 		id, restoreErr := restoreOrInsertCycle(ctx, tx, activationID, observationID, snapshot)
 		return id, 0, false, restoreErr
 	}
+	temporallyInvalidBoundary := cycleBoundaryIsTemporallyInvalidAgainstActive(active, *snapshot)
+	if temporallyInvalidBoundary {
+		// The incoming boundary is already expired while the active cycle's
+		// scheduled end still covers the observation time. Sanitize the
+		// evidence to the current boundary before any lifecycle transition
+		// consumes it; the counter and observation time stay untouched.
+		applyActiveCycleBoundary(snapshot, active)
+	}
 	cycleMatches := cycleMatchesSnapshot(active, *snapshot)
 	if isConfirmedLifecycleBoundary(*snapshot) {
 		counterReset, err := quotaCounterResetDetected(ctx, tx, active, *snapshot)
@@ -1082,10 +1090,7 @@ func reconcileCycle(
 		}
 	}
 	refreshExpiredBoundary := cycleBoundaryShouldRefreshExpiredCurrent(active, *snapshot)
-	actualStartMS := *snapshot.CycleStartMS
-	if refreshExpiredBoundary {
-		actualStartMS = correctedActiveCycleActualStart(active, *snapshot)
-	}
+	actualStartMS := correctedActiveCycleActualStart(active, *snapshot)
 	if cycleMatches {
 		if cycleBoundaryCanReplaceActive(active, *snapshot) || refreshExpiredBoundary {
 			if _, err := tx.ExecContext(ctx, `update account_quota_cycles set
@@ -1209,11 +1214,26 @@ func cycleBoundaryShouldRefreshExpiredCurrent(
 		*snapshot.CycleEndMS > snapshot.ObservedAtMS
 }
 
+// cycleBoundaryIsTemporallyInvalidAgainstActive reports whether an incoming
+// boundary is already expired while the active cycle's scheduled end still
+// covers the observation time. Such evidence is temporally stale: temporal
+// validity outranks accuracy, so it must not move a current cycle into the
+// past.
+func cycleBoundaryIsTemporallyInvalidAgainstActive(
+	cycle model.AccountQuotaCycle,
+	snapshot model.AccountQuotaSnapshot,
+) bool {
+	if cycle.ScheduledEndMS == nil ||
+		snapshot.CycleEndMS == nil {
+		return false
+	}
+	return *cycle.ScheduledEndMS > snapshot.ObservedAtMS &&
+		*snapshot.CycleEndMS <= snapshot.ObservedAtMS
+}
+
 // cycleBoundaryCanReplaceActive reports whether an incoming higher-accuracy
-// boundary may replace the active cycle boundary. While the stored scheduled
-// end still covers the observation time, an already expired incoming boundary
-// must not win on precision alone: temporal validity outranks accuracy, so
-// accepting it would move a current cycle back into the past.
+// boundary may replace the active cycle boundary. A temporally stale incoming
+// boundary never qualifies, even on a precision upgrade.
 func cycleBoundaryCanReplaceActive(
 	cycle model.AccountQuotaCycle,
 	snapshot model.AccountQuotaSnapshot,
@@ -1221,19 +1241,16 @@ func cycleBoundaryCanReplaceActive(
 	if snapshot.CycleEndMS == nil {
 		return false
 	}
-	if cycle.ScheduledEndMS != nil &&
-		*cycle.ScheduledEndMS > snapshot.ObservedAtMS &&
-		*snapshot.CycleEndMS <= snapshot.ObservedAtMS {
+	if cycleBoundaryIsTemporallyInvalidAgainstActive(cycle, snapshot) {
 		return false
 	}
 	return cycleBoundaryShouldUpgrade(cycle, snapshot)
 }
 
-// correctedActiveCycleActualStart keeps an independently confirmed
-// actual_start_ms while an expired-boundary correction moves the scheduled
-// boundary. Counter-reset detection is the only writer that separates
-// actual_start_ms from the scheduled start, so a difference marks a confirmed
-// reset transition that boundary evidence alone must not overwrite.
+// correctedActiveCycleActualStart preserves an independently established
+// actual transition when the active cycle's actual start differs from its
+// scheduled start. Boundary evidence updates scheduled timing and must not
+// rewrite that transition.
 func correctedActiveCycleActualStart(
 	cycle model.AccountQuotaCycle,
 	snapshot model.AccountQuotaSnapshot,
