@@ -322,14 +322,19 @@ const mergeProviderKeyPayload = (
   payload: Record<string, unknown>,
   knownFields: readonly string[]
 ) => {
-  // A payload that defines any fingerprint variant (including the ''
-  // explicit-clear signal from the form) manages the fingerprint itself:
-  // the raw fingerprint value is replaced/cleared and legacy CCH fields
-  // are not restored. Otherwise both raw groups round-trip untouched,
-  // including unknown future fingerprint-profile values.
-  const fingerprintManaged = hasDefinedField(payload, FINGERPRINT_PROFILE_FIELDS);
+  // Fingerprint and legacy CCH round-trip independently:
+  // - untouched (no fingerprint variant in the payload): both raw groups are
+  //   preserved verbatim, including unknown future fingerprint-profile values.
+  // - explicitly enabled (payload carries a profile): the raw fingerprint is
+  //   replaced and the legacy CCH field is kept, so moving a config to the
+  //   new profile never silently drops its previous CCH setting (older CPA
+  //   builds ignore fingerprint-profile and would otherwise lose both).
+  // - explicitly cleared (payload carries ''): the raw fingerprint and the
+  //   legacy CCH field are both dropped.
+  const fingerprintDefined = hasDefinedField(payload, FINGERPRINT_PROFILE_FIELDS);
+  const fingerprintCleared = FINGERPRINT_PROFILE_FIELDS.some((field) => payload[field] === '');
   const next = mergeKnownFields(raw, payload, knownFields);
-  if (fingerprintManaged) {
+  if (fingerprintDefined) {
     FINGERPRINT_PROFILE_FIELDS.forEach((field) => {
       if (next[field] === '') {
         delete next[field];
@@ -337,8 +342,10 @@ const mergeProviderKeyPayload = (
     });
   }
   preserveOmittedRawField(raw, payload, next, DISABLE_COOLING_FIELDS);
-  if (!fingerprintManaged) {
+  if (!fingerprintDefined) {
     preserveOmittedRawField(raw, payload, next, FINGERPRINT_PROFILE_FIELDS);
+  }
+  if (!fingerprintCleared) {
     preserveOmittedRawField(raw, payload, next, LEGACY_CCH_FIELDS);
   }
   const models = mergeModelPayloads(raw, payload.models);
@@ -468,6 +475,26 @@ const matchesProviderConfig = (
     'api-key': original.apiKey,
     'base-url': original.baseUrl,
   });
+
+export const findMatchingProviderKeyConfig = (
+  list: ProviderKeyConfig[],
+  reference: GeminiKeyConfig | ProviderKeyConfig
+): ProviderKeyConfig | undefined =>
+  list.find((item) => matchesProviderConfig(item as unknown as Record<string, unknown>, reference));
+
+// Read-back check for explicit fingerprint changes. Older CPA builds unmarshal
+// config sections into structs without fingerprint-profile, silently ignore
+// the field, and still answer 200 — so a successful PUT alone proves nothing.
+// An explicit Default ('') requires the saved config to expose no profile.
+export const isRequestFingerprintVerified = (
+  requested: ProviderKeyConfig['fingerprintProfile'],
+  saved: ProviderKeyConfig | undefined
+): boolean => {
+  if (requested === 'claude-code-cli') {
+    return saved?.fingerprintProfile === 'claude-code-cli';
+  }
+  return saved !== undefined && saved.fingerprintProfile === undefined;
+};
 
 const extractArrayPayload = (data: unknown, key: string): unknown[] => {
   if (Array.isArray(data)) return data;
@@ -640,6 +667,17 @@ const serializeVertexModelAliases = (models?: ModelAlias[]) =>
         })
         .filter(Boolean)
     : undefined;
+
+// An update that leaves the fingerprint untouched must not carry it in the
+// payload: the round-tripped form value would otherwise read as an explicit
+// change and make the merge layer drop legacy CCH fields from the raw config.
+const serializeClaudeUpdatePayload = (original: ProviderKeyConfig, value: ProviderKeyConfig) => {
+  const payload = serializeProviderKey(value);
+  if (value.fingerprintProfile === original.fingerprintProfile) {
+    delete payload['fingerprint-profile'];
+  }
+  return payload;
+};
 
 const serializeVertexKey = (config: ProviderKeyConfig) => {
   const payload: Record<string, unknown> = {};
@@ -897,7 +935,7 @@ export const providersApi = {
       replaceLatestProviderRecord(
         latestItems,
         (record) => matchesProviderConfig(record, original),
-        serializeProviderKey(value),
+        serializeClaudeUpdatePayload(original, value),
         (raw, payload) => mergeProviderKeyPayload(raw, payload, CLAUDE_KEY_FIELDS)
       )
     ),

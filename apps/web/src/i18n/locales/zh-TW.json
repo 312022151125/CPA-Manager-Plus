@@ -4359,6 +4359,7 @@
     "xai_base_url_required": "請填寫 xAI Base URL",
     "claude_config_added": "Claude 設定新增成功",
     "claude_config_updated": "Claude 設定更新成功",
+    "claude_fingerprint_verify_failed": "無法確認請求指紋已生效，目前連線的 CPA 可能不支援此設定。",
     "claude_config_deleted": "Claude 設定刪除成功",
     "vertex_config_added": "Vertex 設定新增成功",
     "vertex_config_updated": "Vertex 設定更新成功",

@@ -3,7 +3,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
-import { providersApi } from '@/services/api';
+import {
+  findMatchingProviderKeyConfig,
+  isRequestFingerprintVerified,
+  providersApi,
+} from '@/services/api';
 import {
   useAuthStore,
   useClaudeEditDraftStore,
@@ -473,19 +477,47 @@ export function AiProvidersClaudeEditLayout() {
         rebuildMidSystemMessage: form.rebuildMidSystemMessage,
       };
 
+      const fingerprintExplicitlyChanged =
+        editIndex !== null
+          ? configs[editIndex].fingerprintProfile !== payload.fingerprintProfile
+          : payload.fingerprintProfile !== undefined;
+
       if (editIndex !== null) {
         await providersApi.updateClaudeConfig(configs[editIndex], payload);
       } else {
         await providersApi.createClaudeConfig(payload);
       }
-      const syncedList = await providersApi.getClaudeConfigs().catch(() =>
-        editIndex !== null
+      let fetchedList: ProviderKeyConfig[] | null = null;
+      try {
+        fetchedList = await providersApi.getClaudeConfigs();
+      } catch {
+        fetchedList = null;
+      }
+      if (fetchedList === null && fingerprintExplicitlyChanged) {
+        // The PUT succeeded, but without a fresh read we cannot confirm the
+        // fingerprint actually took effect on the connected CPA.
+        clearCache('claude-api-key');
+        showNotification(t('notification.claude_fingerprint_verify_failed'), 'error');
+        return;
+      }
+      const syncedList =
+        fetchedList ??
+        (editIndex !== null
           ? configs.map((item, index) => (index === editIndex ? payload : item))
-          : [...configs, payload]
-      );
+          : [...configs, payload]);
       setConfigs(syncedList);
       updateConfigValue('claude-api-key', syncedList);
       clearCache('claude-api-key');
+      if (fingerprintExplicitlyChanged) {
+        const savedConfig = findMatchingProviderKeyConfig(
+          syncedList,
+          editIndex !== null ? configs[editIndex] : payload
+        );
+        if (!isRequestFingerprintVerified(payload.fingerprintProfile, savedConfig)) {
+          showNotification(t('notification.claude_fingerprint_verify_failed'), 'error');
+          return;
+        }
+      }
       showNotification(
         editIndex !== null
           ? t('notification.claude_config_updated')

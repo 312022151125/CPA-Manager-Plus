@@ -4361,6 +4361,7 @@
     "xai_base_url_required": "Please enter the xAI Base URL",
     "claude_config_added": "Claude configuration added successfully",
     "claude_config_updated": "Claude configuration updated successfully",
+    "claude_fingerprint_verify_failed": "Request fingerprint could not be verified. The connected CPA may not support this setting.",
     "claude_config_deleted": "Claude configuration deleted successfully",
     "vertex_config_added": "Vertex configuration added successfully",
     "vertex_config_updated": "Vertex configuration updated successfully",

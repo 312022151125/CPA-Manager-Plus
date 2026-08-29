@@ -4362,6 +4362,7 @@
     "xai_base_url_required": "Введите базовый URL xAI",
     "claude_config_added": "Конфигурация Claude успешно добавлена",
     "claude_config_updated": "Конфигурация Claude успешно обновлена",
+    "claude_fingerprint_verify_failed": "Не удалось подтвердить применение отпечатка запроса: возможно, подключённый CPA не поддерживает эту настройку.",
     "claude_config_deleted": "Конфигурация Claude успешно удалена",
     "vertex_config_added": "Конфигурация Vertex успешно добавлена",
     "vertex_config_updated": "Конфигурация Vertex успешно обновлена",
