@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   showNotification: vi.fn(),
   showConfirmation: vi.fn(),
   featureAvailability: {
+    checking: false,
+    panelHostMode: 'manager_embedded',
     managerServiceAvailable: true,
     managerServiceBase: 'http://manager.local',
   },
@@ -171,6 +173,8 @@ beforeEach(() => {
   mocks.getApiKeyAliases.mockResolvedValue({ items: [] });
   mocks.saveApiKeyAliases.mockImplementation(async (_base, items) => ({ items }));
   mocks.deleteApiKeyAlias.mockResolvedValue(undefined);
+  mocks.featureAvailability.checking = false;
+  mocks.featureAvailability.panelHostMode = 'manager_embedded';
   mocks.featureAvailability.managerServiceAvailable = true;
   mocks.featureAvailability.managerServiceBase = 'http://manager.local';
   mocks.showConfirmation.mockImplementation((options: Confirmation) => {
@@ -372,6 +376,125 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
     expect(
       editor.renderer.root.findByProps({ className: 'error-box' }).children.join('')
     ).toContain('config_management.visual.api_keys.alias_state_unavailable');
+  });
+
+  it('blocks replace while Alias capability detection is still checking', async () => {
+    mocks.featureAvailability.checking = true;
+    mocks.featureAvailability.panelHostMode = 'external_panel';
+    mocks.featureAvailability.managerServiceAvailable = false;
+    mocks.featureAvailability.managerServiceBase = '';
+    const onPersistApiKeyMutation = vi.fn(async () => ['sk-new']);
+    const editor = mountEditor('sk-old', { onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.edit');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    await clickButton(editor.renderer, 'config_management.visual.common.update');
+
+    expect(onPersistApiKeyMutation).not.toHaveBeenCalled();
+    expect(
+      editor.renderer.root.findByProps({ className: 'error-box' }).children.join('')
+    ).toContain('config_management.visual.api_keys.alias_state_unavailable');
+  });
+
+  it('blocks delete while Alias capability detection is still checking', async () => {
+    mocks.featureAvailability.checking = true;
+    mocks.featureAvailability.panelHostMode = 'external_panel';
+    mocks.featureAvailability.managerServiceAvailable = false;
+    mocks.featureAvailability.managerServiceBase = '';
+    const onPersistApiKeyMutation = vi.fn(async () => []);
+    const editor = mountEditor('sk-old', { onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.delete');
+
+    expect(pendingConfirmation).toBeNull();
+    expect(onPersistApiKeyMutation).not.toHaveBeenCalled();
+    expect(mocks.deleteApiKeyAlias).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'config_management.visual.api_keys.alias_state_unavailable',
+      'warning'
+    );
+  });
+
+  it('blocks replace when a known Manager-hosted panel has no Alias service', async () => {
+    mocks.featureAvailability.checking = false;
+    mocks.featureAvailability.panelHostMode = 'manager_embedded';
+    mocks.featureAvailability.managerServiceAvailable = false;
+    mocks.featureAvailability.managerServiceBase = '';
+    const onPersistApiKeyMutation = vi.fn(async () => ['sk-new']);
+    const editor = mountEditor('sk-old', { onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.edit');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    await clickButton(editor.renderer, 'config_management.visual.common.update');
+
+    expect(onPersistApiKeyMutation).not.toHaveBeenCalled();
+    expect(
+      editor.renderer.root.findByProps({ className: 'error-box' }).children.join('')
+    ).toContain('config_management.visual.api_keys.alias_state_unavailable');
+  });
+
+  it('blocks delete when a known Manager-hosted panel has no Alias service', async () => {
+    mocks.featureAvailability.checking = false;
+    mocks.featureAvailability.panelHostMode = 'manager_embedded';
+    mocks.featureAvailability.managerServiceAvailable = false;
+    mocks.featureAvailability.managerServiceBase = '';
+    const onPersistApiKeyMutation = vi.fn(async () => []);
+    const editor = mountEditor('sk-old', { onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.delete');
+
+    expect(pendingConfirmation).toBeNull();
+    expect(onPersistApiKeyMutation).not.toHaveBeenCalled();
+    expect(mocks.deleteApiKeyAlias).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'config_management.visual.api_keys.alias_state_unavailable',
+      'warning'
+    );
+  });
+
+  it('allows replace in a known external CPA panel without Alias APIs', async () => {
+    mocks.featureAvailability.checking = false;
+    mocks.featureAvailability.panelHostMode = 'external_panel';
+    mocks.featureAvailability.managerServiceAvailable = false;
+    mocks.featureAvailability.managerServiceBase = '';
+    const onPersistApiKeyMutation = vi.fn(async () => ['sk-new']);
+    const editor = mountEditor('sk-old', { onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.edit');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    await clickButton(editor.renderer, 'config_management.visual.common.update');
+
+    expect(onPersistApiKeyMutation).toHaveBeenCalledWith({
+      type: 'replace',
+      oldApiKey: 'sk-old',
+      newApiKey: 'sk-new',
+    });
+    expect(mocks.saveApiKeyAliases).not.toHaveBeenCalled();
+    expect(mocks.deleteApiKeyAlias).not.toHaveBeenCalled();
+  });
+
+  it('allows delete in a known external CPA panel without Alias cleanup', async () => {
+    mocks.featureAvailability.checking = false;
+    mocks.featureAvailability.panelHostMode = 'external_panel';
+    mocks.featureAvailability.managerServiceAvailable = false;
+    mocks.featureAvailability.managerServiceBase = '';
+    const onPersistApiKeyMutation = vi.fn(async () => []);
+    const editor = mountEditor('sk-old', { onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.delete');
+    expect(pendingConfirmation).not.toBeNull();
+    await act(async () => {
+      await pendingConfirmation?.onConfirm();
+    });
+
+    expect(onPersistApiKeyMutation).toHaveBeenCalledWith({ type: 'delete', apiKey: 'sk-old' });
+    expect(mocks.deleteApiKeyAlias).not.toHaveBeenCalled();
   });
 
   it('blocks replace when the Manager Alias list is unavailable', async () => {

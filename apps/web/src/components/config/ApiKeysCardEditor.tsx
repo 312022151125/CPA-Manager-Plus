@@ -93,13 +93,23 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
     return map;
   }, [apiKeyAliases]);
 
+  const aliasCapabilityChecking = featureAvailability.checking;
+  const managerHostedPanel = featureAvailability.panelHostMode === 'manager_embedded';
   const resolveAliasServiceBase = useCallback(
     async (): Promise<string> =>
-      featureAvailability.managerServiceAvailable ? featureAvailability.managerServiceBase : '',
-    [featureAvailability.managerServiceAvailable, featureAvailability.managerServiceBase]
+      managerHostedPanel && featureAvailability.managerServiceAvailable
+        ? featureAvailability.managerServiceBase
+        : '',
+    [
+      featureAvailability.managerServiceAvailable,
+      featureAvailability.managerServiceBase,
+      managerHostedPanel,
+    ]
   );
   const aliasServiceAvailable = Boolean(
-    featureAvailability.managerServiceAvailable && featureAvailability.managerServiceBase
+    managerHostedPanel &&
+    featureAvailability.managerServiceAvailable &&
+    featureAvailability.managerServiceBase
   );
 
   useEffect(() => {
@@ -416,6 +426,10 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
 
   const handleDelete = (apiKey: string) => {
     if (disabled || mutationInFlightRef.current) return;
+    if (aliasCapabilityChecking || (managerHostedPanel && !aliasServiceAvailable)) {
+      showNotification(t('config_management.visual.api_keys.alias_state_unavailable'), 'warning');
+      return;
+    }
 
     showConfirmation({
       title: t('config_management.visual.api_keys.delete_title'),
@@ -472,7 +486,11 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
       setFormError(t('config_management.visual.api_keys.error_duplicate'));
       return;
     }
-    if (isReplace && aliasServiceAvailable && (aliasesLoading || !aliasesAvailable)) {
+    if (
+      isReplace &&
+      (aliasCapabilityChecking ||
+        (managerHostedPanel && (!aliasServiceAvailable || aliasesLoading || !aliasesAvailable)))
+    ) {
       const error = createAliasUnavailableError(
         'config_management.visual.api_keys.alias_state_unavailable'
       );
