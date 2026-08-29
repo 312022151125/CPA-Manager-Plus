@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   showConfirmation: vi.fn(),
   featureAvailability: {
     checking: false,
+    panelHostConfirmed: true,
     panelHostMode: 'manager_embedded',
     managerServiceAvailable: true,
     managerServiceBase: 'http://manager.local',
@@ -174,6 +175,7 @@ beforeEach(() => {
   mocks.saveApiKeyAliases.mockImplementation(async (_base, items) => ({ items }));
   mocks.deleteApiKeyAlias.mockResolvedValue(undefined);
   mocks.featureAvailability.checking = false;
+  mocks.featureAvailability.panelHostConfirmed = true;
   mocks.featureAvailability.panelHostMode = 'manager_embedded';
   mocks.featureAvailability.managerServiceAvailable = true;
   mocks.featureAvailability.managerServiceBase = 'http://manager.local';
@@ -380,6 +382,7 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
 
   it('blocks replace while Alias capability detection is still checking', async () => {
     mocks.featureAvailability.checking = true;
+    mocks.featureAvailability.panelHostConfirmed = false;
     mocks.featureAvailability.panelHostMode = 'external_panel';
     mocks.featureAvailability.managerServiceAvailable = false;
     mocks.featureAvailability.managerServiceBase = '';
@@ -399,6 +402,48 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
 
   it('blocks delete while Alias capability detection is still checking', async () => {
     mocks.featureAvailability.checking = true;
+    mocks.featureAvailability.panelHostConfirmed = false;
+    mocks.featureAvailability.panelHostMode = 'external_panel';
+    mocks.featureAvailability.managerServiceAvailable = false;
+    mocks.featureAvailability.managerServiceBase = '';
+    const onPersistApiKeyMutation = vi.fn(async () => []);
+    const editor = mountEditor('sk-old', { onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.delete');
+
+    expect(pendingConfirmation).toBeNull();
+    expect(onPersistApiKeyMutation).not.toHaveBeenCalled();
+    expect(mocks.deleteApiKeyAlias).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'config_management.visual.api_keys.alias_state_unavailable',
+      'warning'
+    );
+  });
+
+  it('blocks replace while the panel host remains unconfirmed', async () => {
+    mocks.featureAvailability.checking = false;
+    mocks.featureAvailability.panelHostConfirmed = false;
+    mocks.featureAvailability.panelHostMode = 'external_panel';
+    mocks.featureAvailability.managerServiceAvailable = false;
+    mocks.featureAvailability.managerServiceBase = '';
+    const onPersistApiKeyMutation = vi.fn(async () => ['sk-new']);
+    const editor = mountEditor('sk-old', { onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.edit');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    await clickButton(editor.renderer, 'config_management.visual.common.update');
+
+    expect(onPersistApiKeyMutation).not.toHaveBeenCalled();
+    expect(
+      editor.renderer.root.findByProps({ className: 'error-box' }).children.join('')
+    ).toContain('config_management.visual.api_keys.alias_state_unavailable');
+  });
+
+  it('blocks delete while the panel host remains unconfirmed', async () => {
+    mocks.featureAvailability.checking = false;
+    mocks.featureAvailability.panelHostConfirmed = false;
     mocks.featureAvailability.panelHostMode = 'external_panel';
     mocks.featureAvailability.managerServiceAvailable = false;
     mocks.featureAvailability.managerServiceBase = '';
@@ -419,6 +464,7 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
 
   it('blocks replace when a known Manager-hosted panel has no Alias service', async () => {
     mocks.featureAvailability.checking = false;
+    mocks.featureAvailability.panelHostConfirmed = true;
     mocks.featureAvailability.panelHostMode = 'manager_embedded';
     mocks.featureAvailability.managerServiceAvailable = false;
     mocks.featureAvailability.managerServiceBase = '';
@@ -438,6 +484,7 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
 
   it('blocks delete when a known Manager-hosted panel has no Alias service', async () => {
     mocks.featureAvailability.checking = false;
+    mocks.featureAvailability.panelHostConfirmed = true;
     mocks.featureAvailability.panelHostMode = 'manager_embedded';
     mocks.featureAvailability.managerServiceAvailable = false;
     mocks.featureAvailability.managerServiceBase = '';
@@ -458,6 +505,7 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
 
   it('allows replace in a known external CPA panel without Alias APIs', async () => {
     mocks.featureAvailability.checking = false;
+    mocks.featureAvailability.panelHostConfirmed = true;
     mocks.featureAvailability.panelHostMode = 'external_panel';
     mocks.featureAvailability.managerServiceAvailable = false;
     mocks.featureAvailability.managerServiceBase = '';
@@ -480,6 +528,7 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
 
   it('allows delete in a known external CPA panel without Alias cleanup', async () => {
     mocks.featureAvailability.checking = false;
+    mocks.featureAvailability.panelHostConfirmed = true;
     mocks.featureAvailability.panelHostMode = 'external_panel';
     mocks.featureAvailability.managerServiceAvailable = false;
     mocks.featureAvailability.managerServiceBase = '';
@@ -525,6 +574,23 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
       },
       onPersistApiKeyMutation,
     });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.api_keys.add');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    await clickButton(editor.renderer, 'config_management.visual.common.add');
+
+    expect(onPersistApiKeyMutation).toHaveBeenCalledWith({ type: 'create', apiKey: 'sk-new' });
+  });
+
+  it('allows creating a key without an alias while the panel host is unconfirmed', async () => {
+    mocks.featureAvailability.checking = false;
+    mocks.featureAvailability.panelHostConfirmed = false;
+    mocks.featureAvailability.panelHostMode = 'external_panel';
+    mocks.featureAvailability.managerServiceAvailable = false;
+    mocks.featureAvailability.managerServiceBase = '';
+    const onPersistApiKeyMutation = vi.fn(async () => ['sk-new']);
+    const editor = mountEditor('', { onPersistApiKeyMutation });
     await flush();
 
     await clickButton(editor.renderer, 'config_management.visual.api_keys.add');

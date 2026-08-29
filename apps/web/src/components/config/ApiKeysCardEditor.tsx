@@ -94,19 +94,27 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
   }, [apiKeyAliases]);
 
   const aliasCapabilityChecking = featureAvailability.checking;
+  const panelHostUnconfirmed = !featureAvailability.panelHostConfirmed;
   const managerHostedPanel = featureAvailability.panelHostMode === 'manager_embedded';
   const resolveAliasServiceBase = useCallback(
     async (): Promise<string> =>
-      managerHostedPanel && featureAvailability.managerServiceAvailable
+      !aliasCapabilityChecking &&
+      featureAvailability.panelHostConfirmed &&
+      managerHostedPanel &&
+      featureAvailability.managerServiceAvailable
         ? featureAvailability.managerServiceBase
         : '',
     [
+      aliasCapabilityChecking,
       featureAvailability.managerServiceAvailable,
       featureAvailability.managerServiceBase,
+      featureAvailability.panelHostConfirmed,
       managerHostedPanel,
     ]
   );
   const aliasServiceAvailable = Boolean(
+    !aliasCapabilityChecking &&
+    featureAvailability.panelHostConfirmed &&
     managerHostedPanel &&
     featureAvailability.managerServiceAvailable &&
     featureAvailability.managerServiceBase
@@ -426,7 +434,11 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
 
   const handleDelete = (apiKey: string) => {
     if (disabled || mutationInFlightRef.current) return;
-    if (aliasCapabilityChecking || (managerHostedPanel && !aliasServiceAvailable)) {
+    if (
+      aliasCapabilityChecking ||
+      panelHostUnconfirmed ||
+      (managerHostedPanel && !aliasServiceAvailable)
+    ) {
       showNotification(t('config_management.visual.api_keys.alias_state_unavailable'), 'warning');
       return;
     }
@@ -489,6 +501,7 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
     if (
       isReplace &&
       (aliasCapabilityChecking ||
+        panelHostUnconfirmed ||
         (managerHostedPanel && (!aliasServiceAvailable || aliasesLoading || !aliasesAvailable)))
     ) {
       const error = createAliasUnavailableError(
@@ -655,6 +668,14 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
       setAliasFormError(t('config_management.visual.api_keys.alias_error_empty'));
       return;
     }
+    if (
+      aliasCapabilityChecking ||
+      panelHostUnconfirmed ||
+      (managerHostedPanel && !aliasServiceAvailable)
+    ) {
+      setAliasFormError(t('config_management.visual.api_keys.alias_state_unavailable'));
+      return;
+    }
     if (!aliasesAvailable) {
       setAliasFormError(t('config_management.visual.api_keys.alias_unavailable'));
       return;
@@ -706,6 +727,14 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
   const handleAliasDelete = () => {
     const editingKey = aliasEditingApiKey ?? '';
     const apiKeyHash = getApiKeyHash(editingKey);
+    if (
+      aliasCapabilityChecking ||
+      panelHostUnconfirmed ||
+      (managerHostedPanel && !aliasServiceAvailable)
+    ) {
+      setAliasFormError(t('config_management.visual.api_keys.alias_state_unavailable'));
+      return;
+    }
     if (!apiKeyHash || !aliasByHash.has(apiKeyHash)) return;
 
     showConfirmation({
