@@ -3577,7 +3577,9 @@
         "canonical_key_missing": "重新整理後的 CPA API 金鑰清單中找不到剛保存的金鑰。",
         "state_refresh_failed": "API 金鑰變更已提交，但最新狀態重新整理失敗。請重新載入頁面以確認目前狀態。",
         "source_dirty_guard": "來源設定存在未保存修改。請先保存或撤銷來源設定修改，再管理 API 金鑰。",
-        "operation_busy": "另一個 API 金鑰操作或設定保存正在進行，請稍候。"
+        "operation_busy": "另一個 API 金鑰操作或設定保存正在進行，請稍候。",
+        "mutation_outcome_unknown": "無法確認此次 API 金鑰變更是否已提交。請重新載入頁面確認 CPA 目前狀態後再繼續操作。",
+        "alias_state_unavailable": "無法確認目前 API 金鑰的別名狀態，請稍後重試。"
       },
       "payload_rules": {
         "rule": "規則",

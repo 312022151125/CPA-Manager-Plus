@@ -450,6 +450,97 @@ afterEach(() => {
 });
 
 describe('ConfigPage API-key source snapshot safety', () => {
+  it('marks Source stale and reports an unknown outcome when create PUT rejects', async () => {
+    mocks.apiKeysList.mockResolvedValueOnce([]);
+    mocks.apiKeysReplace.mockRejectedValueOnce(new Error('create response lost'));
+    mocks.fetchConfigYaml
+      .mockReset()
+      .mockResolvedValueOnce(INITIAL_YAML)
+      .mockResolvedValueOnce(LATEST_WITHOUT_OLD_KEY);
+    await mountPage();
+
+    await click('create-key');
+
+    expect(mocks.apiKeysReplace).toHaveBeenCalledWith(['sk-new']);
+    expect(mocks.apiKeysList).toHaveBeenCalledTimes(1);
+    expect(mocks.commitApiKeysText).not.toHaveBeenCalled();
+    expect(mocks.apiKeyMutationErrors).toHaveLength(1);
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).toBe(
+      'api_key_mutation_outcome_unknown'
+    );
+
+    await clickTab('source');
+
+    expect(mocks.fetchConfigYaml).toHaveBeenCalledTimes(2);
+    expect(renderer?.root.findByProps({ 'data-tab': 'source' }).props['data-active']).toBe(true);
+    expect(renderer?.root.findByProps({ 'data-test': 'source-editor' }).props.value).toBe(
+      LATEST_WITHOUT_OLD_KEY
+    );
+  });
+
+  it('keeps Source unavailable when create PUT rejects and the stale refresh also fails', async () => {
+    mocks.apiKeysList.mockResolvedValueOnce([]);
+    mocks.apiKeysReplace.mockRejectedValueOnce(new Error('create response lost'));
+    mocks.fetchConfigYaml
+      .mockReset()
+      .mockResolvedValueOnce(INITIAL_YAML)
+      .mockRejectedValueOnce(new Error('source refresh failed'));
+    await mountPage();
+
+    await click('create-key');
+    await clickTab('source');
+
+    expect(renderer?.root.findByProps({ 'data-tab': 'visual' }).props['data-active']).toBe(true);
+    expect(renderer?.root.findAllByProps({ 'data-test': 'source-editor' })).toHaveLength(0);
+    expect(mocks.saveConfigYaml).not.toHaveBeenCalled();
+  });
+
+  it('marks Source stale and reports an unknown outcome when replace PATCH rejects', async () => {
+    mocks.apiKeysList.mockResolvedValueOnce(['sk-old']);
+    mocks.apiKeysReplaceValue.mockRejectedValueOnce(new Error('replace response lost'));
+    mocks.fetchConfigYaml
+      .mockReset()
+      .mockResolvedValueOnce(INITIAL_YAML)
+      .mockResolvedValueOnce(LATEST_WITHOUT_OLD_KEY);
+    await mountPage();
+
+    await click('replace-key');
+
+    expect(mocks.apiKeysReplaceValue).toHaveBeenCalledWith('sk-old', 'sk-new');
+    expect(mocks.apiKeysList).toHaveBeenCalledTimes(1);
+    expect(mocks.commitApiKeysText).not.toHaveBeenCalled();
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).toBe(
+      'api_key_mutation_outcome_unknown'
+    );
+
+    await clickTab('source');
+
+    expect(mocks.fetchConfigYaml).toHaveBeenCalledTimes(2);
+    expect(renderer?.root.findByProps({ 'data-tab': 'source' }).props['data-active']).toBe(true);
+  });
+
+  it('marks Source stale and reports an unknown outcome when delete rejects', async () => {
+    mocks.apiKeysDeleteValue.mockRejectedValueOnce(new Error('delete response lost'));
+    mocks.fetchConfigYaml
+      .mockReset()
+      .mockResolvedValueOnce(INITIAL_YAML)
+      .mockResolvedValueOnce(LATEST_WITHOUT_OLD_KEY);
+    await mountPage();
+
+    await click('delete-key');
+
+    expect(mocks.apiKeysDeleteValue).toHaveBeenCalledWith('sk-old');
+    expect(mocks.commitApiKeysText).not.toHaveBeenCalled();
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).toBe(
+      'api_key_mutation_outcome_unknown'
+    );
+
+    await clickTab('source');
+
+    expect(mocks.fetchConfigYaml).toHaveBeenCalledTimes(2);
+    expect(renderer?.root.findByProps({ 'data-tab': 'source' }).props['data-active']).toBe(true);
+  });
+
   it('marks Source stale after delete succeeds but canonical key refresh fails', async () => {
     mocks.apiKeysList.mockRejectedValueOnce(new Error('canonical refresh failed'));
     mocks.fetchConfigYaml
@@ -576,6 +667,20 @@ describe('ConfigPage API-key source snapshot safety', () => {
 });
 
 describe('ConfigPage API-key replace preflight', () => {
+  it('commits the canonical list when create preflight finds a duplicate', async () => {
+    mocks.apiKeysList.mockResolvedValueOnce(['sk-new']);
+    await mountPage();
+
+    await click('create-key');
+
+    expect(mocks.apiKeysReplace).not.toHaveBeenCalled();
+    expect(mocks.commitApiKeysText).toHaveBeenCalledWith('sk-new');
+    expect(mocks.apiKeyMutationErrors).toHaveLength(1);
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).toBe(
+      'api_key_duplicate'
+    );
+  });
+
   it('does not PATCH a stale old key and commits the canonical list', async () => {
     mocks.apiKeysList.mockResolvedValueOnce(['sk-other']);
     await mountPage();
@@ -590,14 +695,18 @@ describe('ConfigPage API-key replace preflight', () => {
     );
   });
 
-  it('does not PATCH when the replacement key already exists', async () => {
+  it('does not PATCH and commits the canonical list when the replacement key already exists', async () => {
     mocks.apiKeysList.mockResolvedValueOnce(['sk-old', 'sk-new']);
     await mountPage();
 
     await click('replace-key');
 
     expect(mocks.apiKeysReplaceValue).not.toHaveBeenCalled();
-    expect(mocks.commitApiKeysText).not.toHaveBeenCalled();
+    expect(mocks.commitApiKeysText).toHaveBeenCalledWith('sk-old\nsk-new');
+    expect(mocks.apiKeyMutationErrors).toHaveLength(1);
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).toBe(
+      'api_key_duplicate'
+    );
   });
 
   it('orders normal replace as preflight GET, PATCH, canonical GET', async () => {
@@ -693,7 +802,7 @@ describe('ConfigPage Manager/API-key operation lock', () => {
     expect(mocks.reloadPage).toHaveBeenCalledTimes(1);
   });
 
-  it('does not reload when CPA base save fails', async () => {
+  it('reloads after a CPA base save request fails', async () => {
     configureManagerMode();
     await mountPage();
     await clickTab('manager');
@@ -703,11 +812,11 @@ describe('ConfigPage Manager/API-key operation lock', () => {
 
     const confirmation = getPendingConfirmation();
     await act(async () => {
-      await expect(confirmation.onConfirm()).rejects.toThrow('CPA switch failed');
+      await confirmation.onConfirm();
     });
     await flush();
 
-    expect(mocks.reloadPage).not.toHaveBeenCalled();
+    expect(mocks.reloadPage).toHaveBeenCalledTimes(1);
   });
 
   it('does not reload for a Management Key-only save', async () => {
@@ -719,6 +828,23 @@ describe('ConfigPage Manager/API-key operation lock', () => {
     await confirmPending();
 
     expect(mocks.saveManagerConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.reloadPage).not.toHaveBeenCalled();
+  });
+
+  it('does not reload when a Management Key-only save request fails', async () => {
+    configureManagerMode();
+    await mountPage();
+    await clickTab('manager');
+    await click('manager-change-key');
+    mocks.saveManagerConfig.mockRejectedValueOnce(new Error('Management Key rejected'));
+    await clickSave();
+
+    const confirmation = getPendingConfirmation();
+    await act(async () => {
+      await expect(confirmation.onConfirm()).rejects.toThrow('Management Key rejected');
+    });
+    await flush();
+
     expect(mocks.reloadPage).not.toHaveBeenCalled();
   });
 

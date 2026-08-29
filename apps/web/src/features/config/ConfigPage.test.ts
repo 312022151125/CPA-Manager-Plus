@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ManagerConfig } from '@/services/api/usageService';
+import enLocale from '@/i18n/locales/en.json';
+import ruLocale from '@/i18n/locales/ru.json';
+import zhCNLocale from '@/i18n/locales/zh-CN.json';
+import zhTWLocale from '@/i18n/locales/zh-TW.json';
 import {
   resolveManagerCPAConnection,
   resolveManagerBindingStatus,
@@ -367,7 +371,25 @@ describe('resolveApiKeyOperationBlockReason', () => {
         sourceDirty: false,
         ...state,
       })
-    ).toBe('operation_busy');
+    ).toBe('api_key_operation_busy');
+  });
+});
+
+describe('API-key locale parity', () => {
+  it('keeps API-key persistence keys in every supported locale', () => {
+    const locales = [enLocale, zhCNLocale, zhTWLocale, ruLocale];
+    const expectedKeys = Object.keys(enLocale.config_management.visual.api_keys).sort();
+
+    for (const locale of locales) {
+      expect(Object.keys(locale.config_management.visual.api_keys).sort()).toEqual(expectedKeys);
+      for (const key of expectedKeys) {
+        expect(
+          locale.config_management.visual.api_keys[
+            key as keyof typeof locale.config_management.visual.api_keys
+          ]
+        ).toBeTypeOf('string');
+      }
+    }
   });
 });
 

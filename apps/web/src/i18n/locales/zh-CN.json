@@ -3577,7 +3577,9 @@
         "canonical_key_missing": "刷新后的 CPA API 密钥列表中未找到刚保存的密钥。",
         "state_refresh_failed": "API 密钥变更已提交，但最新状态刷新失败。请重新加载页面以确认当前状态。",
         "source_dirty_guard": "源配置存在未保存修改。请先保存或撤销源配置修改，再管理 API 密钥。",
-        "operation_busy": "另一个 API 密钥操作或配置保存正在进行，请稍候。"
+        "operation_busy": "另一个 API 密钥操作或配置保存正在进行，请稍候。",
+        "mutation_outcome_unknown": "无法确认此次 API 密钥变更是否已提交。请重新加载页面确认 CPA 当前状态后再继续操作。",
+        "alias_state_unavailable": "无法确认当前 API 密钥的别名状态，请稍后重试。"
       },
       "payload_rules": {
         "rule": "规则",

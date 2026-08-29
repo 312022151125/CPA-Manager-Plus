@@ -1,4 +1,13 @@
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror';
@@ -147,7 +156,10 @@ function parseManagerPositiveIntegerInput(value: string): number | null {
   return Math.floor(parsed);
 }
 
-function resolveManagerPositiveIntegerBaseline(value: number | undefined, fallback: number): number {
+function resolveManagerPositiveIntegerBaseline(
+  value: number | undefined,
+  fallback: number
+): number {
   return Number.isFinite(value) && value && value > 0 ? Math.floor(value) : fallback;
 }
 
@@ -237,9 +249,9 @@ export function resolveApiKeyOperationBlockReason({
   managerSaving: boolean;
   apiKeyMutationInFlight: boolean;
   diffModalOpen: boolean;
-}): 'source_config_dirty' | 'operation_busy' | null {
+}): 'source_config_dirty' | 'api_key_operation_busy' | null {
   if (saving || managerSaving || apiKeyMutationInFlight || diffModalOpen) {
-    return 'operation_busy';
+    return 'api_key_operation_busy';
   }
   if (sourceDirty) return 'source_config_dirty';
   return null;
@@ -596,9 +608,7 @@ export function ConfigPage() {
   }, [dirty, updateSourceSnapshotStale]);
 
   const persistApiKeyMutation = useCallback(
-    async (
-      mutation: ApiKeyMutation
-    ): Promise<string[]> => {
+    async (mutation: ApiKeyMutation): Promise<string[]> => {
       if (!apiKeyMutationInFlightRef.current) {
         const error = new Error(t('config_management.visual.api_keys.operation_busy')) as Error & {
           code?: string;
@@ -618,14 +628,25 @@ export function ConfigPage() {
         const normalizedApiKey = mutation.apiKey.trim();
         const currentKeys = await apiKeysApi.list();
         if (currentKeys.some((key) => key.trim() === normalizedApiKey)) {
+          commitApiKeysText(currentKeys.join('\n'));
+          await refreshCleanSourceSnapshot();
           const error = new Error(
             t('config_management.visual.api_keys.error_duplicate')
           ) as Error & { code?: string };
           error.code = 'api_key_duplicate';
           throw error;
         }
-        await apiKeysApi.replace([...currentKeys, normalizedApiKey]);
         updateSourceSnapshotStale(true);
+        try {
+          await apiKeysApi.replace([...currentKeys, normalizedApiKey]);
+        } catch (cause) {
+          const error = new Error(
+            t('config_management.visual.api_keys.mutation_outcome_unknown')
+          ) as Error & { cause?: unknown; code?: string };
+          error.code = 'api_key_mutation_outcome_unknown';
+          error.cause = cause;
+          throw error;
+        }
       } else if (mutation.type === 'replace') {
         const normalizedOldApiKey = mutation.oldApiKey.trim();
         const normalizedNewApiKey = mutation.newApiKey.trim();
@@ -645,17 +666,37 @@ export function ConfigPage() {
           throw error;
         }
         if (preflightError === 'api_key_duplicate') {
+          commitApiKeysText(currentKeys.join('\n'));
+          await refreshCleanSourceSnapshot();
           const error = new Error(
             t('config_management.visual.api_keys.error_duplicate')
           ) as Error & { code?: string };
           error.code = preflightError;
           throw error;
         }
-        await apiKeysApi.replaceValue(normalizedOldApiKey, normalizedNewApiKey);
         updateSourceSnapshotStale(true);
+        try {
+          await apiKeysApi.replaceValue(normalizedOldApiKey, normalizedNewApiKey);
+        } catch (cause) {
+          const error = new Error(
+            t('config_management.visual.api_keys.mutation_outcome_unknown')
+          ) as Error & { cause?: unknown; code?: string };
+          error.code = 'api_key_mutation_outcome_unknown';
+          error.cause = cause;
+          throw error;
+        }
       } else {
-        await apiKeysApi.deleteValue(mutation.apiKey.trim());
         updateSourceSnapshotStale(true);
+        try {
+          await apiKeysApi.deleteValue(mutation.apiKey.trim());
+        } catch (cause) {
+          const error = new Error(
+            t('config_management.visual.api_keys.mutation_outcome_unknown')
+          ) as Error & { cause?: unknown; code?: string };
+          error.code = 'api_key_mutation_outcome_unknown';
+          error.cause = cause;
+          throw error;
+        }
       }
 
       let canonicalKeys: string[];
@@ -710,34 +751,33 @@ export function ConfigPage() {
     [detectedPanelBase, panelHostedByUsageService, setUsageServiceConfig]
   );
 
-  const applyManagerConfigResponse = useCallback(
-    (response: ManagerConfigResponse) => {
-      const receivedConnection = response.config.cpaConnection;
-      const nextConfig: ManagerConfig = {
-        ...response.config,
-        cpaConnection: {
-          cpaBaseUrl: receivedConnection?.cpaBaseUrl || '',
-          managementKeyConfigured: Boolean(
-            receivedConnection?.managementKeyConfigured || receivedConnection?.managementKey
-          ),
-        },
-      };
-      const collector = nextConfig.collector ?? MANAGER_COLLECTOR_DEFAULT;
+  const applyManagerConfigResponse = useCallback((response: ManagerConfigResponse) => {
+    const receivedConnection = response.config.cpaConnection;
+    const nextConfig: ManagerConfig = {
+      ...response.config,
+      cpaConnection: {
+        cpaBaseUrl: receivedConnection?.cpaBaseUrl || '',
+        managementKeyConfigured: Boolean(
+          receivedConnection?.managementKeyConfigured || receivedConnection?.managementKey
+        ),
+      },
+    };
+    const collector = nextConfig.collector ?? MANAGER_COLLECTOR_DEFAULT;
 
-      setManagerConfig(nextConfig);
-      setManagerConfigSource(response.source || '');
-      setManagerCPAUsage(response.cpaUsage ?? null);
-      setManagerRequestMonitoringEnabled(collector.enabled !== false);
-      setManagerCPABaseInput(nextConfig.cpaConnection?.cpaBaseUrl || '');
-      setManagerCollectorMode(collector.collectorMode || MANAGER_COLLECTOR_DEFAULT.collectorMode);
-      setManagerPollIntervalMs(String(collector.pollIntervalMs || MANAGER_COLLECTOR_DEFAULT.pollIntervalMs));
-      setManagerBatchSize(String(collector.batchSize || MANAGER_COLLECTOR_DEFAULT.batchSize));
-      setManagerQueryLimit(String(collector.queryLimit || MANAGER_COLLECTOR_DEFAULT.queryLimit));
-      setManagerCPAManagementKeyInput('');
-      setManagerCPAManagementKeyVisible(false);
-    },
-    []
-  );
+    setManagerConfig(nextConfig);
+    setManagerConfigSource(response.source || '');
+    setManagerCPAUsage(response.cpaUsage ?? null);
+    setManagerRequestMonitoringEnabled(collector.enabled !== false);
+    setManagerCPABaseInput(nextConfig.cpaConnection?.cpaBaseUrl || '');
+    setManagerCollectorMode(collector.collectorMode || MANAGER_COLLECTOR_DEFAULT.collectorMode);
+    setManagerPollIntervalMs(
+      String(collector.pollIntervalMs || MANAGER_COLLECTOR_DEFAULT.pollIntervalMs)
+    );
+    setManagerBatchSize(String(collector.batchSize || MANAGER_COLLECTOR_DEFAULT.batchSize));
+    setManagerQueryLimit(String(collector.queryLimit || MANAGER_COLLECTOR_DEFAULT.queryLimit));
+    setManagerCPAManagementKeyInput('');
+    setManagerCPAManagementKeyVisible(false);
+  }, []);
 
   const loadManagerConfig = useCallback(async () => {
     const serviceBase = resolveManagerServiceBase();
@@ -765,12 +805,12 @@ export function ConfigPage() {
       syncEmbeddedManagerBootstrap(serviceBase);
     } catch (error: unknown) {
       const code = getUsageServiceErrorCode(error);
-      if (
-        isManagerAuthErrorCode(code)
-      ) {
+      if (isManagerAuthErrorCode(code)) {
         setManagerError(t('config_management.manager.admin_key_required'));
       } else {
-        setManagerError(getUsageServiceDisplayError(error, 'config_management.manager.load_failed'));
+        setManagerError(
+          getUsageServiceDisplayError(error, 'config_management.manager.load_failed')
+        );
       }
     } finally {
       setManagerLoading(false);
@@ -834,11 +874,7 @@ export function ConfigPage() {
       showNotification(t('notification.refresh_failed'), 'error');
       return;
     }
-    if (
-      savingRef.current ||
-      managerSavingRef.current ||
-      apiKeyMutationInFlightRef.current
-    ) {
+    if (savingRef.current || managerSavingRef.current || apiKeyMutationInFlightRef.current) {
       return;
     }
     savingRef.current = true;
@@ -958,16 +994,10 @@ export function ConfigPage() {
           )
         : MANAGER_COLLECTOR_DEFAULT.pollIntervalMs;
       const batchSize = managerRequestMonitoringEnabled
-        ? readManagerPositiveInteger(
-            managerBatchSize,
-            t('config_management.manager.batch_size')
-          )
+        ? readManagerPositiveInteger(managerBatchSize, t('config_management.manager.batch_size'))
         : MANAGER_COLLECTOR_DEFAULT.batchSize;
       const queryLimit = managerRequestMonitoringEnabled
-        ? readManagerPositiveInteger(
-            managerQueryLimit,
-            t('config_management.manager.query_limit')
-          )
+        ? readManagerPositiveInteger(managerQueryLimit, t('config_management.manager.query_limit'))
         : MANAGER_COLLECTOR_DEFAULT.queryLimit;
       if (managerRequestMonitoringEnabled && pollIntervalMs > managerRetentionSeconds * 1000) {
         showNotification(t('config_management.manager.poll_interval_retention_error'), 'error');
@@ -1002,17 +1032,16 @@ export function ConfigPage() {
           serviceBase: '',
         },
       };
-      const savedCPABase = normalizeUsageServiceBase(managerConfig?.cpaConnection?.cpaBaseUrl || '');
+      const savedCPABase = normalizeUsageServiceBase(
+        managerConfig?.cpaConnection?.cpaBaseUrl || ''
+      );
       const nextCPABase = normalizeUsageServiceBase(cpaConnection.cpaBaseUrl || '');
       const cpaBaseChanged = savedCPABase !== nextCPABase;
       const managementKeyChanged = managerCPAManagementKeyInput.trim() !== '';
       const cpaConnectionChanged = cpaBaseChanged || managementKeyChanged;
 
       if (cpaBaseChanged && sourceDirty) {
-        showNotification(
-          t('config_management.manager.cpa_switch_unsaved_config'),
-          'warning'
-        );
+        showNotification(t('config_management.manager.cpa_switch_unsaved_config'), 'warning');
         return;
       }
 
@@ -1020,14 +1049,33 @@ export function ConfigPage() {
         if (managerSavingRef.current || apiKeyMutationInFlightRef.current) return;
         managerSavingRef.current = true;
         setManagerSaving(true);
+        let requestStarted = false;
         try {
+          requestStarted = true;
           await saveManagerConfigPayload(serviceBase, nextConfig, requestAuthKey);
           if (cpaBaseChanged) {
             window.location.reload();
           }
         } catch (error: unknown) {
+          if (cpaBaseChanged && requestStarted) {
+            if (notifyOnError) {
+              const message = getUsageServiceDisplayError(
+                error,
+                'usage_service_errors.request_failed'
+              );
+              showNotification(
+                `${t('notification.save_failed')}${message ? `: ${message}` : ''}`,
+                'error'
+              );
+            }
+            window.location.reload();
+            return;
+          }
           if (notifyOnError) {
-            const message = getUsageServiceDisplayError(error, 'usage_service_errors.request_failed');
+            const message = getUsageServiceDisplayError(
+              error,
+              'usage_service_errors.request_failed'
+            );
             showNotification(
               `${t('notification.save_failed')}${message ? `: ${message}` : ''}`,
               'error'
@@ -1059,10 +1107,7 @@ export function ConfigPage() {
     } catch (error: unknown) {
       setManagerSaving(false);
       const message = getUsageServiceDisplayError(error, 'usage_service_errors.request_failed');
-      showNotification(
-        `${t('notification.save_failed')}${message ? `: ${message}` : ''}`,
-        'error'
-      );
+      showNotification(`${t('notification.save_failed')}${message ? `: ${message}` : ''}`, 'error');
     }
   };
 
@@ -1072,11 +1117,7 @@ export function ConfigPage() {
       return;
     }
 
-    if (
-      savingRef.current ||
-      managerSavingRef.current ||
-      apiKeyMutationInFlightRef.current
-    ) {
+    if (savingRef.current || managerSavingRef.current || apiKeyMutationInFlightRef.current) {
       return;
     }
 
@@ -1441,19 +1482,14 @@ export function ConfigPage() {
     if (error) return t('config_management.status_load_failed_short', { defaultValue: 'Failed' });
     if (hasVisualModeError)
       return t('config_management.visual_mode_unavailable_short', { defaultValue: 'YAML issue' });
-    if (hasVisualValidationErrors)
-      return t('config_management.visual.validation_blocked_short');
+    if (hasVisualValidationErrors) return t('config_management.visual.validation_blocked_short');
     if (saving) return t('config_management.status_saving_short', { defaultValue: 'Saving' });
     if (isDirty) return t('config_management.status_dirty_short', { defaultValue: 'Unsaved' });
     return t('config_management.status_loaded_short', { defaultValue: 'Loaded' });
   };
 
   const handleReload = useCallback(() => {
-    if (
-      apiKeyMutationInFlightRef.current ||
-      savingRef.current ||
-      managerSavingRef.current
-    ) {
+    if (apiKeyMutationInFlightRef.current || savingRef.current || managerSavingRef.current) {
       return;
     }
     if (isManagerTab) {
@@ -1546,9 +1582,8 @@ export function ConfigPage() {
     panelHostedByUsageService === true &&
     Boolean(
       managerServiceTarget &&
-        managerCPABaseInput.trim() &&
-        (managerCPAManagementKeyInput.trim() ||
-          managerConfig?.cpaConnection?.managementKeyConfigured)
+      managerCPABaseInput.trim() &&
+      (managerCPAManagementKeyInput.trim() || managerConfig?.cpaConnection?.managementKeyConfigured)
     );
   const managerRuntimeModeLabel =
     panelHostedByUsageService === true
@@ -1594,9 +1629,7 @@ export function ConfigPage() {
 
         <div className={styles.content}>
           {!isManagerTab && error && <div className="error-box">{error}</div>}
-          {isManagerTab && managerError && (
-            <div className="error-box">{managerError}</div>
-          )}
+          {isManagerTab && managerError && <div className="error-box">{managerError}</div>}
           {!isManagerTab && !error && visualParseError && (
             <div className="error-box">
               {t('config_management.visual_mode_unavailable_detail', { message: visualParseError })}

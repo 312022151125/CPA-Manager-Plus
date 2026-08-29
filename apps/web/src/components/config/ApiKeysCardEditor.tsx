@@ -98,6 +98,9 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
       featureAvailability.managerServiceAvailable ? featureAvailability.managerServiceBase : '',
     [featureAvailability.managerServiceAvailable, featureAvailability.managerServiceBase]
   );
+  const aliasServiceAvailable = Boolean(
+    featureAvailability.managerServiceAvailable && featureAvailability.managerServiceBase
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -208,6 +211,12 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
     return null;
   };
 
+  const createAliasUnavailableError = (translationKey: string) => {
+    const error = new Error(t(translationKey)) as Error & { code?: string };
+    error.code = 'api_key_alias_unavailable';
+    return error;
+  };
+
   const requestOrphanAliasCleanup = async (
     alias: string,
     currentApiKeyHash: string,
@@ -281,7 +290,7 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
 
     const serviceBase = await resolveAliasServiceBase();
     if (!serviceBase) {
-      throw new Error(t('config_management.visual.api_keys.alias_unavailable'));
+      throw createAliasUnavailableError('config_management.visual.api_keys.alias_unavailable');
     }
 
     const response = await usageServiceApi.saveApiKeyAliases(
@@ -298,7 +307,7 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
   const deleteAliasForHash = async (apiKeyHash: string) => {
     const serviceBase = await resolveAliasServiceBase();
     if (!serviceBase) {
-      throw new Error(t('config_management.visual.api_keys.alias_unavailable'));
+      throw createAliasUnavailableError('config_management.visual.api_keys.alias_unavailable');
     }
 
     await usageServiceApi.deleteApiKeyAlias(serviceBase, apiKeyHash, managementKey);
@@ -366,7 +375,9 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
       code === 'source_config_dirty' ||
       code === 'api_key_operation_busy' ||
       code === 'api_key_duplicate' ||
-      code === 'api_key_state_refresh_failed'
+      code === 'api_key_state_refresh_failed' ||
+      code === 'api_key_mutation_outcome_unknown' ||
+      code === 'api_key_alias_unavailable'
     ) {
       return message;
     }
@@ -417,7 +428,7 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
         try {
           await onPersistApiKeyMutation({ type: 'delete', apiKey });
           const apiKeyHash = getApiKeyHash(apiKey);
-          if (apiKeyHash && aliasByHash.has(apiKeyHash)) {
+          if (apiKeyHash && aliasServiceAvailable) {
             try {
               await deleteAliasForHash(apiKeyHash);
             } catch {
@@ -459,6 +470,13 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
     }
     if (isReplace && apiKeys.some((key) => key !== oldApiKey && key === trimmed)) {
       setFormError(t('config_management.visual.api_keys.error_duplicate'));
+      return;
+    }
+    if (isReplace && aliasServiceAvailable && (aliasesLoading || !aliasesAvailable)) {
+      const error = createAliasUnavailableError(
+        'config_management.visual.api_keys.alias_state_unavailable'
+      );
+      setFormError(getPersistenceErrorMessage(error));
       return;
     }
     if (trimmedAlias && !aliasesAvailable) {

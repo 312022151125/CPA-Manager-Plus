@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
   deleteApiKeyAlias: vi.fn(),
   showNotification: vi.fn(),
   showConfirmation: vi.fn(),
+  featureAvailability: {
+    managerServiceAvailable: true,
+    managerServiceBase: 'http://manager.local',
+  },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -36,10 +40,7 @@ vi.mock('@/components/ui/Modal', () => ({
 }));
 
 vi.mock('@/hooks/usePanelFeatureAvailability', () => ({
-  usePanelFeatureAvailability: () => ({
-    managerServiceAvailable: true,
-    managerServiceBase: 'http://manager.local',
-  }),
+  usePanelFeatureAvailability: () => mocks.featureAvailability,
 }));
 
 vi.mock('@/services/api/usageService', () => ({
@@ -117,6 +118,7 @@ const mountEditor = (
   initialValue: string,
   options: {
     aliases?: Array<{ apiKeyHash: string; alias: string }>;
+    loadAliases?: () => Promise<{ items: Array<{ apiKeyHash: string; alias: string }> }>;
     onPersistApiKeyMutation?: (mutation: ApiKeyMutation) => Promise<string[]>;
     onRefreshApiKeys?: () => Promise<string[]>;
     onApiKeyOperationStart?: () => void;
@@ -132,7 +134,9 @@ const mountEditor = (
   const onApiKeyOperationStart = options.onApiKeyOperationStart ?? vi.fn();
   const onApiKeyOperationEnd = options.onApiKeyOperationEnd ?? vi.fn();
 
-  mocks.getApiKeyAliases.mockResolvedValue({ items: options.aliases ?? [] });
+  mocks.getApiKeyAliases.mockImplementation(
+    options.loadAliases ?? (async () => ({ items: options.aliases ?? [] }))
+  );
 
   const render = () => (
     <ApiKeysCardEditor
@@ -167,6 +171,8 @@ beforeEach(() => {
   mocks.getApiKeyAliases.mockResolvedValue({ items: [] });
   mocks.saveApiKeyAliases.mockImplementation(async (_base, items) => ({ items }));
   mocks.deleteApiKeyAlias.mockResolvedValue(undefined);
+  mocks.featureAvailability.managerServiceAvailable = true;
+  mocks.featureAvailability.managerServiceBase = 'http://manager.local';
   mocks.showConfirmation.mockImplementation((options: Confirmation) => {
     pendingConfirmation = options;
   });
@@ -242,6 +248,27 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
     expect(
       editor.renderer.root.findByProps({ className: 'error-box' }).children.join('')
     ).toContain('CPA unavailable');
+  });
+
+  it('keeps the modal open and skips alias persistence when the CPA mutation outcome is unknown', async () => {
+    const mutationError = new Error('mutation outcome unknown') as Error & { code?: string };
+    mutationError.code = 'api_key_mutation_outcome_unknown';
+    const onPersistApiKeyMutation = vi.fn(async () => {
+      throw mutationError;
+    });
+    const editor = mountEditor('', { onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.api_keys.add');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    setInput(editor.renderer, ALIAS_PLACEHOLDER, 'MacBook');
+    await clickButton(editor.renderer, 'config_management.visual.common.add');
+
+    expect(mocks.saveApiKeyAliases).not.toHaveBeenCalled();
+    expect(editor.renderer.root.findAllByProps({ 'data-test-modal': 'open' })).toHaveLength(1);
+    const errorBox = editor.renderer.root.findByProps({ className: 'error-box' });
+    expect(errorBox.children.join('')).toBe('mutation outcome unknown');
+    expect(errorBox.children.join('')).not.toContain('save_failed');
   });
 
   it('reports an unknown API-key state after CPA succeeds but canonical refresh fails', async () => {
@@ -328,6 +355,60 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
       'config_management.visual.api_keys.stale_key_refreshed',
       'warning'
     );
+  });
+
+  it('blocks replace while the Manager Alias list is still loading', async () => {
+    const onPersistApiKeyMutation = vi.fn(async () => ['sk-new']);
+    const loadAliases = () =>
+      new Promise<{ items: Array<{ apiKeyHash: string; alias: string }> }>(() => {});
+    const editor = mountEditor('sk-old', { loadAliases, onPersistApiKeyMutation });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.edit');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    await clickButton(editor.renderer, 'config_management.visual.common.update');
+
+    expect(onPersistApiKeyMutation).not.toHaveBeenCalled();
+    expect(
+      editor.renderer.root.findByProps({ className: 'error-box' }).children.join('')
+    ).toContain('config_management.visual.api_keys.alias_state_unavailable');
+  });
+
+  it('blocks replace when the Manager Alias list is unavailable', async () => {
+    const onPersistApiKeyMutation = vi.fn(async () => ['sk-new']);
+    const editor = mountEditor('sk-old', {
+      loadAliases: async () => {
+        throw new Error('alias list unavailable');
+      },
+      onPersistApiKeyMutation,
+    });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.edit');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    await clickButton(editor.renderer, 'config_management.visual.common.update');
+
+    expect(onPersistApiKeyMutation).not.toHaveBeenCalled();
+    expect(
+      editor.renderer.root.findByProps({ className: 'error-box' }).children.join('')
+    ).toContain('config_management.visual.api_keys.alias_state_unavailable');
+  });
+
+  it('allows creating a key without an alias when the Manager Alias list is unavailable', async () => {
+    const onPersistApiKeyMutation = vi.fn(async () => ['sk-new']);
+    const editor = mountEditor('', {
+      loadAliases: async () => {
+        throw new Error('alias list unavailable');
+      },
+      onPersistApiKeyMutation,
+    });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.api_keys.add');
+    setInput(editor.renderer, API_KEY_PLACEHOLDER, 'sk-new');
+    await clickButton(editor.renderer, 'config_management.visual.common.add');
+
+    expect(onPersistApiKeyMutation).toHaveBeenCalledWith({ type: 'create', apiKey: 'sk-new' });
   });
 
   it('migrates a same-value alias without redundantly deleting the old hash', async () => {
@@ -522,6 +603,32 @@ describe('ApiKeysCardEditor immediate CPA persistence', () => {
     expect(mocks.showNotification).toHaveBeenCalledWith(
       'config_management.visual.api_keys.delete_partial_success',
       'warning'
+    );
+  });
+
+  it('deletes an alias even when the local Manager Alias list is unavailable', async () => {
+    const apiKeyHash = sha256Hex('sk-delete');
+    const onPersistApiKeyMutation = vi.fn(async () => {
+      editor.updateValue('');
+      return [];
+    });
+    const editor = mountEditor('sk-delete', {
+      loadAliases: async () => {
+        throw new Error('alias list unavailable');
+      },
+      onPersistApiKeyMutation,
+    });
+    await flush();
+
+    await clickButton(editor.renderer, 'config_management.visual.common.delete');
+    await act(async () => {
+      await pendingConfirmation?.onConfirm();
+    });
+
+    expect(mocks.deleteApiKeyAlias).toHaveBeenCalledWith(
+      'http://manager.local',
+      apiKeyHash,
+      'management-key'
     );
   });
 
