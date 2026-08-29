@@ -24,6 +24,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const AUTH_INDEX_FIELDS = ['auth-index', 'authIndex', 'auth_index'] as const;
 const DISABLE_COOLING_FIELDS = ['disable-cooling', 'disableCooling', 'disable_cooling'] as const;
+const FINGERPRINT_PROFILE_FIELDS = [
+  'fingerprint-profile',
+  'fingerprintProfile',
+  'fingerprint_profile',
+] as const;
+const LEGACY_CCH_FIELDS = [
+  'experimental-cch-signing',
+  'experimentalCchSigning',
+  'experimental_cch_signing',
+] as const;
 
 const COMMON_PROVIDER_KEY_FIELDS = [
   'api-key',
@@ -55,9 +65,8 @@ const XAI_KEY_FIELDS = CODEX_KEY_FIELDS;
 const CLAUDE_KEY_FIELDS = [
   ...COOLING_PROVIDER_KEY_FIELDS,
   'cloak',
-  'experimental-cch-signing',
-  'experimentalCchSigning',
-  'experimental_cch_signing',
+  ...FINGERPRINT_PROFILE_FIELDS,
+  ...LEGACY_CCH_FIELDS,
   'rebuild-mid-system-message',
   'rebuildMidSystemMessage',
   'rebuild_mid_system_message',
@@ -313,13 +322,25 @@ const mergeProviderKeyPayload = (
   payload: Record<string, unknown>,
   knownFields: readonly string[]
 ) => {
+  // A payload that defines any fingerprint variant (including the ''
+  // explicit-clear signal from the form) manages the fingerprint itself:
+  // the raw fingerprint value is replaced/cleared and legacy CCH fields
+  // are not restored. Otherwise both raw groups round-trip untouched,
+  // including unknown future fingerprint-profile values.
+  const fingerprintManaged = hasDefinedField(payload, FINGERPRINT_PROFILE_FIELDS);
   const next = mergeKnownFields(raw, payload, knownFields);
+  if (fingerprintManaged) {
+    FINGERPRINT_PROFILE_FIELDS.forEach((field) => {
+      if (next[field] === '') {
+        delete next[field];
+      }
+    });
+  }
   preserveOmittedRawField(raw, payload, next, DISABLE_COOLING_FIELDS);
-  preserveOmittedRawField(raw, payload, next, [
-    'experimental-cch-signing',
-    'experimentalCchSigning',
-    'experimental_cch_signing',
-  ]);
+  if (!fingerprintManaged) {
+    preserveOmittedRawField(raw, payload, next, FINGERPRINT_PROFILE_FIELDS);
+    preserveOmittedRawField(raw, payload, next, LEGACY_CCH_FIELDS);
+  }
   const models = mergeModelPayloads(raw, payload.models);
   if (models) next.models = models;
   if (isRecord(payload.cloak)) {
@@ -573,8 +594,10 @@ const serializeProviderKey = (config: ProviderKeyConfig) => {
   if (config.baseUrl) payload['base-url'] = config.baseUrl;
   if (config.websockets !== undefined) payload.websockets = config.websockets;
   if (config.disableCooling !== undefined) payload['disable-cooling'] = config.disableCooling;
-  if (config.experimentalCchSigning !== undefined) {
-    payload['experimental-cch-signing'] = config.experimentalCchSigning;
+  if (config.fingerprintProfile !== undefined) {
+    // '' is the form's explicit "clear fingerprint-profile" signal; the
+    // merge layer strips the empty key instead of writing it to CPA.
+    payload['fingerprint-profile'] = config.fingerprintProfile.trim();
   }
   if (config.rebuildMidSystemMessage !== undefined) {
     payload['rebuild-mid-system-message'] = config.rebuildMidSystemMessage;

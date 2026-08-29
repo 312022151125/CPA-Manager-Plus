@@ -126,6 +126,8 @@ const buildClaudeBaseline = (form: ProviderFormState): ClaudeEditBaseline => ({
   baseUrl: String(form.baseUrl ?? '').trim(),
   proxyUrl: String(form.proxyUrl ?? '').trim(),
   disableCooling: form.disableCooling,
+  fingerprintProfile:
+    typeof form.fingerprintProfile === 'string' ? form.fingerprintProfile : undefined,
   rebuildMidSystemMessage: Boolean(form.rebuildMidSystemMessage),
   headers: normalizeHeaderEntries(form.headers),
   models: normalizeClaudeModelEntries(form.modelEntries),
@@ -349,6 +351,7 @@ export function AiProvidersClaudeEditLayout() {
       baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
       baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
       baseline.disableCooling !== form.disableCooling ||
+      baseline.fingerprintProfile !== form.fingerprintProfile ||
       baseline.rebuildMidSystemMessage !== Boolean(form.rebuildMidSystemMessage) ||
       isHeadersDirty ||
       isModelsDirty ||
@@ -466,7 +469,7 @@ export function AiProvidersClaudeEditLayout() {
         cloak: form.cloak,
         authIndex: normalizeAuthIndex(form.authIndex) ?? undefined,
         disableCooling: coolingPolicyToOverride(form.disableCooling),
-        experimentalCchSigning: form.experimentalCchSigning,
+        fingerprintProfile: form.fingerprintProfile,
         rebuildMidSystemMessage: form.rebuildMidSystemMessage,
       };
 

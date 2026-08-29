@@ -19,6 +19,7 @@ import { buildClaudeMessagesEndpoint, parseTextList } from '@/components/provide
 import { CredentialWeightInput } from '@/components/providers';
 import { getCredentialWeightError } from '@/utils/credentialWeight';
 import type { ClaudeEditOutletContext } from './AiProvidersClaudeEditLayout';
+import type { ClaudeFingerprintProfile } from '@/types';
 import styles from './AiProvidersPage.module.scss';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
 
@@ -121,6 +122,17 @@ export function AiProvidersClaudeEditPage() {
       { value: 'auto', label: t('ai_providers.claude_cloak_mode_auto') },
       { value: 'always', label: t('ai_providers.claude_cloak_mode_always') },
       { value: 'never', label: t('ai_providers.claude_cloak_mode_never') },
+    ],
+    [t]
+  );
+
+  const fingerprintOptions = useMemo(
+    () => [
+      { value: '', label: t('ai_providers.claude_request_fingerprint_default') },
+      {
+        value: 'claude-code-cli',
+        label: t('ai_providers.claude_request_fingerprint_claude_code_cli'),
+      },
     ],
     [t]
   );
@@ -525,6 +537,23 @@ export function AiProvidersClaudeEditPage() {
               <div className="hint">
                 {t('ai_providers.rebuild_mid_system_message_hint')}
               </div>
+            </div>
+
+            <div className="form-group">
+              <label>{t('ai_providers.claude_request_fingerprint_label')}</label>
+              <Select
+                value={form.fingerprintProfile ?? ''}
+                options={fingerprintOptions}
+                onChange={(value) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    fingerprintProfile: value as ClaudeFingerprintProfile,
+                  }))
+                }
+                ariaLabel={t('ai_providers.claude_request_fingerprint_label')}
+                disabled={saving || disableControls || isTesting}
+              />
+              <div className="hint">{t('ai_providers.claude_request_fingerprint_hint')}</div>
             </div>
 
             <div className={styles.modelConfigSection}>

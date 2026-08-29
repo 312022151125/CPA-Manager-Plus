@@ -390,7 +390,7 @@ describe('providersApi v1.16 provider fields', () => {
     expect(mocks.get).toHaveBeenNthCalledWith(2, '/config');
   });
 
-  it('serializes Claude disable-cooling, cch signing, cloak cache, and model metadata', async () => {
+  it('serializes Claude disable-cooling, rebuild flag, cloak cache, and model metadata without legacy cch writes', async () => {
     mocks.get.mockResolvedValue({
       'claude-api-key': [
         {
@@ -428,7 +428,6 @@ describe('providersApi v1.16 provider fields', () => {
         'raw-field': 'keep',
         'auth-index': 'auth-4',
         'disable-cooling': true,
-        'experimental-cch-signing': true,
         'rebuild-mid-system-message': true,
         cloak: {
           'raw-cloak-field': 'keep-cloak',
@@ -445,6 +444,125 @@ describe('providersApi v1.16 provider fields', () => {
             thinking: { budget_tokens: 1024 },
           },
         ],
+      },
+    ]);
+  });
+
+  it('serializes Claude fingerprint-profile without creating legacy cch fields', async () => {
+    mocks.get.mockResolvedValue({ 'claude-api-key': [] });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.createClaudeConfig({
+      apiKey: 'key',
+      fingerprintProfile: 'claude-code-cli',
+    });
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      { 'api-key': 'key', 'fingerprint-profile': 'claude-code-cli' },
+    ]);
+  });
+
+  it('omits fingerprint and legacy cch fields when a new Claude config uses the default profile', async () => {
+    mocks.get.mockResolvedValue({ 'claude-api-key': [] });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.createClaudeConfig({
+      apiKey: 'key',
+      fingerprintProfile: '',
+    });
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [{ 'api-key': 'key' }]);
+  });
+
+  it('preserves raw legacy cch signing when the fingerprint is untouched', async () => {
+    mocks.get.mockResolvedValue({
+      'claude-api-key': [
+        {
+          'auth-index': 'claude-auth',
+          'experimental-cch-signing': true,
+          priority: 1,
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveClaudeConfigs([{ apiKey: '', authIndex: 'claude-auth', priority: 10 }]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      {
+        'auth-index': 'claude-auth',
+        'experimental-cch-signing': true,
+        priority: 10,
+      },
+    ]);
+  });
+
+  it('drops raw legacy cch signing when the user explicitly enables the fingerprint profile', async () => {
+    mocks.get.mockResolvedValue({
+      'claude-api-key': [
+        {
+          'auth-index': 'claude-auth',
+          'experimental-cch-signing': true,
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveClaudeConfigs([
+      {
+        apiKey: '',
+        authIndex: 'claude-auth',
+        fingerprintProfile: 'claude-code-cli',
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      {
+        'auth-index': 'claude-auth',
+        'fingerprint-profile': 'claude-code-cli',
+      },
+    ]);
+  });
+
+  it('removes fingerprint-profile when the user explicitly selects the default profile', async () => {
+    mocks.get.mockResolvedValue({
+      'claude-api-key': [
+        {
+          'auth-index': 'claude-auth',
+          'fingerprint-profile': 'claude-code-cli',
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveClaudeConfigs([
+      { apiKey: '', authIndex: 'claude-auth', fingerprintProfile: '' },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      { 'auth-index': 'claude-auth' },
+    ]);
+  });
+
+  it('preserves unknown future fingerprint-profile values on unrelated edits', async () => {
+    mocks.get.mockResolvedValue({
+      'claude-api-key': [
+        {
+          'auth-index': 'claude-auth',
+          'fingerprint-profile': 'claude-desktop',
+          weight: 1,
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveClaudeConfigs([{ apiKey: '', authIndex: 'claude-auth', weight: 2 }]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      {
+        'auth-index': 'claude-auth',
+        'fingerprint-profile': 'claude-desktop',
+        weight: 2,
       },
     ]);
   });

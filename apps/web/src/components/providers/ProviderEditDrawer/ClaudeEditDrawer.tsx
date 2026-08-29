@@ -15,6 +15,7 @@ import { useConfigStore, useNotificationStore } from '@/stores';
 import {
   coolingPolicyFromOverride,
   coolingPolicyToOverride,
+  type ClaudeFingerprintProfile,
   type ProviderKeyConfig,
 } from '@/types';
 import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/utils/headers';
@@ -117,6 +118,8 @@ const buildClaudeBaseline = (form: ProviderFormState) => ({
   baseUrl: String(form.baseUrl ?? '').trim(),
   proxyUrl: String(form.proxyUrl ?? '').trim(),
   disableCooling: form.disableCooling,
+  fingerprintProfile:
+    typeof form.fingerprintProfile === 'string' ? form.fingerprintProfile : undefined,
   rebuildMidSystemMessage: Boolean(form.rebuildMidSystemMessage),
   headers: normalizeHeaderEntries(form.headers),
   models: normalizeClaudeModelEntries(form.modelEntries),
@@ -268,6 +271,7 @@ export function ClaudeEditDrawer({
       baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
       baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
       baseline.disableCooling !== form.disableCooling ||
+      baseline.fingerprintProfile !== form.fingerprintProfile ||
       baseline.rebuildMidSystemMessage !== Boolean(form.rebuildMidSystemMessage) ||
       !areKeyValueEntriesEqual(baseline.headers, normalizeHeaderEntries(form.headers)) ||
       !areModelEntriesEqual(baseline.models, normalizeClaudeModelEntries(form.modelEntries)) ||
@@ -337,6 +341,17 @@ export function ClaudeEditDrawer({
       { value: 'auto', label: t('ai_providers.claude_cloak_mode_auto') },
       { value: 'always', label: t('ai_providers.claude_cloak_mode_always') },
       { value: 'never', label: t('ai_providers.claude_cloak_mode_never') },
+    ],
+    [t]
+  );
+
+  const fingerprintOptions = useMemo(
+    () => [
+      { value: '', label: t('ai_providers.claude_request_fingerprint_default') },
+      {
+        value: 'claude-code-cli',
+        label: t('ai_providers.claude_request_fingerprint_claude_code_cli'),
+      },
     ],
     [t]
   );
@@ -606,7 +621,7 @@ export function ClaudeEditDrawer({
         cloak: form.cloak,
         authIndex: normalizeAuthIndex(form.authIndex) ?? undefined,
         disableCooling: coolingPolicyToOverride(form.disableCooling),
-        experimentalCchSigning: form.experimentalCchSigning,
+        fingerprintProfile: form.fingerprintProfile,
         rebuildMidSystemMessage: form.rebuildMidSystemMessage,
       };
       if (editIndex !== null) {
@@ -743,6 +758,23 @@ export function ClaudeEditDrawer({
               <div className="hint">
                 {t('ai_providers.rebuild_mid_system_message_hint')}
               </div>
+            </div>
+
+            <div className="form-group">
+              <label>{t('ai_providers.claude_request_fingerprint_label')}</label>
+              <Select
+                value={form.fingerprintProfile ?? ''}
+                options={fingerprintOptions}
+                onChange={(value) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    fingerprintProfile: value as ClaudeFingerprintProfile,
+                  }))
+                }
+                ariaLabel={t('ai_providers.claude_request_fingerprint_label')}
+                disabled={saving || disabled || isTesting}
+              />
+              <div className="hint">{t('ai_providers.claude_request_fingerprint_hint')}</div>
             </div>
             <HeaderInputList
               entries={form.headers}
