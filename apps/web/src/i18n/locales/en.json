@@ -3302,6 +3302,7 @@
       "cpa_connection_risk_title": "Confirm CPA Connection Change",
       "cpa_connection_risk_message": "You are changing the Manager Server CPA connection. Current CPA: {{currentBase}}; CPA after save: {{nextBase}}. This affects proxying and monitoring data. Confirm the target CPA URL and Management Key are exactly correct before continuing.",
       "cpa_connection_risk_confirm": "Confirm and Accept Risk",
+      "cpa_switch_unsaved_config": "The current CPA configuration has unsaved changes. Save or discard them before switching the CPA connection.",
       "current_cpa_base": "Current CPA URL",
       "bound_cpa_base": "Manager Server bound CPA",
       "not_bound": "Not bound",

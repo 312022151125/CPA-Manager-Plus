@@ -3300,6 +3300,7 @@
       "cpa_connection_risk_title": "确认修改 CPA 连接",
       "cpa_connection_risk_message": "你正在修改 Manager Server 的 CPA 连接。当前 CPA：{{currentBase}}；保存后 CPA：{{nextBase}}。这会影响代理和监控数据，请确认目标 CPA 地址和 Management Key 完全正确后再继续。",
       "cpa_connection_risk_confirm": "确认并承担风险",
+      "cpa_switch_unsaved_config": "当前 CPA 配置存在未保存修改。请先保存或撤销这些修改，再切换 CPA 连接。",
       "current_cpa_base": "当前 CPA 地址",
       "bound_cpa_base": "Manager Server 已绑定 CPA",
       "not_bound": "未绑定",

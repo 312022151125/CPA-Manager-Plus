@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   setUsageServiceConfig: vi.fn(),
   getManagerConfig: vi.fn(),
   saveManagerConfig: vi.fn(),
+  reloadPage: vi.fn(),
   capturedApiKeyOperationStart: null as (() => void) | null,
   capturedApiKeyOperationEnd: null as (() => void) | null,
   translate: (key: string) => key,
@@ -101,9 +102,13 @@ vi.mock('./components/ManagerConfigPanel', () => ({
   ManagerConfigPanel: ({
     managerSaving,
     onCollectorModeChange,
+    onCPABaseInputChange,
+    onCPAManagementKeyInputChange,
   }: {
     managerSaving: boolean;
     onCollectorModeChange: (value: string) => void;
+    onCPABaseInputChange: (value: string) => void;
+    onCPAManagementKeyInputChange: (value: string) => void;
   }) => (
     <div data-test="manager-panel">
       <button
@@ -111,6 +116,18 @@ vi.mock('./components/ManagerConfigPanel', () => ({
         data-test="manager-dirty"
         disabled={managerSaving}
         onClick={() => onCollectorModeChange('http')}
+      />
+      <button
+        type="button"
+        data-test="manager-change-cpa"
+        disabled={managerSaving}
+        onClick={() => onCPABaseInputChange('http://cpa-next.local:8317')}
+      />
+      <button
+        type="button"
+        data-test="manager-change-key"
+        disabled={managerSaving}
+        onClick={() => onCPAManagementKeyInputChange('next-management-key')}
       />
     </div>
   ),
@@ -276,6 +293,10 @@ let renderer: ReactTestRenderer | null = null;
 const originalLocalStorage = globalThis.localStorage;
 const originalDocument = globalThis.document;
 
+type ConfirmationOptions = {
+  onConfirm: () => void | Promise<void>;
+};
+
 type Deferred<T> = {
   promise: Promise<T>;
   resolve: (value: T | PromiseLike<T>) => void;
@@ -348,6 +369,21 @@ const clickSave = async () => {
   await flush();
 };
 
+const getPendingConfirmation = (): ConfirmationOptions => {
+  const call = mocks.showConfirmation.mock.calls[mocks.showConfirmation.mock.calls.length - 1];
+  const options = call?.[0] as ConfirmationOptions | undefined;
+  if (!options) throw new Error('Confirmation not found');
+  return options;
+};
+
+const confirmPending = async () => {
+  const confirmation = getPendingConfirmation();
+  await act(async () => {
+    await confirmation.onConfirm();
+  });
+  await flush();
+};
+
 const configureManagerMode = () => {
   mocks.getInfo.mockResolvedValue({ service: 'test-manager' });
   mocks.getManagerConfig.mockResolvedValue(MANAGER_CONFIG_RESPONSE);
@@ -382,6 +418,7 @@ beforeEach(() => {
   });
   mocks.visualState.apiKeysText = 'sk-old';
   mocks.visualState.dirty = false;
+  vi.stubGlobal('window', { location: { reload: mocks.reloadPage } });
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
     value: { body: {} },
@@ -393,6 +430,7 @@ afterEach(() => {
     act(() => renderer?.unmount());
     renderer = null;
   }
+  vi.unstubAllGlobals();
   if (originalLocalStorage === undefined) {
     Reflect.deleteProperty(globalThis, 'localStorage');
   } else {
@@ -581,6 +619,109 @@ describe('ConfigPage API-key replace preflight', () => {
 });
 
 describe('ConfigPage Manager/API-key operation lock', () => {
+  it('blocks switching CPA bases while Visual config has unsaved changes', async () => {
+    configureManagerMode();
+    mocks.visualState.dirty = true;
+    await mountPage();
+    await clickTab('manager');
+
+    await click('manager-change-cpa');
+    await clickSave();
+
+    expect(mocks.saveManagerConfig).not.toHaveBeenCalled();
+    expect(mocks.reloadPage).not.toHaveBeenCalled();
+    expect(mocks.showConfirmation).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'config_management.manager.cpa_switch_unsaved_config',
+      'warning'
+    );
+  });
+
+  it('blocks switching CPA bases while Source has unsaved changes', async () => {
+    configureManagerMode();
+    await mountPage();
+    await clickTab('source');
+
+    const sourceEditor = renderer?.root.findByProps({ 'data-test': 'source-editor' });
+    if (!sourceEditor) throw new Error('Source editor not found');
+    act(() => {
+      sourceEditor.props.onChange({ target: { value: `${INITIAL_YAML}# unsaved draft\n` } });
+    });
+
+    await clickTab('manager');
+    await click('manager-change-cpa');
+    await clickSave();
+
+    expect(mocks.saveManagerConfig).not.toHaveBeenCalled();
+    expect(mocks.reloadPage).not.toHaveBeenCalled();
+    expect(mocks.showConfirmation).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'config_management.manager.cpa_switch_unsaved_config',
+      'warning'
+    );
+  });
+
+  it('reloads once after a successful CPA base switch', async () => {
+    configureManagerMode();
+    await mountPage();
+    await clickTab('manager');
+    await click('manager-change-cpa');
+
+    const saveDeferred = createDeferred<ManagerConfigResponse>();
+    mocks.saveManagerConfig.mockReturnValueOnce(saveDeferred.promise);
+    await clickSave();
+
+    expect(mocks.showConfirmation).toHaveBeenCalledTimes(1);
+    expect(mocks.saveManagerConfig).not.toHaveBeenCalled();
+    const confirmation = getPendingConfirmation();
+    let savePromise!: Promise<void>;
+    await act(async () => {
+      savePromise = confirmation.onConfirm() as Promise<void>;
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(mocks.saveManagerConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.reloadPage).not.toHaveBeenCalled();
+
+    saveDeferred.resolve(MANAGER_CONFIG_RESPONSE);
+    await act(async () => {
+      await savePromise;
+    });
+    await flush();
+
+    expect(mocks.reloadPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reload when CPA base save fails', async () => {
+    configureManagerMode();
+    await mountPage();
+    await clickTab('manager');
+    await click('manager-change-cpa');
+    mocks.saveManagerConfig.mockRejectedValueOnce(new Error('CPA switch failed'));
+    await clickSave();
+
+    const confirmation = getPendingConfirmation();
+    await act(async () => {
+      await expect(confirmation.onConfirm()).rejects.toThrow('CPA switch failed');
+    });
+    await flush();
+
+    expect(mocks.reloadPage).not.toHaveBeenCalled();
+  });
+
+  it('does not reload for a Management Key-only save', async () => {
+    configureManagerMode();
+    await mountPage();
+    await clickTab('manager');
+    await click('manager-change-key');
+    await clickSave();
+    await confirmPending();
+
+    expect(mocks.saveManagerConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.reloadPage).not.toHaveBeenCalled();
+  });
+
   it('blocks API-key operation and tab changes while Manager Save is pending', async () => {
     configureManagerMode();
     await mountPage();
@@ -656,6 +797,7 @@ describe('ConfigPage Manager/API-key operation lock', () => {
 
     expect(mocks.apiKeysList).toHaveBeenCalled();
     expect(mocks.apiKeysReplace).toHaveBeenCalledWith(['sk-new']);
+    expect(mocks.reloadPage).not.toHaveBeenCalled();
   });
 
   it('releases the Manager Save lock after a failed request', async () => {

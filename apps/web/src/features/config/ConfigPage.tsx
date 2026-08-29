@@ -1004,8 +1004,17 @@ export function ConfigPage() {
       };
       const savedCPABase = normalizeUsageServiceBase(managerConfig?.cpaConnection?.cpaBaseUrl || '');
       const nextCPABase = normalizeUsageServiceBase(cpaConnection.cpaBaseUrl || '');
-      const cpaConnectionChanged =
-        savedCPABase !== nextCPABase || managerCPAManagementKeyInput.trim() !== '';
+      const cpaBaseChanged = savedCPABase !== nextCPABase;
+      const managementKeyChanged = managerCPAManagementKeyInput.trim() !== '';
+      const cpaConnectionChanged = cpaBaseChanged || managementKeyChanged;
+
+      if (cpaBaseChanged && sourceDirty) {
+        showNotification(
+          t('config_management.manager.cpa_switch_unsaved_config'),
+          'warning'
+        );
+        return;
+      }
 
       const runSave = async (notifyOnError: boolean) => {
         if (managerSavingRef.current || apiKeyMutationInFlightRef.current) return;
@@ -1013,6 +1022,9 @@ export function ConfigPage() {
         setManagerSaving(true);
         try {
           await saveManagerConfigPayload(serviceBase, nextConfig, requestAuthKey);
+          if (cpaBaseChanged) {
+            window.location.reload();
+          }
         } catch (error: unknown) {
           if (notifyOnError) {
             const message = getUsageServiceDisplayError(error, 'usage_service_errors.request_failed');
