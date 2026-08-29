@@ -27,6 +27,59 @@ beforeEach(() => {
   mocks.delete.mockReset();
 });
 
+describe('apiKeysApi.list response contract', () => {
+  it('returns an empty list for an explicit empty kebab-case list', async () => {
+    mocks.get.mockResolvedValue({ 'api-keys': [] });
+
+    await expect(apiKeysApi.list()).resolves.toEqual([]);
+  });
+
+  it('returns an empty list for an explicit null kebab-case list', async () => {
+    mocks.get.mockResolvedValue({ 'api-keys': null });
+
+    await expect(apiKeysApi.list()).resolves.toEqual([]);
+  });
+
+  it('rejects a response without a recognized API-key field', async () => {
+    mocks.get.mockResolvedValue({});
+
+    await expect(apiKeysApi.list()).rejects.toThrow('Invalid API key list response');
+  });
+
+  it('rejects a response with an unrelated field', async () => {
+    mocks.get.mockResolvedValue({ unexpected: ['sk-a'] });
+
+    await expect(apiKeysApi.list()).rejects.toThrow('Invalid API key list response');
+  });
+
+  it.each([
+    ['a scalar', { 'api-keys': 'sk-a' }],
+    ['an object', { 'api-keys': { a: 'sk-a' } }],
+  ])('rejects a response whose API-key field is %s', async (_label, response) => {
+    mocks.get.mockResolvedValue(response);
+
+    await expect(apiKeysApi.list()).rejects.toThrow('Invalid API key list response');
+  });
+
+  it('keeps the camelCase fallback', async () => {
+    mocks.get.mockResolvedValue({ apiKeys: ['fallback'] });
+
+    await expect(apiKeysApi.list()).resolves.toEqual(['fallback']);
+  });
+
+  it('prefers the kebab-case field when both fields exist', async () => {
+    mocks.get.mockResolvedValue({ 'api-keys': ['canonical'], apiKeys: ['fallback'] });
+
+    await expect(apiKeysApi.list()).resolves.toEqual(['canonical']);
+  });
+
+  it('preserves existing element normalization', async () => {
+    mocks.get.mockResolvedValue({ 'api-keys': ['first', 2] });
+
+    await expect(apiKeysApi.list()).resolves.toEqual(['first', '2']);
+  });
+});
+
 describe('apiKeysApi value-based mutations', () => {
   it('replaces an API key by value', async () => {
     mocks.patch.mockResolvedValue({});
@@ -45,13 +98,5 @@ describe('apiKeysApi value-based mutations', () => {
     await apiKeysApi.deleteValue('key/with ?&');
 
     expect(mocks.delete).toHaveBeenCalledWith('/api-keys?value=key%2Fwith%20%3F%26');
-  });
-
-  it('keeps list normalization for CPA and camel-case response fields', async () => {
-    mocks.get.mockResolvedValueOnce({ 'api-keys': ['first', 2] });
-    await expect(apiKeysApi.list()).resolves.toEqual(['first', '2']);
-
-    mocks.get.mockResolvedValueOnce({ apiKeys: ['fallback'] });
-    await expect(apiKeysApi.list()).resolves.toEqual(['fallback']);
   });
 });

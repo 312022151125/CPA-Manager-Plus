@@ -495,6 +495,50 @@ describe('ConfigPage API-key source snapshot safety', () => {
     expect(mocks.saveConfigYaml).not.toHaveBeenCalled();
   });
 
+  it('does not PUT when the create preflight response is malformed', async () => {
+    mocks.apiKeysList.mockRejectedValueOnce(new Error('Invalid API key list response'));
+    await mountPage();
+
+    await click('create-key');
+
+    expect(mocks.apiKeysList).toHaveBeenCalledTimes(1);
+    expect(mocks.apiKeysReplace).not.toHaveBeenCalled();
+    expect(mocks.apiKeysReplaceValue).not.toHaveBeenCalled();
+    expect(mocks.apiKeysDeleteValue).not.toHaveBeenCalled();
+    expect(mocks.commitApiKeysText).not.toHaveBeenCalled();
+    expect(mocks.apiKeyMutationErrors).toHaveLength(1);
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).not.toBe(
+      'api_key_mutation_outcome_unknown'
+    );
+
+    await clickTab('source');
+
+    expect(mocks.fetchConfigYaml).toHaveBeenCalledTimes(1);
+    expect(renderer?.root.findAllByProps({ 'data-test': 'source-editor' })).toHaveLength(1);
+  });
+
+  it('does not PATCH when the replace preflight response is malformed', async () => {
+    mocks.apiKeysList.mockRejectedValueOnce(new Error('Invalid API key list response'));
+    await mountPage();
+
+    await click('replace-key');
+
+    expect(mocks.apiKeysList).toHaveBeenCalledTimes(1);
+    expect(mocks.apiKeysReplace).not.toHaveBeenCalled();
+    expect(mocks.apiKeysReplaceValue).not.toHaveBeenCalled();
+    expect(mocks.apiKeysDeleteValue).not.toHaveBeenCalled();
+    expect(mocks.commitApiKeysText).not.toHaveBeenCalled();
+    expect(mocks.apiKeyMutationErrors).toHaveLength(1);
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).not.toBe(
+      'api_key_mutation_outcome_unknown'
+    );
+
+    await clickTab('source');
+
+    expect(mocks.fetchConfigYaml).toHaveBeenCalledTimes(1);
+    expect(renderer?.root.findAllByProps({ 'data-test': 'source-editor' })).toHaveLength(1);
+  });
+
   it('marks Source stale and reports an unknown outcome when replace PATCH rejects', async () => {
     mocks.apiKeysList.mockResolvedValueOnce(['sk-old']);
     mocks.apiKeysReplaceValue.mockRejectedValueOnce(new Error('replace response lost'));
@@ -566,10 +610,10 @@ describe('ConfigPage API-key source snapshot safety', () => {
     expect(mocks.showNotification).toHaveBeenCalledWith('notification.refresh_failed', 'error');
   });
 
-  it('keeps Source stale and skips Alias-dependent completion after create canonical refresh fails', async () => {
+  it('keeps Source stale after a malformed post-write canonical response', async () => {
     mocks.apiKeysList
       .mockResolvedValueOnce([])
-      .mockRejectedValueOnce(new Error('canonical refresh failed'));
+      .mockRejectedValueOnce(new Error('Invalid API key list response'));
     mocks.fetchConfigYaml
       .mockResolvedValueOnce(INITIAL_YAML)
       .mockRejectedValueOnce(new Error('source refresh failed'));
