@@ -3730,6 +3730,135 @@ func TestQuotaLifecycleKeepsExpiredBoundaryGuardBeforeScheduledEnd(t *testing.T)
 	}
 }
 
+func TestQuotaLifecycleDoesNotReplaceFreshCurrentBoundaryWithLaterExpiredExactEvidence(t *testing.T) {
+	const durationSeconds = int64(5 * 60 * 60)
+	firstStartMS := quotaLifecycleBaseMS
+	firstEndMS := firstStartMS + durationSeconds*1000
+	freshStartMS := firstStartMS + 3*quotaLifecycleHourMS
+	freshEndMS := freshStartMS + durationSeconds*1000
+	refreshAtMS := firstEndMS + quotaLifecycleHourMS
+	expiredAtMS := refreshAtMS + 10*60*1000
+	service, path := newQuotaSnapshotTestServiceWithPath(t, expiredAtMS+50*60*1000)
+
+	first := quotaLifecycleFixedWindow("five-hour", "five_hour", firstStartMS, durationSeconds, 40)
+	writeQuotaLifecycleObservation(t, service, "complete", firstStartMS+quotaLifecycleHourMS, []WindowInput{first})
+
+	fresh := quotaLifecycleFixedWindow("five-hour", "five_hour", freshStartMS, durationSeconds, 45)
+	fresh.Source = "response_header"
+	fresh.BoundaryAccuracy = "derived"
+	if _, err := service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{
+		quotaLifecycleWriteEntryWithObservation(
+			"complete", "response_header", "header-expired-refresh", "codex:quota-windows",
+			refreshAtMS, []WindowInput{fresh},
+		),
+	}}); err != nil {
+		t.Fatalf("write fresh overlapping observation: %v", err)
+	}
+	refreshed := queryQuotaLifecycleWindows(t, service, false)["five-hour"]
+	if refreshed.CurrentCycle == nil || refreshed.CurrentCycle.ScheduledStartMS == nil ||
+		*refreshed.CurrentCycle.ScheduledStartMS != freshStartMS ||
+		refreshed.CurrentCycle.ScheduledEndMS == nil || *refreshed.CurrentCycle.ScheduledEndMS != freshEndMS ||
+		refreshed.CurrentCycle.BoundaryAccuracy != "derived" || refreshed.Stale {
+		t.Fatalf("fresh derived boundary was not refreshed: %#v", refreshed)
+	}
+	currentCycleID := refreshed.CurrentCycle.ID
+
+	expired := quotaLifecycleFixedWindow("five-hour", "five_hour", firstStartMS, durationSeconds, 46)
+	writeQuotaLifecycleObservation(t, service, "complete", expiredAtMS, []WindowInput{expired})
+
+	window := queryQuotaLifecycleWindows(t, service, false)["five-hour"]
+	if window.CurrentCycle == nil || window.CurrentCycle.ID != currentCycleID || window.PreviousCycle != nil {
+		t.Fatalf("expired exact evidence split or replaced the cycle: %#v", window)
+	}
+	if window.CurrentCycle.ScheduledStartMS == nil || *window.CurrentCycle.ScheduledStartMS != freshStartMS ||
+		window.CurrentCycle.ScheduledEndMS == nil || *window.CurrentCycle.ScheduledEndMS != freshEndMS ||
+		window.CurrentCycle.BoundaryAccuracy != "derived" {
+		t.Fatalf("expired exact evidence replaced the current boundary: %#v", window.CurrentCycle)
+	}
+	if window.CycleStartMS == nil || *window.CycleStartMS != freshStartMS ||
+		window.CycleEndMS == nil || *window.CycleEndMS != freshEndMS || window.Stale {
+		t.Fatalf("window boundary did not keep the fresh current cycle: %#v", window)
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open expired-evidence database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var cycleCount int
+	if err := db.QueryRow(`select count(*) from account_quota_cycles`).Scan(&cycleCount); err != nil {
+		t.Fatalf("count expired-evidence cycles: %v", err)
+	}
+	if cycleCount != 1 {
+		t.Fatalf("expired-evidence cycle count = %d, want 1", cycleCount)
+	}
+}
+
+func TestQuotaLifecycleExpiredBoundaryRefreshPreservesConfirmedResetTransition(t *testing.T) {
+	const durationSeconds = int64(5 * 60 * 60)
+	firstStartMS := quotaLifecycleBaseMS
+	firstEndMS := firstStartMS + durationSeconds*1000
+	resetAtMS := firstStartMS + 4*quotaLifecycleHourMS
+	freshStartMS := firstStartMS + 3*quotaLifecycleHourMS
+	freshEndMS := freshStartMS + durationSeconds*1000
+	refreshAtMS := firstEndMS + quotaLifecycleHourMS
+	service, path := newQuotaSnapshotTestServiceWithPath(t, refreshAtMS+quotaLifecycleHourMS)
+
+	initial := quotaLifecycleFixedWindow("five-hour", "five_hour", firstStartMS, durationSeconds, 75)
+	writeQuotaLifecycleObservation(t, service, "complete", firstStartMS+3*quotaLifecycleHourMS, []WindowInput{initial})
+
+	reset := quotaLifecycleFixedWindow("five-hour", "five_hour", firstStartMS, durationSeconds, 1)
+	writeQuotaLifecycleObservation(t, service, "complete", resetAtMS, []WindowInput{reset})
+
+	resetted := queryQuotaLifecycleWindows(t, service, false)["five-hour"]
+	if resetted.PreviousCycle == nil || resetted.PreviousCycle.ActualEndMS == nil ||
+		*resetted.PreviousCycle.ActualEndMS != resetAtMS ||
+		resetted.CurrentCycle == nil || resetted.CurrentCycle.ActualStartMS != resetAtMS ||
+		resetted.CurrentCycle.ScheduledStartMS == nil || *resetted.CurrentCycle.ScheduledStartMS != firstStartMS ||
+		resetted.CurrentCycle.ScheduledEndMS == nil || *resetted.CurrentCycle.ScheduledEndMS != firstEndMS {
+		t.Fatalf("same-boundary counter reset = %#v", resetted)
+	}
+	currentCycleID := resetted.CurrentCycle.ID
+	previousCycleID := resetted.PreviousCycle.ID
+
+	fresh := quotaLifecycleFixedWindow("five-hour", "five_hour", freshStartMS, durationSeconds, 10)
+	writeQuotaLifecycleObservation(t, service, "complete", refreshAtMS, []WindowInput{fresh})
+
+	window := queryQuotaLifecycleWindows(t, service, false)["five-hour"]
+	if window.CurrentCycle == nil || window.CurrentCycle.ID != currentCycleID ||
+		window.PreviousCycle == nil || window.PreviousCycle.ID != previousCycleID {
+		t.Fatalf("expired refresh changed cycle identity: %#v", window)
+	}
+	if window.CurrentCycle.ScheduledStartMS == nil || *window.CurrentCycle.ScheduledStartMS != freshStartMS ||
+		window.CurrentCycle.ScheduledEndMS == nil || *window.CurrentCycle.ScheduledEndMS != freshEndMS {
+		t.Fatalf("expired refresh did not update scheduled boundary: %#v", window.CurrentCycle)
+	}
+	if window.CurrentCycle.ActualStartMS != resetAtMS {
+		t.Fatalf("confirmed reset transition was overwritten: %#v", window.CurrentCycle)
+	}
+	if window.PreviousCycle.ActualEndMS == nil || *window.PreviousCycle.ActualEndMS != resetAtMS ||
+		window.CurrentCycle.ActualStartMS != *window.PreviousCycle.ActualEndMS {
+		t.Fatalf("previous cycle no longer meets the confirmed transition: %#v", window)
+	}
+	if window.CycleStartMS == nil || *window.CycleStartMS != freshStartMS ||
+		window.CycleEndMS == nil || *window.CycleEndMS != freshEndMS || window.Stale {
+		t.Fatalf("window canonical boundary = %#v", window)
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open reset-transition database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var cycleCount int
+	if err := db.QueryRow(`select count(*) from account_quota_cycles`).Scan(&cycleCount); err != nil {
+		t.Fatalf("count reset-transition cycles: %v", err)
+	}
+	if cycleCount != 2 {
+		t.Fatalf("reset-transition cycle count = %d, want 2", cycleCount)
+	}
+}
+
 func TestQuotaLifecycleReclassifiesLegacyCodexSparkAllScope(t *testing.T) {
 	service, path := newQuotaSnapshotTestServiceWithPath(t, quotaLifecycleBaseMS+quotaLifecycleDayMS)
 	legacy := quotaLifecycleFixedWindow(
