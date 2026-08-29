@@ -3,11 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
-import {
-  findMatchingProviderKeyConfig,
-  isRequestFingerprintVerified,
-  providersApi,
-} from '@/services/api';
+import { configApi, providersApi, verifyClaudeFingerprintInConfig } from '@/services/api';
 import {
   useAuthStore,
   useClaudeEditDraftStore,
@@ -17,6 +13,7 @@ import {
 import {
   coolingPolicyFromOverride,
   coolingPolicyToOverride,
+  type NotificationType,
   type ProviderKeyConfig,
 } from '@/types';
 import type { ModelInfo } from '@/utils/models';
@@ -487,43 +484,44 @@ export function AiProvidersClaudeEditLayout() {
       } else {
         await providersApi.createClaudeConfig(payload);
       }
-      let fetchedList: ProviderKeyConfig[] | null = null;
+
+      // The PUT succeeded: the config write is committed no matter what the
+      // fingerprint verification below concludes. Verification reads the
+      // persisted /config (never the runtime /claude-api-key endpoint, whose
+      // auth-index is derived and absent from /config) and only decides which
+      // notification the user gets.
+      let savedList: ProviderKeyConfig[] | null = null;
       try {
-        fetchedList = await providersApi.getClaudeConfigs();
+        savedList = (await configApi.getConfig()).claudeApiKeys ?? [];
       } catch {
-        fetchedList = null;
+        savedList = null;
       }
-      if (fetchedList === null && fingerprintExplicitlyChanged) {
-        // The PUT succeeded, but without a fresh read we cannot confirm the
-        // fingerprint actually took effect on the connected CPA.
-        clearCache('claude-api-key');
-        showNotification(t('notification.claude_fingerprint_verify_failed'), 'error');
-        return;
+      if (savedList) {
+        setConfigs(savedList);
+        updateConfigValue('claude-api-key', savedList);
       }
-      const syncedList =
-        fetchedList ??
-        (editIndex !== null
-          ? configs.map((item, index) => (index === editIndex ? payload : item))
-          : [...configs, payload]);
-      setConfigs(syncedList);
-      updateConfigValue('claude-api-key', syncedList);
       clearCache('claude-api-key');
-      if (fingerprintExplicitlyChanged) {
-        const savedConfig = findMatchingProviderKeyConfig(
-          syncedList,
-          editIndex !== null ? configs[editIndex] : payload
+
+      let notificationKey =
+        editIndex !== null
+          ? 'notification.claude_config_updated'
+          : 'notification.claude_config_added';
+      let notificationType: NotificationType = 'success';
+      if (!savedList) {
+        notificationKey = 'notification.claude_fingerprint_verify_unavailable';
+        notificationType = 'warning';
+      } else if (fingerprintExplicitlyChanged) {
+        const verification = verifyClaudeFingerprintInConfig(
+          savedList,
+          payload.fingerprintProfile,
+          { index: editIndex, apiKey: payload.apiKey, baseUrl: payload.baseUrl }
         );
-        if (!isRequestFingerprintVerified(payload.fingerprintProfile, savedConfig)) {
-          showNotification(t('notification.claude_fingerprint_verify_failed'), 'error');
-          return;
+        if (verification !== 'confirmed') {
+          notificationKey = 'notification.claude_fingerprint_not_applied';
+          notificationType = 'warning';
         }
       }
-      showNotification(
-        editIndex !== null
-          ? t('notification.claude_config_updated')
-          : t('notification.claude_config_added'),
-        'success'
-      );
+      showNotification(t(notificationKey), notificationType);
       allowNextNavigation();
       setDraftBaseline(draftKey, buildClaudeBaseline(form));
       handleBack();

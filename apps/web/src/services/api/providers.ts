@@ -476,24 +476,38 @@ const matchesProviderConfig = (
     'base-url': original.baseUrl,
   });
 
-export const findMatchingProviderKeyConfig = (
-  list: ProviderKeyConfig[],
-  reference: GeminiKeyConfig | ProviderKeyConfig
-): ProviderKeyConfig | undefined =>
-  list.find((item) => matchesProviderConfig(item as unknown as Record<string, unknown>, reference));
+export type ClaudeFingerprintVerification = 'confirmed' | 'not-applied' | 'not-found';
 
-// Read-back check for explicit fingerprint changes. Older CPA builds unmarshal
-// config sections into structs without fingerprint-profile, silently ignore
-// the field, and still answer 200 — so a successful PUT alone proves nothing.
-// An explicit Default ('') requires the saved config to expose no profile.
-export const isRequestFingerprintVerified = (
-  requested: ProviderKeyConfig['fingerprintProfile'],
-  saved: ProviderKeyConfig | undefined
-): boolean => {
-  if (requested === 'claude-code-cli') {
-    return saved?.fingerprintProfile === 'claude-code-cli';
+// Read-back check for explicit fingerprint changes against the persisted
+// /config list. Older CPA builds unmarshal config sections into structs
+// without fingerprint-profile, silently ignore the field, and still answer
+// 200 — so a successful PUT alone proves nothing. Identity is positional
+// (the PUT replaced the record in place) with an apiKey + baseUrl fallback;
+// the runtime auth-index from /claude-api-key deliberately plays no part
+// because /config entries never carry it.
+export const verifyClaudeFingerprintInConfig = (
+  configs: ProviderKeyConfig[],
+  expected: ProviderKeyConfig['fingerprintProfile'],
+  target: { index: number | null; apiKey?: string; baseUrl?: string }
+): ClaudeFingerprintVerification => {
+  const targetApiKey = (target.apiKey ?? '').trim();
+  const targetBaseUrl = (target.baseUrl ?? '').trim();
+  const hasIdentity = Boolean(targetApiKey || targetBaseUrl);
+  const matchesIdentity = (record: ProviderKeyConfig) =>
+    (record.apiKey ?? '').trim() === targetApiKey &&
+    (record.baseUrl ?? '').trim() === targetBaseUrl;
+  const byIndex = target.index !== null ? configs[target.index] : undefined;
+  const saved =
+    byIndex && (!hasIdentity || matchesIdentity(byIndex))
+      ? byIndex
+      : hasIdentity
+        ? configs.find(matchesIdentity)
+        : undefined;
+  if (!saved) return 'not-found';
+  if (expected === 'claude-code-cli') {
+    return saved.fingerprintProfile === 'claude-code-cli' ? 'confirmed' : 'not-applied';
   }
-  return saved !== undefined && saved.fingerprintProfile === undefined;
+  return saved.fingerprintProfile === undefined ? 'confirmed' : 'not-applied';
 };
 
 const extractArrayPayload = (data: unknown, key: string): unknown[] => {

@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderKeyConfig } from '@/types';
 
 const mocks = vi.hoisted(() => ({
+  t: (key: string) => key,
+  params: { index: '0' } as Record<string, string | undefined>,
   config: { claudeApiKeys: [] as ProviderKeyConfig[] },
   fetchConfig: vi.fn(),
   updateConfigValue: vi.fn(),
@@ -14,12 +16,12 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   updateClaudeConfig: vi.fn(),
   createClaudeConfig: vi.fn(),
-  getClaudeConfigs: vi.fn(),
+  getConfig: vi.fn(),
   outletContext: { current: null as Record<string, unknown> | null },
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: mocks.t }),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -29,7 +31,7 @@ vi.mock('react-router-dom', () => ({
   },
   useNavigate: () => mocks.navigate,
   useLocation: () => ({ state: null }),
-  useParams: () => ({ index: '0' }),
+  useParams: () => mocks.params,
 }));
 
 vi.mock('@/hooks/useUnsavedChangesGuard', () => ({
@@ -60,10 +62,11 @@ vi.mock('@/services/api', async () => {
     providersApi: {
       updateClaudeConfig: mocks.updateClaudeConfig,
       createClaudeConfig: mocks.createClaudeConfig,
-      getClaudeConfigs: mocks.getClaudeConfigs,
     },
-    findMatchingProviderKeyConfig: actual.findMatchingProviderKeyConfig,
-    isRequestFingerprintVerified: actual.isRequestFingerprintVerified,
+    configApi: {
+      getConfig: mocks.getConfig,
+    },
+    verifyClaudeFingerprintInConfig: actual.verifyClaudeFingerprintInConfig,
   };
 });
 
@@ -73,7 +76,7 @@ import { useClaudeEditDraftStore } from '@/stores/useClaudeEditDraftStore';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 type EditorContext = {
-  form: { fingerprintProfile?: string };
+  form: { fingerprintProfile?: string; apiKey?: string; baseUrl?: string };
   setForm: (action: (prev: Record<string, unknown>) => Record<string, unknown>) => void;
   handleSave: () => Promise<void>;
 };
@@ -95,11 +98,11 @@ const renderEditor = async () => {
   return renderer!;
 };
 
-const setFingerprint = async (value: string) => {
+const patchForm = async (patch: Record<string, unknown>) => {
   const context = mocks.outletContext.current as EditorContext | null;
   if (!context) throw new Error('editor context was not captured');
   await act(async () => {
-    context.setForm((prev) => ({ ...prev, fingerprintProfile: value }));
+    context.setForm((prev) => ({ ...prev, ...patch }));
   });
 };
 
@@ -111,106 +114,192 @@ const save = async () => {
   });
 };
 
-const successNotifications = () =>
-  mocks.showNotification.mock.calls.filter((call) => call[1] === 'success');
-const errorNotifications = () =>
-  mocks.showNotification.mock.calls.filter((call) => call[1] === 'error');
+const notifications = (type: string) =>
+  mocks.showNotification.mock.calls.filter((call) => call[1] === type);
 
 describe('AiProvidersClaudeEditLayout fingerprint save verification', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useClaudeEditDraftStore.setState({ drafts: {}, refCounts: {} });
+    mocks.params = { index: '0' };
+    // /config fixture: persisted facts only — no runtime auth-index.
     mocks.config = {
-      claudeApiKeys: [{ apiKey: 'key', authIndex: 'claude-auth', priority: 1 }],
+      claudeApiKeys: [{ apiKey: 'key', baseUrl: 'https://api.anthropic.com', priority: 1 }],
     };
     mocks.fetchConfig.mockResolvedValue(mocks.config.claudeApiKeys);
     mocks.updateClaudeConfig.mockResolvedValue(undefined);
     mocks.createClaudeConfig.mockResolvedValue(undefined);
   });
 
-  it('reports an error instead of success when the connected CPA silently drops the fingerprint', async () => {
-    mocks.getClaudeConfigs.mockResolvedValue([{ apiKey: 'key', authIndex: 'claude-auth' }]);
+  it('confirms Default → CLI against /config without any runtime auth-index', async () => {
+    mocks.getConfig.mockResolvedValue({
+      claudeApiKeys: [
+        {
+          apiKey: 'key',
+          baseUrl: 'https://api.anthropic.com',
+          fingerprintProfile: 'claude-code-cli',
+        },
+      ],
+    });
 
     await renderEditor();
-    await setFingerprint('claude-code-cli');
+    await patchForm({ fingerprintProfile: 'claude-code-cli' });
     await save();
 
     expect(mocks.updateClaudeConfig).toHaveBeenCalledWith(
       mocks.config.claudeApiKeys[0],
       expect.objectContaining({ fingerprintProfile: 'claude-code-cli' })
     );
-    expect(errorNotifications()).toHaveLength(1);
-    expect(errorNotifications()[0][0]).toBe('notification.claude_fingerprint_verify_failed');
-    expect(successNotifications()).toHaveLength(0);
-    expect(mocks.navigate).not.toHaveBeenCalled();
-    expect(mocks.updateConfigValue).toHaveBeenLastCalledWith('claude-api-key', [
-      { apiKey: 'key', authIndex: 'claude-auth' },
-    ]);
+    expect(notifications('error')).toHaveLength(0);
+    expect(notifications('warning')).toHaveLength(0);
+    expect(notifications('success')[0][0]).toBe('notification.claude_config_updated');
+    expect(mocks.navigate).toHaveBeenCalledWith('/ai-providers', { replace: true });
   });
 
-  it('saves with a success notification when the read-back confirms the requested profile', async () => {
-    mocks.getClaudeConfigs.mockResolvedValue([
-      { apiKey: 'key', authIndex: 'claude-auth', fingerprintProfile: 'claude-code-cli' },
-    ]);
-
-    await renderEditor();
-    await setFingerprint('claude-code-cli');
-    await save();
-
-    expect(errorNotifications()).toHaveLength(0);
-    expect(successNotifications()).toHaveLength(1);
-    expect(successNotifications()[0][0]).toBe('notification.claude_config_updated');
-  });
-
-  it('accepts an explicit Default once the read-back no longer exposes a profile', async () => {
+  it('confirms CLI → Default once /config no longer exposes a profile', async () => {
     mocks.config = {
       claudeApiKeys: [
-        { apiKey: 'key', authIndex: 'claude-auth', fingerprintProfile: 'claude-code-cli' },
+        {
+          apiKey: 'key',
+          baseUrl: 'https://api.anthropic.com',
+          fingerprintProfile: 'claude-code-cli',
+        },
       ],
     };
     mocks.fetchConfig.mockResolvedValue(mocks.config.claudeApiKeys);
-    mocks.getClaudeConfigs.mockResolvedValue([{ apiKey: 'key', authIndex: 'claude-auth' }]);
+    mocks.getConfig.mockResolvedValue({
+      claudeApiKeys: [{ apiKey: 'key', baseUrl: 'https://api.anthropic.com' }],
+    });
 
     await renderEditor();
-    await setFingerprint('');
+    await patchForm({ fingerprintProfile: '' });
     await save();
 
     expect(mocks.updateClaudeConfig).toHaveBeenCalledWith(
       mocks.config.claudeApiKeys[0],
       expect.objectContaining({ fingerprintProfile: '' })
     );
-    expect(errorNotifications()).toHaveLength(0);
-    expect(successNotifications()).toHaveLength(1);
+    expect(notifications('warning')).toHaveLength(0);
+    expect(notifications('success')[0][0]).toBe('notification.claude_config_updated');
   });
 
-  it('reports an error without touching local state when verification cannot read back', async () => {
-    mocks.getClaudeConfigs.mockRejectedValue(new Error('read-back failed'));
+  it('verifies with the new identity after the API key changes', async () => {
+    mocks.getConfig.mockResolvedValue({
+      claudeApiKeys: [
+        {
+          apiKey: 'new-key',
+          baseUrl: 'https://api.anthropic.com',
+          fingerprintProfile: 'claude-code-cli',
+        },
+      ],
+    });
 
     await renderEditor();
-    await setFingerprint('claude-code-cli');
-    await save();
-
-    expect(errorNotifications()).toHaveLength(1);
-    expect(errorNotifications()[0][0]).toBe('notification.claude_fingerprint_verify_failed');
-    expect(successNotifications()).toHaveLength(0);
-    expect(mocks.updateConfigValue).not.toHaveBeenCalled();
-    expect(mocks.navigate).not.toHaveBeenCalled();
-  });
-
-  it('keeps the existing fallback save flow when the fingerprint was not changed', async () => {
-    mocks.getClaudeConfigs.mockRejectedValue(new Error('read-back failed'));
-
-    await renderEditor();
+    await patchForm({ apiKey: 'new-key', fingerprintProfile: 'claude-code-cli' });
     await save();
 
     expect(mocks.updateClaudeConfig).toHaveBeenCalledWith(
       mocks.config.claudeApiKeys[0],
-      expect.objectContaining({ fingerprintProfile: undefined })
+      expect.objectContaining({ apiKey: 'new-key', fingerprintProfile: 'claude-code-cli' })
     );
-    expect(errorNotifications()).toHaveLength(0);
-    expect(successNotifications()).toHaveLength(1);
+    expect(notifications('warning')).toHaveLength(0);
+    expect(notifications('success')).toHaveLength(1);
+  });
+
+  it('verifies with the new identity after the base URL changes', async () => {
+    mocks.getConfig.mockResolvedValue({
+      claudeApiKeys: [
+        {
+          apiKey: 'key',
+          baseUrl: 'https://relay.example.com',
+          fingerprintProfile: 'claude-code-cli',
+        },
+      ],
+    });
+
+    await renderEditor();
+    await patchForm({
+      baseUrl: 'https://relay.example.com',
+      fingerprintProfile: 'claude-code-cli',
+    });
+    await save();
+
+    expect(mocks.updateClaudeConfig).toHaveBeenCalledWith(
+      mocks.config.claudeApiKeys[0],
+      expect.objectContaining({ baseUrl: 'https://relay.example.com' })
+    );
+    expect(notifications('warning')).toHaveLength(0);
+    expect(notifications('success')).toHaveLength(1);
+  });
+
+  it('warns that the save is committed when the connected CPA silently drops the fingerprint', async () => {
+    mocks.getConfig.mockResolvedValue({
+      claudeApiKeys: [{ apiKey: 'key', baseUrl: 'https://api.anthropic.com' }],
+    });
+
+    await renderEditor();
+    await patchForm({ fingerprintProfile: 'claude-code-cli' });
+    await save();
+
+    expect(notifications('success')).toHaveLength(0);
+    expect(notifications('warning')).toHaveLength(1);
+    expect(notifications('warning')[0][0]).toBe('notification.claude_fingerprint_not_applied');
     expect(mocks.updateConfigValue).toHaveBeenLastCalledWith('claude-api-key', [
-      expect.objectContaining({ apiKey: 'key', authIndex: 'claude-auth' }),
+      { apiKey: 'key', baseUrl: 'https://api.anthropic.com' },
     ]);
+    expect(mocks.navigate).toHaveBeenCalledWith('/ai-providers', { replace: true });
+  });
+
+  it('warns that the save is committed when verification cannot read /config', async () => {
+    mocks.getConfig.mockRejectedValue(new Error('read-back failed'));
+
+    await renderEditor();
+    await patchForm({ fingerprintProfile: 'claude-code-cli' });
+    await save();
+
+    expect(notifications('success')).toHaveLength(0);
+    expect(notifications('warning')).toHaveLength(1);
+    expect(notifications('warning')[0][0]).toBe(
+      'notification.claude_fingerprint_verify_unavailable'
+    );
+    expect(mocks.updateConfigValue).not.toHaveBeenCalled();
+    expect(mocks.clearCache).toHaveBeenCalledWith('claude-api-key');
+    expect(mocks.navigate).toHaveBeenCalledWith('/ai-providers', { replace: true });
+  });
+
+  it('leaves create mode after a committed create even when verification fails', async () => {
+    mocks.params = {};
+    mocks.config = { claudeApiKeys: [] };
+    mocks.fetchConfig.mockResolvedValue([]);
+    mocks.getConfig.mockResolvedValue({
+      claudeApiKeys: [{ apiKey: 'new-key', baseUrl: 'https://api.anthropic.com' }],
+    });
+
+    await renderEditor();
+    await patchForm({
+      apiKey: 'new-key',
+      baseUrl: 'https://api.anthropic.com',
+      fingerprintProfile: 'claude-code-cli',
+    });
+    await save();
+
+    // The editor navigates back to the provider list after the committed
+    // create, so the create payload cannot be submitted a second time.
+    expect(mocks.createClaudeConfig).toHaveBeenCalledTimes(1);
+    expect(notifications('success')).toHaveLength(0);
+    expect(notifications('warning')[0][0]).toBe('notification.claude_fingerprint_not_applied');
+    expect(mocks.navigate).toHaveBeenCalledWith('/ai-providers', { replace: true });
+  });
+
+  it('keeps the plain success flow when the fingerprint was not changed', async () => {
+    mocks.getConfig.mockResolvedValue({
+      claudeApiKeys: [{ apiKey: 'key', baseUrl: 'https://api.anthropic.com', priority: 1 }],
+    });
+
+    await renderEditor();
+    await save();
+
+    expect(notifications('warning')).toHaveLength(0);
+    expect(notifications('success')[0][0]).toBe('notification.claude_config_updated');
   });
 });
