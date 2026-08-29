@@ -40,6 +40,12 @@ describe('apiKeysApi.list response contract', () => {
     await expect(apiKeysApi.list()).resolves.toEqual([]);
   });
 
+  it('returns an empty list for an explicit null camelCase list', async () => {
+    mocks.get.mockResolvedValue({ apiKeys: null });
+
+    await expect(apiKeysApi.list()).resolves.toEqual([]);
+  });
+
   it('rejects a response without a recognized API-key field', async () => {
     mocks.get.mockResolvedValue({});
 
@@ -73,10 +79,36 @@ describe('apiKeysApi.list response contract', () => {
     await expect(apiKeysApi.list()).resolves.toEqual(['canonical']);
   });
 
-  it('preserves existing element normalization', async () => {
-    mocks.get.mockResolvedValue({ 'api-keys': ['first', 2] });
+  it('preserves canonical string values exactly', async () => {
+    mocks.get.mockResolvedValue({ 'api-keys': ['  sk-a  '] });
 
-    await expect(apiKeysApi.list()).resolves.toEqual(['first', '2']);
+    await expect(apiKeysApi.list()).resolves.toEqual(['  sk-a  ']);
+  });
+
+  it.each([
+    ['a number', ['sk-a', 2]],
+    ['null', ['sk-a', null]],
+    ['an object', ['sk-a', { bad: true }]],
+  ])('rejects an API-key list containing %s elements', async (_label, keys) => {
+    mocks.get.mockResolvedValue({ 'api-keys': keys });
+
+    await expect(apiKeysApi.list()).rejects.toThrow('Invalid API key list response');
+  });
+
+  it.each([
+    ['an array', ['sk-a']],
+    ['a scalar', 'sk-a'],
+  ])('rejects a top-level %s response', async (_label, response) => {
+    mocks.get.mockResolvedValue(response);
+
+    await expect(apiKeysApi.list()).rejects.toThrow('Invalid API key list response');
+  });
+
+  it('propagates a transport failure from the canonical API request', async () => {
+    const error = new Error('network unavailable');
+    mocks.get.mockRejectedValue(error);
+
+    await expect(apiKeysApi.list()).rejects.toBe(error);
   });
 });
 

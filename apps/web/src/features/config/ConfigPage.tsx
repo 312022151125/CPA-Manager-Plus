@@ -259,6 +259,16 @@ export function resolveApiKeyOperationBlockReason({
 
 // CPA appends the replacement value when the old value is missing. Keep replace
 // semantics explicit at the UI boundary so a stale edit cannot become a create.
+export type ApiKeyReplacePreflightResult =
+  | {
+      ok: true;
+      canonicalOldApiKey: string;
+    }
+  | {
+      ok: false;
+      reason: 'api_key_stale' | 'api_key_duplicate' | 'api_key_ambiguous';
+    };
+
 // eslint-disable-next-line react-refresh/only-export-components
 export function resolveApiKeyReplacePreflight({
   currentKeys,
@@ -268,20 +278,25 @@ export function resolveApiKeyReplacePreflight({
   currentKeys: string[];
   oldApiKey: string;
   newApiKey: string;
-}): 'api_key_stale' | 'api_key_duplicate' | null {
+}): ApiKeyReplacePreflightResult {
   const normalizedOldApiKey = oldApiKey.trim();
   const normalizedNewApiKey = newApiKey.trim();
-  const hasOldApiKey = currentKeys.some((key) => key.trim() === normalizedOldApiKey);
-  if (!hasOldApiKey) return 'api_key_stale';
+  const matchingOldKeys = currentKeys.filter((key) => key.trim() === normalizedOldApiKey);
+  if (matchingOldKeys.length === 0) {
+    return { ok: false, reason: 'api_key_stale' };
+  }
+  if (matchingOldKeys.length > 1) {
+    return { ok: false, reason: 'api_key_ambiguous' };
+  }
 
   if (
     normalizedOldApiKey !== normalizedNewApiKey &&
     currentKeys.some((key) => key.trim() === normalizedNewApiKey)
   ) {
-    return 'api_key_duplicate';
+    return { ok: false, reason: 'api_key_duplicate' };
   }
 
-  return null;
+  return { ok: true, canonicalOldApiKey: matchingOldKeys[0] };
 }
 
 // A stale source buffer must never be used as the payload for a config save.
@@ -656,27 +671,22 @@ export function ConfigPage() {
           oldApiKey: normalizedOldApiKey,
           newApiKey: normalizedNewApiKey,
         });
-        if (preflightError === 'api_key_stale') {
+        if (!preflightError.ok) {
           commitApiKeysText(currentKeys.join('\n'));
           await refreshCleanSourceSnapshot();
-          const error = new Error(
-            t('config_management.visual.api_keys.stale_key_refreshed')
-          ) as Error & { code?: string };
-          error.code = preflightError;
-          throw error;
-        }
-        if (preflightError === 'api_key_duplicate') {
-          commitApiKeysText(currentKeys.join('\n'));
-          await refreshCleanSourceSnapshot();
-          const error = new Error(
-            t('config_management.visual.api_keys.error_duplicate')
-          ) as Error & { code?: string };
-          error.code = preflightError;
+          const messageKey =
+            preflightError.reason === 'api_key_stale'
+              ? 'config_management.visual.api_keys.stale_key_refreshed'
+              : preflightError.reason === 'api_key_duplicate'
+                ? 'config_management.visual.api_keys.error_duplicate'
+                : 'config_management.visual.api_keys.state_refresh_failed';
+          const error = new Error(t(messageKey)) as Error & { code?: string };
+          error.code = preflightError.reason;
           throw error;
         }
         updateSourceSnapshotStale(true);
         try {
-          await apiKeysApi.replaceValue(normalizedOldApiKey, normalizedNewApiKey);
+          await apiKeysApi.replaceValue(preflightError.canonicalOldApiKey, normalizedNewApiKey);
         } catch (cause) {
           const error = new Error(
             t('config_management.visual.api_keys.mutation_outcome_unknown')

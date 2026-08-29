@@ -769,6 +769,47 @@ describe('ConfigPage API-key replace preflight', () => {
     expect(events).toEqual(['get', 'patch', 'get']);
     expect(mocks.apiKeysReplaceValue).toHaveBeenCalledWith('sk-old', 'sk-new');
   });
+
+  it('sends the raw canonical old key when replacing a whitespace-padded entry', async () => {
+    mocks.apiKeysList.mockResolvedValueOnce(['  sk-old  ']).mockResolvedValueOnce(['sk-new']);
+    await mountPage();
+
+    await click('replace-key');
+
+    expect(mocks.apiKeysReplaceValue).toHaveBeenCalledWith('  sk-old  ', 'sk-new');
+  });
+
+  it('does not PATCH when the old runtime identity is canonically ambiguous', async () => {
+    mocks.apiKeysList.mockResolvedValueOnce(['sk-old', '  sk-old  ']);
+    await mountPage();
+
+    await click('replace-key');
+
+    expect(mocks.apiKeysReplaceValue).not.toHaveBeenCalled();
+    expect(mocks.commitApiKeysText).toHaveBeenCalledWith('sk-old\n  sk-old  ');
+    expect(mocks.apiKeyMutationErrors).toHaveLength(1);
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).toBe(
+      'api_key_ambiguous'
+    );
+
+    const fetchCallsAfterPreflight = mocks.fetchConfigYaml.mock.calls.length;
+    await clickTab('source');
+    expect(mocks.fetchConfigYaml).toHaveBeenCalledTimes(fetchCallsAfterPreflight);
+  });
+
+  it('does not PATCH when the new runtime identity already exists with whitespace', async () => {
+    mocks.apiKeysList.mockResolvedValueOnce(['sk-old', '  sk-new  ']);
+    await mountPage();
+
+    await click('replace-key');
+
+    expect(mocks.apiKeysReplaceValue).not.toHaveBeenCalled();
+    expect(mocks.commitApiKeysText).toHaveBeenCalledWith('sk-old\n  sk-new  ');
+    expect(mocks.apiKeyMutationErrors).toHaveLength(1);
+    expect((mocks.apiKeyMutationErrors[0] as Error & { code?: string }).code).toBe(
+      'api_key_duplicate'
+    );
+  });
 });
 
 describe('ConfigPage Manager/API-key operation lock', () => {

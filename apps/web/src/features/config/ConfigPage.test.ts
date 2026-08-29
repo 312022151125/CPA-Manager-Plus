@@ -401,7 +401,7 @@ describe('resolveApiKeyReplacePreflight', () => {
         oldApiKey: ' sk-old ',
         newApiKey: ' sk-new ',
       })
-    ).toBe('api_key_stale');
+    ).toEqual({ ok: false, reason: 'api_key_stale' });
   });
 
   it('rejects a replace when the new key already exists in CPA', () => {
@@ -411,17 +411,47 @@ describe('resolveApiKeyReplacePreflight', () => {
         oldApiKey: 'sk-old',
         newApiKey: 'sk-new',
       })
-    ).toBe('api_key_duplicate');
+    ).toEqual({ ok: false, reason: 'api_key_duplicate' });
   });
 
-  it('allows a replace only when the old key exists and the new key is unique', () => {
+  it('returns the unique raw canonical old key for a safe replace', () => {
     expect(
       resolveApiKeyReplacePreflight({
         currentKeys: ['sk-old'],
         oldApiKey: ' sk-old ',
         newApiKey: ' sk-new ',
       })
-    ).toBeNull();
+    ).toEqual({ ok: true, canonicalOldApiKey: 'sk-old' });
+  });
+
+  it('preserves whitespace in the unique raw canonical old key', () => {
+    expect(
+      resolveApiKeyReplacePreflight({
+        currentKeys: ['  sk-old  '],
+        oldApiKey: 'sk-old',
+        newApiKey: 'sk-new',
+      })
+    ).toEqual({ ok: true, canonicalOldApiKey: '  sk-old  ' });
+  });
+
+  it('rejects multiple canonical entries with the same runtime identity', () => {
+    expect(
+      resolveApiKeyReplacePreflight({
+        currentKeys: ['sk-old', '  sk-old  '],
+        oldApiKey: 'sk-old',
+        newApiKey: 'sk-new',
+      })
+    ).toEqual({ ok: false, reason: 'api_key_ambiguous' });
+  });
+
+  it('detects a normalized duplicate replacement target', () => {
+    expect(
+      resolveApiKeyReplacePreflight({
+        currentKeys: ['sk-old', '  sk-new  '],
+        oldApiKey: 'sk-old',
+        newApiKey: 'sk-new',
+      })
+    ).toEqual({ ok: false, reason: 'api_key_duplicate' });
   });
 });
 

@@ -26,7 +26,11 @@ const parseApiKeyListResponse = (data: unknown): string[] => {
     throw new Error(INVALID_API_KEY_LIST_RESPONSE);
   }
 
-  return keys.map((key) => String(key));
+  if (!keys.every((key): key is string => typeof key === 'string')) {
+    throw new Error(INVALID_API_KEY_LIST_RESPONSE);
+  }
+
+  return keys;
 };
 
 export const apiKeysApi = {
