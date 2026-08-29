@@ -27,7 +27,7 @@ const normalizeBoolean = (value: unknown): boolean | undefined => {
   return Boolean(value);
 };
 
-const normalizeClaudeFingerprintProfile = (
+export const normalizeClaudeFingerprintProfile = (
   value: unknown
 ): ClaudeFingerprintProfile | undefined => {
   if (typeof value !== 'string') return undefined;

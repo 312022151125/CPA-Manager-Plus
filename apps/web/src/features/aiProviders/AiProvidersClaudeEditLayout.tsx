@@ -3,7 +3,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
-import { configApi, providersApi, verifyClaudeFingerprintInConfig } from '@/services/api';
+import {
+  providersApi,
+  readBackClaudeConfigAfterSave,
+  verifyClaudeFingerprintInRawConfig,
+} from '@/services/api';
 import {
   useAuthStore,
   useClaudeEditDraftStore,
@@ -490,15 +494,15 @@ export function AiProvidersClaudeEditLayout() {
       // persisted /config (never the runtime /claude-api-key endpoint, whose
       // auth-index is derived and absent from /config) and only decides which
       // notification the user gets.
-      let savedList: ProviderKeyConfig[] | null = null;
+      let readBack: Awaited<ReturnType<typeof readBackClaudeConfigAfterSave>> | null = null;
       try {
-        savedList = (await configApi.getConfig()).claudeApiKeys ?? [];
+        readBack = await readBackClaudeConfigAfterSave();
       } catch {
-        savedList = null;
+        readBack = null;
       }
-      if (savedList) {
-        setConfigs(savedList);
-        updateConfigValue('claude-api-key', savedList);
+      if (readBack) {
+        setConfigs(readBack.claudeApiKeys);
+        updateConfigValue('claude-api-key', readBack.claudeApiKeys);
       }
       clearCache('claude-api-key');
 
@@ -507,14 +511,18 @@ export function AiProvidersClaudeEditLayout() {
           ? 'notification.claude_config_updated'
           : 'notification.claude_config_added';
       let notificationType: NotificationType = 'success';
-      if (!savedList) {
-        notificationKey = 'notification.claude_fingerprint_verify_unavailable';
-        notificationType = 'warning';
+      if (!readBack) {
+        if (fingerprintExplicitlyChanged) {
+          notificationKey = 'notification.claude_fingerprint_verify_unavailable';
+          notificationType = 'warning';
+        }
       } else if (fingerprintExplicitlyChanged) {
-        const verification = verifyClaudeFingerprintInConfig(
-          savedList,
+        const verification = verifyClaudeFingerprintInRawConfig(
+          readBack.rawRecords,
           payload.fingerprintProfile,
-          { index: editIndex, apiKey: payload.apiKey, baseUrl: payload.baseUrl }
+          editIndex !== null
+            ? { mode: 'edit', index: editIndex, apiKey: payload.apiKey, baseUrl: payload.baseUrl }
+            : { mode: 'create', apiKey: payload.apiKey, baseUrl: payload.baseUrl }
         );
         if (verification !== 'confirmed') {
           notificationKey = 'notification.claude_fingerprint_not_applied';

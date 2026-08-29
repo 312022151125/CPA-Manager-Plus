@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   onClose: vi.fn(),
   updateClaudeConfig: vi.fn(),
   createClaudeConfig: vi.fn(),
-  getConfig: vi.fn(),
+  readBack: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -65,9 +65,8 @@ vi.mock('@/services/api', async () => {
       updateClaudeConfig: mocks.updateClaudeConfig,
       createClaudeConfig: mocks.createClaudeConfig,
     },
-    configApi: {
-      getConfig: mocks.getConfig,
-    },
+    readBackClaudeConfigAfterSave: mocks.readBack,
+    verifyClaudeFingerprintInRawConfig: actual.verifyClaudeFingerprintInRawConfig,
     modelsApi: {
       getModels: vi.fn().mockResolvedValue([]),
       buildClaudeModelsEndpoint: vi.fn(() => ''),
@@ -76,7 +75,6 @@ vi.mock('@/services/api', async () => {
       request: vi.fn(),
     },
     getApiCallErrorMessage: () => '',
-    verifyClaudeFingerprintInConfig: actual.verifyClaudeFingerprintInConfig,
   };
 });
 
@@ -140,13 +138,20 @@ describe('ClaudeEditDrawer fingerprint save verification', () => {
     mocks.updateClaudeConfig.mockResolvedValue(undefined);
   });
 
-  it('saves the fingerprint, verifies against /config, and closes as committed', async () => {
-    mocks.getConfig.mockResolvedValue({
+  it('saves the fingerprint, verifies against the persisted raw /config, and closes as committed', async () => {
+    mocks.readBack.mockResolvedValue({
       claudeApiKeys: [
         {
           apiKey: 'key',
           baseUrl: 'https://api.anthropic.com',
           fingerprintProfile: 'claude-code-cli',
+        },
+      ],
+      rawRecords: [
+        {
+          'api-key': 'key',
+          'base-url': 'https://api.anthropic.com',
+          'fingerprint-profile': 'claude-code-cli',
         },
       ],
     });
@@ -173,8 +178,9 @@ describe('ClaudeEditDrawer fingerprint save verification', () => {
   });
 
   it('warns on a committed save when the CPA drops the fingerprint, then closes', async () => {
-    mocks.getConfig.mockResolvedValue({
+    mocks.readBack.mockResolvedValue({
       claudeApiKeys: [{ apiKey: 'key', baseUrl: 'https://api.anthropic.com' }],
+      rawRecords: [{ 'api-key': 'key', 'base-url': 'https://api.anthropic.com' }],
     });
 
     const renderer = await renderDrawer();
@@ -187,6 +193,25 @@ describe('ClaudeEditDrawer fingerprint save verification', () => {
     expect(mocks.updateConfigValue).toHaveBeenLastCalledWith('claude-api-key', [
       { apiKey: 'key', baseUrl: 'https://api.anthropic.com' },
     ]);
+    expect(mocks.onSaved).toHaveBeenCalledTimes(1);
+    expect(mocks.onClose).toHaveBeenCalledTimes(1);
+  });
+  it('treats a re-picked Default on an untouched config as untouched when read-back fails', async () => {
+    mocks.readBack.mockRejectedValue(new Error('read-back failed'));
+
+    const renderer = await renderDrawer();
+    // undefined (untouched) and '' (explicit Default) both display Default;
+    // re-picking it must not turn the config into an explicit clear, so the
+    // save is a plain committed success even though verification failed.
+    await setFingerprint(renderer, '');
+    await save(renderer);
+
+    expect(mocks.updateClaudeConfig).toHaveBeenCalledWith(
+      mocks.config.claudeApiKeys[0],
+      expect.objectContaining({ fingerprintProfile: undefined })
+    );
+    expect(notifications('warning')).toHaveLength(0);
+    expect(notifications('success')[0][0]).toBe('notification.claude_config_updated');
     expect(mocks.onSaved).toHaveBeenCalledTimes(1);
     expect(mocks.onClose).toHaveBeenCalledTimes(1);
   });

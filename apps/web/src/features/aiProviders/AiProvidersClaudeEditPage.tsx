@@ -15,11 +15,14 @@ import { apiCallApi, getApiCallErrorMessage } from '@/services/api';
 import { useNotificationStore } from '@/stores';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { buildHeaderObject } from '@/utils/headers';
-import { buildClaudeMessagesEndpoint, parseTextList } from '@/components/providers/utils';
+import {
+  buildClaudeMessagesEndpoint,
+  parseTextList,
+  resolveClaudeFingerprintSelection,
+} from '@/components/providers/utils';
 import { CredentialWeightInput } from '@/components/providers';
 import { getCredentialWeightError } from '@/utils/credentialWeight';
 import type { ClaudeEditOutletContext } from './AiProvidersClaudeEditLayout';
-import type { ClaudeFingerprintProfile } from '@/types';
 import styles from './AiProvidersPage.module.scss';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
 
@@ -547,7 +550,10 @@ export function AiProvidersClaudeEditPage() {
                 onChange={(value) =>
                   setForm((prev) => ({
                     ...prev,
-                    fingerprintProfile: value as ClaudeFingerprintProfile,
+                    fingerprintProfile: resolveClaudeFingerprintSelection(
+                      prev.fingerprintProfile,
+                      value
+                    ),
                   }))
                 }
                 ariaLabel={t('ai_providers.claude_request_fingerprint_label')}

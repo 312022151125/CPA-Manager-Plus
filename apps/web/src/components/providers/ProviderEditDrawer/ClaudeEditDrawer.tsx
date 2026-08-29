@@ -12,17 +12,16 @@ import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { CoolingPolicySelect } from '@/components/providers/CoolingPolicySelect';
 import {
   apiCallApi,
-  configApi,
   getApiCallErrorMessage,
   modelsApi,
   providersApi,
-  verifyClaudeFingerprintInConfig,
+  readBackClaudeConfigAfterSave,
+  verifyClaudeFingerprintInRawConfig,
 } from '@/services/api';
 import { useConfigStore, useNotificationStore } from '@/stores';
 import {
   coolingPolicyFromOverride,
   coolingPolicyToOverride,
-  type ClaudeFingerprintProfile,
   type NotificationType,
   type ProviderKeyConfig,
 } from '@/types';
@@ -38,6 +37,7 @@ import {
   parseExcludedModels,
   buildClaudeMessagesEndpoint,
   parseTextList,
+  resolveClaudeFingerprintSelection,
 } from '@/components/providers/utils';
 import { modelsToEntries } from '@/components/ui/modelInputListUtils';
 import type { ProviderFormState } from '@/components/providers';
@@ -648,15 +648,15 @@ export function ClaudeEditDrawer({
       // persisted /config (never the runtime /claude-api-key endpoint, whose
       // auth-index is derived and absent from /config) and only decides which
       // notification the user gets.
-      let savedList: ProviderKeyConfig[] | null = null;
+      let readBack: Awaited<ReturnType<typeof readBackClaudeConfigAfterSave>> | null = null;
       try {
-        savedList = (await configApi.getConfig()).claudeApiKeys ?? [];
+        readBack = await readBackClaudeConfigAfterSave();
       } catch {
-        savedList = null;
+        readBack = null;
       }
-      if (savedList) {
-        setConfigs(savedList);
-        updateConfigValue('claude-api-key', savedList);
+      if (readBack) {
+        setConfigs(readBack.claudeApiKeys);
+        updateConfigValue('claude-api-key', readBack.claudeApiKeys);
       }
       clearCache('claude-api-key');
 
@@ -665,14 +665,18 @@ export function ClaudeEditDrawer({
           ? 'notification.claude_config_updated'
           : 'notification.claude_config_added';
       let notificationType: NotificationType = 'success';
-      if (!savedList) {
-        notificationKey = 'notification.claude_fingerprint_verify_unavailable';
-        notificationType = 'warning';
+      if (!readBack) {
+        if (fingerprintExplicitlyChanged) {
+          notificationKey = 'notification.claude_fingerprint_verify_unavailable';
+          notificationType = 'warning';
+        }
       } else if (fingerprintExplicitlyChanged) {
-        const verification = verifyClaudeFingerprintInConfig(
-          savedList,
+        const verification = verifyClaudeFingerprintInRawConfig(
+          readBack.rawRecords,
           payload.fingerprintProfile,
-          { index: editIndex, apiKey: payload.apiKey, baseUrl: payload.baseUrl }
+          editIndex !== null
+            ? { mode: 'edit', index: editIndex, apiKey: payload.apiKey, baseUrl: payload.baseUrl }
+            : { mode: 'create', apiKey: payload.apiKey, baseUrl: payload.baseUrl }
         );
         if (verification !== 'confirmed') {
           notificationKey = 'notification.claude_fingerprint_not_applied';
@@ -806,7 +810,10 @@ export function ClaudeEditDrawer({
                 onChange={(value) =>
                   setForm((prev) => ({
                     ...prev,
-                    fingerprintProfile: value as ClaudeFingerprintProfile,
+                    fingerprintProfile: resolveClaudeFingerprintSelection(
+                      prev.fingerprintProfile,
+                      value
+                    ),
                   }))
                 }
                 ariaLabel={t('ai_providers.claude_request_fingerprint_label')}

@@ -3,7 +3,9 @@
  */
 
 import { apiClient } from './client';
+import { configApi } from './config';
 import {
+  normalizeClaudeFingerprintProfile,
   normalizeGeminiKeyConfig,
   normalizeOpenAIProvider,
   normalizeProviderKeyConfig,
@@ -478,36 +480,84 @@ const matchesProviderConfig = (
 
 export type ClaudeFingerprintVerification = 'confirmed' | 'not-applied' | 'not-found';
 
-// Read-back check for explicit fingerprint changes against the persisted
+export type ClaudeFingerprintVerificationTarget =
+  | { mode: 'edit'; index: number; apiKey?: string; baseUrl?: string }
+  | { mode: 'create'; apiKey?: string; baseUrl?: string };
+
+// One GET /config after a committed save: the normalized section refreshes the
+// global config store, while the raw section is the verification source of
+// truth. The raw section is required because an unknown future fingerprint
+// value normalizes to undefined and would otherwise make an explicit Default
+// look confirmed even though the raw field is still present.
+export const readBackClaudeConfigAfterSave = async (): Promise<{
+  claudeApiKeys: ProviderKeyConfig[];
+  rawRecords: Array<Record<string, unknown>>;
+}> => {
+  const config = await configApi.getConfig();
+  return {
+    claudeApiKeys: config.claudeApiKeys ?? [],
+    rawRecords: getRawSectionList(config.raw, 'claude-api-key'),
+  };
+};
+
+const matchesPersistedIdentity = (
+  record: Record<string, unknown>,
+  apiKey?: string,
+  baseUrl?: string
+) => {
+  const targetApiKey = (apiKey ?? '').trim();
+  const targetBaseUrl = (baseUrl ?? '').trim();
+  if (!targetApiKey && !targetBaseUrl) return true;
+  const recordApiKey = (getStringField(record, ['api-key', 'apiKey']) ?? '').trim();
+  const recordBaseUrl = (getStringField(record, ['base-url', 'baseUrl', 'base_url']) ?? '').trim();
+  return recordApiKey === targetApiKey && recordBaseUrl === targetBaseUrl;
+};
+
+// Read-back check for explicit fingerprint changes against the persisted raw
 // /config list. Older CPA builds unmarshal config sections into structs
 // without fingerprint-profile, silently ignore the field, and still answer
-// 200 — so a successful PUT alone proves nothing. Identity is positional
-// (the PUT replaced the record in place) with an apiKey + baseUrl fallback;
-// the runtime auth-index from /claude-api-key deliberately plays no part
-// because /config entries never carry it.
-export const verifyClaudeFingerprintInConfig = (
-  configs: ProviderKeyConfig[],
+// 200 — so a successful PUT alone proves nothing. The runtime auth-index from
+// /claude-api-key deliberately plays no part because /config entries never
+// carry it: Edit verifies positionally (the PUT replaced the record in place)
+// with an apiKey + baseUrl fallback; Create verifies the appended last record,
+// because duplicate api-key/base-url entries are legal (they differ in
+// proxy/prefix/headers) and an identity find() could verify an older record.
+export const verifyClaudeFingerprintInRawConfig = (
+  rawRecords: Array<Record<string, unknown>>,
   expected: ProviderKeyConfig['fingerprintProfile'],
-  target: { index: number | null; apiKey?: string; baseUrl?: string }
+  target: ClaudeFingerprintVerificationTarget
 ): ClaudeFingerprintVerification => {
-  const targetApiKey = (target.apiKey ?? '').trim();
-  const targetBaseUrl = (target.baseUrl ?? '').trim();
-  const hasIdentity = Boolean(targetApiKey || targetBaseUrl);
-  const matchesIdentity = (record: ProviderKeyConfig) =>
-    (record.apiKey ?? '').trim() === targetApiKey &&
-    (record.baseUrl ?? '').trim() === targetBaseUrl;
-  const byIndex = target.index !== null ? configs[target.index] : undefined;
-  const saved =
-    byIndex && (!hasIdentity || matchesIdentity(byIndex))
-      ? byIndex
-      : hasIdentity
-        ? configs.find(matchesIdentity)
-        : undefined;
-  if (!saved) return 'not-found';
-  if (expected === 'claude-code-cli') {
-    return saved.fingerprintProfile === 'claude-code-cli' ? 'confirmed' : 'not-applied';
+  let saved: Record<string, unknown> | undefined;
+  if (target.mode === 'create') {
+    const last = rawRecords[rawRecords.length - 1];
+    // Sanity check only: on mismatch we cannot tell which record was written,
+    // and falling back to find() could verify an older duplicate record.
+    if (isRecord(last) && matchesPersistedIdentity(last, target.apiKey, target.baseUrl)) {
+      saved = last;
+    }
+  } else {
+    const byIndex = rawRecords[target.index];
+    if (isRecord(byIndex) && matchesPersistedIdentity(byIndex, target.apiKey, target.baseUrl)) {
+      saved = byIndex;
+    } else if ((target.apiKey ?? '').trim() || (target.baseUrl ?? '').trim()) {
+      saved = rawRecords.find((record) =>
+        matchesPersistedIdentity(record, target.apiKey, target.baseUrl)
+      );
+    }
   }
-  return saved.fingerprintProfile === undefined ? 'confirmed' : 'not-applied';
+  if (!isRecord(saved)) return 'not-found';
+  const rawValue =
+    saved['fingerprint-profile'] ?? saved.fingerprintProfile ?? saved.fingerprint_profile;
+  const actual = normalizeClaudeFingerprintProfile(rawValue);
+  if (expected === 'claude-code-cli') {
+    return actual === 'claude-code-cli' ? 'confirmed' : 'not-applied';
+  }
+  // Explicit Default is only confirmed when the raw field is really gone;
+  // an unknown future value reads as undefined through the recognized-alias
+  // normalization but must count as not-applied here.
+  const rawFieldAbsent =
+    rawValue === undefined || (typeof rawValue === 'string' && rawValue.trim() === '');
+  return rawFieldAbsent ? 'confirmed' : 'not-applied';
 };
 
 const extractArrayPayload = (data: unknown, key: string): unknown[] => {

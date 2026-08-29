@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   updateClaudeConfig: vi.fn(),
   createClaudeConfig: vi.fn(),
-  getConfig: vi.fn(),
+  readBack: vi.fn(),
   outletContext: { current: null as Record<string, unknown> | null },
 }));
 
@@ -63,10 +63,8 @@ vi.mock('@/services/api', async () => {
       updateClaudeConfig: mocks.updateClaudeConfig,
       createClaudeConfig: mocks.createClaudeConfig,
     },
-    configApi: {
-      getConfig: mocks.getConfig,
-    },
-    verifyClaudeFingerprintInConfig: actual.verifyClaudeFingerprintInConfig,
+    readBackClaudeConfigAfterSave: mocks.readBack,
+    verifyClaudeFingerprintInRawConfig: actual.verifyClaudeFingerprintInRawConfig,
   };
 });
 
@@ -131,13 +129,20 @@ describe('AiProvidersClaudeEditLayout fingerprint save verification', () => {
     mocks.createClaudeConfig.mockResolvedValue(undefined);
   });
 
-  it('confirms Default → CLI against /config without any runtime auth-index', async () => {
-    mocks.getConfig.mockResolvedValue({
+  it('confirms Default → CLI against the persisted raw /config without any auth-index', async () => {
+    mocks.readBack.mockResolvedValue({
       claudeApiKeys: [
         {
           apiKey: 'key',
           baseUrl: 'https://api.anthropic.com',
           fingerprintProfile: 'claude-code-cli',
+        },
+      ],
+      rawRecords: [
+        {
+          'api-key': 'key',
+          'base-url': 'https://api.anthropic.com',
+          'fingerprint-profile': 'claude-code-cli',
         },
       ],
     });
@@ -156,7 +161,7 @@ describe('AiProvidersClaudeEditLayout fingerprint save verification', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/ai-providers', { replace: true });
   });
 
-  it('confirms CLI → Default once /config no longer exposes a profile', async () => {
+  it('confirms CLI → Default once the persisted raw config no longer exposes a profile', async () => {
     mocks.config = {
       claudeApiKeys: [
         {
@@ -167,8 +172,9 @@ describe('AiProvidersClaudeEditLayout fingerprint save verification', () => {
       ],
     };
     mocks.fetchConfig.mockResolvedValue(mocks.config.claudeApiKeys);
-    mocks.getConfig.mockResolvedValue({
+    mocks.readBack.mockResolvedValue({
       claudeApiKeys: [{ apiKey: 'key', baseUrl: 'https://api.anthropic.com' }],
+      rawRecords: [{ 'api-key': 'key', 'base-url': 'https://api.anthropic.com' }],
     });
 
     await renderEditor();
@@ -183,13 +189,52 @@ describe('AiProvidersClaudeEditLayout fingerprint save verification', () => {
     expect(notifications('success')[0][0]).toBe('notification.claude_config_updated');
   });
 
+  it('does not confirm an explicit Default while an unknown future raw profile survives', async () => {
+    mocks.config = {
+      claudeApiKeys: [
+        {
+          apiKey: 'key',
+          baseUrl: 'https://api.anthropic.com',
+          fingerprintProfile: 'claude-code-cli',
+        },
+      ],
+    };
+    mocks.fetchConfig.mockResolvedValue(mocks.config.claudeApiKeys);
+    mocks.readBack.mockResolvedValue({
+      // normalized read drops the unknown value, the raw read must not
+      claudeApiKeys: [{ apiKey: 'key', baseUrl: 'https://api.anthropic.com' }],
+      rawRecords: [
+        {
+          'api-key': 'key',
+          'base-url': 'https://api.anthropic.com',
+          'fingerprint-profile': 'claude-desktop',
+        },
+      ],
+    });
+
+    await renderEditor();
+    await patchForm({ fingerprintProfile: '' });
+    await save();
+
+    expect(notifications('success')).toHaveLength(0);
+    expect(notifications('warning')).toHaveLength(1);
+    expect(notifications('warning')[0][0]).toBe('notification.claude_fingerprint_not_applied');
+  });
+
   it('verifies with the new identity after the API key changes', async () => {
-    mocks.getConfig.mockResolvedValue({
+    mocks.readBack.mockResolvedValue({
       claudeApiKeys: [
         {
           apiKey: 'new-key',
           baseUrl: 'https://api.anthropic.com',
           fingerprintProfile: 'claude-code-cli',
+        },
+      ],
+      rawRecords: [
+        {
+          'api-key': 'new-key',
+          'base-url': 'https://api.anthropic.com',
+          'fingerprint-profile': 'claude-code-cli',
         },
       ],
     });
@@ -207,12 +252,19 @@ describe('AiProvidersClaudeEditLayout fingerprint save verification', () => {
   });
 
   it('verifies with the new identity after the base URL changes', async () => {
-    mocks.getConfig.mockResolvedValue({
+    mocks.readBack.mockResolvedValue({
       claudeApiKeys: [
         {
           apiKey: 'key',
           baseUrl: 'https://relay.example.com',
           fingerprintProfile: 'claude-code-cli',
+        },
+      ],
+      rawRecords: [
+        {
+          'api-key': 'key',
+          'base-url': 'https://relay.example.com',
+          'fingerprint-profile': 'claude-code-cli',
         },
       ],
     });
@@ -233,8 +285,9 @@ describe('AiProvidersClaudeEditLayout fingerprint save verification', () => {
   });
 
   it('warns that the save is committed when the connected CPA silently drops the fingerprint', async () => {
-    mocks.getConfig.mockResolvedValue({
+    mocks.readBack.mockResolvedValue({
       claudeApiKeys: [{ apiKey: 'key', baseUrl: 'https://api.anthropic.com' }],
+      rawRecords: [{ 'api-key': 'key', 'base-url': 'https://api.anthropic.com' }],
     });
 
     await renderEditor();
@@ -251,7 +304,7 @@ describe('AiProvidersClaudeEditLayout fingerprint save verification', () => {
   });
 
   it('warns that the save is committed when verification cannot read /config', async () => {
-    mocks.getConfig.mockRejectedValue(new Error('read-back failed'));
+    mocks.readBack.mockRejectedValue(new Error('read-back failed'));
 
     await renderEditor();
     await patchForm({ fingerprintProfile: 'claude-code-cli' });
@@ -267,12 +320,24 @@ describe('AiProvidersClaudeEditLayout fingerprint save verification', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/ai-providers', { replace: true });
   });
 
+  it('keeps the plain success flow when an untouched fingerprint read-back fails', async () => {
+    mocks.readBack.mockRejectedValue(new Error('read-back failed'));
+
+    await renderEditor();
+    await save();
+
+    expect(notifications('warning')).toHaveLength(0);
+    expect(notifications('success')[0][0]).toBe('notification.claude_config_updated');
+    expect(mocks.navigate).toHaveBeenCalledWith('/ai-providers', { replace: true });
+  });
+
   it('leaves create mode after a committed create even when verification fails', async () => {
     mocks.params = {};
     mocks.config = { claudeApiKeys: [] };
     mocks.fetchConfig.mockResolvedValue([]);
-    mocks.getConfig.mockResolvedValue({
+    mocks.readBack.mockResolvedValue({
       claudeApiKeys: [{ apiKey: 'new-key', baseUrl: 'https://api.anthropic.com' }],
+      rawRecords: [{ 'api-key': 'new-key', 'base-url': 'https://api.anthropic.com' }],
     });
 
     await renderEditor();
@@ -291,15 +356,46 @@ describe('AiProvidersClaudeEditLayout fingerprint save verification', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/ai-providers', { replace: true });
   });
 
-  it('keeps the plain success flow when the fingerprint was not changed', async () => {
-    mocks.getConfig.mockResolvedValue({
-      claudeApiKeys: [{ apiKey: 'key', baseUrl: 'https://api.anthropic.com', priority: 1 }],
+  it('verifies a create against the appended record when a duplicate apiKey + baseUrl exists', async () => {
+    mocks.params = {};
+    mocks.config = { claudeApiKeys: [] };
+    mocks.fetchConfig.mockResolvedValue([]);
+    mocks.readBack.mockResolvedValue({
+      claudeApiKeys: [
+        { apiKey: 'same-key', baseUrl: 'https://relay.example' },
+        {
+          apiKey: 'same-key',
+          baseUrl: 'https://relay.example',
+          fingerprintProfile: 'claude-code-cli',
+        },
+      ],
+      rawRecords: [
+        {
+          'api-key': 'same-key',
+          'base-url': 'https://relay.example',
+          'proxy-url': 'http://proxy-a',
+        },
+        {
+          'api-key': 'same-key',
+          'base-url': 'https://relay.example',
+          'proxy-url': 'http://proxy-b',
+          'fingerprint-profile': 'claude-code-cli',
+        },
+      ],
     });
 
     await renderEditor();
+    await patchForm({
+      apiKey: 'same-key',
+      baseUrl: 'https://relay.example',
+      fingerprintProfile: 'claude-code-cli',
+    });
     await save();
 
+    // The appended (second) record carries the profile; verifying the first
+    // duplicate would report a false not-applied warning.
+    expect(mocks.createClaudeConfig).toHaveBeenCalledTimes(1);
     expect(notifications('warning')).toHaveLength(0);
-    expect(notifications('success')[0][0]).toBe('notification.claude_config_updated');
+    expect(notifications('success')).toHaveLength(1);
   });
 });
