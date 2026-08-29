@@ -1081,8 +1081,9 @@ func reconcileCycle(
 			return id, active.ID, true, err
 		}
 	}
+	refreshExpiredBoundary := cycleBoundaryShouldRefreshExpiredCurrent(active, *snapshot)
 	if cycleMatches {
-		if cycleBoundaryShouldUpgrade(active, *snapshot) {
+		if cycleBoundaryShouldUpgrade(active, *snapshot) || refreshExpiredBoundary {
 			if _, err := tx.ExecContext(ctx, `update account_quota_cycles set
 				scheduled_start_ms = ?, scheduled_end_ms = ?, actual_start_ms = ?,
 				duration_seconds = ?, boundary_accuracy = ?, last_observation_id = ?, updated_at_ms = ?
@@ -1108,7 +1109,8 @@ func reconcileCycle(
 		}
 		return active.ID, 0, false, nil
 	}
-	if isConfirmedLifecycleBoundary(*snapshot) && cycleBoundaryShouldUpgrade(active, *snapshot) {
+	if isConfirmedLifecycleBoundary(*snapshot) &&
+		(cycleBoundaryShouldUpgrade(active, *snapshot) || refreshExpiredBoundary) {
 		if _, err := tx.ExecContext(ctx, `update account_quota_cycles set
 			scheduled_start_ms = ?, scheduled_end_ms = ?, actual_start_ms = ?,
 			duration_seconds = ?, boundary_accuracy = ?, last_observation_id = ?, updated_at_ms = ?
@@ -1176,6 +1178,31 @@ func confirmedResetTransitionMS(cycle model.AccountQuotaCycle, snapshot model.Ac
 
 func cycleBoundaryShouldUpgrade(cycle model.AccountQuotaCycle, snapshot model.AccountQuotaSnapshot) bool {
 	return boundaryAccuracyValue(snapshot.BoundaryAccuracy) > boundaryAccuracyValue(cycle.BoundaryAccuracy)
+}
+
+// cycleBoundaryShouldRefreshExpiredCurrent reports whether a confirmed fresh
+// boundary that still covers the observation time must replace an active cycle
+// whose scheduled end has already passed. This is a temporal-validity
+// correction rather than a precision upgrade: once the stored scheduled end is
+// in the past it can no longer represent the current window, even when its
+// accuracy rank is higher than the fresh evidence. The cycle keeps its
+// identity, so no rollover, reset, or additional cycle is created.
+func cycleBoundaryShouldRefreshExpiredCurrent(
+	cycle model.AccountQuotaCycle,
+	snapshot model.AccountQuotaSnapshot,
+) bool {
+	if !isConfirmedLifecycleBoundary(snapshot) ||
+		cycle.ScheduledEndMS == nil ||
+		cycle.DurationSeconds == nil ||
+		snapshot.CycleEndMS == nil ||
+		snapshot.DurationSeconds == nil {
+		return false
+	}
+	if *cycle.DurationSeconds != *snapshot.DurationSeconds {
+		return false
+	}
+	return snapshot.ObservedAtMS >= *cycle.ScheduledEndMS &&
+		*snapshot.CycleEndMS > snapshot.ObservedAtMS
 }
 
 func quotaCounterResetDetected(
