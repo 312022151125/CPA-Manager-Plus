@@ -1063,6 +1063,11 @@ func reconcileCycle(
 		id, restoreErr := restoreOrInsertCycle(ctx, tx, activationID, observationID, snapshot)
 		return id, 0, false, restoreErr
 	}
+	// Canonicalization below replaces stale timing geometry with the active
+	// boundary, so the incoming evidence authority must be captured first:
+	// geometry correction must not promote estimated or unknown evidence into
+	// confirmed lifecycle authority.
+	incomingBoundaryConfirmed := isConfirmedLifecycleBoundary(*snapshot)
 	temporallyInvalidBoundary := cycleBoundaryIsTemporallyInvalidAgainstActive(active, *snapshot)
 	if temporallyInvalidBoundary {
 		// The incoming boundary is already expired while the active cycle's
@@ -1072,7 +1077,12 @@ func reconcileCycle(
 		applyActiveCycleBoundary(snapshot, active)
 	}
 	cycleMatches := cycleMatchesSnapshot(active, *snapshot)
-	if isConfirmedLifecycleBoundary(*snapshot) {
+	// Counter-reset reconciliation splits lifecycle state, so it needs a
+	// canonical boundary that is still current at the observation time to
+	// carry the transition. An already expired boundary keeps its usage-drop
+	// evidence but cannot drive the split on its own.
+	counterResetBoundaryCurrent := cycleBoundaryCoversObservation(*snapshot)
+	if incomingBoundaryConfirmed && counterResetBoundaryCurrent {
 		counterReset, err := quotaCounterResetDetected(ctx, tx, active, *snapshot)
 		if err != nil {
 			return 0, 0, false, err
@@ -1229,6 +1239,16 @@ func cycleBoundaryIsTemporallyInvalidAgainstActive(
 	}
 	return *cycle.ScheduledEndMS > snapshot.ObservedAtMS &&
 		*snapshot.CycleEndMS <= snapshot.ObservedAtMS
+}
+
+// cycleBoundaryCoversObservation reports whether the snapshot's canonical
+// boundary still extends beyond the observation time. Counter-reset
+// reconciliation needs a boundary that is current at the observation to carry
+// the transition; an expired boundary keeps its usage-drop evidence but cannot
+// split lifecycle state on its own.
+func cycleBoundaryCoversObservation(snapshot model.AccountQuotaSnapshot) bool {
+	return snapshot.CycleEndMS != nil &&
+		*snapshot.CycleEndMS > snapshot.ObservedAtMS
 }
 
 // cycleBoundaryCanReplaceActive reports whether an incoming higher-accuracy
