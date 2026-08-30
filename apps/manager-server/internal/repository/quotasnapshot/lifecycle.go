@@ -1251,9 +1251,31 @@ func cycleBoundaryCoversObservation(snapshot model.AccountQuotaSnapshot) bool {
 		*snapshot.CycleEndMS > snapshot.ObservedAtMS
 }
 
+// cycleBoundaryWouldRegressExpiredActive reports whether an already expired
+// incoming boundary is materially older than the active boundary. Differences
+// within the provider jitter stay the same canonical boundary and may still be
+// upgraded for precision; a larger backward movement would rewind a previously
+// refreshed boundary into the past. The difference is computed after the
+// ordering precondition, so the subtraction cannot overflow or go negative.
+func cycleBoundaryWouldRegressExpiredActive(
+	cycle model.AccountQuotaCycle,
+	snapshot model.AccountQuotaSnapshot,
+) bool {
+	if cycle.ScheduledEndMS == nil ||
+		snapshot.CycleEndMS == nil ||
+		*snapshot.CycleEndMS > snapshot.ObservedAtMS ||
+		*cycle.ScheduledEndMS <= *snapshot.CycleEndMS {
+		return false
+	}
+	return *cycle.ScheduledEndMS-*snapshot.CycleEndMS >
+		quotaBoundaryJitterMS
+}
+
 // cycleBoundaryCanReplaceActive reports whether an incoming higher-accuracy
 // boundary may replace the active cycle boundary. A temporally stale incoming
-// boundary never qualifies, even on a precision upgrade.
+// boundary never qualifies, even on a precision upgrade, and neither does an
+// expired boundary that is materially older than the active one: accuracy
+// alone must not rewind a known boundary into the past.
 func cycleBoundaryCanReplaceActive(
 	cycle model.AccountQuotaCycle,
 	snapshot model.AccountQuotaSnapshot,
@@ -1262,6 +1284,9 @@ func cycleBoundaryCanReplaceActive(
 		return false
 	}
 	if cycleBoundaryIsTemporallyInvalidAgainstActive(cycle, snapshot) {
+		return false
+	}
+	if cycleBoundaryWouldRegressExpiredActive(cycle, snapshot) {
 		return false
 	}
 	return cycleBoundaryShouldUpgrade(cycle, snapshot)
