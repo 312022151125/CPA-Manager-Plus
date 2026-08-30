@@ -3705,6 +3705,69 @@ func TestQuotaLifecycleRefreshesExpiredBoundaryFromFreshOverlappingObservation(t
 	}
 }
 
+func TestQuotaLifecycleRefreshesExpiredCalendarBoundaryFromFreshOverlappingObservation(t *testing.T) {
+	const durationSeconds = int64(5 * 60 * 60)
+	firstStartMS := quotaLifecycleBaseMS
+	firstEndMS := firstStartMS + durationSeconds*1000
+	freshStartMS := firstStartMS + 3*quotaLifecycleHourMS
+	freshEndMS := freshStartMS + durationSeconds*1000
+	refreshAtMS := firstEndMS + quotaLifecycleHourMS
+	service, path := newQuotaSnapshotTestServiceWithPath(t, refreshAtMS+quotaLifecycleHourMS)
+
+	first := quotaLifecycleFixedWindow("calendar-week", "weekly", firstStartMS, durationSeconds, 40)
+	first.WindowMode = "calendar"
+	writeQuotaLifecycleObservation(t, service, "complete", firstStartMS+quotaLifecycleHourMS, []WindowInput{first})
+	initial := queryQuotaLifecycleWindows(t, service, false)["calendar-week"]
+	if initial.CurrentCycle == nil {
+		t.Fatalf("initial calendar lifecycle = %#v", initial)
+	}
+	initialCycleID := initial.CurrentCycle.ID
+
+	fresh := quotaLifecycleFixedWindow("calendar-week", "weekly", freshStartMS, durationSeconds, 45)
+	fresh.WindowMode = "calendar"
+	fresh.Source = "response_header"
+	fresh.BoundaryAccuracy = "derived"
+	if _, err := service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{
+		quotaLifecycleWriteEntryWithObservation(
+			"complete", "response_header", "header-calendar-refresh", "codex:quota-windows",
+			refreshAtMS, []WindowInput{fresh},
+		),
+	}}); err != nil {
+		t.Fatalf("write fresh overlapping calendar observation: %v", err)
+	}
+
+	window := queryQuotaLifecycleWindows(t, service, false)["calendar-week"]
+	if window.CurrentCycle == nil || window.CurrentCycle.ID != initialCycleID || window.PreviousCycle != nil {
+		t.Fatalf("calendar expired refresh split the cycle: %#v", window)
+	}
+	if window.CurrentCycle.ScheduledStartMS == nil || *window.CurrentCycle.ScheduledStartMS != freshStartMS ||
+		window.CurrentCycle.ScheduledEndMS == nil || *window.CurrentCycle.ScheduledEndMS != freshEndMS ||
+		window.CurrentCycle.DurationSeconds == nil || *window.CurrentCycle.DurationSeconds != durationSeconds ||
+		window.CurrentCycle.BoundaryAccuracy != "derived" {
+		t.Fatalf("calendar cycle boundary was not refreshed: %#v", window.CurrentCycle)
+	}
+	if window.CycleStartMS == nil || *window.CycleStartMS != freshStartMS ||
+		window.CycleEndMS == nil || *window.CycleEndMS != freshEndMS {
+		t.Fatalf("window boundary did not follow refreshed calendar cycle: %#v", window)
+	}
+	if window.Stale {
+		t.Fatalf("refreshed calendar window must not be stale: %#v", window)
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open calendar-refresh database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var cycleCount int
+	if err := db.QueryRow(`select count(*) from account_quota_cycles`).Scan(&cycleCount); err != nil {
+		t.Fatalf("count calendar-refresh cycles: %v", err)
+	}
+	if cycleCount != 1 {
+		t.Fatalf("calendar-refresh cycle count = %d, want 1", cycleCount)
+	}
+}
+
 func TestQuotaLifecycleKeepsExpiredBoundaryGuardBeforeScheduledEnd(t *testing.T) {
 	const durationSeconds = int64(5 * 60 * 60)
 	firstStartMS := quotaLifecycleBaseMS
