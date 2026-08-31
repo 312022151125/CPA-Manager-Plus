@@ -483,6 +483,10 @@ const { mocks } = vi.hoisted(() => {
         if (typeof options.name === 'string') parts.push(options.name);
         if (typeof options.count === 'number') parts.push(String(options.count));
         if (typeof options.message === 'string') parts.push(options.message);
+        if (typeof options.requests === 'string') parts.push(options.requests);
+        if (typeof options.tokens === 'string') parts.push(options.tokens);
+        if (typeof options.cost === 'string') parts.push(options.cost);
+        if (typeof options.rate === 'string') parts.push(options.rate);
         return parts.length > 0 ? `${key}:${parts.join(':')}` : key;
       },
     },
@@ -9000,12 +9004,12 @@ describe('AccountsPage replacement flows', () => {
           row_key: 'healthy.json\u0000auth-1',
           account_key: 'healthy@example.com',
           matched: true,
-          total_requests: 1234,
-          success_calls: 1218,
-          failure_calls: 16,
-          total_tokens: 5678900,
-          total_cost: 12.34,
-          success_rate: 0.987,
+          total_requests: 1_234_567,
+          success_calls: 1_218_000,
+          failure_calls: 16_567,
+          total_tokens: 1_000_190_000,
+          total_cost: 12_345.67,
+          success_rate: 0.98321,
           first_seen_ms: 1,
           last_seen_ms: 2,
           sync_status: 'ready',
@@ -9038,10 +9042,29 @@ describe('AccountsPage replacement flows', () => {
     );
     const accountHistoryRequest = mocks.getAccountHistory.mock.calls[0]?.[2];
     expect(accountHistoryRequest).not.toHaveProperty('catch_up');
-    expect(cardText).toContain('1.2K');
-    expect(cardText).toContain('5.7M');
-    expect(cardText).toContain('$12.34');
-    expect(cardText).toContain('98.7%');
+    expect(cardText).toContain('1.2M');
+    expect(cardText).toContain('1.0B');
+    expect(cardText).toContain('$12.35K');
+    expect(cardText).toContain('98.3%');
+    expect(cardText).not.toContain('1000.2M');
+    expect(
+      renderer.root.findByProps({
+        title: 'accounts.history_title:1,234,567:1,000,190,000:$12,345.67:98.32%',
+      })
+    ).toBeTruthy();
+    const historyMetricAriaLabels = [
+      'accounts.history_requests: 1,234,567',
+      'accounts.history_tokens: 1,000,190,000',
+      'accounts.history_cost: $12,345.67',
+      'accounts.history_success: 98.32%',
+    ];
+    const historyMetrics = renderer.root.findAll((node) =>
+      historyMetricAriaLabels.includes(node.props['aria-label'])
+    );
+    expect(historyMetrics.map((metric) => metric.props['aria-label'])).toEqual(
+      historyMetricAriaLabels
+    );
+    historyMetrics.forEach((metric) => expect(metric.props).not.toHaveProperty('title'));
     expect(cardText).not.toContain('accounts.history_requests');
     expect(cardText).not.toContain('accounts.history_tokens');
     expect(cardText).not.toContain('accounts.history_cost');
@@ -9075,14 +9098,14 @@ describe('AccountsPage replacement flows', () => {
         (node) => node.type === 'strong' && typeof node.props['aria-describedby'] === 'string'
       )
       .map((node) => readText(node));
-    expect(compactSummaryValues).toEqual(expect.arrayContaining(['1.2K', '5.7M']));
+    expect(compactSummaryValues).toEqual(expect.arrayContaining(['1.2M', '1.0B']));
     const summaryTooltips = quotaSummary
       .findAll((node) => node.props.role === 'tooltip')
       .map((node) => readText(node));
     expect(summaryTooltips).toEqual(
       expect.arrayContaining([
-        'accounts.detail_total_requests1,234',
-        'accounts.detail_total_tokens5,678,900',
+        'accounts.detail_total_requests1,234,567',
+        'accounts.detail_total_tokens1,000,190,000',
       ])
     );
   });

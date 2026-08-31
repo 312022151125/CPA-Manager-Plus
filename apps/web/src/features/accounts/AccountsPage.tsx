@@ -183,9 +183,8 @@ import {
   DETAIL_EVENTS_RANGE_MS,
   PAGE_SIZE_OPTIONS,
   buildAntigravityQuotaMatrix,
-  formatCompactNumber,
+  formatHistoryNumber,
   formatHistorySuccessRate,
-  formatMoney,
   formatPercent,
   formatQuotaResetDisplay,
   formatQuotaResetTooltipParams,
@@ -198,6 +197,7 @@ import {
   type AccountsView,
   type DetailTab,
 } from '@/features/accounts/model/accountsPagePresentation';
+import { formatCompactNumber, formatCompactUsd, formatUsd } from '@/utils/usage';
 import {
   getAuthFileCodexInspectionKeyForFile,
   getAuthFileCodexInspectionKeyForIdentity,
@@ -6848,7 +6848,8 @@ export function AccountsPage() {
               t,
               accountHistory,
               accountHistoryLoading,
-              accountHistoryError
+              accountHistoryError,
+              i18n.language
             );
             const accountHistoryFootnote = accountHistoryError
               ? row.usage.success + row.usage.failure > 0
@@ -6860,6 +6861,22 @@ export function AccountsPage() {
                   ? t('accounts.history_syncing')
                   : null;
             const recentRequestCount = row.usage.success + row.usage.failure;
+            const accountHistoryRequestExactValue = accountHistoryMatched
+              ? formatHistoryNumber(accountHistory.total_requests, i18n.language)
+              : recentRequestCount > 0
+                ? formatHistoryNumber(recentRequestCount, i18n.language)
+                : '-';
+            const accountHistoryTokenExactValue = accountHistoryMatched
+              ? formatHistoryNumber(accountHistory.total_tokens, i18n.language)
+              : '-';
+            const accountHistoryCostExactValue = accountHistoryMatched
+              ? formatUsd(accountHistory.total_cost)
+              : '-';
+            const accountHistorySuccessExactValue = accountHistoryMatched
+              ? formatHistorySuccessRate(accountHistory.success_rate, 2)
+              : row.usage.successRate !== null
+                ? formatPercent(row.usage.successRate, 2)
+                : '-';
             const accountHistoryRequestValue = accountHistoryMatched
               ? formatCompactNumber(accountHistory.total_requests)
               : recentRequestCount > 0
@@ -6869,7 +6886,7 @@ export function AccountsPage() {
               ? formatCompactNumber(accountHistory.total_tokens)
               : '-';
             const accountHistoryCostValue = accountHistoryMatched
-              ? formatMoney(accountHistory.total_cost)
+              ? formatCompactUsd(accountHistory.total_cost)
               : '-';
             const accountHistorySuccessValue = accountHistoryMatched
               ? formatHistorySuccessRate(accountHistory.success_rate)
@@ -6989,8 +7006,7 @@ export function AccountsPage() {
                   <div className={styles.accountHistoryGrid}>
                     <div
                       className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricRequests}`}
-                      aria-label={`${t('accounts.history_requests')} ${accountHistoryRequestValue}`}
-                      title={t('accounts.history_requests')}
+                      aria-label={`${t('accounts.history_requests')}: ${accountHistoryRequestExactValue}`}
                     >
                       <span className={styles.accountHistoryIcon}>
                         <IconSend size={13} />
@@ -6999,8 +7015,7 @@ export function AccountsPage() {
                     </div>
                     <div
                       className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricTokens}`}
-                      aria-label={`${t('accounts.history_tokens')} ${accountHistoryTokenValue}`}
-                      title={t('accounts.history_tokens')}
+                      aria-label={`${t('accounts.history_tokens')}: ${accountHistoryTokenExactValue}`}
                     >
                       <span className={styles.accountHistoryIcon}>
                         <IconBinary size={13} />
@@ -7009,8 +7024,7 @@ export function AccountsPage() {
                     </div>
                     <div
                       className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricCost}`}
-                      aria-label={`${t('accounts.history_cost')} ${accountHistoryCostValue}`}
-                      title={t('accounts.history_cost')}
+                      aria-label={`${t('accounts.history_cost')}: ${accountHistoryCostExactValue}`}
                     >
                       <span className={styles.accountHistoryIcon}>
                         <IconDollarSign size={13} />
@@ -7019,8 +7033,7 @@ export function AccountsPage() {
                     </div>
                     <div
                       className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricSuccess}`}
-                      aria-label={`${t('accounts.history_success')} ${accountHistorySuccessValue}`}
-                      title={t('accounts.history_success')}
+                      aria-label={`${t('accounts.history_success')}: ${accountHistorySuccessExactValue}`}
                     >
                       <span className={styles.accountHistoryIcon}>
                         <IconCheck size={13} />

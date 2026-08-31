@@ -30,7 +30,7 @@ import type {
   AccountDetailWindowUsageSummary,
 } from '@/features/accounts/model/accountDetailViewModel';
 import { formatQuotaResetDisplay } from '@/features/accounts/model/accountsPagePresentation';
-import { formatUsd } from '@/utils/usage';
+import { formatCompactNumber, formatUsd } from '@/utils/usage';
 import { isCodexMainQuotaModelScope } from '@/utils/quota/codexQuota';
 import { QuotaProgressBar } from './QuotaProgressBar';
 import styles from './QuotaWindowCard.module.scss';
@@ -56,13 +56,8 @@ const formatPercent = (value: number | null | undefined, digits = 0): string => 
   return `${value.toFixed(digits)}%`;
 };
 
-const formatCompactNumber = (value: number | null | undefined): string => {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
-  if (value < 1_000) return String(Math.round(value));
-  if (value < 1_000_000) return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)}K`;
-  if (value < 1_000_000_000) return `${(value / 1_000_000).toFixed(value < 10_000_000 ? 1 : 0)}M`;
-  return `${(value / 1_000_000_000).toFixed(1)}B`;
-};
+const formatOptionalCompactNumber = (value: number | null | undefined): string =>
+  typeof value !== 'number' || !Number.isFinite(value) ? '-' : formatCompactNumber(value);
 
 const formatMoney = (value: number | null | undefined): string => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
@@ -240,13 +235,13 @@ const UsageMetricList = ({
       icon={<IconChartLine size={16} />}
       tone="blue"
       label={labels.requests}
-      value={formatCompactNumber(usage.totalRequests)}
+      value={formatOptionalCompactNumber(usage.totalRequests)}
     />
     <MetricItem
       icon={<IconBinary size={16} />}
       tone="teal"
       label={labels.tokens}
-      value={formatCompactNumber(usage.totalTokens)}
+      value={formatOptionalCompactNumber(usage.totalTokens)}
     />
     <MetricItem
       icon={<IconDollarSign size={16} />}
@@ -343,13 +338,13 @@ const ForecastColumn = ({
           icon={<IconChartLine size={16} />}
           tone="blue"
           label={labels.requests}
-          value={formatCompactNumber(forecast.requests)}
+          value={formatOptionalCompactNumber(forecast.requests)}
         />
         <MetricItem
           icon={<IconBinary size={16} />}
           tone="teal"
           label={labels.tokens}
-          value={formatCompactNumber(forecast.tokens)}
+          value={formatOptionalCompactNumber(forecast.tokens)}
         />
         <MetricItem
           icon={<IconDollarSign size={16} />}
