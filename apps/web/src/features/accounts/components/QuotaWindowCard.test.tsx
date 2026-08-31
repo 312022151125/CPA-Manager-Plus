@@ -171,6 +171,20 @@ describe('QuotaWindowCard', () => {
     ]);
   });
 
+  it('uses the shared compact formatter for large token counts', () => {
+    const renderer = renderCard(
+      makeWindow({
+        currentUsage: usage({ totalTokens: 1_000_190_000 }),
+      })
+    );
+    const currentText = readText(
+      renderer.root.findByProps({ 'data-quota-usage-period': 'current' })
+    );
+
+    expect(currentText).toContain('1.0B');
+    expect(currentText).not.toContain('1000.2M');
+  });
+
   it('uses complete fixed-cycle boundaries instead of the current data cutoff', () => {
     const cycleStartMs = Date.parse('2026-08-05T10:00:00Z');
     const cycleEndMs = Date.parse('2026-08-05T15:00:00Z');

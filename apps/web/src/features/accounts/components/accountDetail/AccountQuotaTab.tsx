@@ -14,10 +14,10 @@ import type {
   AccountDetailViewModel,
 } from '@/features/accounts/model/accountDetailViewModel';
 import {
-  formatCompactNumber,
+  formatPercent,
   formatQuotaResetTimestamp,
 } from '@/features/accounts/model/accountsPagePresentation';
-import { formatUsd } from '@/utils/usage';
+import { formatCompactNumber, formatUsd } from '@/utils/usage';
 import { isCodexMainQuotaModelScope } from '@/utils/quota/codexQuota';
 import { QuotaWindowCard } from '../QuotaWindowCard';
 import styles from '@/features/accounts/AccountsPage.module.scss';
@@ -209,11 +209,7 @@ export function AccountQuotaTab({
             icon={<IconCheck size={20} />}
             tone="green"
             label={t('accounts.detail_success_rate')}
-            value={
-              history?.successRate !== null && history?.successRate !== undefined
-                ? `${history.successRate.toFixed(2)}%`
-                : '-'
-            }
+            value={formatPercent(history?.successRate, 2)}
           />
         </div>
       </section>

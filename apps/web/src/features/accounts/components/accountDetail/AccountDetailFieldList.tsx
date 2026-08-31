@@ -1,7 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type { AccountDetailField } from '@/features/accounts/model/accountDetailViewModel';
 import {
-  formatCompactNumber,
   formatMoney,
   formatPercent,
   formatQuotaResetTimestamp,
@@ -10,6 +9,7 @@ import {
   translateDetailEnum,
 } from '@/features/accounts/model/accountsPagePresentation';
 import { CopyableText } from '@/features/accounts/components/CopyableText';
+import { formatCompactNumber } from '@/utils/usage';
 
 export function AccountDetailFieldValue({ field }: { field: AccountDetailField }) {
   const { t, i18n } = useTranslation();
