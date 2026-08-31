@@ -55,6 +55,11 @@ describe('formatCompactUsd', () => {
     expect(formatCompactUsd(1_000_000)).toBe('$1.00M');
     expect(formatCompactUsd(1_234_567.89)).toBe('$1.23M');
     expect(formatCompactUsd(1_000_000_000)).toBe('$1.00B');
+    expect(formatCompactUsd(999.994)).toBe('$999.99');
+    expect(formatCompactUsd(999.999)).toBe('$1.00K');
+    expect(formatCompactUsd(999_999.999)).toBe('$1.00M');
+    expect(formatCompactUsd(999_999_999.999)).toBe('$1.00B');
+    expect(formatCompactUsd(-999.999)).toBe('$-1.00K');
   });
 
   it('uses the existing invalid-value fallback', () => {

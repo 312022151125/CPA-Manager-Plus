@@ -1542,10 +1542,11 @@ export function formatCompactUsd(value: number): string {
   const num = Number(value);
   if (!Number.isFinite(num)) return '$0.00';
 
-  const abs = Math.abs(num);
-  if (abs < 1_000) return formatUsd(num);
+  const rounded = Number(num.toFixed(2));
+  const roundedAbs = Math.abs(rounded);
+  if (roundedAbs < 1_000) return formatUsd(num);
 
-  const unit = COMPACT_NUMBER_UNITS.find((item) => abs >= item.threshold);
+  const unit = COMPACT_NUMBER_UNITS.find((item) => roundedAbs >= item.threshold);
   if (!unit) return formatUsd(num);
 
   const formatted = (num / unit.threshold).toFixed(2);

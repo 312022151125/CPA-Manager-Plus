@@ -7007,7 +7007,6 @@ export function AccountsPage() {
                     <div
                       className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricRequests}`}
                       aria-label={`${t('accounts.history_requests')}: ${accountHistoryRequestExactValue}`}
-                      title={`${t('accounts.history_requests')}: ${accountHistoryRequestExactValue}`}
                     >
                       <span className={styles.accountHistoryIcon}>
                         <IconSend size={13} />
@@ -7017,7 +7016,6 @@ export function AccountsPage() {
                     <div
                       className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricTokens}`}
                       aria-label={`${t('accounts.history_tokens')}: ${accountHistoryTokenExactValue}`}
-                      title={`${t('accounts.history_tokens')}: ${accountHistoryTokenExactValue}`}
                     >
                       <span className={styles.accountHistoryIcon}>
                         <IconBinary size={13} />
@@ -7027,7 +7025,6 @@ export function AccountsPage() {
                     <div
                       className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricCost}`}
                       aria-label={`${t('accounts.history_cost')}: ${accountHistoryCostExactValue}`}
-                      title={`${t('accounts.history_cost')}: ${accountHistoryCostExactValue}`}
                     >
                       <span className={styles.accountHistoryIcon}>
                         <IconDollarSign size={13} />
@@ -7037,7 +7034,6 @@ export function AccountsPage() {
                     <div
                       className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricSuccess}`}
                       aria-label={`${t('accounts.history_success')}: ${accountHistorySuccessExactValue}`}
-                      title={`${t('accounts.history_success')}: ${accountHistorySuccessExactValue}`}
                     >
                       <span className={styles.accountHistoryIcon}>
                         <IconCheck size={13} />

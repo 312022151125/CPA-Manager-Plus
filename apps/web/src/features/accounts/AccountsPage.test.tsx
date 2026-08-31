@@ -9052,14 +9052,19 @@ describe('AccountsPage replacement flows', () => {
         title: 'accounts.history_title:1,234,567:1,000,190,000:$12,345.67:98.32%',
       })
     ).toBeTruthy();
-    expect(
-      renderer.root.findByProps({ title: 'accounts.history_requests: 1,234,567' })
-    ).toBeTruthy();
-    expect(
-      renderer.root.findByProps({ title: 'accounts.history_tokens: 1,000,190,000' })
-    ).toBeTruthy();
-    expect(renderer.root.findByProps({ title: 'accounts.history_cost: $12,345.67' })).toBeTruthy();
-    expect(renderer.root.findByProps({ title: 'accounts.history_success: 98.32%' })).toBeTruthy();
+    const historyMetricAriaLabels = [
+      'accounts.history_requests: 1,234,567',
+      'accounts.history_tokens: 1,000,190,000',
+      'accounts.history_cost: $12,345.67',
+      'accounts.history_success: 98.32%',
+    ];
+    const historyMetrics = renderer.root.findAll((node) =>
+      historyMetricAriaLabels.includes(node.props['aria-label'])
+    );
+    expect(historyMetrics.map((metric) => metric.props['aria-label'])).toEqual(
+      historyMetricAriaLabels
+    );
+    historyMetrics.forEach((metric) => expect(metric.props).not.toHaveProperty('title'));
     expect(cardText).not.toContain('accounts.history_requests');
     expect(cardText).not.toContain('accounts.history_tokens');
     expect(cardText).not.toContain('accounts.history_cost');

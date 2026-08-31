@@ -11,6 +11,11 @@ import {
 import { CopyableText } from '@/features/accounts/components/CopyableText';
 import { formatCompactNumber } from '@/utils/usage';
 
+const formatDetailNumber = (value: number): string => {
+  if (!Number.isFinite(value)) return '-';
+  return Math.abs(value) < 1_000 ? String(value) : formatCompactNumber(value);
+};
+
 export function AccountDetailFieldValue({ field }: { field: AccountDetailField }) {
   const { t, i18n } = useTranslation();
   if (field.value === null || field.value === '') return <>-</>;
@@ -59,7 +64,7 @@ export function AccountDetailFieldValue({ field }: { field: AccountDetailField }
   if (field.valueKind === 'number') {
     return (
       <>
-        {typeof field.value === 'number' ? formatCompactNumber(field.value) : String(field.value)}
+        {typeof field.value === 'number' ? formatDetailNumber(field.value) : String(field.value)}
       </>
     );
   }
