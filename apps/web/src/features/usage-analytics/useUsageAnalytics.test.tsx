@@ -69,6 +69,7 @@ describe('useUsageAnalytics request orchestration', () => {
   let selectorError = '';
   let credentialTimelineError = '';
   let credentialTimelineLoading = false;
+  let apiKeyTimelineAvailable = true;
   let apiKeyStats: MonitoringAnalyticsApiKeyStatRow[] = [createApiKeyStatRow()];
   const mainRefresh = vi.fn();
   const selectorRefresh = vi.fn();
@@ -146,7 +147,7 @@ describe('useUsageAnalytics request orchestration', () => {
             }
         : main
           ? mainData
-          : apiKeyTimeline
+          : apiKeyTimeline && apiKeyTimelineAvailable
             ? {
                 ...emptyAnalyticsResponse,
                 api_key_timeline: [
@@ -209,6 +210,7 @@ describe('useUsageAnalytics request orchestration', () => {
     selectorError = '';
     credentialTimelineError = '';
     credentialTimelineLoading = false;
+    apiKeyTimelineAvailable = true;
     apiKeyStats = [createApiKeyStatRow()];
     latestResult = null;
     mainRefresh.mockReset();
@@ -359,6 +361,60 @@ describe('useUsageAnalytics request orchestration', () => {
     );
     expect(fallbackSelectionTimeline?.filters).toMatchObject({ api_key_hashes: ['real-key-hash'] });
     expect(latestResult?.selectedApiKey?.apiKeyHash).toBe('real-key-hash');
+  });
+
+  it('uses only real API keys for exact trend series while keeping a leading fallback rank row', async () => {
+    apiKeyStats = [
+      createApiKeyStatRow({
+        id: 'unknown-client-api-key:missing-client-key',
+        api_key_hash: '',
+        calls: 100,
+        cost: 100,
+      }),
+      ...['key-a', 'key-b', 'key-c', 'key-d'].map((apiKeyHash, index) =>
+        createApiKeyStatRow({
+          id: apiKeyHash,
+          api_key_hash: apiKeyHash,
+          calls: 10 - index,
+          cost: 10 - index,
+        })
+      ),
+    ];
+
+    await renderHook();
+
+    const apiKeyTimeline = lastParams((params) => Boolean(params.include?.api_key_timeline));
+    expect(latestResult?.apiKeyRows[0].id).toBe('unknown-client-api-key:missing-client-key');
+    expect(apiKeyTimeline?.filters).toMatchObject({
+      api_key_hashes: ['key-a', 'key-b', 'key-c', 'key-d'],
+    });
+    expect(latestResult?.apiKeyTrendSeries.map((series) => series.id)).toEqual([
+      'key-a',
+      'key-b',
+      'key-c',
+      'key-d',
+    ]);
+    expect(
+      latestResult?.apiKeyTrendSeries[0].points.slice(0, 3).map((point) => point.value)
+    ).toEqual([2, 0, 4]);
+  });
+
+  it('does not approximate fallback-only API key rows as trend series', async () => {
+    apiKeyStats = [
+      createApiKeyStatRow({
+        id: 'unknown-client-api-key:missing-client-key',
+        api_key_hash: '',
+        calls: 100,
+        cost: 100,
+      }),
+    ];
+    apiKeyTimelineAvailable = false;
+
+    await renderHook();
+
+    expect(latestResult?.apiKeyRows).toHaveLength(1);
+    expect(latestResult?.apiKeyRows[0].id).toBe('unknown-client-api-key:missing-client-key');
+    expect(latestResult?.apiKeyTrendSeries).toEqual([]);
   });
 
   it('omits an initial fallback API key filter from analytics requests', async () => {

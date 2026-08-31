@@ -373,14 +373,16 @@ export function useUsageAnalytics() {
       resolvedGranularity,
     ]
   );
+  const apiKeyTrendRows = useMemo(
+    () => adapted.apiKeyRows.filter((row) => Boolean(getSelectableApiKeyHash(row.apiKeyHash))),
+    [adapted.apiKeyRows]
+  );
   const apiKeyTrendHashes = useMemo(() => {
     if (activeTabState !== 'overview' && activeTabState !== 'trends') return [];
     return Array.from(
-      new Set(
-        adapted.apiKeyRows.map((row) => getSelectableApiKeyHash(row.apiKeyHash)).filter(Boolean)
-      )
+      new Set(apiKeyTrendRows.map((row) => getSelectableApiKeyHash(row.apiKeyHash)))
     ).slice(0, API_KEY_TREND_SERIES_LIMIT);
-  }, [activeTabState, adapted.apiKeyRows]);
+  }, [activeTabState, apiKeyTrendRows]);
   const apiKeyTrendFilters = useMemo(
     () =>
       apiKeyTrendHashes.length > 0
@@ -490,19 +492,19 @@ export function useUsageAnalytics() {
     () =>
       hasExactAPIKeyTimeline
         ? buildApiKeyTrendSeries(
-            adapted.apiKeyRows,
+            apiKeyTrendRows,
             adapted.timeline,
             apiKeyTimeline,
             trendMetric,
             API_KEY_TREND_SERIES_LIMIT
           )
         : buildEntityTrendSeries(
-            adapted.apiKeyRows,
+            apiKeyTrendRows,
             adapted.timeline,
             trendMetric,
             API_KEY_TREND_SERIES_LIMIT
           ),
-    [adapted.apiKeyRows, adapted.timeline, apiKeyTimeline, hasExactAPIKeyTimeline, trendMetric]
+    [apiKeyTimeline, apiKeyTrendRows, adapted.timeline, hasExactAPIKeyTimeline, trendMetric]
   );
   const selectedApiKeyFilterHash = getSelectableApiKeyHash(selectedApiKey?.apiKeyHash);
   const selectedApiKeyTimelineFilters = useMemo(
