@@ -36,6 +36,7 @@ import type { AuthFilesCredentialMutation } from '@/features/authFiles/hooks/use
 import { clearAccountCredentialEvidenceBoundaryStateCache } from './model/accountCredentialEvidenceStorage';
 import {
   clearAccountCredentialMutationMarkersForTests,
+  createAccountCredentialMutationBaseline,
   listAccountCredentialMutationMarkers,
   recordAccountCredentialMutationMarker,
 } from './model/accountCredentialMutationMarker';
@@ -3383,9 +3384,7 @@ describe('AccountsPage replacement flows', () => {
     if (!statusSelect) throw new Error('Accounts status filter not found');
 
     expect(statusSelect.props.options).toEqual(
-      expect.arrayContaining([
-        { value: 'unconfirmed', label: 'accounts.metric_unconfirmed' },
-      ])
+      expect.arrayContaining([{ value: 'unconfirmed', label: 'accounts.metric_unconfirmed' }])
     );
   });
 
@@ -12199,14 +12198,25 @@ describe('AccountsPage replacement flows', () => {
       search: `?account=${encodeURIComponent(oauthSelectionKey)}&tab=overview`,
     };
     installCodexQuotaStoreMutationMock();
-    const storeKey = getQuotaCredentialStoreKey(oauthFile);
-    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(oauthFile, {
-      status: 'error',
+    const existingStoreKey = getQuotaCredentialStoreKey(existingFile);
+    const existingQuota = {
+      status: 'success' as const,
       windows: [],
-      error: 'stale OAuth quota failure',
-      errorStatus: 429,
-      failedAtMs: markerAtMs - 1_000,
-    });
+      quotaInventoryObserved: true,
+      fetchedAtMs: markerAtMs - 2_000,
+      ...buildQuotaCredentialIdentity(existingFile),
+    };
+    const storeKey = getQuotaCredentialStoreKey(oauthFile);
+    mocks.quotaState.codexQuota = {
+      [existingStoreKey]: existingQuota,
+      ...buildCredentialScopedQuotaRecord(oauthFile, {
+        status: 'error',
+        windows: [],
+        error: 'stale OAuth quota failure',
+        errorStatus: 429,
+        failedAtMs: markerAtMs - 1_000,
+      }),
+    };
     mocks.loadFiles.mockImplementation(async () => {
       if (mocks.loadFiles.mock.calls.length === 1) return mocks.files;
       mocks.files = [existingFile, oauthFile];
@@ -12215,6 +12225,8 @@ describe('AccountsPage replacement flows', () => {
     recordAccountCredentialMutationMarker({
       connectionFingerprint: 'http://cpa-a.local:8317:manager-key',
       provider: 'codex',
+      baseline: createAccountCredentialMutationBaseline([existingFile], 'codex'),
+      requireObservedMutation: true,
       createdAtMs: markerAtMs,
     });
 
@@ -12227,8 +12239,9 @@ describe('AccountsPage replacement flows', () => {
     await flushPromises();
 
     expect(mocks.loadFiles).toHaveBeenCalledTimes(2);
-    expect(mocks.quotaState.setCodexQuota).toHaveBeenCalledTimes(2);
+    expect(mocks.quotaState.setCodexQuota).toHaveBeenCalledTimes(1);
     expect(listAccountCredentialMutationMarkers('http://cpa-a.local:8317:manager-key')).toEqual([]);
+    expect(mocks.quotaState.codexQuota).toHaveProperty(existingStoreKey, existingQuota);
     expect(mocks.quotaState.codexQuota).not.toHaveProperty(storeKey);
     expect(getAccountCardText(renderer, oauthSelectionKey)).not.toContain('accounts.health_reauth');
   });
@@ -12249,14 +12262,27 @@ describe('AccountsPage replacement flows', () => {
       search: `?account=${encodeURIComponent(oauthSelectionKey)}&tab=overview`,
     };
     installCodexQuotaStoreMutationMock();
+    const existingStoreKey = getQuotaCredentialStoreKey(existingFile);
+    const existingQuota = {
+      status: 'success' as const,
+      windows: [],
+      quotaInventoryObserved: true,
+      fetchedAtMs: markerAtMs - 2_000,
+      ...buildQuotaCredentialIdentity(existingFile),
+    };
     const storeKey = getQuotaCredentialStoreKey(oauthFile);
-    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(oauthFile, {
-      status: 'error',
+    const oauthQuota = {
+      status: 'error' as const,
       windows: [],
       error: 'post OAuth quota failure',
       errorStatus: 429,
       failedAtMs: newerEvidenceAtMs,
-    });
+      ...buildQuotaCredentialIdentity(oauthFile),
+    };
+    mocks.quotaState.codexQuota = {
+      [existingStoreKey]: existingQuota,
+      [storeKey]: oauthQuota,
+    };
     mocks.loadFiles.mockImplementation(async () => {
       if (mocks.loadFiles.mock.calls.length === 1) return mocks.files;
       mocks.files = [existingFile, oauthFile];
@@ -12265,6 +12291,8 @@ describe('AccountsPage replacement flows', () => {
     recordAccountCredentialMutationMarker({
       connectionFingerprint: 'http://cpa-a.local:8317:manager-key',
       provider: 'codex',
+      baseline: createAccountCredentialMutationBaseline([existingFile], 'codex'),
+      requireObservedMutation: true,
       createdAtMs: markerAtMs,
     });
 
@@ -12276,9 +12304,10 @@ describe('AccountsPage replacement flows', () => {
     });
     await flushPromises();
 
-    expect(mocks.quotaState.setCodexQuota).toHaveBeenCalledTimes(2);
+    expect(mocks.quotaState.setCodexQuota).toHaveBeenCalledTimes(1);
     expect(listAccountCredentialMutationMarkers('http://cpa-a.local:8317:manager-key')).toEqual([]);
-    expect(mocks.quotaState.codexQuota).toHaveProperty(storeKey);
+    expect(mocks.quotaState.codexQuota).toHaveProperty(existingStoreKey, existingQuota);
+    expect(mocks.quotaState.codexQuota).toHaveProperty(storeKey, oauthQuota);
     expect(getAccountCardText(renderer, oauthSelectionKey)).toContain('accounts.health_limited');
     await act(async () => {
       findDetailButtonByName(renderer, oauthFile.name).props.onClick();
@@ -12287,6 +12316,112 @@ describe('AccountsPage replacement flows', () => {
       renderer.root.findByType(AccountOverviewTab).props.detailView.overview.recentStatus
         .statusMessage
     ).toBe('post_oauth_failure');
+  });
+  it('preserves every existing same-provider quota when OAuth adds one credential', async () => {
+    const markerAtMs = Date.now();
+    const existingFiles = [
+      makeCodexFile('existing-a.json', 'auth-a', 'a@example.com'),
+      makeCodexFile('existing-b.json', 'auth-b', 'b@example.com'),
+      makeCodexFile('existing-c.json', 'auth-c', 'c@example.com'),
+    ];
+    const oauthFile = {
+      ...makeCodexFile('oauth-d.json', 'auth-d', 'd@example.com'),
+      status: 'error',
+      statusMessage: 'token_expired',
+      updatedAtMs: markerAtMs - 1_000,
+    } as AuthFileItem;
+    mocks.files = existingFiles;
+    installCodexQuotaStoreMutationMock();
+    const existingQuotaByKey = Object.fromEntries(
+      existingFiles.map((file, index) => [
+        getQuotaCredentialStoreKey(file),
+        {
+          status: 'success' as const,
+          windows: [],
+          quotaInventoryObserved: true,
+          fetchedAtMs: markerAtMs - (index + 2) * 1_000,
+          ...buildQuotaCredentialIdentity(file),
+        },
+      ])
+    );
+    const oauthStoreKey = getQuotaCredentialStoreKey(oauthFile);
+    const oauthStaleQuota = {
+      status: 'error' as const,
+      windows: [],
+      error: 'stale OAuth quota failure',
+      errorStatus: 429,
+      failedAtMs: markerAtMs - 1_000,
+      ...buildQuotaCredentialIdentity(oauthFile),
+    };
+    mocks.quotaState.codexQuota = {
+      ...existingQuotaByKey,
+      [oauthStoreKey]: oauthStaleQuota,
+    };
+    mocks.loadFiles.mockImplementation(async () => {
+      if (mocks.loadFiles.mock.calls.length === 1) return mocks.files;
+      mocks.files = [...existingFiles, oauthFile];
+      return mocks.files;
+    });
+    const marker = recordAccountCredentialMutationMarker({
+      connectionFingerprint: 'http://cpa-a.local:8317:manager-key',
+      provider: 'codex',
+      baseline: createAccountCredentialMutationBaseline(existingFiles, 'codex'),
+      requireObservedMutation: true,
+      createdAtMs: markerAtMs,
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(marker).not.toBeNull();
+    expect(mocks.quotaState.setCodexQuota).toHaveBeenCalledTimes(1);
+    existingFiles.forEach((file) => {
+      const key = getQuotaCredentialStoreKey(file);
+      expect(mocks.quotaState.codexQuota).toHaveProperty(key, existingQuotaByKey[key]);
+    });
+    expect(mocks.quotaState.codexQuota).not.toHaveProperty(oauthStoreKey);
+    expect(listAccountCredentialMutationMarkers('http://cpa-a.local:8317:manager-key')).toEqual([]);
+  });
+  it('keeps existing quota and the OAuth marker when credential reload fails', async () => {
+    const markerAtMs = Date.now();
+    const existingFile = makeCodexFile('existing.json', 'auth-existing', 'existing@example.com');
+    const existingStoreKey = getQuotaCredentialStoreKey(existingFile);
+    const existingQuota = {
+      status: 'success' as const,
+      windows: [],
+      quotaInventoryObserved: true,
+      fetchedAtMs: markerAtMs - 1_000,
+      ...buildQuotaCredentialIdentity(existingFile),
+    };
+    mocks.files = [existingFile];
+    installCodexQuotaStoreMutationMock();
+    mocks.quotaState.codexQuota = { [existingStoreKey]: existingQuota };
+    const marker = recordAccountCredentialMutationMarker({
+      connectionFingerprint: 'http://cpa-a.local:8317:manager-key',
+      provider: 'codex',
+      baseline: createAccountCredentialMutationBaseline([existingFile], 'codex'),
+      requireObservedMutation: true,
+      createdAtMs: markerAtMs,
+    });
+    mocks.loadFiles
+      .mockImplementationOnce(async () => mocks.files)
+      .mockRejectedValueOnce(new Error('temporary auth-file list failure'))
+      .mockImplementation(async () => mocks.files);
+
+    await renderAccountsPage();
+    await flushPromises();
+
+    expect(marker).not.toBeNull();
+    expect(listAccountCredentialMutationMarkers('http://cpa-a.local:8317:manager-key')).toEqual([
+      marker,
+    ]);
+    expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
+    expect(mocks.quotaState.codexQuota).toHaveProperty(existingStoreKey, existingQuota);
   });
   it('does not consume OAuth mutation markers from another CPA connection', async () => {
     recordAccountCredentialMutationMarker({
