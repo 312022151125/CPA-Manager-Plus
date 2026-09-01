@@ -131,6 +131,7 @@ import {
   createAccountCredentialMutationBaseline,
   hasAccountCredentialMutationEvidence,
   listAccountCredentialMutationMarkers,
+  resolveAccountCredentialMutationFiles,
   type AccountCredentialMutationMarker,
 } from '@/features/accounts/model/accountCredentialMutationMarker';
 import {
@@ -542,7 +543,8 @@ const pruneCredentialQuotaStatesForProviderMutation = <
   current: Record<string, TState>,
   targetFiles: readonly AuthFileItem[],
   getStoreKey: (file: AuthFileItem) => string,
-  preserveEvidenceAfterMs = 0
+  preserveEvidenceAfterMs = 0,
+  preservedFiles: readonly AuthFileItem[] = []
 ): Record<string, TState> => {
   const storeKeys = new Set(targetFiles.map(getStoreKey));
   const fileNames = new Set(targetFiles.map((file) => file.name));
@@ -557,6 +559,14 @@ const pruneCredentialQuotaStatesForProviderMutation = <
       !storeKeys.has(key) &&
       (!stateFileKey || !storeKeys.has(stateFileKey)) &&
       (!stateFileName || !fileNames.has(stateFileName))
+    ) {
+      return;
+    }
+    if (
+      preservedFiles.some((file) => {
+        const preservedStoreKey = getStoreKey(file);
+        return key === preservedStoreKey || stateFileKey === preservedStoreKey;
+      })
     ) {
       return;
     }
@@ -1322,7 +1332,9 @@ export function AccountsPage() {
       createdAtMs: number,
       options?: {
         credentialFiles?: readonly AuthFileItem[];
+        inventoryFiles?: readonly AuthFileItem[];
         supersedeRequests?: boolean;
+        scope?: 'provider' | 'credential';
       }
     ) => AuthFileItem[]
   >(() => []);
@@ -1582,10 +1594,6 @@ export function AccountsPage() {
             providerMarkers.push(marker);
             markersByProvider.set(marker.provider, providerMarkers);
           });
-          markersByProvider.forEach((providerMarkers, provider) => {
-            const markerAtMs = Math.max(...providerMarkers.map((marker) => marker.createdAtMs));
-            invalidateProviderCredentialEvidenceRef.current(provider, markerAtMs);
-          });
 
           const retry = await runCredentialVisibilityRetry<AuthFileItem[]>({
             load: async () => {
@@ -1631,22 +1639,37 @@ export function AccountsPage() {
                   );
                 }
               });
-            if (evidencedMarkers.length === 0) return;
-            const markerAtMs = Math.max(...providerMarkers.map((marker) => marker.createdAtMs));
-            const targetFiles = invalidateProviderCredentialEvidenceRef.current(
-              provider,
-              markerAtMs,
-              {
-                credentialFiles: reloadedFiles,
-                supersedeRequests: false,
-              }
+            const sortedEvidencedMarkers = [...evidencedMarkers].sort(
+              (left, right) =>
+                left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id)
             );
-            if (targetFiles.length === 0) return;
-            evidencedMarkers.forEach((marker) => {
+            if (sortedEvidencedMarkers.length === 0) return;
+            let providerConsumed = false;
+            sortedEvidencedMarkers.forEach((marker) => {
+              const markerFiles = marker.requireObservedMutation
+                ? resolveAccountCredentialMutationFiles(marker, reloadedFiles)
+                : reloadedFiles.filter((file) => normalizeAccountProvider(file) === provider);
+              const affectedFilesBySelectionKey = new Map<string, AuthFileItem>();
+              markerFiles.forEach((file) => {
+                affectedFilesBySelectionKey.set(getAuthFileSelectionKey(file), file);
+              });
+              const targetFiles = invalidateProviderCredentialEvidenceRef.current(
+                provider,
+                marker.createdAtMs,
+                {
+                  credentialFiles: Array.from(affectedFilesBySelectionKey.values()),
+                  inventoryFiles: reloadedFiles,
+                  supersedeRequests: false,
+                  scope: marker.requireObservedMutation ? 'credential' : 'provider',
+                }
+              );
+              if (targetFiles.length === 0) return;
               consumedIds.push(marker.id);
               credentialMutationMarkerAttemptsRef.current.delete(marker.id);
               credentialMutationMarkerExhaustedRef.current.delete(marker.id);
+              providerConsumed = true;
             });
+            if (!providerConsumed) return;
             publishAccountCredentialMutationRevision({
               connectionFingerprint,
               provider,
@@ -2478,29 +2501,56 @@ export function AccountsPage() {
       createdAtMs: number,
       options: {
         credentialFiles?: readonly AuthFileItem[];
+        inventoryFiles?: readonly AuthFileItem[];
         supersedeRequests?: boolean;
+        scope?: 'provider' | 'credential';
       } = {}
     ): AuthFileItem[] => {
       const normalizedProvider = provider.trim().toLowerCase().replace(/_/g, '-');
       if (!normalizedProvider) return [];
+      const scope = options.scope ?? 'provider';
       const credentialFiles = options.credentialFiles ?? files;
+      const inventoryFiles = options.inventoryFiles ?? files;
       const supersedeRequests = options.supersedeRequests !== false;
-      const targetFiles = credentialFiles.filter(
-        (file) => normalizeAccountProvider(file) === normalizedProvider
-      );
+      const targetFiles =
+        scope === 'credential' && !options.credentialFiles
+          ? []
+          : credentialFiles.filter((file) => normalizeAccountProvider(file) === normalizedProvider);
+      if (targetFiles.length === 0) return [];
+      const targetSelectionKeys = new Set(targetFiles.map((file) => getAuthFileSelectionKey(file)));
+      const preservedFiles =
+        scope === 'credential'
+          ? inventoryFiles.filter(
+              (file) =>
+                normalizeAccountProvider(file) === normalizedProvider &&
+                !targetSelectionKeys.has(getAuthFileSelectionKey(file))
+            )
+          : [];
       const providerBoundary = buildProviderCredentialMutationBoundary(createdAtMs);
       const rawStatusBoundaryEntries = targetFiles.flatMap((file) => {
         const boundary = buildCredentialMutationRawStatusBoundary(file, createdAtMs);
         return boundary ? ([[getAuthFileSelectionKey(file), boundary]] as const) : [];
       });
+      const credentialBoundaryEntries =
+        scope === 'credential'
+          ? targetFiles.map((file) => [getAuthFileSelectionKey(file), providerBoundary] as const)
+          : [];
+      const boundaryEntries: Array<readonly [string, AccountCredentialEvidenceBoundary]> = [
+        ...(scope === 'provider'
+          ? [
+              [
+                getCredentialEvidenceProviderBoundaryKey(normalizedProvider),
+                providerBoundary,
+              ] as const,
+            ]
+          : credentialBoundaryEntries),
+        ...rawStatusBoundaryEntries,
+      ];
       setCredentialEvidenceBoundaries((current) =>
-        upsertAccountCredentialEvidenceBoundaries(current, [
-          [getCredentialEvidenceProviderBoundaryKey(normalizedProvider), providerBoundary],
-          ...rawStatusBoundaryEntries,
-        ])
+        upsertAccountCredentialEvidenceBoundaries(current, boundaryEntries)
       );
 
-      if (supersedeRequests) {
+      if (supersedeRequests && scope === 'provider') {
         headerSnapshotRequestGenerationRef.current += 1;
         invalidateInspectionSummaryRequest();
         accountActionCandidatesReqIdRef.current += 1;
@@ -2525,6 +2575,7 @@ export function AccountsPage() {
           pruneCodexQuotaStatesForCredentialMutation(current, {
             affectedFileNames,
             invalidatedStoreKeys,
+            preservedFiles,
             preserveEvidenceAfterMs: createdAtMs,
           })
         );
@@ -2554,7 +2605,8 @@ export function AccountsPage() {
             current,
             targetFiles,
             (file) => config.getStoreKey?.(file) ?? file.name,
-            createdAtMs
+            createdAtMs,
+            preservedFiles
           )
         );
       };
