@@ -1599,36 +1599,36 @@ export function AccountsPage() {
                   );
                 }
               });
-            if (evidencedMarkers.length === 0) return;
-            const markerAtMs = Math.max(...providerMarkers.map((marker) => marker.createdAtMs));
-            const affectedFilesBySelectionKey = new Map<string, AuthFileItem>();
-            evidencedMarkers.forEach((marker) => {
+            const sortedEvidencedMarkers = [...evidencedMarkers].sort(
+              (left, right) =>
+                left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id)
+            );
+            if (sortedEvidencedMarkers.length === 0) return;
+            let providerConsumed = false;
+            sortedEvidencedMarkers.forEach((marker) => {
               const markerFiles = marker.requireObservedMutation
                 ? resolveAccountCredentialMutationFiles(marker, reloadedFiles)
                 : reloadedFiles.filter((file) => normalizeAccountProvider(file) === provider);
+              const affectedFilesBySelectionKey = new Map<string, AuthFileItem>();
               markerFiles.forEach((file) => {
                 affectedFilesBySelectionKey.set(getAuthFileSelectionKey(file), file);
               });
-            });
-            const affectedFiles = Array.from(affectedFilesBySelectionKey.values());
-            const scope = evidencedMarkers.some((marker) => !marker.requireObservedMutation)
-              ? 'provider'
-              : 'credential';
-            const targetFiles = invalidateProviderCredentialEvidenceRef.current(
-              provider,
-              markerAtMs,
-              {
-                credentialFiles: affectedFiles,
-                supersedeRequests: false,
-                scope,
-              }
-            );
-            if (targetFiles.length === 0) return;
-            evidencedMarkers.forEach((marker) => {
+              const targetFiles = invalidateProviderCredentialEvidenceRef.current(
+                provider,
+                marker.createdAtMs,
+                {
+                  credentialFiles: Array.from(affectedFilesBySelectionKey.values()),
+                  supersedeRequests: false,
+                  scope: marker.requireObservedMutation ? 'credential' : 'provider',
+                }
+              );
+              if (targetFiles.length === 0) return;
               consumedIds.push(marker.id);
               credentialMutationMarkerAttemptsRef.current.delete(marker.id);
               credentialMutationMarkerExhaustedRef.current.delete(marker.id);
+              providerConsumed = true;
             });
+            if (!providerConsumed) return;
             publishAccountCredentialMutationRevision({
               connectionFingerprint,
               provider,
