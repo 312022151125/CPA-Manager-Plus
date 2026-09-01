@@ -12431,9 +12431,9 @@ describe('AccountsPage replacement flows', () => {
     const bQuotaAtMs = now - 20_000;
     const secondMarkerAtMs = now - 10_000;
     const existingFile = makeCodexFile('existing.json', 'auth-existing', 'existing@example.com');
-    const firstOauthFile = makeCodexFile('oauth-b.json', 'auth-b', 'b@example.com');
+    const firstOauthFile = makeCodexFile('shared.json', 'auth-b', 'b@example.com');
     const secondOauthFile = {
-      ...makeCodexFile('oauth-c.json', 'auth-c', 'c@example.com'),
+      ...makeCodexFile('shared.json', 'auth-c', 'c@example.com'),
       status: 'error',
       statusMessage: 'token_expired',
       updatedAtMs: secondMarkerAtMs - 100,
@@ -12463,6 +12463,7 @@ describe('AccountsPage replacement flows', () => {
       failedAtMs: secondMarkerAtMs - 100,
       ...buildQuotaCredentialIdentity(secondOauthFile),
     };
+    const reloadedFiles = [existingFile, firstOauthFile, secondOauthFile];
     mocks.files = [existingFile];
     installCodexQuotaStoreMutationMock();
     mocks.quotaState.codexQuota = {
@@ -12489,8 +12490,7 @@ describe('AccountsPage replacement flows', () => {
     });
     mocks.loadFiles.mockImplementation(async () => {
       if (mocks.loadFiles.mock.calls.length === 1) return mocks.files;
-      mocks.files = [existingFile, firstOauthFile, secondOauthFile];
-      return mocks.files;
+      return reloadedFiles;
     });
 
     const renderer = await renderAccountsPage();

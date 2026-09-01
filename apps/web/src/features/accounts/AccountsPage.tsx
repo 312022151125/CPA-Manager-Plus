@@ -1293,6 +1293,7 @@ export function AccountsPage() {
       createdAtMs: number,
       options?: {
         credentialFiles?: readonly AuthFileItem[];
+        inventoryFiles?: readonly AuthFileItem[];
         supersedeRequests?: boolean;
         scope?: 'provider' | 'credential';
       }
@@ -1618,6 +1619,7 @@ export function AccountsPage() {
                 marker.createdAtMs,
                 {
                   credentialFiles: Array.from(affectedFilesBySelectionKey.values()),
+                  inventoryFiles: reloadedFiles,
                   supersedeRequests: false,
                   scope: marker.requireObservedMutation ? 'credential' : 'provider',
                 }
@@ -2460,6 +2462,7 @@ export function AccountsPage() {
       createdAtMs: number,
       options: {
         credentialFiles?: readonly AuthFileItem[];
+        inventoryFiles?: readonly AuthFileItem[];
         supersedeRequests?: boolean;
         scope?: 'provider' | 'credential';
       } = {}
@@ -2468,6 +2471,7 @@ export function AccountsPage() {
       if (!normalizedProvider) return [];
       const scope = options.scope ?? 'provider';
       const credentialFiles = options.credentialFiles ?? files;
+      const inventoryFiles = options.inventoryFiles ?? files;
       const supersedeRequests = options.supersedeRequests !== false;
       const targetFiles =
         scope === 'credential' && !options.credentialFiles
@@ -2477,7 +2481,7 @@ export function AccountsPage() {
       const targetSelectionKeys = new Set(targetFiles.map((file) => getAuthFileSelectionKey(file)));
       const preservedFiles =
         scope === 'credential'
-          ? files.filter(
+          ? inventoryFiles.filter(
               (file) =>
                 normalizeAccountProvider(file) === normalizedProvider &&
                 !targetSelectionKeys.has(getAuthFileSelectionKey(file))
