@@ -3545,6 +3545,114 @@ func TestQuotaLifecycleScheduledRolloverUsesScheduledBoundaryAfterIdleGap(t *tes
 	}
 }
 
+func TestQuotaLifecycleTreatsNegativeBoundaryJitterAsScheduledRollover(t *testing.T) {
+	const durationSeconds = int64(7 * 24 * 60 * 60)
+	oldStartMS := quotaLifecycleBaseMS
+	oldEndMS := oldStartMS + durationSeconds*1000
+	nextStartMS := oldEndMS - 5*1000
+	nextEndMS := nextStartMS + durationSeconds*1000
+	observedAtMS := oldEndMS + 5*60*1000
+	service := newQuotaSnapshotTestService(t, observedAtMS+quotaLifecycleHourMS)
+
+	first := quotaLifecycleFixedWindow("weekly", "weekly", oldStartMS, durationSeconds, 20)
+	writeQuotaLifecycleObservation(t, service, "complete", oldStartMS+quotaLifecycleHourMS, []WindowInput{first})
+
+	next := quotaLifecycleFixedWindow("weekly", "weekly", nextStartMS, durationSeconds, 8)
+	next.Source = "api_query"
+	next.BoundaryAccuracy = "derived"
+	if _, err := service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{
+		quotaLifecycleWriteEntryWithObservation(
+			"complete", "api_query", "api-negative-jitter", "codex:quota-windows",
+			observedAtMS, []WindowInput{next},
+		),
+	}}); err != nil {
+		t.Fatalf("write negative-jitter observation: %v", err)
+	}
+
+	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
+	if window.CurrentCycle == nil || window.PreviousCycle == nil {
+		t.Fatalf("negative-jitter rollover did not expose both cycles: %#v", window)
+	}
+	if window.CurrentCycle.ID == window.PreviousCycle.ID {
+		t.Fatalf("negative-jitter rollover reused the active cycle: %#v", window)
+	}
+	if window.PreviousCycle.State != "closed" || window.PreviousCycle.EndReason != "scheduled" ||
+		window.PreviousCycle.ActualEndMS == nil || *window.PreviousCycle.ActualEndMS != oldEndMS {
+		t.Fatalf("negative-jitter previous cycle = %#v", window.PreviousCycle)
+	}
+	if window.CurrentCycle.ActualStartMS != oldEndMS ||
+		window.CurrentCycle.ScheduledStartMS == nil || *window.CurrentCycle.ScheduledStartMS != nextStartMS ||
+		window.CurrentCycle.ScheduledEndMS == nil || *window.CurrentCycle.ScheduledEndMS != nextEndMS {
+		t.Fatalf("negative-jitter current cycle = %#v", window.CurrentCycle)
+	}
+	if window.CurrentCycle.ActualStartMS != *window.PreviousCycle.ActualEndMS {
+		t.Fatalf("negative-jitter transition has overlap or gap: %#v", window)
+	}
+}
+
+func TestQuotaLifecycleNegativeBoundaryJitterCanonicalizesIndependentActualTransition(t *testing.T) {
+	const durationSeconds = int64(5 * 60 * 60)
+	oldStartMS := quotaLifecycleBaseMS
+	oldEndMS := oldStartMS + durationSeconds*1000
+	actualTransitionMS := oldStartMS + 4*quotaLifecycleHourMS
+	nextStartMS := oldEndMS - 5*1000
+	nextEndMS := nextStartMS + durationSeconds*1000
+	observedAtMS := oldEndMS + 5*60*1000
+	service := newQuotaSnapshotTestService(t, observedAtMS+quotaLifecycleHourMS)
+
+	initial := quotaLifecycleFixedWindow("five-hour", "five_hour", oldStartMS, durationSeconds, 75)
+	writeQuotaLifecycleObservation(t, service, "complete", oldStartMS+quotaLifecycleHourMS, []WindowInput{initial})
+
+	reset := quotaLifecycleFixedWindow("five-hour", "five_hour", oldStartMS, durationSeconds, 1)
+	reset.Source = "response_header"
+	reset.BoundaryAccuracy = "derived"
+	if _, err := service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{
+		quotaLifecycleWriteEntryWithObservation(
+			"complete", "response_header", "header-early-reset", "codex:quota-windows",
+			actualTransitionMS, []WindowInput{reset},
+		),
+	}}); err != nil {
+		t.Fatalf("write independent actual transition: %v", err)
+	}
+
+	resetted := queryQuotaLifecycleWindows(t, service, false)["five-hour"]
+	if resetted.CurrentCycle == nil || resetted.CurrentCycle.ActualStartMS != actualTransitionMS ||
+		resetted.CurrentCycle.ScheduledStartMS == nil || *resetted.CurrentCycle.ScheduledStartMS != oldStartMS {
+		t.Fatalf("independent actual transition was not established: %#v", resetted)
+	}
+	oldCycleID := resetted.CurrentCycle.ID
+
+	next := quotaLifecycleFixedWindow("five-hour", "five_hour", nextStartMS, durationSeconds, 8)
+	next.Source = "api_query"
+	next.BoundaryAccuracy = "derived"
+	if _, err := service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{
+		quotaLifecycleWriteEntryWithObservation(
+			"complete", "api_query", "api-negative-jitter-after-reset", "codex:quota-windows",
+			observedAtMS, []WindowInput{next},
+		),
+	}}); err != nil {
+		t.Fatalf("write negative-jitter observation after actual transition: %v", err)
+	}
+
+	window := queryQuotaLifecycleWindows(t, service, false)["five-hour"]
+	if window.CurrentCycle == nil || window.PreviousCycle == nil || window.PreviousCycle.ID != oldCycleID {
+		t.Fatalf("negative-jitter rollover lost the independent transition cycle: %#v", window)
+	}
+	if window.PreviousCycle.ActualStartMS != actualTransitionMS ||
+		window.PreviousCycle.ActualEndMS == nil || *window.PreviousCycle.ActualEndMS != oldEndMS ||
+		window.PreviousCycle.EndReason != "scheduled" {
+		t.Fatalf("negative-jitter closed cycle crossed the provider reset: %#v", window.PreviousCycle)
+	}
+	if window.CurrentCycle.ActualStartMS != oldEndMS ||
+		window.CurrentCycle.ScheduledStartMS == nil || *window.CurrentCycle.ScheduledStartMS != nextStartMS ||
+		window.CurrentCycle.ScheduledEndMS == nil || *window.CurrentCycle.ScheduledEndMS != nextEndMS {
+		t.Fatalf("negative-jitter next cycle did not use the canonical transition: %#v", window.CurrentCycle)
+	}
+	if window.CurrentCycle.ActualStartMS != *window.PreviousCycle.ActualEndMS {
+		t.Fatalf("negative-jitter transition has overlap or gap after actual reset: %#v", window)
+	}
+}
+
 func TestQuotaLifecycleExposesFiveHourAndWeeklyScheduledGapsAsPrevious(t *testing.T) {
 	const gapMS = int64(8 * 60 * 1000)
 	weeklyStartMS := quotaLifecycleBaseMS
@@ -3570,16 +3678,17 @@ func TestQuotaLifecycleExposesFiveHourAndWeeklyScheduledGapsAsPrevious(t *testin
 	})
 
 	windows := queryQuotaLifecycleWindows(t, service, false)
-	for id, bounds := range map[string][2]int64{
-		"five-hour": {fiveHourStartMS, fiveHourEndMS},
-		"weekly":    {weeklyStartMS, weeklyEndMS},
+	for id, bounds := range map[string][3]int64{
+		"five-hour": {fiveHourStartMS, fiveHourEndMS, fiveHourNextStartMS},
+		"weekly":    {weeklyStartMS, weeklyEndMS, weeklyNextStartMS},
 	} {
-		wantStart, wantEnd := bounds[0], bounds[1]
+		wantStart, wantEnd, wantCurrentStart := bounds[0], bounds[1], bounds[2]
 		window := windows[id]
 		if window.CurrentCycle == nil || window.PreviousCycle == nil ||
 			window.PreviousCycle.ActualStartMS != wantStart || window.PreviousCycle.ActualEndMS == nil ||
 			*window.PreviousCycle.ActualEndMS != wantEnd || window.PreviousCycle.EndReason != "scheduled" ||
-			window.PreviousCycle.ActivationID != window.CurrentCycle.ActivationID {
+			window.PreviousCycle.ActivationID != window.CurrentCycle.ActivationID ||
+			window.CurrentCycle.ActualStartMS != wantCurrentStart {
 			t.Fatalf("%s scheduled gap previous lifecycle = %#v", id, window)
 		}
 	}
