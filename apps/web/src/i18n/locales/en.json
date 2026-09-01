@@ -993,8 +993,6 @@
     "quota_source_short_cache": "Last check",
     "quota_source_short_observed": "Request record",
     "quota_source_short_none": "No data",
-    "quota_more_windows": "+{{count}}",
-    "quota_more_windows_title": "{{count}} more quota windows. Open details to inspect.",
     "activity_brief": "{{count}} calls · {{rate}} success",
     "activity_empty": "No recent calls",
     "activity_success_failure": "Success {{success}} · Failure {{failure}}",

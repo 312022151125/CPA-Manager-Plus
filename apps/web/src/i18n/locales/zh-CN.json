@@ -991,8 +991,6 @@
     "quota_source_short_cache": "上次查询",
     "quota_source_short_observed": "请求记录",
     "quota_source_short_none": "无数据",
-    "quota_more_windows": "+{{count}} 项",
-    "quota_more_windows_title": "还有 {{count}} 个额度窗口，点击查看详情",
     "activity_brief": "{{count}} 次 · 成功率 {{rate}}",
     "activity_empty": "暂无近期请求",
     "activity_success_failure": "成功 {{success}} · 失败 {{failure}}",

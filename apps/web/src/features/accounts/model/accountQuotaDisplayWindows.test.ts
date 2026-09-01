@@ -6,6 +6,9 @@ import {
   buildAccountQuotaDisplayWindow,
   buildAccountQuotaDisplayWindows,
   getQuotaWindowShortLabel,
+  isIntervalAccountQuotaWindow,
+  isModelScopedAccountQuotaWindow,
+  isStandardAccountQuotaWindow,
   parseQuotaResetLabelMs,
   type TranslateQuotaWindowLabel,
 } from './accountQuotaDisplayWindows';
@@ -60,6 +63,85 @@ const buildRow = (file: AuthFileItem, stores: AccountQuotaStores = emptyStores()
 };
 
 describe('accountQuotaDisplayWindows', () => {
+  describe('quota window classification', () => {
+    it.each(['fixed', 'calendar', 'rolling'] as const)(
+      'classifies an account-wide %s window as standard quota',
+      (windowMode) => {
+        const window = {
+          windowMode,
+          source: 'claude' as const,
+          modelScope: { kind: 'all' as const, complete: true },
+        };
+
+        expect(isIntervalAccountQuotaWindow(window)).toBe(true);
+        expect(isModelScopedAccountQuotaWindow(window)).toBe(false);
+        expect(isStandardAccountQuotaWindow(window)).toBe(true);
+      }
+    );
+
+    it.each([
+      { kind: 'models' as const, models: ['gemini-3-pro'], complete: true },
+      { kind: 'family' as const, key: 'gemini', complete: true },
+    ])('classifies an explicitly model-scoped fixed window as model quota', (modelScope) => {
+      const window = { windowMode: 'fixed' as const, source: 'antigravity' as const, modelScope };
+
+      expect(isIntervalAccountQuotaWindow(window)).toBe(true);
+      expect(isModelScopedAccountQuotaWindow(window)).toBe(true);
+      expect(isStandardAccountQuotaWindow(window)).toBe(false);
+    });
+
+    it('keeps the complete Codex main family in standard quota', () => {
+      const window = {
+        windowMode: 'fixed' as const,
+        source: 'codex' as const,
+        modelScope: { kind: 'family' as const, key: 'codex_main', complete: true },
+      };
+
+      expect(isModelScopedAccountQuotaWindow(window)).toBe(false);
+      expect(isStandardAccountQuotaWindow(window)).toBe(true);
+    });
+
+    it.each([
+      { kind: 'billing' as const, windowMode: 'non_window' as const },
+      { kind: 'payg' as const, windowMode: 'non_window' as const },
+      { kind: 'product' as const, windowMode: 'non_window' as const },
+      { kind: 'unknown' as const, windowMode: 'unknown' as const },
+    ])('does not classify a $kind $windowMode item as standard quota', ({ kind, windowMode }) => {
+      const window = {
+        kind,
+        windowMode,
+        source: 'xai' as const,
+        modelScope: { kind: 'all' as const, complete: true },
+      };
+
+      expect(isIntervalAccountQuotaWindow(window)).toBe(false);
+      expect(isStandardAccountQuotaWindow(window)).toBe(false);
+    });
+
+    it('does not classify a billing item as standard even when it has interval boundaries', () => {
+      const window = {
+        kind: 'billing' as const,
+        windowMode: 'fixed' as const,
+        source: 'xai' as const,
+        modelScope: { kind: 'all' as const, complete: true },
+      };
+
+      expect(isIntervalAccountQuotaWindow(window)).toBe(true);
+      expect(isStandardAccountQuotaWindow(window)).toBe(false);
+    });
+
+    it('fails closed when a provider reports an incomplete account-wide scope', () => {
+      const window = {
+        windowMode: 'fixed' as const,
+        source: 'antigravity' as const,
+        modelScope: { kind: 'all' as const, complete: false },
+      };
+
+      expect(isModelScopedAccountQuotaWindow(window)).toBe(true);
+      expect(isStandardAccountQuotaWindow(window)).toBe(false);
+    });
+  });
+
   it('rolls legacy yearless reset labels into the next calendar year', () => {
     const nowMs = new Date(2026, 11, 31, 23, 0, 0, 0).getTime();
 

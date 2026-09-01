@@ -991,8 +991,6 @@
     "quota_source_short_cache": "上次查詢",
     "quota_source_short_observed": "請求記錄",
     "quota_source_short_none": "無資料",
-    "quota_more_windows": "+{{count}} 項",
-    "quota_more_windows_title": "還有 {{count}} 個額度視窗，點擊查看詳情",
     "activity_brief": "{{count}} 次 · 成功率 {{rate}}",
     "activity_empty": "暫無近期請求",
     "activity_success_failure": "成功 {{success}} · 失敗 {{failure}}",
