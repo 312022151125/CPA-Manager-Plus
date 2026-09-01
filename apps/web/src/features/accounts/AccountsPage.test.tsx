@@ -218,6 +218,20 @@ const makeCodexQuotaData = (
   rateLimitResetCreditsError: null,
 });
 
+const makeCodexQuotaWindow = (
+  overrides: Partial<CodexQuotaState['windows'][number]> = {}
+): CodexQuotaState['windows'][number] => ({
+  id: 'five-hour',
+  label: 'Five hours',
+  usedPercent: 20,
+  resetLabel: 'later',
+  resetAtMs: Date.now() + 6 * 60 * 60 * 1000,
+  resetAccuracy: 'exact',
+  limitWindowSeconds: 5 * 60 * 60,
+  modelScope: CODEX_MAIN_SCOPE,
+  ...overrides,
+});
+
 const buildCredentialScopedQuotaRecord = <TState extends object>(
   file: AuthFileItem,
   state: TState
@@ -977,6 +991,18 @@ const findAccountCardButtonByAriaLabel = (
     .find((node) => node.props['aria-label'] === label);
   if (!button) throw new Error(`Card button not found: ${label}`);
   return button;
+};
+
+const findAccountDetailRegion = (
+  renderer: ReactTestRenderer,
+  selectionKey: string,
+  kind: 'history' | 'quota'
+) => {
+  const region = findAccountCardByKey(renderer, selectionKey).findAll(
+    (node) => node.props['data-account-detail-region'] === kind
+  )[0];
+  if (!region) throw new Error(`Account detail region not found: ${kind}`);
+  return region;
 };
 
 const findAccountCardInputByAriaLabel = (
@@ -2449,7 +2475,9 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.loadModelAlias).not.toHaveBeenCalled();
     expect(mocks.getAnalytics).not.toHaveBeenCalled();
     expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
-    expect(getAccountListItemTexts(renderer)[0]).toContain('20%');
+    expect(getAccountListItemTexts(renderer)[0]).toContain('accounts.quota_details_only');
+    expect(getAccountListItemTexts(renderer)[0]).not.toContain('accounts.quota_source_none');
+    expect(getAccountListItemTexts(renderer)[0]).not.toContain('20%');
     expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
   });
 
@@ -6915,7 +6943,7 @@ describe('AccountsPage replacement flows', () => {
     expect(getAccountListItemTexts(renderer)[0]).toContain('high.json');
   });
 
-  it('renders xAI monthly and pay-as-you-go quota windows on account cards', async () => {
+  it('keeps xAI billing and pay-as-you-go windows in quota details only', async () => {
     mocks.files = [
       {
         name: 'xai.json',
@@ -6942,13 +6970,84 @@ describe('AccountsPage replacement flows', () => {
     });
 
     const renderer = await renderAccountsPage();
-    const text = treeText(renderer);
+    const selectionKey = getAuthFileSelectionKey(mocks.files[0]);
+    const card = findAccountCardByKey(renderer, selectionKey);
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
+    const text = readText(card);
 
-    expect(text).toContain('30D');
-    expect(text).toContain('PAYG');
+    expect(text).toContain('accounts.quota_details_only');
+    expect(text).not.toContain('accounts.quota_source_none');
+    expect(text).not.toContain('30D');
+    expect(text).not.toContain('PAYG');
+    expect(quotaRegion.props['aria-label']).toContain('accounts.quota_details_only');
+
+    await act(async () => {
+      quotaRegion.props.onClick();
+    });
+
+    const otherQuotaGroup = renderer.root.findByProps({ 'data-quota-window-group': 'other' });
+    expect(readText(otherQuotaGroup)).toContain('xai_quota.monthly_credits');
+    expect(readText(otherQuotaGroup)).toContain('xai_quota.pay_as_you_go_label');
+    expect(renderer.root.findAllByProps({ 'data-quota-window-group': 'standard' })).toHaveLength(0);
   });
 
-  it('renders Antigravity Pro model groups as a two-row quota matrix', async () => {
+  it('keeps a fixed xAI billing period in detail standard mode while hiding it from the list', async () => {
+    const file = {
+      name: 'xai-fixed-billing.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-fixed-billing-1',
+      account: 'xai-fixed-billing@example.com',
+      priority: 0,
+      disabled: false,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.quotaState.xaiQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      billing: {
+        periodType: 'monthly',
+        usagePercent: 20,
+        periodStart: '2026-08-01T00:00:00Z',
+        periodEnd: '2026-09-01T00:00:00Z',
+        productUsage: [{ product: 'Grok Code Fast', usagePercent: 20 }],
+        monthlyLimitCents: 10_000,
+        usedCents: 2_000,
+        includedUsedCents: 2_000,
+        onDemandCapCents: null,
+        onDemandUsedCents: null,
+        onDemandUsedPercent: null,
+        billingPeriodStart: '2026-08-01T00:00:00Z',
+        billingPeriodEnd: '2026-09-01T00:00:00Z',
+        usedPercent: 20,
+      },
+    });
+
+    const renderer = await renderAccountsPage();
+    const selectionKey = getAuthFileSelectionKey(file);
+    const card = findAccountCardByKey(renderer, selectionKey);
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
+    const cardText = readText(card);
+    expect(cardText).toContain('accounts.quota_details_only');
+    expect(cardText).not.toContain('accounts.quota_source_none');
+    expect(cardText).not.toContain('30D');
+    expect(cardText).not.toContain('Grok Code Fast');
+    expect(quotaRegion.props['aria-label']).toContain('accounts.quota_details_only');
+
+    await act(async () => {
+      findAccountDetailRegion(renderer, selectionKey, 'quota').props.onClick();
+    });
+    await flushPromises();
+
+    const standardGroup = renderer.root.findByProps({ 'data-quota-window-group': 'standard' });
+    const otherGroup = renderer.root.findByProps({ 'data-quota-window-group': 'other' });
+    expect(standardGroup.findAllByType(QuotaWindowCard)).toHaveLength(1);
+    expect(standardGroup.findByProps({ 'data-quota-card-mode': 'standard' })).toBeTruthy();
+    expect(standardGroup.findByProps({ 'data-quota-standard-comparison': 'true' })).toBeTruthy();
+    expect(readText(otherGroup)).toContain('xai_quota.monthly_credits');
+    expect(readText(otherGroup)).toContain('Grok Code Fast');
+  });
+
+  it('keeps Antigravity Pro model groups out of the list and in quota details', async () => {
     mocks.files = [
       {
         name: 'antigravity-pro-matrix.json',
@@ -7016,33 +7115,27 @@ describe('AccountsPage replacement flows', () => {
     const matrices = renderer.root.findAll(
       (node) => typeof node.props['data-account-quota-matrix'] === 'string'
     );
-    expect(matrices).toHaveLength(1);
-    const matrix = matrices[0];
-    const matrixRows = matrix.findAll(
-      (node) => typeof node.props['data-account-quota-matrix-row'] === 'string'
-    );
-    const matrixCells = matrix.findAll(
-      (node) => typeof node.props['data-account-quota-matrix-cell'] === 'string'
-    );
+    expect(matrices).toHaveLength(0);
+    expect(
+      readText(findAccountCardByKey(renderer, getAuthFileSelectionKey(mocks.files[0])))
+    ).toContain('accounts.quota_details_only');
 
-    expect(matrixRows.map((node) => node.props['data-account-quota-matrix-row'])).toEqual([
-      'five_hour',
-      'weekly',
-    ]);
-    expect(matrixCells).toHaveLength(4);
-    expect(readText(matrix)).toContain('5H');
-    expect(readText(matrix)).toContain('7D');
-    expect(readText(matrix)).toContain('Claude');
-    expect(readText(matrix)).toContain('Gemini');
-    expect(readText(matrix)).toContain('11%');
-    expect(readText(matrix)).toContain('96%');
-    expect(readText(matrix)).toContain('19%');
-    expect(readText(matrix)).toContain('4%');
-    expect(readText(matrix)).not.toContain('Claude/GPT');
-    expect(readText(matrix)).not.toContain('accounts.quota_more_windows');
+    await act(async () => {
+      findAccountDetailRegion(
+        renderer,
+        getAuthFileSelectionKey(mocks.files[0]),
+        'quota'
+      ).props.onClick();
+    });
+
+    const modelQuotaGroup = renderer.root.findByProps({ 'data-quota-window-group': 'model' });
+    expect(modelQuotaGroup.findAllByType(QuotaWindowCard)).toHaveLength(4);
+    expect(readText(modelQuotaGroup)).toContain('antigravity_quota.group_claude_gpt_models');
+    expect(readText(modelQuotaGroup)).toContain('antigravity_quota.group_gemini_models');
+    expect(renderer.root.findAllByProps({ 'data-quota-window-group': 'standard' })).toHaveLength(0);
   });
 
-  it('renders Antigravity Free weekly groups as a single-row quota matrix', async () => {
+  it('keeps Antigravity Free model groups out of the list and in quota details', async () => {
     mocks.files = [
       {
         name: 'antigravity-free-weekly.json',
@@ -7096,27 +7189,24 @@ describe('AccountsPage replacement flows', () => {
     const matrices = renderer.root.findAll(
       (node) => typeof node.props['data-account-quota-matrix'] === 'string'
     );
-    expect(matrices).toHaveLength(1);
-    const matrix = matrices[0];
-    const matrixRows = matrix.findAll(
-      (node) => typeof node.props['data-account-quota-matrix-row'] === 'string'
-    );
-    const matrixCells = matrix.findAll(
-      (node) => typeof node.props['data-account-quota-matrix-cell'] === 'string'
-    );
+    expect(matrices).toHaveLength(0);
+    expect(
+      readText(findAccountCardByKey(renderer, getAuthFileSelectionKey(mocks.files[0])))
+    ).toContain('accounts.quota_details_only');
 
-    expect(matrixRows.map((node) => node.props['data-account-quota-matrix-row'])).toEqual([
-      'weekly',
-    ]);
-    expect(matrixCells).toHaveLength(2);
-    expect(readText(matrix)).toContain('7D');
-    expect(readText(matrix)).toContain('Claude');
-    expect(readText(matrix)).toContain('Gemini');
-    expect(readText(matrix)).toContain('31%');
-    expect(readText(matrix)).toContain('76%');
-    expect(readText(matrix)).not.toContain('5H');
-    expect(readText(matrix)).not.toContain('Claude/GPT');
-    expect(readText(matrix)).not.toContain('accounts.quota_more_windows');
+    await act(async () => {
+      findAccountDetailRegion(
+        renderer,
+        getAuthFileSelectionKey(mocks.files[0]),
+        'quota'
+      ).props.onClick();
+    });
+
+    const modelQuotaGroup = renderer.root.findByProps({ 'data-quota-window-group': 'model' });
+    expect(modelQuotaGroup.findAllByType(QuotaWindowCard)).toHaveLength(2);
+    expect(readText(modelQuotaGroup)).toContain('antigravity_quota.group_claude_gpt_models');
+    expect(readText(modelQuotaGroup)).toContain('antigravity_quota.group_gemini_models');
+    expect(renderer.root.findAllByProps({ 'data-quota-window-group': 'standard' })).toHaveLength(0);
   });
 
   it('keeps the accounts view in card mode without table controls', async () => {
@@ -7166,7 +7256,325 @@ describe('AccountsPage replacement flows', () => {
     ]);
 
     expect(renderer.root.findAllByProps({ 'data-account-quota-empty': 'true' })).toHaveLength(1);
+    expect(treeText(renderer)).toContain('accounts.quota_source_none');
+    expect(treeText(renderer)).not.toContain('accounts.quota_details_only');
     expect(treeText(renderer)).not.toContain('SUM');
+  });
+
+  it('opens the quota detail from the full historical usage region', async () => {
+    const file = mocks.files[0];
+    const selectionKey = getAuthFileSelectionKey(file);
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory.mockResolvedValue(
+      makeAccountHistoryResponse([
+        {
+          row_key: selectionKey,
+          account_key: 'codex@example.com',
+          matched: true,
+          total_requests: 12,
+          success_calls: 10,
+          failure_calls: 2,
+          total_tokens: 1_200,
+          total_cost: 0.12,
+          success_rate: 10 / 12,
+          first_seen_ms: 1,
+          last_seen_ms: 2,
+          sync_status: 'ready',
+        },
+      ])
+    );
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    const historyRegion = findAccountDetailRegion(renderer, selectionKey, 'history');
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
+    expect(historyRegion.type).toBe('button');
+    expect(historyRegion.props['data-account-detail-trigger']).toBe('history');
+    const historyLabel = historyRegion.props['aria-label'] as string;
+    expect(historyLabel).toContain('accounts.list_header_historical_usage');
+    expect(historyLabel).toContain('accounts.history_title:12:1,200:$0.12:83.33%');
+    expect(historyLabel).toContain('accounts.open_detail:codex.json');
+    expect(historyLabel).toContain('accounts.detail_tab_quota');
+    expect(quotaRegion.props['aria-label']).not.toBe(historyRegion.props['aria-label']);
+    expect(historyRegion.findAllByType('div')).toHaveLength(0);
+    expect(readText(historyRegion)).toContain('12');
+
+    await act(async () => {
+      historyRegion.props.onClick();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(renderer.root.findByType(AccountQuotaTab)).toBeTruthy();
+    expect(findHostButtonByText(renderer, 'accounts.detail_tab_quota').props['aria-selected']).toBe(
+      true
+    );
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      {
+        pathname: '/accounts',
+        search: `?account=${encodeURIComponent(selectionKey)}&tab=quota`,
+      },
+      { replace: true }
+    );
+  });
+
+  it('opens the quota detail from the full quota information region', async () => {
+    const file = mocks.files[0];
+    const selectionKey = getAuthFileSelectionKey(file);
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      windows: [
+        makeCodexQuotaWindow({
+          resetAtMs: Date.now() + 5 * 60 * 60 * 1000 - 60_000,
+        }),
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
+    const historyRegion = findAccountDetailRegion(renderer, selectionKey, 'history');
+
+    expect(quotaRegion.type).toBe('button');
+    expect(quotaRegion.props['data-account-detail-trigger']).toBe('quota');
+    const quotaLabel = quotaRegion.props['aria-label'] as string;
+    expect(quotaLabel).toContain('accounts.list_header_quota');
+    expect(quotaLabel).toContain('Five hours');
+    expect(quotaLabel).toContain('80%');
+    expect(quotaLabel).toContain('accounts.open_detail:codex.json');
+    expect(quotaLabel).toContain('accounts.detail_tab_quota');
+    expect(quotaLabel).not.toBe(historyRegion.props['aria-label']);
+    expect(quotaRegion.findAllByType('div')).toHaveLength(0);
+    expect(readText(quotaRegion)).toContain('5H');
+
+    await act(async () => {
+      quotaRegion.props.onClick();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(renderer.root.findByType(AccountQuotaTab)).toBeTruthy();
+    expect(findHostButtonByText(renderer, 'accounts.detail_tab_quota').props['aria-selected']).toBe(
+      true
+    );
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      {
+        pathname: '/accounts',
+        search: `?account=${encodeURIComponent(selectionKey)}&tab=quota`,
+      },
+      { replace: true }
+    );
+  });
+
+  it('keeps an empty historical usage region openable', async () => {
+    const selectionKey = getAuthFileSelectionKey(mocks.files[0]);
+    const renderer = await renderAccountsPage();
+    const historyRegion = findAccountDetailRegion(renderer, selectionKey, 'history');
+
+    expect(readText(historyRegion)).toContain('-');
+    expect(historyRegion.props.disabled).not.toBe(true);
+    expect(historyRegion.props['aria-label']).toContain('accounts.history_empty');
+
+    await act(async () => {
+      historyRegion.props.onClick();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(renderer.root.findByType(AccountQuotaTab)).toBeTruthy();
+  });
+
+  it('keeps a details-only quota region openable when only model quota exists', async () => {
+    const file = mocks.files[0];
+    const selectionKey = getAuthFileSelectionKey(file);
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      windows: [
+        makeCodexQuotaWindow({
+          id: 'spark-model',
+          label: 'Spark model quota',
+          resetAtMs: Date.now() + 5 * 60 * 60 * 1000 - 60_000,
+          modelScope: { kind: 'family', key: 'codex_spark', complete: true },
+        }),
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    const card = findAccountCardByKey(renderer, selectionKey);
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
+
+    expect(readText(card)).toContain('accounts.quota_details_only');
+    expect(readText(card)).not.toContain('accounts.quota_source_none');
+    expect(readText(card)).not.toContain('Spark model quota');
+    expect(quotaRegion.props['aria-label']).toContain('accounts.quota_details_only');
+
+    await act(async () => {
+      quotaRegion.props.onClick();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(renderer.root.findAllByProps({ 'data-quota-window-group': 'standard' })).toHaveLength(0);
+    expect(renderer.root.findByProps({ 'data-quota-window-group': 'model' })).toBeTruthy();
+    expect(renderer.root.findByType(AccountQuotaTab)).toBeTruthy();
+  });
+
+  it('uses card selection instead of opening details for both shortcut regions in selection mode', async () => {
+    const selectionKey = getAuthFileSelectionKey(mocks.files[0]);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.selection_mode_enter').props.onClick();
+    });
+
+    const card = findAccountCardByKey(renderer, selectionKey);
+    const historyRegion = findAccountDetailRegion(renderer, selectionKey, 'history');
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
+    expect(historyRegion.type).toBe('div');
+    expect(quotaRegion.type).toBe('div');
+    expect(historyRegion.props['data-account-detail-trigger']).toBeUndefined();
+    expect(quotaRegion.props['data-account-detail-trigger']).toBeUndefined();
+
+    await act(async () => {
+      card.props.onClick();
+      card.props.onClick();
+    });
+
+    expect(mocks.toggleSelect).toHaveBeenNthCalledWith(1, selectionKey);
+    expect(mocks.toggleSelect).toHaveBeenNthCalledWith(2, selectionKey);
+    expect(renderer.root.findAllByType(AccountQuotaTab)).toHaveLength(0);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('keeps shortcut navigation behind the existing dirty configuration guard', async () => {
+    const selectionKey = getAuthFileSelectionKey(mocks.files[0]);
+    mocks.configurationDirty = true;
+    mocks.location = {
+      pathname: '/accounts',
+      search: `?account=${encodeURIComponent(selectionKey)}&tab=config`,
+    };
+    const renderer = await renderAccountsPage();
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
+
+    await act(async () => {
+      quotaRegion.props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(mocks.showConfirmation).toHaveBeenCalledTimes(1);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(
+      findHostButtonByText(renderer, 'accounts.detail_tab_config').props['aria-selected']
+    ).toBe(true);
+
+    const firstConfirmation = mocks.showConfirmation.mock.calls[0]?.[0] as {
+      onCancel: () => void;
+    };
+    await act(async () => {
+      firstConfirmation.onCancel();
+      await Promise.resolve();
+    });
+    await flushPromises();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(renderer.root.findAllByType(AccountQuotaTab)).toHaveLength(0);
+
+    await act(async () => {
+      quotaRegion.props.onClick();
+      await Promise.resolve();
+    });
+    const secondConfirmation = mocks.showConfirmation.mock.calls[1]?.[0] as {
+      onConfirm: () => void;
+    };
+    await act(async () => {
+      secondConfirmation.onConfirm();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(mocks.configurationReset).toHaveBeenCalledTimes(1);
+    expect(renderer.root.findByType(AccountQuotaTab)).toBeTruthy();
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      {
+        pathname: '/accounts',
+        search: `?account=${encodeURIComponent(selectionKey)}&tab=quota`,
+      },
+      { replace: true }
+    );
+  });
+
+  it('shows every standard window while keeping model and other quota in the detail tab', async () => {
+    const file = mocks.files[0];
+    const selectionKey = getAuthFileSelectionKey(file);
+    const nowMs = Date.now();
+    const standardWindow = (
+      id: string,
+      label: string,
+      limitWindowSeconds: number,
+      usedPercent: number
+    ) =>
+      makeCodexQuotaWindow({
+        id,
+        label,
+        limitWindowSeconds,
+        usedPercent,
+        resetAtMs: nowMs + limitWindowSeconds * 1000 - 60_000,
+        modelScope: CODEX_MAIN_SCOPE,
+      });
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      windows: [
+        standardWindow('five-hour', 'Five hours', 5 * 60 * 60, 20),
+        standardWindow('weekly', 'Weekly', 7 * 24 * 60 * 60, 30),
+        standardWindow('monthly', 'Monthly', 30 * 24 * 60 * 60, 40),
+        makeCodexQuotaWindow({
+          id: 'spark-model',
+          label: 'Spark model quota',
+          resetAtMs: nowMs + 5 * 60 * 60 * 1000 - 60_000,
+          modelScope: { kind: 'family', key: 'codex_spark', complete: true },
+        }),
+        makeCodexQuotaWindow({
+          id: 'billing',
+          label: 'Billing credits',
+          usedPercent: 10,
+          resetLabel: '-',
+          resetAtMs: null,
+          limitWindowSeconds: null,
+          modelScope: { kind: 'all', complete: true },
+        }),
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    const cardText = getAccountCardText(renderer, selectionKey);
+    expect(cardText).toContain('5H');
+    expect(cardText).toContain('7D');
+    expect(cardText).toContain('30D');
+    expect(cardText).not.toContain('Spark model quota');
+    expect(cardText).not.toContain('Billing credits');
+    expect(cardText).not.toMatch(/\+\d+/);
+
+    await act(async () => {
+      findAccountDetailRegion(renderer, selectionKey, 'quota').props.onClick();
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    const standardGroup = renderer.root.findByProps({ 'data-quota-window-group': 'standard' });
+    const modelGroup = renderer.root.findByProps({ 'data-quota-window-group': 'model' });
+    const otherGroup = renderer.root.findByProps({ 'data-quota-window-group': 'other' });
+    expect(standardGroup.findAllByType(QuotaWindowCard)).toHaveLength(3);
+    expect(modelGroup.findAllByType(QuotaWindowCard)).toHaveLength(1);
+    expect(otherGroup.findAllByType(QuotaWindowCard)).toHaveLength(1);
+    expect(readText(standardGroup)).toContain('Five hours');
+    expect(readText(standardGroup)).toContain('Weekly');
+    expect(readText(standardGroup)).toContain('Monthly');
+    expect(readText(modelGroup)).toContain('Spark model quota');
+    expect(readText(otherGroup)).toContain('Billing credits');
   });
 
   it('selects account cards by row click while selection mode is active', async () => {

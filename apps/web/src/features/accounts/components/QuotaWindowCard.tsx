@@ -23,7 +23,11 @@ import {
   IconChartLine,
   IconCheck,
 } from '@/components/ui/icons';
-import type { AccountQuotaWindowKind } from '@/features/accounts/model/accountQuotaDisplayWindows';
+import {
+  isIntervalAccountQuotaWindow,
+  isModelScopedAccountQuotaWindow,
+  type AccountQuotaWindowKind,
+} from '@/features/accounts/model/accountQuotaDisplayWindows';
 import type { AccountQuotaBoundaryAccuracy } from '@/features/accounts/model/accountQuotaWindowDefinitions';
 import type {
   AccountDetailQuotaWindow,
@@ -31,7 +35,6 @@ import type {
 } from '@/features/accounts/model/accountDetailViewModel';
 import { formatQuotaResetDisplay } from '@/features/accounts/model/accountsPagePresentation';
 import { formatCompactNumber, formatUsd } from '@/utils/usage';
-import { isCodexMainQuotaModelScope } from '@/utils/quota/codexQuota';
 import { QuotaProgressBar } from './QuotaProgressBar';
 import styles from './QuotaWindowCard.module.scss';
 
@@ -145,16 +148,10 @@ const formatObservedAt = (value: number, locale: string): string =>
     minute: '2-digit',
   }).format(value);
 
-const isIntervalWindow = (window: AccountDetailQuotaWindow): boolean =>
-  window.windowMode === 'fixed' ||
-  window.windowMode === 'calendar' ||
-  window.windowMode === 'rolling';
-
 const inferCardMode = (window: AccountDetailQuotaWindow): QuotaWindowCardMode => {
-  if (!isIntervalWindow(window)) return 'other';
-  if (window.source === 'codex' && isCodexMainQuotaModelScope(window.modelScope)) return 'standard';
-  if (window.modelScope?.complete === false) return 'model';
-  return window.modelScope?.kind && window.modelScope.kind !== 'all' ? 'model' : 'standard';
+  if (!isIntervalAccountQuotaWindow(window)) return 'other';
+  if (isModelScopedAccountQuotaWindow(window)) return 'model';
+  return 'standard';
 };
 
 const windowIconForKind = (
@@ -617,7 +614,7 @@ export const QuotaWindowCard = ({
 
   const progress = <QuotaProgress className={styles.bar} percent={q.remainingPercent} />;
 
-  if (resolvedMode === 'other' || !isIntervalWindow(q)) {
+  if (resolvedMode === 'other' || !isIntervalAccountQuotaWindow(q)) {
     return (
       <div
         className={`${styles.card} ${styles.otherCard}`}
