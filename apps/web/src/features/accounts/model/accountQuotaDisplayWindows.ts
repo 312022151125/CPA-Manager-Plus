@@ -118,7 +118,7 @@ export const isModelScopedAccountQuotaWindow = (
     window.modelScope.kind !== 'all' &&
     !(window.source === 'codex' && isCodexMainQuotaModelScope(window.modelScope)));
 
-export const isStandardAccountQuotaWindow = (
+export const isStandardAccountQuotaListWindow = (
   window: Pick<AccountQuotaDisplayWindow, 'kind' | 'windowMode' | 'modelScope' | 'source'>
 ): boolean =>
   isIntervalAccountQuotaWindow(window) &&

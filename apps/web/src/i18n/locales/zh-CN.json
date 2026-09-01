@@ -986,6 +986,7 @@
     "quota_source_cache": "上次查询结果",
     "quota_source_observed_header": "最近请求返回信息",
     "quota_source_none": "暂无额度数据",
+    "quota_standard_none": "无标准额度",
     "quota_brief_remaining": "剩余 {{percent}}",
     "quota_brief_unknown": "额度未知",
     "quota_source_short_cache": "上次查询",

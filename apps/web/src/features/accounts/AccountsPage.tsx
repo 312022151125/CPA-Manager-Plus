@@ -165,7 +165,7 @@ import {
 import {
   buildAccountQuotaDisplayWindows,
   getQuotaWindowShortLabel,
-  isStandardAccountQuotaWindow,
+  isStandardAccountQuotaListWindow,
   type AccountQuotaDisplayWindow,
 } from '@/features/accounts/model/accountQuotaDisplayWindows';
 import {
@@ -188,7 +188,6 @@ import {
   DETAIL_EVENTS_LIMIT,
   DETAIL_EVENTS_RANGE_MS,
   PAGE_SIZE_OPTIONS,
-  buildAntigravityQuotaMatrix,
   formatHistoryNumber,
   formatHistorySuccessRate,
   formatPercent,
@@ -266,7 +265,6 @@ import {
   AccountModelsTab,
   AccountOverviewTab,
   AccountProviderTabs,
-  AccountQuotaMatrix,
   AccountQuotaTab,
   AccountsBatchDeletePreview,
 } from '@/features/accounts/components';
@@ -6846,7 +6844,7 @@ export function AccountsPage() {
             const accountHistory = accountHistoryByRowKey.get(row.selectionKey) ?? null;
             const quotaWindows =
               quotaDisplayWindowsByRowKey.get(row.selectionKey) ?? buildQuotaDisplayWindows(row);
-            const standardQuotaWindows = quotaWindows.filter(isStandardAccountQuotaWindow);
+            const standardQuotaWindows = quotaWindows.filter(isStandardAccountQuotaListWindow);
             const quotaCooldown = quotaCooldownsByRowKey.get(row.selectionKey)?.[0] ?? null;
             const codexStatus = codexStatusBySelectionKey.get(row.selectionKey) ?? null;
             const item = buildAccountListItem(row, {
@@ -6857,8 +6855,10 @@ export function AccountsPage() {
               quotaWindows,
               requestEvidence: requestEvidenceBySelectionKey.get(row.selectionKey),
             });
-            const antigravityQuotaMatrix = buildAntigravityQuotaMatrix(row, standardQuotaWindows);
-            const displayQuotaWindows = antigravityQuotaMatrix ? [] : standardQuotaWindows;
+            const quotaEmptyLabel =
+              quotaWindows.length > 0
+                ? t('accounts.quota_standard_none')
+                : t('accounts.quota_source_none');
             const quotaWindowTitle =
               standardQuotaWindows
                 .map((window) => {
@@ -6867,7 +6867,7 @@ export function AccountsPage() {
                     : window.label;
                   return `${label}: ${formatPercent(window.remainingPercent)}`;
                 })
-                .join('\n') || t('accounts.quota_source_none');
+                .join('\n') || quotaEmptyLabel;
             const healthTitle = t(
               item.health.tooltipKey,
               formatQuotaResetTooltipParams(
@@ -7041,13 +7041,13 @@ export function AccountsPage() {
                   isSelectionMode,
                   className: styles.accountCardEvidence,
                   title: accountHistoryTitle,
-                  ariaLabel: `${t('accounts.open_detail', { name: row.fileName })}: ${t('accounts.detail_tab_quota')}`,
+                  ariaLabel: `${t('accounts.list_header_historical_usage')}: ${t('accounts.open_detail', { name: row.fileName })}: ${t('accounts.detail_tab_quota')}`,
                   kind: 'history',
                   onOpen: () => void openAccountDetail(row, 'quota'),
                   children: (
                     <>
-                      <div className={styles.accountHistoryGrid}>
-                        <div
+                      <span className={styles.accountHistoryGrid}>
+                        <span
                           className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricRequests}`}
                           aria-label={`${t('accounts.history_requests')}: ${accountHistoryRequestExactValue}`}
                         >
@@ -7055,8 +7055,8 @@ export function AccountsPage() {
                             <IconSend size={13} />
                           </span>
                           <strong>{accountHistoryRequestValue}</strong>
-                        </div>
-                        <div
+                        </span>
+                        <span
                           className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricTokens}`}
                           aria-label={`${t('accounts.history_tokens')}: ${accountHistoryTokenExactValue}`}
                         >
@@ -7064,8 +7064,8 @@ export function AccountsPage() {
                             <IconBinary size={13} />
                           </span>
                           <strong>{accountHistoryTokenValue}</strong>
-                        </div>
-                        <div
+                        </span>
+                        <span
                           className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricCost}`}
                           aria-label={`${t('accounts.history_cost')}: ${accountHistoryCostExactValue}`}
                         >
@@ -7073,8 +7073,8 @@ export function AccountsPage() {
                             <IconDollarSign size={13} />
                           </span>
                           <strong>{accountHistoryCostValue}</strong>
-                        </div>
-                        <div
+                        </span>
+                        <span
                           className={`${styles.accountHistoryMetric} ${styles.accountHistoryMetricSuccess}`}
                           aria-label={`${t('accounts.history_success')}: ${accountHistorySuccessExactValue}`}
                         >
@@ -7082,8 +7082,8 @@ export function AccountsPage() {
                             <IconCheck size={13} />
                           </span>
                           <strong>{accountHistorySuccessValue}</strong>
-                        </div>
-                      </div>
+                        </span>
+                      </span>
                       {accountHistoryFootnote ? (
                         <span className={styles.accountHistoryFootnote}>
                           {accountHistoryFootnote}
@@ -7097,18 +7097,13 @@ export function AccountsPage() {
                   isSelectionMode,
                   className: styles.accountCardBusiness,
                   title: quotaWindowTitle,
-                  ariaLabel: `${t('accounts.open_detail', { name: row.fileName })}: ${t('accounts.detail_tab_quota')}`,
+                  ariaLabel: `${t('accounts.list_header_quota')}: ${t('accounts.open_detail', { name: row.fileName })}: ${t('accounts.detail_tab_quota')}`,
                   kind: 'quota',
                   onOpen: () => void openAccountDetail(row, 'quota'),
                   children: (
-                    <div className={styles.quotaWindowGrid} title={quotaWindowTitle}>
-                      {antigravityQuotaMatrix ? (
-                        <AccountQuotaMatrix
-                          accountKey={row.selectionKey}
-                          matrix={antigravityQuotaMatrix}
-                        />
-                      ) : displayQuotaWindows.length > 0 ? (
-                        displayQuotaWindows.map((window) => {
+                    <span className={styles.quotaWindowGrid} title={quotaWindowTitle}>
+                      {standardQuotaWindows.length > 0 ? (
+                        standardQuotaWindows.map((window) => {
                           const windowRemaining = window.remainingPercent;
                           const windowWidth = Math.max(0, Math.min(100, windowRemaining ?? 0));
                           const resetLabel =
@@ -7120,21 +7115,21 @@ export function AccountsPage() {
                           );
                           const shortLabel = getQuotaWindowShortLabel(window);
                           return (
-                            <div
+                            <span
                               key={window.key}
                               className={styles.quotaWindowCard}
                               title={`${window.label}: ${formatPercent(windowRemaining)}`}
                             >
-                              <div className={styles.quotaWindowPrimaryLine}>
+                              <span className={styles.quotaWindowPrimaryLine}>
                                 <span className={styles.quotaWindowSummary} title={window.label}>
                                   {shortLabel}
                                 </span>
-                                <div className={styles.quotaTrack} aria-hidden="true">
+                                <span className={styles.quotaTrack} aria-hidden="true">
                                   <span
                                     className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
                                     style={{ width: `${windowWidth}%` }}
                                   />
-                                </div>
+                                </span>
                                 <strong className={styles.quotaWindowPercent}>
                                   {windowRemaining !== null ? formatPercent(windowRemaining) : '-'}
                                 </strong>
@@ -7148,16 +7143,16 @@ export function AccountsPage() {
                                 >
                                   {resetDisplayLabel}
                                 </span>
-                              </div>
-                            </div>
+                              </span>
+                            </span>
                           );
                         })
                       ) : (
                         <span className={styles.quotaEmptyState} data-account-quota-empty="true">
-                          {t('accounts.quota_source_none')}
+                          {quotaEmptyLabel}
                         </span>
                       )}
-                    </div>
+                    </span>
                   ),
                 })}
 

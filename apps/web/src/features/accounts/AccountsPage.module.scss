@@ -5276,9 +5276,15 @@
     border-left: 0;
   }
 
+  .accountCardEvidence,
+  .accountCardBusiness {
+    padding-top: 8px;
+  }
+
   .accountCardDetailTrigger.accountCardEvidence,
   .accountCardDetailTrigger.accountCardBusiness {
     padding-inline: 0;
+    padding-top: 8px;
   }
 
   .accountCardHealth,
@@ -5401,6 +5407,11 @@
   .accountCardRecommendation {
     padding-top: 8px;
     border-top: 1px solid color-mix(in srgb, var(--accounts-border) 64%, transparent);
+  }
+
+  .accountCardDetailTrigger.accountCardEvidence,
+  .accountCardDetailTrigger.accountCardBusiness {
+    padding-top: 8px;
   }
 
   .accountCardLine,

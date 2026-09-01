@@ -8,7 +8,7 @@ import {
   getQuotaWindowShortLabel,
   isIntervalAccountQuotaWindow,
   isModelScopedAccountQuotaWindow,
-  isStandardAccountQuotaWindow,
+  isStandardAccountQuotaListWindow,
   parseQuotaResetLabelMs,
   type TranslateQuotaWindowLabel,
 } from './accountQuotaDisplayWindows';
@@ -75,7 +75,7 @@ describe('accountQuotaDisplayWindows', () => {
 
         expect(isIntervalAccountQuotaWindow(window)).toBe(true);
         expect(isModelScopedAccountQuotaWindow(window)).toBe(false);
-        expect(isStandardAccountQuotaWindow(window)).toBe(true);
+        expect(isStandardAccountQuotaListWindow(window)).toBe(true);
       }
     );
 
@@ -87,7 +87,7 @@ describe('accountQuotaDisplayWindows', () => {
 
       expect(isIntervalAccountQuotaWindow(window)).toBe(true);
       expect(isModelScopedAccountQuotaWindow(window)).toBe(true);
-      expect(isStandardAccountQuotaWindow(window)).toBe(false);
+      expect(isStandardAccountQuotaListWindow(window)).toBe(false);
     });
 
     it('keeps the complete Codex main family in standard quota', () => {
@@ -98,7 +98,7 @@ describe('accountQuotaDisplayWindows', () => {
       };
 
       expect(isModelScopedAccountQuotaWindow(window)).toBe(false);
-      expect(isStandardAccountQuotaWindow(window)).toBe(true);
+      expect(isStandardAccountQuotaListWindow(window)).toBe(true);
     });
 
     it.each([
@@ -115,10 +115,10 @@ describe('accountQuotaDisplayWindows', () => {
       };
 
       expect(isIntervalAccountQuotaWindow(window)).toBe(false);
-      expect(isStandardAccountQuotaWindow(window)).toBe(false);
+      expect(isStandardAccountQuotaListWindow(window)).toBe(false);
     });
 
-    it('does not classify a billing item as standard even when it has interval boundaries', () => {
+    it('keeps a fixed billing interval out of the list while retaining interval semantics', () => {
       const window = {
         kind: 'billing' as const,
         windowMode: 'fixed' as const,
@@ -127,7 +127,7 @@ describe('accountQuotaDisplayWindows', () => {
       };
 
       expect(isIntervalAccountQuotaWindow(window)).toBe(true);
-      expect(isStandardAccountQuotaWindow(window)).toBe(false);
+      expect(isStandardAccountQuotaListWindow(window)).toBe(false);
     });
 
     it('fails closed when a provider reports an incomplete account-wide scope', () => {
@@ -138,7 +138,7 @@ describe('accountQuotaDisplayWindows', () => {
       };
 
       expect(isModelScopedAccountQuotaWindow(window)).toBe(true);
-      expect(isStandardAccountQuotaWindow(window)).toBe(false);
+      expect(isStandardAccountQuotaListWindow(window)).toBe(false);
     });
   });
 
@@ -469,6 +469,56 @@ describe('accountQuotaDisplayWindows', () => {
       source: 'xai',
     });
     expect(getQuotaWindowShortLabel(windows[1])).toBe('PAYG');
+  });
+
+  it('keeps a monthly xAI billing period as an interval while hiding it from the list', () => {
+    const periodStartMs = Date.parse('2026-08-01T00:00:00Z');
+    const periodEndMs = Date.parse('2026-09-01T00:00:00Z');
+    const stores = {
+      ...emptyStores(),
+      xaiQuota: {
+        'xai.json': {
+          status: 'success',
+          billing: {
+            periodType: 'monthly',
+            usagePercent: 20,
+            periodStart: '2026-08-01T00:00:00Z',
+            periodEnd: '2026-09-01T00:00:00Z',
+            productUsage: [{ product: 'Grok Code Fast', usagePercent: 20 }],
+            monthlyLimitCents: 10_000,
+            usedCents: 2_000,
+            includedUsedCents: 2_000,
+            onDemandCapCents: null,
+            onDemandUsedCents: null,
+            onDemandUsedPercent: null,
+            billingPeriodStart: '2026-08-01T00:00:00Z',
+            billingPeriodEnd: '2026-09-01T00:00:00Z',
+            usedPercent: 20,
+          },
+        },
+      },
+    } satisfies AccountQuotaStores;
+    const row = buildRow({ name: 'xai.json', type: 'xai' }, stores);
+
+    const windows = buildAccountQuotaDisplayWindows(row, {
+      stores,
+      translateQuotaWindowLabel,
+      t,
+      nowMs: Date.parse('2026-08-15T00:00:00Z'),
+    });
+    const periodWindow = windows.find((window) => window.key === 'credits-period');
+
+    expect(periodWindow).toMatchObject({
+      kind: 'billing',
+      windowMode: 'fixed',
+      cycleStartMs: periodStartMs,
+      cycleEndMs: periodEndMs,
+      modelScope: { kind: 'all', complete: true },
+    });
+    expect(periodWindow).toBeDefined();
+    expect(isIntervalAccountQuotaWindow(periodWindow!)).toBe(true);
+    expect(isModelScopedAccountQuotaWindow(periodWindow!)).toBe(false);
+    expect(isStandardAccountQuotaListWindow(periodWindow!)).toBe(false);
   });
 
   it('shows xAI weekly credits as a separate quota window', () => {

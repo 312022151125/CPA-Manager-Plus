@@ -992,6 +992,7 @@
     "quota_source_cache": "Результат предыдущей проверки",
     "quota_source_observed_header": "Данные последнего ответа",
     "quota_source_none": "Нет данных квоты",
+    "quota_standard_none": "Нет стандартной квоты",
     "quota_brief_remaining": "Осталось {{percent}}",
     "quota_brief_unknown": "Квота неизвестна",
     "quota_source_short_cache": "Пред. проверка",

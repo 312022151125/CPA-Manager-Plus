@@ -2472,7 +2472,8 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.loadModelAlias).not.toHaveBeenCalled();
     expect(mocks.getAnalytics).not.toHaveBeenCalled();
     expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
-    expect(getAccountListItemTexts(renderer)[0]).toContain('accounts.quota_source_none');
+    expect(getAccountListItemTexts(renderer)[0]).toContain('accounts.quota_standard_none');
+    expect(getAccountListItemTexts(renderer)[0]).not.toContain('accounts.quota_source_none');
     expect(getAccountListItemTexts(renderer)[0]).not.toContain('20%');
     expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
   });
@@ -6969,7 +6970,8 @@ describe('AccountsPage replacement flows', () => {
     const card = findAccountCardByKey(renderer, getAuthFileSelectionKey(mocks.files[0]));
     const text = readText(card);
 
-    expect(text).toContain('accounts.quota_source_none');
+    expect(text).toContain('accounts.quota_standard_none');
+    expect(text).not.toContain('accounts.quota_source_none');
     expect(text).not.toContain('30D');
     expect(text).not.toContain('PAYG');
 
@@ -6985,6 +6987,60 @@ describe('AccountsPage replacement flows', () => {
     expect(readText(otherQuotaGroup)).toContain('xai_quota.monthly_credits');
     expect(readText(otherQuotaGroup)).toContain('xai_quota.pay_as_you_go_label');
     expect(renderer.root.findAllByProps({ 'data-quota-window-group': 'standard' })).toHaveLength(0);
+  });
+
+  it('keeps a fixed xAI billing period in detail standard mode while hiding it from the list', async () => {
+    const file = {
+      name: 'xai-fixed-billing.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-fixed-billing-1',
+      account: 'xai-fixed-billing@example.com',
+      priority: 0,
+      disabled: false,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.quotaState.xaiQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      billing: {
+        periodType: 'monthly',
+        usagePercent: 20,
+        periodStart: '2026-08-01T00:00:00Z',
+        periodEnd: '2026-09-01T00:00:00Z',
+        productUsage: [{ product: 'Grok Code Fast', usagePercent: 20 }],
+        monthlyLimitCents: 10_000,
+        usedCents: 2_000,
+        includedUsedCents: 2_000,
+        onDemandCapCents: null,
+        onDemandUsedCents: null,
+        onDemandUsedPercent: null,
+        billingPeriodStart: '2026-08-01T00:00:00Z',
+        billingPeriodEnd: '2026-09-01T00:00:00Z',
+        usedPercent: 20,
+      },
+    });
+
+    const renderer = await renderAccountsPage();
+    const selectionKey = getAuthFileSelectionKey(file);
+    const card = findAccountCardByKey(renderer, selectionKey);
+    const cardText = readText(card);
+    expect(cardText).toContain('accounts.quota_standard_none');
+    expect(cardText).not.toContain('accounts.quota_source_none');
+    expect(cardText).not.toContain('30D');
+    expect(cardText).not.toContain('Grok Code Fast');
+
+    await act(async () => {
+      findAccountDetailRegion(renderer, selectionKey, 'quota').props.onClick();
+    });
+    await flushPromises();
+
+    const standardGroup = renderer.root.findByProps({ 'data-quota-window-group': 'standard' });
+    const otherGroup = renderer.root.findByProps({ 'data-quota-window-group': 'other' });
+    expect(standardGroup.findAllByType(QuotaWindowCard)).toHaveLength(1);
+    expect(standardGroup.findByProps({ 'data-quota-card-mode': 'standard' })).toBeTruthy();
+    expect(standardGroup.findByProps({ 'data-quota-standard-comparison': 'true' })).toBeTruthy();
+    expect(readText(otherGroup)).toContain('xai_quota.monthly_credits');
+    expect(readText(otherGroup)).toContain('Grok Code Fast');
   });
 
   it('keeps Antigravity Pro model groups out of the list and in quota details', async () => {
@@ -7058,7 +7114,7 @@ describe('AccountsPage replacement flows', () => {
     expect(matrices).toHaveLength(0);
     expect(
       readText(findAccountCardByKey(renderer, getAuthFileSelectionKey(mocks.files[0])))
-    ).toContain('accounts.quota_source_none');
+    ).toContain('accounts.quota_standard_none');
 
     await act(async () => {
       findAccountDetailRegion(
@@ -7132,7 +7188,7 @@ describe('AccountsPage replacement flows', () => {
     expect(matrices).toHaveLength(0);
     expect(
       readText(findAccountCardByKey(renderer, getAuthFileSelectionKey(mocks.files[0])))
-    ).toContain('accounts.quota_source_none');
+    ).toContain('accounts.quota_standard_none');
 
     await act(async () => {
       findAccountDetailRegion(
@@ -7231,8 +7287,14 @@ describe('AccountsPage replacement flows', () => {
     await flushPromises();
 
     const historyRegion = findAccountDetailRegion(renderer, selectionKey, 'history');
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
     expect(historyRegion.type).toBe('button');
     expect(historyRegion.props['data-account-detail-trigger']).toBe('history');
+    expect(historyRegion.props['aria-label']).toBe(
+      'accounts.list_header_historical_usage: accounts.open_detail:codex.json: accounts.detail_tab_quota'
+    );
+    expect(quotaRegion.props['aria-label']).not.toBe(historyRegion.props['aria-label']);
+    expect(historyRegion.findAllByType('div')).toHaveLength(0);
     expect(readText(historyRegion)).toContain('12');
 
     await act(async () => {
@@ -7272,8 +7334,12 @@ describe('AccountsPage replacement flows', () => {
     expect(quotaRegion.type).toBe('button');
     expect(quotaRegion.props['data-account-detail-trigger']).toBe('quota');
     expect(quotaRegion.props['aria-label']).toBe(
-      'accounts.open_detail:codex.json: accounts.detail_tab_quota'
+      'accounts.list_header_quota: accounts.open_detail:codex.json: accounts.detail_tab_quota'
     );
+    expect(quotaRegion.props['aria-label']).not.toBe(
+      'accounts.list_header_historical_usage: accounts.open_detail:codex.json: accounts.detail_tab_quota'
+    );
+    expect(quotaRegion.findAllByType('div')).toHaveLength(0);
     expect(readText(quotaRegion)).toContain('5H');
 
     await act(async () => {
@@ -7331,7 +7397,8 @@ describe('AccountsPage replacement flows', () => {
     const card = findAccountCardByKey(renderer, selectionKey);
     const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
 
-    expect(readText(card)).toContain('accounts.quota_source_none');
+    expect(readText(card)).toContain('accounts.quota_standard_none');
+    expect(readText(card)).not.toContain('accounts.quota_source_none');
     expect(readText(card)).not.toContain('Spark model quota');
 
     await act(async () => {

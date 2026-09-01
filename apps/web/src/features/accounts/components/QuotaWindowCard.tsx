@@ -26,7 +26,6 @@ import {
 import {
   isIntervalAccountQuotaWindow,
   isModelScopedAccountQuotaWindow,
-  isStandardAccountQuotaWindow,
   type AccountQuotaWindowKind,
 } from '@/features/accounts/model/accountQuotaDisplayWindows';
 import type { AccountQuotaBoundaryAccuracy } from '@/features/accounts/model/accountQuotaWindowDefinitions';
@@ -151,9 +150,8 @@ const formatObservedAt = (value: number, locale: string): string =>
 
 const inferCardMode = (window: AccountDetailQuotaWindow): QuotaWindowCardMode => {
   if (!isIntervalAccountQuotaWindow(window)) return 'other';
-  if (isStandardAccountQuotaWindow(window)) return 'standard';
   if (isModelScopedAccountQuotaWindow(window)) return 'model';
-  return 'other';
+  return 'standard';
 };
 
 const windowIconForKind = (
