@@ -70,6 +70,7 @@ describe('useUsageAnalytics request orchestration', () => {
   let credentialTimelineError = '';
   let credentialTimelineLoading = false;
   let apiKeyTimelineAvailable = true;
+  let mainTimelineBucketCalls = 5;
   let apiKeyStats: MonitoringAnalyticsApiKeyStatRow[] = [createApiKeyStatRow()];
   const mainRefresh = vi.fn();
   const selectorRefresh = vi.fn();
@@ -112,17 +113,17 @@ describe('useUsageAnalytics request orchestration', () => {
               {
                 bucket_ms: mainTimelineStartMs,
                 label: '00:00',
-                calls: 5,
-                tokens: 500,
-                success: 5,
+                calls: mainTimelineBucketCalls,
+                tokens: mainTimelineBucketCalls * 100,
+                success: mainTimelineBucketCalls,
                 failure: 0,
               },
               {
                 bucket_ms: mainTimelineStartMs + 2 * HOUR_MS,
                 label: '01:00',
-                calls: 5,
-                tokens: 500,
-                success: 5,
+                calls: mainTimelineBucketCalls,
+                tokens: mainTimelineBucketCalls * 100,
+                success: mainTimelineBucketCalls,
                 failure: 0,
               },
             ],
@@ -211,6 +212,7 @@ describe('useUsageAnalytics request orchestration', () => {
     credentialTimelineError = '';
     credentialTimelineLoading = false;
     apiKeyTimelineAvailable = true;
+    mainTimelineBucketCalls = 5;
     apiKeyStats = [createApiKeyStatRow()];
     latestResult = null;
     mainRefresh.mockReset();
@@ -415,6 +417,34 @@ describe('useUsageAnalytics request orchestration', () => {
     expect(latestResult?.apiKeyRows).toHaveLength(1);
     expect(latestResult?.apiKeyRows[0].id).toBe('unknown-client-api-key:missing-client-key');
     expect(latestResult?.apiKeyTrendSeries).toEqual([]);
+  });
+
+  it('uses complete API key totals for approximate trend shares while hiding fallback rows', async () => {
+    apiKeyStats = [
+      createApiKeyStatRow({
+        id: 'unknown-client-api-key:missing-client-key',
+        api_key_hash: '',
+        calls: 90,
+      }),
+      createApiKeyStatRow({
+        id: 'real-key-row',
+        api_key_hash: 'real-key-hash',
+        calls: 10,
+      }),
+    ];
+    mainTimelineBucketCalls = 50;
+    apiKeyTimelineAvailable = false;
+
+    await renderHook();
+
+    expect(latestResult?.apiKeyRows.map((row) => row.id)).toEqual([
+      'unknown-client-api-key:missing-client-key',
+      'real-key-hash',
+    ]);
+    expect(latestResult?.apiKeyTrendSeries.map((series) => series.id)).toEqual(['real-key-hash']);
+    expect(
+      latestResult?.apiKeyTrendSeries[0].points.slice(0, 3).map((point) => point.value)
+    ).toEqual([5, 0, 5]);
   });
 
   it('omits an initial fallback API key filter from analytics requests', async () => {

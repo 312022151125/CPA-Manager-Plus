@@ -1928,9 +1928,10 @@ export const buildEntityTrendSeries = (
   rows: UsageRankRow[],
   timeline: UsageTimelinePoint[],
   metric: UsageTrendMetricKey,
-  limit = 4
+  limit = 4,
+  shareRows = rows
 ): UsageEntityTrendSeries[] => {
-  const total = sumUsageRows(rows, metric);
+  const total = sumUsageRows(shareRows, metric);
   const colors = ['#2563eb', '#0ea5a7', '#f59e0b', '#ef4444', '#64748b'];
   return rows
     .filter((row) => usageRankMetricValue(row, metric) > 0)
