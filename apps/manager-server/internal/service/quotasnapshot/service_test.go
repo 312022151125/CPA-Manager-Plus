@@ -3653,6 +3653,58 @@ func TestQuotaLifecycleNegativeBoundaryJitterCanonicalizesIndependentActualTrans
 	}
 }
 
+func TestQuotaLifecycleDoesNotUseProvisionalZeroAPINegativeJitterForScheduledRollover(t *testing.T) {
+	const durationSeconds = int64(7 * 24 * 60 * 60)
+	oldStartMS := quotaLifecycleBaseMS
+	oldEndMS := oldStartMS + durationSeconds*1000
+	provisionalStartMS := oldEndMS - 5*1000
+	observedAtMS := oldEndMS + 30*1000
+	service, path := newQuotaSnapshotTestServiceWithPath(t, observedAtMS+quotaLifecycleHourMS)
+
+	oldCycle := quotaLifecycleFixedWindow("weekly", "weekly", oldStartMS, durationSeconds, 65)
+	writeQuotaLifecycleObservation(t, service, "complete", oldStartMS+quotaLifecycleHourMS, []WindowInput{oldCycle})
+	initial := queryQuotaLifecycleWindows(t, service, false)["weekly"]
+	if initial.CurrentCycle == nil {
+		t.Fatalf("initial provisional-zero lifecycle = %#v", initial)
+	}
+	oldCycleID := initial.CurrentCycle.ID
+
+	provisional := quotaLifecycleFixedWindow("weekly", "weekly", provisionalStartMS, durationSeconds, 0)
+	provisional.BoundaryAccuracy = "derived"
+	if _, err := service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{
+		quotaLifecycleWriteEntryWithObservation(
+			"complete", "api_query", "api-negative-jitter-provisional", "codex:quota-windows",
+			observedAtMS, []WindowInput{provisional},
+		),
+	}}); err != nil {
+		t.Fatalf("write provisional negative-jitter API boundary: %v", err)
+	}
+
+	window := queryQuotaLifecycleWindows(t, service, false)["weekly"]
+	if window.CurrentCycle == nil || window.CurrentCycle.ID != oldCycleID ||
+		window.CurrentCycle.State != "active" || window.PreviousCycle != nil {
+		t.Fatalf("provisional negative-jitter API boundary changed lifecycle = %#v", window)
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open provisional lifecycle database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var cycleCount, provisionalSnapshotCount int
+	if err := db.QueryRow(`select count(*) from account_quota_cycles`).Scan(&cycleCount); err != nil {
+		t.Fatalf("count provisional lifecycle cycles: %v", err)
+	}
+	if err := db.QueryRow(`select count(*) from account_quota_snapshots
+		where source_observation_id = 'api-negative-jitter-provisional'
+			and cycle_id is null and boundary_accuracy = 'unknown'`).Scan(&provisionalSnapshotCount); err != nil {
+		t.Fatalf("count unassigned provisional snapshot: %v", err)
+	}
+	if cycleCount != 1 || provisionalSnapshotCount != 1 {
+		t.Fatalf("cycle_count=%d provisional_snapshot_count=%d, want 1 and 1", cycleCount, provisionalSnapshotCount)
+	}
+}
+
 func TestQuotaLifecycleExposesFiveHourAndWeeklyScheduledGapsAsPrevious(t *testing.T) {
 	const gapMS = int64(8 * 60 * 1000)
 	weeklyStartMS := quotaLifecycleBaseMS

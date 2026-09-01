@@ -1241,6 +1241,9 @@ func cycleBoundaryIsNearScheduledRollover(
 	cycle model.AccountQuotaCycle,
 	snapshot model.AccountQuotaSnapshot,
 ) bool {
+	if isProvisionalZeroAPIBoundary(snapshot) {
+		return false
+	}
 	if cycle.ScheduledEndMS == nil ||
 		cycle.DurationSeconds == nil ||
 		snapshot.CycleStartMS == nil ||
