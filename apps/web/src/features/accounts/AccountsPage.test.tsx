@@ -2472,7 +2472,7 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.loadModelAlias).not.toHaveBeenCalled();
     expect(mocks.getAnalytics).not.toHaveBeenCalled();
     expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
-    expect(getAccountListItemTexts(renderer)[0]).toContain('accounts.quota_standard_none');
+    expect(getAccountListItemTexts(renderer)[0]).toContain('accounts.quota_details_only');
     expect(getAccountListItemTexts(renderer)[0]).not.toContain('accounts.quota_source_none');
     expect(getAccountListItemTexts(renderer)[0]).not.toContain('20%');
     expect(mocks.quotaState.setCodexQuota).not.toHaveBeenCalled();
@@ -6967,20 +6967,19 @@ describe('AccountsPage replacement flows', () => {
     });
 
     const renderer = await renderAccountsPage();
-    const card = findAccountCardByKey(renderer, getAuthFileSelectionKey(mocks.files[0]));
+    const selectionKey = getAuthFileSelectionKey(mocks.files[0]);
+    const card = findAccountCardByKey(renderer, selectionKey);
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
     const text = readText(card);
 
-    expect(text).toContain('accounts.quota_standard_none');
+    expect(text).toContain('accounts.quota_details_only');
     expect(text).not.toContain('accounts.quota_source_none');
     expect(text).not.toContain('30D');
     expect(text).not.toContain('PAYG');
+    expect(quotaRegion.props['aria-label']).toContain('accounts.quota_details_only');
 
     await act(async () => {
-      findAccountDetailRegion(
-        renderer,
-        getAuthFileSelectionKey(mocks.files[0]),
-        'quota'
-      ).props.onClick();
+      quotaRegion.props.onClick();
     });
 
     const otherQuotaGroup = renderer.root.findByProps({ 'data-quota-window-group': 'other' });
@@ -7023,11 +7022,13 @@ describe('AccountsPage replacement flows', () => {
     const renderer = await renderAccountsPage();
     const selectionKey = getAuthFileSelectionKey(file);
     const card = findAccountCardByKey(renderer, selectionKey);
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
     const cardText = readText(card);
-    expect(cardText).toContain('accounts.quota_standard_none');
+    expect(cardText).toContain('accounts.quota_details_only');
     expect(cardText).not.toContain('accounts.quota_source_none');
     expect(cardText).not.toContain('30D');
     expect(cardText).not.toContain('Grok Code Fast');
+    expect(quotaRegion.props['aria-label']).toContain('accounts.quota_details_only');
 
     await act(async () => {
       findAccountDetailRegion(renderer, selectionKey, 'quota').props.onClick();
@@ -7114,7 +7115,7 @@ describe('AccountsPage replacement flows', () => {
     expect(matrices).toHaveLength(0);
     expect(
       readText(findAccountCardByKey(renderer, getAuthFileSelectionKey(mocks.files[0])))
-    ).toContain('accounts.quota_standard_none');
+    ).toContain('accounts.quota_details_only');
 
     await act(async () => {
       findAccountDetailRegion(
@@ -7188,7 +7189,7 @@ describe('AccountsPage replacement flows', () => {
     expect(matrices).toHaveLength(0);
     expect(
       readText(findAccountCardByKey(renderer, getAuthFileSelectionKey(mocks.files[0])))
-    ).toContain('accounts.quota_standard_none');
+    ).toContain('accounts.quota_details_only');
 
     await act(async () => {
       findAccountDetailRegion(
@@ -7252,6 +7253,8 @@ describe('AccountsPage replacement flows', () => {
     ]);
 
     expect(renderer.root.findAllByProps({ 'data-account-quota-empty': 'true' })).toHaveLength(1);
+    expect(treeText(renderer)).toContain('accounts.quota_source_none');
+    expect(treeText(renderer)).not.toContain('accounts.quota_details_only');
     expect(treeText(renderer)).not.toContain('SUM');
   });
 
@@ -7290,9 +7293,11 @@ describe('AccountsPage replacement flows', () => {
     const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
     expect(historyRegion.type).toBe('button');
     expect(historyRegion.props['data-account-detail-trigger']).toBe('history');
-    expect(historyRegion.props['aria-label']).toBe(
-      'accounts.list_header_historical_usage: accounts.open_detail:codex.json: accounts.detail_tab_quota'
-    );
+    const historyLabel = historyRegion.props['aria-label'] as string;
+    expect(historyLabel).toContain('accounts.list_header_historical_usage');
+    expect(historyLabel).toContain('accounts.history_title:12:1,200:$0.12:83.33%');
+    expect(historyLabel).toContain('accounts.open_detail:codex.json');
+    expect(historyLabel).toContain('accounts.detail_tab_quota');
     expect(quotaRegion.props['aria-label']).not.toBe(historyRegion.props['aria-label']);
     expect(historyRegion.findAllByType('div')).toHaveLength(0);
     expect(readText(historyRegion)).toContain('12');
@@ -7330,15 +7335,17 @@ describe('AccountsPage replacement flows', () => {
 
     const renderer = await renderAccountsPage();
     const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
+    const historyRegion = findAccountDetailRegion(renderer, selectionKey, 'history');
 
     expect(quotaRegion.type).toBe('button');
     expect(quotaRegion.props['data-account-detail-trigger']).toBe('quota');
-    expect(quotaRegion.props['aria-label']).toBe(
-      'accounts.list_header_quota: accounts.open_detail:codex.json: accounts.detail_tab_quota'
-    );
-    expect(quotaRegion.props['aria-label']).not.toBe(
-      'accounts.list_header_historical_usage: accounts.open_detail:codex.json: accounts.detail_tab_quota'
-    );
+    const quotaLabel = quotaRegion.props['aria-label'] as string;
+    expect(quotaLabel).toContain('accounts.list_header_quota');
+    expect(quotaLabel).toContain('Five hours');
+    expect(quotaLabel).toContain('80%');
+    expect(quotaLabel).toContain('accounts.open_detail:codex.json');
+    expect(quotaLabel).toContain('accounts.detail_tab_quota');
+    expect(quotaLabel).not.toBe(historyRegion.props['aria-label']);
     expect(quotaRegion.findAllByType('div')).toHaveLength(0);
     expect(readText(quotaRegion)).toContain('5H');
 
@@ -7368,6 +7375,7 @@ describe('AccountsPage replacement flows', () => {
 
     expect(readText(historyRegion)).toContain('-');
     expect(historyRegion.props.disabled).not.toBe(true);
+    expect(historyRegion.props['aria-label']).toContain('accounts.history_empty');
 
     await act(async () => {
       historyRegion.props.onClick();
@@ -7378,7 +7386,7 @@ describe('AccountsPage replacement flows', () => {
     expect(renderer.root.findByType(AccountQuotaTab)).toBeTruthy();
   });
 
-  it('keeps an empty standard quota region openable when only model quota exists', async () => {
+  it('keeps a details-only quota region openable when only model quota exists', async () => {
     const file = mocks.files[0];
     const selectionKey = getAuthFileSelectionKey(file);
     mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, {
@@ -7397,9 +7405,10 @@ describe('AccountsPage replacement flows', () => {
     const card = findAccountCardByKey(renderer, selectionKey);
     const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
 
-    expect(readText(card)).toContain('accounts.quota_standard_none');
+    expect(readText(card)).toContain('accounts.quota_details_only');
     expect(readText(card)).not.toContain('accounts.quota_source_none');
     expect(readText(card)).not.toContain('Spark model quota');
+    expect(quotaRegion.props['aria-label']).toContain('accounts.quota_details_only');
 
     await act(async () => {
       quotaRegion.props.onClick();

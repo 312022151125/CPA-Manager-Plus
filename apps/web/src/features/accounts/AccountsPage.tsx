@@ -6857,7 +6857,7 @@ export function AccountsPage() {
             });
             const quotaEmptyLabel =
               quotaWindows.length > 0
-                ? t('accounts.quota_standard_none')
+                ? t('accounts.quota_details_only')
                 : t('accounts.quota_source_none');
             const quotaWindowTitle =
               standardQuotaWindows
@@ -7041,7 +7041,10 @@ export function AccountsPage() {
                   isSelectionMode,
                   className: styles.accountCardEvidence,
                   title: accountHistoryTitle,
-                  ariaLabel: `${t('accounts.list_header_historical_usage')}: ${t('accounts.open_detail', { name: row.fileName })}: ${t('accounts.detail_tab_quota')}`,
+                  ariaLabel: `${t('accounts.list_header_historical_usage')}: ${accountHistoryTitle}. ${t(
+                    'accounts.open_detail',
+                    { name: row.fileName }
+                  )}: ${t('accounts.detail_tab_quota')}`,
                   kind: 'history',
                   onOpen: () => void openAccountDetail(row, 'quota'),
                   children: (
@@ -7097,7 +7100,10 @@ export function AccountsPage() {
                   isSelectionMode,
                   className: styles.accountCardBusiness,
                   title: quotaWindowTitle,
-                  ariaLabel: `${t('accounts.list_header_quota')}: ${t('accounts.open_detail', { name: row.fileName })}: ${t('accounts.detail_tab_quota')}`,
+                  ariaLabel: `${t('accounts.list_header_quota')}: ${quotaWindowTitle}. ${t(
+                    'accounts.open_detail',
+                    { name: row.fileName }
+                  )}: ${t('accounts.detail_tab_quota')}`,
                   kind: 'quota',
                   onOpen: () => void openAccountDetail(row, 'quota'),
                   children: (

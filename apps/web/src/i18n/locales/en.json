@@ -988,7 +988,7 @@
     "quota_source_cache": "Previous check result",
     "quota_source_observed_header": "Recent request return data",
     "quota_source_none": "No quota data",
-    "quota_standard_none": "No standard quota",
+    "quota_details_only": "Quota available in details",
     "quota_brief_remaining": "{{percent}} left",
     "quota_brief_unknown": "Unknown quota",
     "quota_source_short_cache": "Last check",
