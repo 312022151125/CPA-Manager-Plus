@@ -26,40 +26,131 @@ export const normalizeKnownThinkingLevel = (value: unknown): ThinkingLevel | und
     : undefined;
 };
 
-export const getKnownThinkingLevels = (levels: readonly unknown[]): ThinkingLevel[] => {
-  const knownLevels = new Set<ThinkingLevel>();
-  levels.forEach((level) => {
-    const normalized = normalizeKnownThinkingLevel(level);
-    if (normalized) knownLevels.add(normalized);
-  });
-  return KNOWN_THINKING_LEVELS.filter((level) => knownLevels.has(level));
-};
-
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const MODEL_THINKING_EMPTY_CONTAINER_MARKER = Symbol('model-thinking-empty-container');
+
+type EmptyThinkingContainerCarrier = {
+  [MODEL_THINKING_EMPTY_CONTAINER_MARKER]?: true;
+};
+
+export const hasExplicitEmptyThinkingContainer = (value: unknown): boolean => {
+  if (value === null || typeof value !== 'object') return false;
+  if ((value as EmptyThinkingContainerCarrier)[MODEL_THINKING_EMPTY_CONTAINER_MARKER] === true) {
+    return true;
+  }
+  return (
+    'thinking' in value &&
+    isRecord((value as { thinking?: unknown }).thinking) &&
+    Object.keys((value as { thinking: Record<string, unknown> }).thinking).length === 0
+  );
+};
+
+const markExplicitEmptyThinkingContainer = <T extends object>(value: T): T => {
+  Object.defineProperty(value, MODEL_THINKING_EMPTY_CONTAINER_MARKER, {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
+  return value;
+};
+
+const areUnknownThinkingLevelsEqual = (left: unknown, right: unknown): boolean => {
+  if (typeof left === 'string' && typeof right === 'string') {
+    return left.trim() === right.trim();
+  }
+  return Object.is(left, right);
+};
+
+export const normalizeThinkingLevelsPreservingOrder = (levels: readonly unknown[]): unknown[] => {
+  const normalized: unknown[] = [];
+  const seenKnownLevels = new Set<ThinkingLevel>();
+  const seenUnknownLevels: unknown[] = [];
+
+  levels.forEach((level) => {
+    if (typeof level === 'string') {
+      if (!level.trim()) return;
+      const knownLevel = normalizeKnownThinkingLevel(level);
+      if (knownLevel) {
+        if (seenKnownLevels.has(knownLevel)) return;
+        seenKnownLevels.add(knownLevel);
+        normalized.push(knownLevel);
+        return;
+      }
+    }
+
+    if (seenUnknownLevels.some((seenLevel) => areUnknownThinkingLevelsEqual(seenLevel, level))) {
+      return;
+    }
+    seenUnknownLevels.push(level);
+    normalized.push(level);
+  });
+
+  return normalized;
+};
+
+export const getKnownThinkingLevels = (levels: readonly unknown[]): ThinkingLevel[] => {
+  return normalizeThinkingLevelsPreservingOrder(levels).filter((level): level is ThinkingLevel =>
+    Boolean(normalizeKnownThinkingLevel(level))
+  );
+};
 
 export const getThinkingLevels = (thinking?: Record<string, unknown>): unknown[] =>
   Array.isArray(thinking?.levels) ? thinking.levels : [];
 
+export const getEffectiveThinkingLevels = (levels: readonly unknown[]): unknown[] =>
+  normalizeThinkingLevelsPreservingOrder(levels);
+
+export const hasEffectiveThinkingLevels = (levels: readonly unknown[]): boolean =>
+  getEffectiveThinkingLevels(levels).length > 0;
+
 export const getUnknownThinkingLevels = (levels: readonly unknown[]) =>
-  levels.filter((level) => !normalizeKnownThinkingLevel(level));
+  normalizeThinkingLevelsPreservingOrder(levels).filter(
+    (level) => !normalizeKnownThinkingLevel(level)
+  );
 
 export const buildThinkingWithLevels = (
   thinking: Record<string, unknown> | undefined,
   selectedLevels: readonly ThinkingLevel[],
-  unknownLevels: readonly unknown[]
+  unknownLevels: readonly unknown[],
+  currentLevels: readonly unknown[] = [...selectedLevels, ...unknownLevels]
 ) => {
-  const normalizedSelectedLevels = getKnownThinkingLevels(selectedLevels);
+  const selectedKnownLevels = getKnownThinkingLevels(selectedLevels);
+  const selectedKnownSet = new Set(selectedKnownLevels);
+  const normalizedCurrentLevels = normalizeThinkingLevelsPreservingOrder([
+    ...currentLevels,
+    ...unknownLevels,
+  ]);
+  const nextLevels = normalizedCurrentLevels.filter((level) => {
+    const knownLevel = normalizeKnownThinkingLevel(level);
+    return !knownLevel || selectedKnownSet.has(knownLevel);
+  });
+  const presentKnownLevels = new Set(
+    nextLevels
+      .map((level) => normalizeKnownThinkingLevel(level))
+      .filter((level): level is ThinkingLevel => Boolean(level))
+  );
+  selectedKnownLevels.forEach((level) => {
+    if (!presentKnownLevels.has(level)) {
+      nextLevels.push(level);
+    }
+  });
+
   return {
     ...(isRecord(thinking) ? thinking : {}),
-    levels: [...normalizedSelectedLevels, ...unknownLevels],
+    levels: nextLevels,
   };
 };
 
-export const removeThinkingLevels = (thinking?: Record<string, unknown>) => {
+export const removeThinkingLevels = (
+  thinking?: Record<string, unknown>,
+  preserveEmptyContainer = false
+) => {
   const nextThinking = isRecord(thinking) ? { ...thinking } : {};
   delete nextThinking.levels;
-  return Object.keys(nextThinking).length > 0 ? nextThinking : undefined;
+  if (Object.keys(nextThinking).length > 0) return nextThinking;
+  return preserveEmptyContainer ? {} : undefined;
 };
 
 export const cloneModelEntry = (entry: ModelEntry, patch: Partial<ModelEntry> = {}): ModelEntry => {
@@ -67,16 +158,21 @@ export const cloneModelEntry = (entry: ModelEntry, patch: Partial<ModelEntry> = 
   if (hasModelThinkingLevelsClearMarker(entry)) {
     markModelThinkingLevelsForClear(nextEntry);
   }
+  if (hasExplicitEmptyThinkingContainer(entry)) {
+    markExplicitEmptyThinkingContainer(nextEntry);
+  }
   return nextEntry;
 };
 
+export const hasInvalidThinkingLevelEntry = (
+  entry: Pick<ModelEntry, 'name' | 'thinking'>
+): boolean =>
+  Boolean(entry.name.trim()) &&
+  Array.isArray(entry.thinking?.levels) &&
+  !hasEffectiveThinkingLevels(getThinkingLevels(entry.thinking));
+
 export const hasInvalidThinkingLevels = (entries: readonly ModelEntry[]) =>
-  entries.some(
-    (entry) =>
-      Boolean(entry.name.trim()) &&
-      Array.isArray(entry.thinking?.levels) &&
-      getThinkingLevels(entry.thinking).length === 0
-  );
+  entries.some(hasInvalidThinkingLevelEntry);
 
 export interface ModelEntry {
   name: string;
@@ -114,6 +210,9 @@ export const modelsToEntries = (models?: ModelAlias[]): ModelEntry[] => {
     if (hasModelThinkingLevelsClearMarker(model)) {
       markModelThinkingLevelsForClear(entry);
     }
+    if (isRecord(model.thinking) && Object.keys(model.thinking).length === 0) {
+      markExplicitEmptyThinkingContainer(entry);
+    }
     return entry;
   });
 };
@@ -145,8 +244,14 @@ export const entriesToModels = (entries: ModelEntry[]): ModelAlias[] => {
       if (entry.outputModalities !== undefined) {
         model.outputModalities = [...entry.outputModalities];
       }
-      if (entry.thinking && typeof entry.thinking === 'object') {
-        model.thinking = entry.thinking;
+      if (isRecord(entry.thinking)) {
+        const thinking = { ...entry.thinking };
+        if (Array.isArray(thinking.levels)) {
+          thinking.levels = normalizeThinkingLevelsPreservingOrder(thinking.levels);
+        }
+        model.thinking = thinking;
+      } else if (hasExplicitEmptyThinkingContainer(entry)) {
+        model.thinking = {};
       }
       if (hasModelThinkingLevelsClearMarker(entry)) {
         markModelThinkingLevelsForClear(model);

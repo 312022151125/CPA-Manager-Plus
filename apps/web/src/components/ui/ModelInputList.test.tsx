@@ -2,7 +2,7 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it } from 'vitest';
 import { MODEL_THINKING_LEVELS_CLEAR_MARKER } from '@/types';
 import { ModelInputList } from './ModelInputList';
-import type { ModelEntry } from './modelInputListUtils';
+import { entriesToModels, type ModelEntry } from './modelInputListUtils';
 
 const findInputByLabelSuffix = (renderer: ReactTestRenderer, suffix: string) =>
   renderer.root
@@ -156,9 +156,147 @@ describe('ModelInputList', () => {
       });
     });
     expect(entries[0]?.thinking).toEqual({
-      levels: ['medium', 'max', 'ultra'],
+      levels: ['medium', 'ultra', 'max'],
       'future-option': { enabled: true },
     });
+  });
+
+  it('preserves an explicitly empty thinking container through a mode round-trip', () => {
+    let entries: ModelEntry[] = [{ name: 'empty-thinking-model', alias: '', thinking: {} }];
+    let renderer!: ReactTestRenderer;
+
+    const render = () => (
+      <ModelInputList
+        entries={entries}
+        onChange={(next) => {
+          entries = next;
+          renderer.update(render());
+        }}
+        showThinkingLevels
+        thinkingDefaultLabel="Do not explicitly configure levels"
+        thinkingCustomLabel="Custom levels"
+      />
+    );
+
+    act(() => {
+      renderer = create(render());
+    });
+    act(() => {
+      findInputByLabelSuffix(renderer, 'Custom levels')?.props.onChange();
+    });
+    act(() => {
+      findInputByLabelSuffix(renderer, 'Do not explicitly configure levels')?.props.onChange();
+    });
+
+    expect(entries[0]?.thinking).toEqual({});
+    expect(entriesToModels(entries)).toEqual([{ name: 'empty-thinking-model', thinking: {} }]);
+  });
+
+  it('preserves existing order when selecting all and clearing known levels', () => {
+    let entries: ModelEntry[] = [
+      {
+        name: 'ordered-model',
+        alias: '',
+        thinking: { levels: ['high', 'future-a', 'low', 'future-b'] },
+      },
+    ];
+    let renderer!: ReactTestRenderer;
+
+    const render = () => (
+      <ModelInputList
+        entries={entries}
+        onChange={(next) => {
+          entries = next;
+          renderer.update(render());
+        }}
+        showThinkingLevels
+        thinkingDefaultLabel="Do not explicitly configure levels"
+        thinkingCustomLabel="Custom levels"
+        thinkingSelectAllLabel="Select all"
+        thinkingClearLabel="Clear known levels"
+      />
+    );
+
+    act(() => {
+      renderer = create(render());
+    });
+    act(() => {
+      findButtonByText(renderer, 'Select all')?.props.onClick();
+    });
+    expect(entries[0]?.thinking?.levels).toEqual([
+      'high',
+      'future-a',
+      'low',
+      'future-b',
+      'none',
+      'minimal',
+      'medium',
+      'xhigh',
+      'max',
+      'auto',
+    ]);
+
+    act(() => {
+      findButtonByText(renderer, 'Clear known levels')?.props.onClick();
+    });
+    expect(entries[0]?.thinking?.levels).toEqual(['future-a', 'future-b']);
+  });
+
+  it('does not show or block thinking validation for a blank model row', () => {
+    let entries: ModelEntry[] = [{ name: '', alias: '', thinking: { levels: [] } }];
+    let renderer!: ReactTestRenderer;
+
+    const render = () => (
+      <ModelInputList
+        entries={entries}
+        onChange={(next) => {
+          entries = next;
+          renderer.update(render());
+        }}
+        showThinkingLevels
+        thinkingRequiredError="Select at least one thinking level"
+      />
+    );
+
+    act(() => {
+      renderer = create(render());
+    });
+    expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(0);
+
+    act(() => {
+      renderer.root.findAllByType('input')[0]?.props.onChange({ target: { value: 'model-a' } });
+    });
+    expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(1);
+  });
+
+  it('ignores whitespace-only levels for unknown display and validation', () => {
+    let entries: ModelEntry[] = [
+      { name: 'whitespace-model', alias: '', thinking: { levels: ['   '] } },
+    ];
+    let renderer!: ReactTestRenderer;
+
+    const render = () => (
+      <ModelInputList
+        entries={entries}
+        onChange={(next) => {
+          entries = next;
+          renderer.update(render());
+        }}
+        showThinkingLevels
+        thinkingDefaultLabel="Do not explicitly configure levels"
+        thinkingCustomLabel="Custom levels"
+        thinkingRequiredError="Select at least one thinking level"
+      />
+    );
+
+    act(() => {
+      renderer = create(render());
+    });
+
+    expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(1);
+    expect(
+      renderer.root.findAllByType('span').some((node) => node.children.join('') === '   ')
+    ).toBe(false);
   });
 
   it('clears known level variants while retaining unknown levels', () => {

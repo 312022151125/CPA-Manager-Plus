@@ -29,22 +29,40 @@ describe('InfoTooltip', () => {
     ).toBeUndefined();
   });
 
-  it('opens on hover and closes when the pointer leaves', () => {
+  it('keeps the tooltip open while the pointer moves from the trigger to the tooltip', () => {
+    vi.useFakeTimers();
     let renderer!: ReactTestRenderer;
-    act(() => {
-      renderer = create(<InfoTooltip ariaLabel="Information" content="Details" />);
-    });
+    try {
+      act(() => {
+        renderer = create(<InfoTooltip ariaLabel="Information" content="Details" />);
+      });
 
-    const trigger = renderer.root.findByProps({ 'data-info-tooltip-trigger': 'true' });
-    act(() => {
-      trigger.props.onMouseEnter();
-    });
-    expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(1);
+      const trigger = renderer.root.findByProps({ 'data-info-tooltip-trigger': 'true' });
+      act(() => {
+        trigger.props.onMouseEnter();
+      });
+      expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(1);
 
-    act(() => {
-      renderer.root.findByProps({ 'data-info-tooltip-trigger': 'true' }).props.onMouseLeave();
-    });
-    expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(0);
+      const tooltip = renderer.root.findByProps({ role: 'tooltip' });
+      act(() => {
+        trigger.props.onMouseLeave();
+      });
+      expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(1);
+
+      act(() => {
+        tooltip.props.onMouseEnter();
+        vi.advanceTimersByTime(120);
+      });
+      expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(1);
+
+      act(() => {
+        tooltip.props.onMouseLeave();
+        vi.advanceTimersByTime(120);
+      });
+      expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('closes on Escape and prevents the browser default action', () => {
@@ -66,6 +84,58 @@ describe('InfoTooltip', () => {
     });
 
     expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(0);
+  });
+
+  it('closes a mouse-open tooltip from a window Escape event', () => {
+    if (typeof window === 'undefined') {
+      const addEventListener = vi.fn();
+      const removeEventListener = vi.fn();
+      vi.stubGlobal('window', {
+        addEventListener,
+        removeEventListener,
+        innerWidth: 1024,
+        innerHeight: 768,
+      });
+      let renderer!: ReactTestRenderer;
+      try {
+        act(() => {
+          renderer = create(<InfoTooltip ariaLabel="Information" content="Details" />);
+        });
+        const trigger = renderer.root.findByProps({ 'data-info-tooltip-trigger': 'true' });
+        act(() => {
+          trigger.props.onMouseEnter();
+        });
+        const keydownHandler = addEventListener.mock.calls.find(
+          ([eventName]) => eventName === 'keydown'
+        )?.[1] as ((event: { key: string; preventDefault: () => void }) => void) | undefined;
+        expect(keydownHandler).toBeTypeOf('function');
+        act(() => {
+          keydownHandler?.({ key: 'Escape', preventDefault: vi.fn() });
+        });
+        expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(0);
+      } finally {
+        act(() => {
+          renderer?.unmount();
+        });
+        vi.unstubAllGlobals();
+      }
+      return;
+    }
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(<InfoTooltip ariaLabel="Information" content="Details" />);
+    });
+    const trigger = renderer.root.findByProps({ 'data-info-tooltip-trigger': 'true' });
+
+    act(() => {
+      trigger.props.onMouseEnter();
+    });
+    expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(1);
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
     expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(0);
   });
 

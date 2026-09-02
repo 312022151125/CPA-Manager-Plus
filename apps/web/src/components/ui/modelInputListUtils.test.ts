@@ -3,9 +3,12 @@ import {
   buildThinkingWithLevels,
   entriesToModels,
   getKnownThinkingLevels,
+  getEffectiveThinkingLevels,
   getUnknownThinkingLevels,
+  hasInvalidThinkingLevels,
   modelsToEntries,
   normalizeKnownThinkingLevel,
+  normalizeThinkingLevelsPreservingOrder,
 } from './modelInputListUtils';
 import {
   MODEL_THINKING_LEVELS_CLEAR_MARKER,
@@ -69,7 +72,7 @@ describe('modelInputListUtils', () => {
   it('normalizes known thinking levels while preserving unknown values', () => {
     const levels = ['HIGH', ' medium ', 'Low', 'ultra'];
 
-    expect(getKnownThinkingLevels(levels)).toEqual(['low', 'medium', 'high']);
+    expect(getKnownThinkingLevels(levels)).toEqual(['high', 'medium', 'low']);
     expect(getUnknownThinkingLevels(levels)).toEqual(['ultra']);
     expect(normalizeKnownThinkingLevel(' High ')).toBe('high');
     expect(normalizeKnownThinkingLevel('experimental')).toBeUndefined();
@@ -85,6 +88,40 @@ describe('modelInputListUtils', () => {
         getUnknownThinkingLevels(levels)
       )
     ).toEqual({ levels: ['high', 'ultra'] });
+  });
+
+  it('normalizes levels in place without changing first-occurrence order', () => {
+    expect(
+      normalizeThinkingLevelsPreservingOrder(['HIGH', 'future-level', 'low', ' high '])
+    ).toEqual(['high', 'future-level', 'low']);
+    expect(buildThinkingWithLevels(undefined, ['high', 'low', 'max'], [], ['high', 'low'])).toEqual(
+      { levels: ['high', 'low', 'max'] }
+    );
+  });
+
+  it('ignores blank levels when calculating effective levels', () => {
+    expect(getEffectiveThinkingLevels(['   '])).toEqual([]);
+    expect(getEffectiveThinkingLevels(['   ', 'ultra'])).toEqual(['ultra']);
+  });
+
+  it('uses effective levels for model validation and ignores blank model rows', () => {
+    expect(hasInvalidThinkingLevels([{ name: '', alias: '', thinking: { levels: ['   '] } }])).toBe(
+      false
+    );
+    expect(
+      hasInvalidThinkingLevels([{ name: 'model-a', alias: '', thinking: { levels: ['   '] } }])
+    ).toBe(true);
+    expect(
+      hasInvalidThinkingLevels([
+        { name: 'model-a', alias: '', thinking: { levels: ['   ', 'ultra'] } },
+      ])
+    ).toBe(false);
+  });
+
+  it('keeps explicit empty thinking containers through entry conversion', () => {
+    const entries = modelsToEntries([{ name: 'empty-thinking-model', thinking: {} }]);
+
+    expect(entriesToModels(entries)).toEqual([{ name: 'empty-thinking-model', thinking: {} }]);
   });
 
   it('clears known variants while retaining unknown levels', () => {

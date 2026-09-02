@@ -25,6 +25,9 @@ const serializeHeaders = (headers?: Record<string, string>) =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
+const hasOwnField = (value: unknown, field: string): value is Record<string, unknown> =>
+  isRecord(value) && Object.prototype.hasOwnProperty.call(value, field);
+
 const AUTH_INDEX_FIELDS = ['auth-index', 'authIndex', 'auth_index'] as const;
 const DISABLE_COOLING_FIELDS = ['disable-cooling', 'disableCooling', 'disable_cooling'] as const;
 const FINGERPRINT_PROFILE_FIELDS = [
@@ -323,7 +326,10 @@ const mergeModelPayloads = (raw: unknown, models: unknown) =>
               ...(isRecord(payloadThinking) ? payloadThinking : {}),
             };
             delete nextThinking.levels;
-            if (Object.keys(nextThinking).length > 0) {
+            const preserveExplicitEmptyThinking =
+              (isRecord(rawThinking) && Object.keys(rawThinking).length === 0) ||
+              (isRecord(payloadThinking) && Object.keys(payloadThinking).length === 0);
+            if (Object.keys(nextThinking).length > 0 || preserveExplicitEmptyThinking) {
               next.thinking = nextThinking;
             } else {
               delete next.thinking;
@@ -334,6 +340,10 @@ const mergeModelPayloads = (raw: unknown, models: unknown) =>
               ...(rawThinking ?? {}),
               ...payloadThinking,
             };
+          } else if (hasOwnField(rawModel, 'thinking') && isRecord(rawModel.thinking)) {
+            // Preserve an explicitly empty or future-only Thinking container when the
+            // normalized payload does not mention it.
+            next.thinking = { ...rawModel.thinking };
           }
           if (next.thinking === null) {
             delete next.thinking;
@@ -432,7 +442,9 @@ const buildPreservedList = async <T>(
           if (hasModelThinkingLevelsClearMarker(model)) {
             const nextThinking = isRecord(model.thinking) ? { ...model.thinking } : {};
             delete nextThinking.levels;
-            if (Object.keys(nextThinking).length > 0) {
+            const preserveExplicitEmptyThinking =
+              isRecord(model.thinking) && Object.keys(model.thinking).length === 0;
+            if (Object.keys(nextThinking).length > 0 || preserveExplicitEmptyThinking) {
               next.thinking = nextThinking;
             } else {
               delete next.thinking;

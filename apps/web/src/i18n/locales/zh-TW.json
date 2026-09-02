@@ -730,7 +730,7 @@
     "output_modalities_placeholder": "輸出模態：text, image",
     "thinking_levels_label": "思考等級",
     "thinking_model_fallback_label": "模型",
-    "thinking_levels_tooltip": "設定此模型明確允許的推理等級。未明確設定等級時不會寫入 thinking.levels；其他既有 Thinking 設定會繼續保留並生效。只有模型完全沒有 Thinking 設定時，CPA 才會使用預設能力。",
+    "thinking_levels_tooltip": "設定此模型明確允許的推理等級。未明確設定時不會寫入 thinking.levels；其他既有 Thinking 設定會繼續保留並生效。模型最終的 Thinking 能力由 CPA 根據完整模型設定決定，請僅啟用已確認上游模型支援的等級。",
     "thinking_levels_tooltip_aria_label": "思考等級說明",
     "thinking_default_label": "未明確設定等級",
     "thinking_custom_label": "自訂等級",

@@ -12,9 +12,12 @@ import {
 import {
   buildThinkingWithLevels,
   cloneModelEntry,
+  getEffectiveThinkingLevels,
   getKnownThinkingLevels,
   getThinkingLevels,
   getUnknownThinkingLevels,
+  hasExplicitEmptyThinkingContainer,
+  hasInvalidThinkingLevelEntry,
   KNOWN_THINKING_LEVELS,
   removeThinkingLevels,
   type ModelEntry,
@@ -128,10 +131,14 @@ export function ModelInputList({
   ) => {
     const next = currentEntries.map((entry, idx) => {
       if (idx !== index) return entry;
-      const nextEntry = {
-        ...entry,
-        thinking: buildThinkingWithLevels(entry.thinking, selectedLevels, unknownLevels),
-      };
+      const nextEntry = cloneModelEntry(entry, {
+        thinking: buildThinkingWithLevels(
+          entry.thinking,
+          selectedLevels,
+          unknownLevels,
+          getThinkingLevels(entry.thinking)
+        ),
+      });
       delete nextEntry[MODEL_THINKING_LEVELS_CLEAR_MARKER];
       return nextEntry;
     });
@@ -148,10 +155,13 @@ export function ModelInputList({
       return;
     }
 
-    const nextThinking = removeThinkingLevels(entry.thinking);
+    const nextThinking = removeThinkingLevels(
+      entry.thinking,
+      hasExplicitEmptyThinkingContainer(entry)
+    );
     const next = currentEntries.map((item, idx) => {
       if (idx !== index) return item;
-      const nextEntry = { ...item };
+      const nextEntry = cloneModelEntry(item);
       delete nextEntry.thinking;
       delete nextEntry[MODEL_THINKING_LEVELS_CLEAR_MARKER];
       if (nextThinking) {
@@ -213,6 +223,9 @@ export function ModelInputList({
           : modelOrdinal;
         const thinkingAccessibleName = `${modelContext} ${thinkingLabel}`;
         const thinkingTooltipAccessibleName = `${modelContext} ${thinkingTooltipAriaLabel}`;
+        const thinkingLevels = getEffectiveThinkingLevels(getThinkingLevels(entry.thinking));
+        const knownThinkingLevels = getKnownThinkingLevels(thinkingLevels);
+        const unknownThinkingLevels = getUnknownThinkingLevels(thinkingLevels);
         const modelContent = (
           <>
             <div className={rowClassNames}>
@@ -361,9 +374,7 @@ export function ModelInputList({
                       {KNOWN_THINKING_LEVELS.map((level) => (
                         <SelectionCheckbox
                           key={level}
-                          checked={getKnownThinkingLevels(
-                            getThinkingLevels(entry.thinking)
-                          ).includes(level)}
+                          checked={knownThinkingLevels.includes(level)}
                           onChange={(checked) => updateThinkingLevel(index, level, checked)}
                           disabled={disabled}
                           label={level}
@@ -373,29 +384,27 @@ export function ModelInputList({
                         />
                       ))}
                     </div>
-                    {getUnknownThinkingLevels(getThinkingLevels(entry.thinking)).length > 0 && (
+                    {unknownThinkingLevels.length > 0 && (
                       <div className={styles.thinkingUnknown} role="note">
                         <div className={styles.thinkingUnknownLabel}>
                           {thinkingUnknownLevelsLabel}
                         </div>
                         <div className={styles.thinkingUnknownLevels}>
-                          {getUnknownThinkingLevels(getThinkingLevels(entry.thinking)).map(
-                            (level, levelIndex) => (
-                              <span
-                                key={`${String(level)}-${levelIndex}`}
-                                className={styles.thinkingUnknownChip}
-                              >
-                                {String(level)}
-                              </span>
-                            )
-                          )}
+                          {unknownThinkingLevels.map((level, levelIndex) => (
+                            <span
+                              key={`${String(level)}-${levelIndex}`}
+                              className={styles.thinkingUnknownChip}
+                            >
+                              {String(level)}
+                            </span>
+                          ))}
                         </div>
                         <div className={styles.thinkingUnknownHint}>
                           {thinkingUnknownLevelsHint}
                         </div>
                       </div>
                     )}
-                    {getThinkingLevels(entry.thinking).length === 0 && (
+                    {hasInvalidThinkingLevelEntry(entry) && (
                       <div className={styles.thinkingError} role="alert">
                         {thinkingRequiredError}
                       </div>

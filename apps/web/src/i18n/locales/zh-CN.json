@@ -730,7 +730,7 @@
     "output_modalities_placeholder": "输出模态：text, image",
     "thinking_levels_label": "思考等级",
     "thinking_model_fallback_label": "模型",
-    "thinking_levels_tooltip": "配置该模型显式允许的推理等级。未显式配置等级时不会写入 thinking.levels；其他已有 Thinking 配置会继续保留并生效。只有模型完全没有 Thinking 配置时，CPA 才使用默认能力。",
+    "thinking_levels_tooltip": "配置该模型显式允许的推理等级。未显式配置时不会写入 thinking.levels；其他已有 Thinking 配置会继续保留并生效。模型最终的 Thinking 能力由 CPA 根据完整模型配置决定，请仅启用已确认上游模型支持的等级。",
     "thinking_levels_tooltip_aria_label": "思考等级说明",
     "thinking_default_label": "未显式配置等级",
     "thinking_custom_label": "自定义等级",

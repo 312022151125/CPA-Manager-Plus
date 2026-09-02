@@ -1014,6 +1014,70 @@ describe('providersApi v1.16 provider fields', () => {
     ]);
   });
 
+  it('preserves an explicitly empty thinking container during a normal save', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'openai-compatibility': [
+        {
+          name: 'openai-compatible',
+          'base-url': 'https://api.example.com/v1',
+          'api-key-entries': [],
+          models: [{ name: 'openai-model', thinking: {} }],
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveOpenAIProviders([
+      {
+        name: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [],
+        models: [{ name: 'openai-model', thinking: {} }],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenCalledWith('/openai-compatibility', [
+      {
+        name: 'openai-compatible',
+        'base-url': 'https://api.example.com/v1',
+        'api-key-entries': [],
+        models: [{ name: 'openai-model', thinking: {} }],
+      },
+    ]);
+  });
+
+  it('keeps an explicitly empty thinking container when levels are cleared', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'openai-compatibility': [
+        {
+          name: 'openai-compatible',
+          'base-url': 'https://api.example.com/v1',
+          'api-key-entries': [],
+          models: [{ name: 'openai-model', thinking: {} }],
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveOpenAIProviders([
+      {
+        name: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [],
+        models: [markModelThinkingLevelsForClear({ name: 'openai-model', thinking: {} })],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenCalledWith('/openai-compatibility', [
+      {
+        name: 'openai-compatible',
+        'base-url': 'https://api.example.com/v1',
+        'api-key-entries': [],
+        models: [{ name: 'openai-model', thinking: {} }],
+      },
+    ]);
+  });
+
   it('preserves unknown thinking levels and future fields during a custom update', async () => {
     mocks.get.mockResolvedValueOnce({
       'openai-compatibility': [
