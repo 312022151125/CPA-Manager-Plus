@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 type Repository interface {
@@ -44,6 +45,24 @@ func (r *repository) Upsert(ctx context.Context, input model.AccountActionCandid
 		input.AccountSnapshot = ""
 	}
 	input.AccountIDSnapshot = strings.TrimSpace(input.AccountIDSnapshot)
+	if input.Provider == "codex" {
+		if input.AccountIDSnapshot != "" {
+			workspace, ok := usageidentity.NormalizeCodexWorkspaceSnapshot(input.AccountIDSnapshot)
+			if !ok {
+				return model.AccountActionCandidate{}, errors.New("invalid Codex workspace identity")
+			}
+			input.AccountIDSnapshot = workspace
+		}
+		if input.AccountSnapshot != "" {
+			if member, ok := usageidentity.NormalizeCodexMemberSnapshot(input.AccountSnapshot); ok {
+				input.AccountSnapshot = member
+			} else {
+				// A display label is not a Codex member identity. It may remain
+				// in evidence, but must not participate in candidate ownership.
+				input.AccountSnapshot = ""
+			}
+		}
+	}
 	input.AuthLabel = strings.TrimSpace(input.AuthLabel)
 	input.ReasonCode = strings.TrimSpace(input.ReasonCode)
 	input.Reason = strings.TrimSpace(input.Reason)
@@ -61,32 +80,7 @@ func (r *repository) Upsert(ctx context.Context, input model.AccountActionCandid
 	}
 	defer tx.Rollback()
 
-	authIndexIdentity, accountIDIdentity, providerIdentity, accountSnapshotIdentity := candidateIdentity(input)
-	id, found, err := querySingleCandidateID(ctx, tx, `select id from account_action_candidates
-		where status = ? and auth_file_name = ? and action_type = ?
-		and coalesce(trim(reason_code), '') = ?
-		and coalesce(trim(auth_index), '') = ?
-		and case when coalesce(trim(auth_index), '') <> '' then '' else coalesce(trim(account_id_snapshot), '') end = ?
-		and case when coalesce(trim(auth_index), '') <> '' then ''
-			else case coalesce(lower(replace(trim(provider), '_', '-')), '')
-				when 'x-ai' then 'xai'
-				when 'grok' then 'xai'
-				else coalesce(lower(replace(trim(provider), '_', '-')), '')
-			end
-		end = ?
-		and case when coalesce(trim(auth_index), '') <> '' or coalesce(trim(account_id_snapshot), '') <> '' then ''
-			else coalesce(trim(account_snapshot), '')
-		end = ?
-		order by id asc limit 2`,
-		model.AccountActionStatusPending,
-		input.AuthFileName,
-		input.ActionType,
-		input.ReasonCode,
-		authIndexIdentity,
-		accountIDIdentity,
-		providerIdentity,
-		accountSnapshotIdentity,
-	)
+	id, found, err := findPendingCandidateID(ctx, tx, input)
 	if err != nil {
 		return model.AccountActionCandidate{}, err
 	}
@@ -155,6 +149,67 @@ func (r *repository) Upsert(ctx context.Context, input model.AccountActionCandid
 	return item, nil
 }
 
+func findPendingCandidateID(ctx context.Context, tx *sql.Tx, input model.AccountActionCandidateUpsert) (int64, bool, error) {
+	base := `select id from account_action_candidates
+		where status = ? and auth_file_name = ? and action_type = ?
+		and coalesce(trim(reason_code), '') = ?`
+	args := []any{
+		model.AccountActionStatusPending,
+		input.AuthFileName,
+		input.ActionType,
+		input.ReasonCode,
+	}
+	provider := normalizeProvider(input.Provider)
+	if provider == "codex" {
+		if input.AuthIndex != "" {
+			query := base + `
+				and coalesce(trim(auth_index), '') = ?
+				and (coalesce(lower(replace(trim(provider), '_', '-')), '') = '' or coalesce(lower(replace(trim(provider), '_', '-')), '') = 'codex')`
+			args = append(args, input.AuthIndex)
+			if input.AccountIDSnapshot != "" {
+				query += ` and (coalesce(trim(account_id_snapshot), '') = '' or trim(account_id_snapshot) = ?)`
+				args = append(args, input.AccountIDSnapshot)
+			}
+			if input.AccountSnapshot != "" {
+				// A workspace-only pending row is not owned by the new member.
+				// Require exact strong-member evidence before reusing it; otherwise
+				// the update below would silently bind the row to this member.
+				query += ` and lower(trim(account_snapshot)) = ?`
+				args = append(args, input.AccountSnapshot)
+			}
+			return querySingleCandidateID(ctx, tx, query+` order by id asc limit 2`, args...)
+		}
+		if input.AccountIDSnapshot == "" || input.AccountSnapshot == "" {
+			// Preserve an unowned review row if the caller wants to display it,
+			// but never let incomplete Codex evidence select an existing row.
+			return 0, false, nil
+		}
+
+		return querySingleCandidateID(ctx, tx, base+`
+			and coalesce(trim(auth_index), '') = ''
+			and coalesce(lower(replace(trim(provider), '_', '-')), '') = 'codex'
+			and trim(account_id_snapshot) = ?
+			and lower(trim(account_snapshot)) = ?
+			order by id asc limit 2`, append(args, input.AccountIDSnapshot, input.AccountSnapshot)...)
+	}
+
+	authIndexIdentity, accountIDIdentity, providerIdentity, accountSnapshotIdentity := candidateIdentity(input)
+	return querySingleCandidateID(ctx, tx, base+`
+		and coalesce(trim(auth_index), '') = ?
+		and case when coalesce(trim(auth_index), '') <> '' then '' else coalesce(trim(account_id_snapshot), '') end = ?
+		and case when coalesce(trim(auth_index), '') <> '' then ''
+			else case coalesce(lower(replace(trim(provider), '_', '-')), '')
+				when 'x-ai' then 'xai'
+				when 'grok' then 'xai'
+				else coalesce(lower(replace(trim(provider), '_', '-')), '')
+			end
+		end = ?
+		and case when coalesce(trim(auth_index), '') <> '' or coalesce(trim(account_id_snapshot), '') <> '' then ''
+			else coalesce(trim(account_snapshot), '')
+		end = ?
+		order by id asc limit 2`, append(args, authIndexIdentity, accountIDIdentity, providerIdentity, accountSnapshotIdentity)...)
+}
+
 func candidateIdentity(input model.AccountActionCandidateUpsert) (authIndex string, accountID string, provider string, accountSnapshot string) {
 	authIndex = strings.TrimSpace(input.AuthIndex)
 	if authIndex != "" {
@@ -175,6 +230,20 @@ func findUpgradeableCandidateID(ctx context.Context, tx *sql.Tx, input model.Acc
 		input.AuthFileName,
 		input.ActionType,
 		input.ReasonCode,
+	}
+	if provider == "codex" {
+		// An old no-index row is only upgradeable when it already carries the
+		// same Workspace and strong member evidence. account_id alone is a
+		// shared Team Workspace and is never sufficient for an upgrade.
+		if input.AuthIndex == "" || input.AccountIDSnapshot == "" || accountSnapshot == "" {
+			return 0, false, nil
+		}
+		return querySingleCandidateID(ctx, tx, `select id from account_action_candidates
+			where status = ? and auth_file_name = ? and action_type = ? and coalesce(trim(reason_code), '') = ?
+				and coalesce(trim(auth_index), '') = '' and coalesce(trim(account_id_snapshot), '') = ?
+				and lower(trim(account_snapshot)) = ?
+				and coalesce(lower(replace(trim(provider), '_', '-')), '') = 'codex'
+			order by id asc limit 2`, append(baseArgs, input.AccountIDSnapshot, accountSnapshot)...)
 	}
 	if input.AuthIndex != "" && input.AccountIDSnapshot != "" && provider != "" {
 		id, found, err := querySingleCandidateID(ctx, tx, `select id from account_action_candidates

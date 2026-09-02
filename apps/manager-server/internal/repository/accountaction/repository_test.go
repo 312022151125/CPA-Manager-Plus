@@ -283,3 +283,52 @@ func TestUpsertUpgradesFallbackIdentityWhenStableLocatorAppears(t *testing.T) {
 		t.Fatalf("upgraded candidate = %#v, first = %#v", upgraded, first)
 	}
 }
+
+func TestUpsertDoesNotBindNewCodexMemberToWorkspaceOnlyCandidate(t *testing.T) {
+	ctx := context.Background()
+	st := testutil.NewStore(t, testutil.NewConfig(t))
+	repo := st.AccountActions
+
+	workspaceOnly, err := repo.Upsert(ctx, model.AccountActionCandidateUpsert{
+		ActionType:        model.AccountActionTypeReauth,
+		Provider:          "codex",
+		AuthFileName:      "shared.json",
+		AuthIndex:         "auth-1",
+		AccountIDSnapshot: "workspace-1",
+		ReasonCode:        "token_revoked",
+		Reason:            "workspace-only pending review",
+		SeenAtMS:          1000,
+	})
+	if err != nil {
+		t.Fatalf("upsert workspace-only candidate: %v", err)
+	}
+
+	member, err := repo.Upsert(ctx, model.AccountActionCandidateUpsert{
+		ActionType:        model.AccountActionTypeReauth,
+		Provider:          "codex",
+		AuthFileName:      "shared.json",
+		AuthIndex:         "auth-1",
+		AccountSnapshot:   "bob@example.com",
+		AccountIDSnapshot: "workspace-1",
+		ReasonCode:        "token_revoked",
+		Reason:            "member-specific pending review",
+		SeenAtMS:          2000,
+	})
+	if err != nil {
+		t.Fatalf("upsert member candidate: %v", err)
+	}
+	if member.ID == workspaceOnly.ID {
+		t.Fatalf("new Codex member reused workspace-only candidate %d", member.ID)
+	}
+	if workspaceOnly.AccountSnapshot != "" || member.AccountSnapshot != "bob@example.com" {
+		t.Fatalf("candidate identities = workspace-only %#v, member %#v", workspaceOnly, member)
+	}
+
+	items, err := repo.List(ctx, model.AccountActionStatusPending, 10)
+	if err != nil {
+		t.Fatalf("list pending candidates: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("pending candidates = %#v, want workspace-only and member-specific rows", items)
+	}
+}

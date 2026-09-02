@@ -344,8 +344,8 @@ func TestToAccountBuildsStableDistinctFallbackKeys(t *testing.T) {
 		"account":    "new-label@example.com",
 		"account_id": "account-1",
 	})
-	if oldLabel.Key != newLabel.Key {
-		t.Fatalf("account ID fallback key changed with label: old=%q new=%q", oldLabel.Key, newLabel.Key)
+	if oldLabel.Key == newLabel.Key {
+		t.Fatalf("same Codex Workspace merged different members: old=%q new=%q", oldLabel.Key, newLabel.Key)
 	}
 	if inspectionActionIdentityKey(resultFromAccount(first)) == inspectionActionIdentityKey(resultFromAccount(second)) {
 		t.Fatal("same-name account snapshots shared an action identity")
@@ -370,6 +370,75 @@ func TestToAccountBuildsStableDistinctFallbackKeys(t *testing.T) {
 	})
 	if renamedLabel.Key != labelOnly.Key {
 		t.Fatalf("label-only runtime key changed with display label: old=%q new=%q", labelOnly.Key, renamedLabel.Key)
+	}
+}
+
+func TestInspectionIdentityRejectsInvalidCodexAccountEvidence(t *testing.T) {
+	candidate := toAccount(authFile{
+		"id":         "runtime-conflict",
+		"name":       "shared.json",
+		"provider":   "codex",
+		"auth_index": "auth-1",
+		"account_id": "workspace-a",
+		"account":    "alice@example.com",
+		"metadata": map[string]any{
+			"id_token": map[string]any{"account_id": "workspace-b"},
+		},
+	})
+	result := model.CodexInspectionResult{
+		FileName:        "shared.json",
+		Provider:        "codex",
+		AuthIndex:       "auth-1",
+		AccountID:       "workspace-a",
+		AccountSnapshot: "alice@example.com",
+	}
+	if inspectionResultMatchesCurrentAccount(result, candidate) {
+		t.Fatalf("invalid Codex account evidence matched mutation target: %#v", candidate)
+	}
+}
+
+func TestToAccountRejectsConflictingExplicitCodexMemberEvidence(t *testing.T) {
+	candidate := toAccount(authFile{
+		"id":               "runtime-member-conflict",
+		"name":             "shared.json",
+		"provider":         "codex",
+		"auth_index":       "auth-1",
+		"account_id":       "workspace-a",
+		"account_snapshot": "bob@example.com",
+		"accountSnapshot":  "alice@example.com",
+		"account":          "alice@example.com",
+	})
+	if candidate.AccountSnapshot != "" || !candidate.AccountSnapshotInvalid {
+		t.Fatalf("conflicting member evidence = %#v, want invalid and no member", candidate)
+	}
+	result := model.CodexInspectionResult{
+		FileName:        "shared.json",
+		Provider:        "codex",
+		AuthIndex:       "auth-1",
+		AccountID:       "workspace-a",
+		AccountSnapshot: "alice@example.com",
+	}
+	if inspectionResultMatchesCurrentAccount(result, candidate) {
+		t.Fatal("conflicting Codex member evidence matched a mutation target")
+	}
+}
+
+func TestToAccountRejectsStrongCodexMemberSnapshotConflictingWithDisplayEmail(t *testing.T) {
+	for _, field := range []string{"account", "email"} {
+		t.Run(field, func(t *testing.T) {
+			candidate := toAccount(authFile{
+				"id":               "runtime-member-display-conflict",
+				"name":             "shared.json",
+				"provider":         "codex",
+				"auth_index":       "auth-1",
+				"account_id":       "workspace-a",
+				"account_snapshot": "alice@example.com",
+				field:              "bob@example.com",
+			})
+			if candidate.AccountSnapshot != "" || !candidate.AccountSnapshotInvalid {
+				t.Fatalf("conflicting member evidence = %#v, want invalid and no member", candidate)
+			}
+		})
 	}
 }
 
@@ -2954,7 +3023,7 @@ func TestApplyDisableOwnershipRejectsSameFileReplacement(t *testing.T) {
 	}
 }
 
-func TestApplyDisableOwnershipUsesAccountIDBeforeSnapshot(t *testing.T) {
+func TestApplyDisableOwnershipRequiresCodexMemberMatch(t *testing.T) {
 	db := newCodexInspectionTestStore(t)
 	if err := db.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
 		FileName:        "shared-auth.json",
@@ -2975,8 +3044,48 @@ func TestApplyDisableOwnershipUsesAccountIDBeforeSnapshot(t *testing.T) {
 		Disabled:       true,
 	}}
 	New(db, nil).applyDisableOwnership(context.Background(), accounts, runLogger{})
-	if !accounts[0].AutoRecoverOwned {
-		t.Fatalf("stable account ID did not retain ownership: %#v", accounts[0])
+	if accounts[0].AutoRecoverOwned {
+		t.Fatalf("Codex Workspace ID overrode a conflicting member snapshot: %#v", accounts[0])
+	}
+	ownership, err := db.ListCodexInspectionDisableOwnership(context.Background())
+	if err != nil {
+		t.Fatalf("list ownership: %v", err)
+	}
+	if len(ownership) != 0 {
+		t.Fatalf("conflicting member ownership = %#v, want removed", ownership)
+	}
+}
+
+func TestApplyDisableOwnershipRejectsWorkspaceOnlyCodexOwnership(t *testing.T) {
+	db := newCodexInspectionTestStore(t)
+	if err := db.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
+		FileName:     "shared-auth.json",
+		Provider:     "codex",
+		AuthIndex:    "auth-1",
+		AccountID:    "workspace-1",
+		DisabledAtMS: time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatalf("save workspace-only inspection disable ownership: %v", err)
+	}
+
+	accounts := []account{{
+		FileName:        "shared-auth.json",
+		Provider:        "codex",
+		AuthIndex:       "auth-1",
+		AccountID:       "workspace-1",
+		AccountSnapshot: "bob@example.com",
+		Disabled:        true,
+	}}
+	New(db, nil).applyDisableOwnership(context.Background(), accounts, runLogger{})
+	if accounts[0].AutoRecoverOwned {
+		t.Fatalf("workspace-only Codex ownership granted Bob recovery: %#v", accounts[0])
+	}
+	ownership, err := db.ListCodexInspectionDisableOwnership(context.Background())
+	if err != nil {
+		t.Fatalf("list ownership: %v", err)
+	}
+	if len(ownership) != 0 {
+		t.Fatalf("workspace-only ownership = %#v, want stale ownership removed", ownership)
 	}
 }
 

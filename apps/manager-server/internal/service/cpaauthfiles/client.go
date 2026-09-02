@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 const (
@@ -23,6 +24,8 @@ const (
 )
 
 var ErrAuthFileNotFound = errors.New("CPA auth file not found")
+
+var ErrAuthFileAmbiguous = errors.New("CPA auth file selector is ambiguous")
 
 var ErrIdentityMismatch = errors.New("CPA auth file identity mismatch")
 
@@ -61,8 +64,14 @@ type File struct {
 	Provider        string
 	AccountSnapshot string
 	AccountID       string
-	Disabled        bool
-	Raw             map[string]any
+	// AccountIDInvalid distinguishes an explicit but conflicting/malformed
+	// Codex account-id payload from a credential that simply has no account-id
+	// evidence. Both expose an empty AccountID, but only the former must make
+	// identity verification fail closed even when another field matches.
+	AccountIDInvalid       bool
+	AccountSnapshotInvalid bool
+	Disabled               bool
+	Raw                    map[string]any
 }
 
 type StatusMutationTarget struct {
@@ -279,17 +288,15 @@ func responseTooLargeError(label string, limit int64) error {
 }
 
 func (c *Client) Verify(ctx context.Context, baseURL string, managementKey string, identity Identity) (File, error) {
-	file, ok, err := c.Find(ctx, baseURL, managementKey, identity.AuthFileName, identity.AuthIndex)
+	files := make([]File, 0, 1)
+	err := c.visit(ctx, baseURL, managementKey, identity.AuthFileName, identity.AuthIndex, func(file File) (bool, error) {
+		files = append(files, file)
+		return false, nil
+	})
 	if err != nil {
 		return File{}, err
 	}
-	if !ok {
-		return File{}, ErrAuthFileNotFound
-	}
-	if err := verifyFileIdentity(file, identity); err != nil {
-		return File{}, err
-	}
-	return file, nil
+	return VerifyIdentity(files, identity)
 }
 
 func (c *Client) ResolveVerifiedStatusMutationTarget(
@@ -992,6 +999,18 @@ func Find(files []File, fileName string, authIndex string) (File, bool) {
 	return File{}, false
 }
 
+func matchingFiles(files []File, fileName string, authIndex string) []File {
+	fileName = strings.TrimSpace(fileName)
+	authIndex = strings.TrimSpace(authIndex)
+	matched := make([]File, 0, 1)
+	for _, file := range files {
+		if matches(file, fileName, authIndex) {
+			matched = append(matched, file)
+		}
+	}
+	return matched
+}
+
 func matches(file File, fileName string, authIndex string) bool {
 	fileName = strings.TrimSpace(fileName)
 	authIndex = strings.TrimSpace(authIndex)
@@ -1005,14 +1024,80 @@ func matches(file File, fileName string, authIndex string) bool {
 }
 
 func VerifyIdentity(files []File, identity Identity) (File, error) {
-	file, ok := Find(files, identity.AuthFileName, identity.AuthIndex)
-	if !ok {
+	candidates := matchingFiles(files, identity.AuthFileName, identity.AuthIndex)
+	if len(candidates) == 0 {
 		return File{}, ErrAuthFileNotFound
 	}
+	codexSelector := normalizeAuthProvider(identity.Provider) == "codex"
+	if codexSelector && len(candidates) > 1 {
+		narrowed, applicable := narrowCodexIdentityCandidates(candidates, identity)
+		if !applicable {
+			return File{}, fmt.Errorf(
+				"%w: file %q auth_index %q matched %d credentials",
+				ErrAuthFileAmbiguous,
+				strings.TrimSpace(identity.AuthFileName),
+				strings.TrimSpace(identity.AuthIndex),
+				len(candidates),
+			)
+		}
+		if len(narrowed) == 0 {
+			return File{}, fmt.Errorf(
+				"%w: file %q auth_index %q has no matching Codex Workspace member",
+				ErrIdentityMismatch,
+				strings.TrimSpace(identity.AuthFileName),
+				strings.TrimSpace(identity.AuthIndex),
+			)
+		}
+		candidates = narrowed
+	}
+	if codexSelector && len(candidates) > 1 {
+		return File{}, fmt.Errorf(
+			"%w: file %q auth_index %q matched %d credentials",
+			ErrAuthFileAmbiguous,
+			strings.TrimSpace(identity.AuthFileName),
+			strings.TrimSpace(identity.AuthIndex),
+			len(candidates),
+		)
+	}
+	// Find historically returns the first matching file. Preserve that
+	// behavior for non-Codex providers and for a unique Codex candidate.
+	file := candidates[0]
 	if err := verifyFileIdentity(file, identity); err != nil {
 		return File{}, err
 	}
 	return file, nil
+}
+
+// narrowCodexIdentityCandidates disambiguates a shared file/auth-index
+// selector only when every candidate exposes complete, non-conflicting
+// Workspace+member evidence. A missing or invalid candidate keeps the selector
+// ambiguous; an unknown Team member must never be hidden by a known match.
+func narrowCodexIdentityCandidates(candidates []File, identity Identity) ([]File, bool) {
+	if len(candidates) <= 1 || normalizeAuthProvider(identity.Provider) != "codex" {
+		return nil, false
+	}
+	expectedWorkspace, workspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(identity.AccountIDSnapshot)
+	expectedMember, memberOK := usageidentity.NormalizeCodexMemberSnapshot(identity.AccountSnapshot)
+	if !workspaceOK || !memberOK {
+		return nil, false
+	}
+
+	matched := make([]File, 0, 1)
+	for _, candidate := range candidates {
+		if candidate.AccountIDInvalid || candidate.AccountSnapshotInvalid ||
+			normalizeAuthProvider(candidate.Provider) != "codex" {
+			return nil, false
+		}
+		workspace, candidateWorkspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(candidate.AccountID)
+		member, candidateMemberOK := usageidentity.NormalizeCodexMemberSnapshot(candidate.AccountSnapshot)
+		if !candidateWorkspaceOK || !candidateMemberOK {
+			return nil, false
+		}
+		if workspace == expectedWorkspace && member == expectedMember && verifyFileIdentity(candidate, identity) == nil {
+			matched = append(matched, candidate)
+		}
+	}
+	return matched, true
 }
 
 func VerifyResolvedIdentity(file File, identity Identity) error {
@@ -1029,11 +1114,75 @@ func verifyFileIdentity(file File, identity Identity) error {
 	if identity.AuthIndex != "" && strings.TrimSpace(file.AuthIndex) != strings.TrimSpace(identity.AuthIndex) {
 		return fmt.Errorf("%w: auth_index mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.AuthIndex), strings.TrimSpace(file.AuthIndex))
 	}
-	if identity.AccountIDSnapshot != "" && file.AccountID != strings.TrimSpace(identity.AccountIDSnapshot) {
+	provider := normalizeAuthProvider(file.Provider)
+	hasCodexCredentialLocator := strings.TrimSpace(identity.AuthIndex) != "" || strings.TrimSpace(identity.RuntimeID) != ""
+	if provider == "codex" {
+		expectedAccountID := strings.TrimSpace(identity.AccountIDSnapshot)
+		expectedMember := strings.TrimSpace(identity.AccountSnapshot)
+		if !hasCodexCredentialLocator {
+			if expectedAccountID != "" {
+				normalizedWorkspace, workspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(expectedAccountID)
+				if !workspaceOK {
+					return fmt.Errorf(
+						"%w: Codex workspace identity is invalid",
+						ErrIdentityMismatch,
+					)
+				}
+				expectedAccountID = normalizedWorkspace
+			}
+			if expectedMember != "" {
+				normalizedMember, memberOK := usageidentity.NormalizeCodexMemberSnapshot(expectedMember)
+				if !memberOK {
+					return fmt.Errorf(
+						"%w: Codex member identity is invalid",
+						ErrIdentityMismatch,
+					)
+				}
+				expectedMember = normalizedMember
+			}
+			if expectedAccountID == "" || expectedMember == "" {
+				return fmt.Errorf(
+					"%w: Codex mutation requires workspace+member identity",
+					ErrIdentityMismatch,
+				)
+			}
+		}
+		if file.AccountIDInvalid {
+			return fmt.Errorf("%w: account_id evidence is invalid or conflicting", ErrIdentityMismatch)
+		}
+		if file.AccountSnapshotInvalid {
+			return fmt.Errorf("%w: account_snapshot evidence is invalid or conflicting", ErrIdentityMismatch)
+		}
+		if expectedAccountID != "" {
+			normalizedExpected, expectedOK := usageidentity.NormalizeCodexWorkspaceSnapshot(expectedAccountID)
+			if !expectedOK || file.AccountID != normalizedExpected {
+				return fmt.Errorf("%w: account_id mismatch (expected %q, got %q)", ErrIdentityMismatch, expectedAccountID, file.AccountID)
+			}
+		}
+	} else if identity.AccountIDSnapshot != "" && file.AccountID != strings.TrimSpace(identity.AccountIDSnapshot) {
 		return fmt.Errorf("%w: account_id mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.AccountIDSnapshot), file.AccountID)
 	}
 	if identity.Provider != "" && normalizeAuthProvider(file.Provider) != normalizeAuthProvider(identity.Provider) {
 		return fmt.Errorf("%w: provider mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.Provider), file.Provider)
+	}
+	if provider == "codex" && strings.TrimSpace(identity.AccountSnapshot) != "" {
+		expectedMember, expectedOK := usageidentity.NormalizeCodexMemberSnapshot(identity.AccountSnapshot)
+		if !expectedOK && hasCodexCredentialLocator {
+			// A label or filename can remain in a legacy caller's
+			// account_snapshot field. It is not member evidence, but an explicit
+			// auth_index/runtime id still identifies the physical credential.
+			// Ignore only this weak value; workspace and all strong evidence above
+			// remain enforced.
+			if identity.Provider != "" && provider != normalizeAuthProvider(identity.Provider) {
+				return fmt.Errorf("%w: provider mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.Provider), file.Provider)
+			}
+			return nil
+		}
+		actualMember, actualOK := usageidentity.NormalizeCodexMemberSnapshot(file.AccountSnapshot)
+		if !expectedOK || !actualOK || expectedMember != actualMember {
+			return fmt.Errorf("%w: account_snapshot mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.AccountSnapshot), file.AccountSnapshot)
+		}
+		return nil
 	}
 	if identity.AccountIDSnapshot == "" && identity.AccountSnapshot != "" && file.AccountSnapshot != strings.TrimSpace(identity.AccountSnapshot) {
 		return fmt.Errorf("%w: account_snapshot mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.AccountSnapshot), file.AccountSnapshot)
@@ -1290,15 +1439,20 @@ func filesFromJSON(value any) []File {
 }
 
 func FromMap(file map[string]any) File {
+	provider := normalizeAuthProvider(stringField(file, "provider", "type"))
+	accountID, accountIDInvalid := accountIDField(file, provider)
+	accountSnapshot, accountSnapshotInvalid := accountSnapshotField(file, provider)
 	return File{
-		ID:              stringField(file, "id"),
-		Name:            stringField(file, "name", "file_name", "fileName", "id"),
-		AuthIndex:       stringField(file, "auth_index", "authIndex", "auth-index"),
-		Provider:        normalizeAuthProvider(stringField(file, "provider", "type")),
-		AccountSnapshot: stringField(file, "account", "email", "display_account", "displayAccount"),
-		AccountID:       accountIDField(file),
-		Disabled:        disabledField(file),
-		Raw:             file,
+		ID:                     stringField(file, "id"),
+		Name:                   stringField(file, "name", "file_name", "fileName", "id"),
+		AuthIndex:              stringField(file, "auth_index", "authIndex", "auth-index"),
+		Provider:               provider,
+		AccountSnapshot:        accountSnapshot,
+		AccountID:              accountID,
+		AccountIDInvalid:       accountIDInvalid,
+		AccountSnapshotInvalid: accountSnapshotInvalid,
+		Disabled:               disabledField(file),
+		Raw:                    file,
 	}
 }
 
@@ -1319,28 +1473,149 @@ var accountIDFieldNames = []string{
 	"sub",
 }
 
-func accountIDField(file map[string]any) string {
-	if value := stringField(file, accountIDFieldNames...); value != "" {
-		return value
-	}
-	for _, key := range []string{"id_token", "idToken", "metadata", "attributes"} {
-		if value := accountIDFromValue(file[key]); value != "" {
-			return value
-		}
-	}
-	return ""
+var codexAccountIDFieldNames = []string{
+	"account_id", "accountId", "chatgpt_account_id", "chatgptAccountId",
 }
 
-func accountIDFromValue(value any) string {
+func accountSnapshotField(file map[string]any, provider string) (string, bool) {
+	if provider != "codex" {
+		return stringField(file, "account", "email", "display_account", "displayAccount"), false
+	}
+
+	// account_snapshot, account, and email can all carry member evidence in
+	// different CPA response shapes. Only email-shaped values are strong
+	// evidence, but every strong value must agree; choosing one over another
+	// would allow a stale or cross-member response to pass verification.
+	strongMembers := make([]string, 0, 4)
+	addStrongMember := func(value string) bool {
+		candidate, ok := usageidentity.NormalizeCodexMemberSnapshot(value)
+		if !ok {
+			return true
+		}
+		if len(strongMembers) > 0 && strongMembers[0] != candidate {
+			return false
+		}
+		strongMembers = append(strongMembers, candidate)
+		return true
+	}
+	for _, key := range []string{"account_snapshot", "accountSnapshot"} {
+		raw, present := file[key]
+		if !present || raw == nil {
+			continue
+		}
+		// Keep the raw value here. NormalizeCodexMemberSnapshot intentionally
+		// trims ASCII spaces only; trimming with strings.TrimSpace first would
+		// silently turn Unicode-whitespace input into a different identity than
+		// the Go/SQLite account-key implementation accepts.
+		value := fmt.Sprint(raw)
+		if value == "" || value == "<nil>" {
+			continue
+		}
+		if !addStrongMember(value) {
+			return "", true
+		}
+	}
+	for _, key := range []string{"account", "email"} {
+		if !addStrongMember(rawStringField(file, key)) {
+			return "", true
+		}
+	}
+	if len(strongMembers) == 0 {
+		return "", false
+	}
+	return strongMembers[0], false
+}
+
+func accountIDField(file map[string]any, provider string) (string, bool) {
+	if provider == "codex" {
+		return codexAccountIDField(file)
+	}
+	fieldNames := accountIDFieldNames
+	if value := stringField(file, fieldNames...); value != "" {
+		return value, false
+	}
+	for _, key := range []string{"id_token", "idToken", "metadata", "attributes"} {
+		if value := accountIDFromValue(file[key], provider); value != "" {
+			return value, false
+		}
+	}
+	return "", false
+}
+
+// codexAccountIDField collects every explicit Codex account-id candidate
+// before deciding. A first-candidate read is unsafe because auth files can
+// carry the same evidence in direct fields, metadata, and token payloads. An
+// empty result with invalid=true means an explicit value was malformed or the
+// candidates disagreed; callers must not treat it as a wildcard.
+func codexAccountIDField(file map[string]any) (string, bool) {
+	values := make(map[string]struct{})
+	invalid := false
+	var visit func(any)
+	visit = func(input any) {
+		record, ok := input.(map[string]any)
+		if !ok {
+			return
+		}
+		if record == nil {
+			return
+		}
+		for _, key := range codexAccountIDFieldNames {
+			raw, present := record[key]
+			if !present {
+				continue
+			}
+			if raw == nil {
+				continue
+			}
+			if text, ok := raw.(string); ok && strings.TrimSpace(text) == "" {
+				continue
+			}
+			value, ok := normalizeCodexAccountIDValue(raw)
+			if !ok {
+				invalid = true
+				continue
+			}
+			values[value] = struct{}{}
+		}
+		for _, key := range []string{"id_token", "idToken", "metadata", "attributes"} {
+			nested := record[key]
+			if child, ok := nested.(map[string]any); ok {
+				visit(child)
+			}
+		}
+	}
+	visit(map[string]any(file))
+	if invalid || len(values) > 1 {
+		return "", true
+	}
+	for value := range values {
+		return value, false
+	}
+	return "", false
+}
+func normalizeCodexAccountIDValue(value any) (string, bool) {
+	switch value.(type) {
+	case string, json.Number, float64, float32, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return usageidentity.NormalizeCodexWorkspaceSnapshot(fmt.Sprint(value))
+	default:
+		return "", false
+	}
+}
+
+func accountIDFromValue(value any, provider string) string {
 	child, ok := value.(map[string]any)
 	if !ok || child == nil {
 		return ""
 	}
-	if accountID := stringField(child, accountIDFieldNames...); accountID != "" {
+	fieldNames := accountIDFieldNames
+	if provider == "codex" {
+		fieldNames = codexAccountIDFieldNames
+	}
+	if accountID := stringField(child, fieldNames...); accountID != "" {
 		return accountID
 	}
 	for _, key := range []string{"id_token", "idToken"} {
-		if accountID := accountIDFromValue(child[key]); accountID != "" {
+		if accountID := accountIDFromValue(child[key], provider); accountID != "" {
 			return accountID
 		}
 	}
@@ -1369,6 +1644,18 @@ func stringField(file map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if raw, ok := file[key]; ok && raw != nil {
 			value := strings.TrimSpace(fmt.Sprint(raw))
+			if value != "" && value != "<nil>" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func rawStringField(file map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if raw, ok := file[key]; ok && raw != nil {
+			value := fmt.Sprint(raw)
 			if value != "" && value != "<nil>" {
 				return value
 			}
