@@ -5,6 +5,7 @@ import {
   getAccountCredentialEvidenceCutoffs,
   getEffectiveAccountInspectionAction,
   hasPendingAccountInspectionAction,
+  isKnownHealthyCodexQuota,
   mergeConfirmedReauthCodexQuotaStates,
   reconcileCodexQuotaEvidence,
   stripSupersededAccountInspectionStatus,
@@ -114,6 +115,80 @@ describe('confirmed reauth Codex quota state merge', () => {
     });
   });
 
+  it.each([429, 503])(
+    'does not use the HTTP %s lifecycle timestamp to replace fresher source windows',
+    (status) => {
+      const result = mergeConfirmedReauthCodexQuotaStates(
+        providerQuota({ planType: 'team' }),
+        {
+          status: 'error',
+          windows: [
+            {
+              id: 'weekly',
+              label: 'Weekly replacement cache',
+              usedPercent: 20,
+              resetLabel: 'stale',
+              observedAtMs: 500,
+            },
+          ],
+          quotaInventoryObserved: true,
+          planType: 'plus',
+          fetchedAtMs: 500,
+          observedAtMs: 500,
+          error: `HTTP ${status}`,
+          errorStatus: status,
+          failedAtMs: 1_500,
+        },
+        2_000
+      );
+
+      expect(result).toMatchObject({
+        status: 'error',
+        errorStatus: status,
+        failedAtMs: 1_500,
+        planType: 'team',
+        fetchedAtMs: 1_000,
+        windows: [expect.objectContaining({ usedPercent: 100, observedAtMs: 1_000 })],
+      });
+    }
+  );
+
+  it('keeps fresher scalar quota facts when an error carries an older inherited payload', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota({
+        planType: 'team',
+        subscriptionActiveUntil: 'team-until',
+        creditsBalance: '40',
+        rateLimitResetCreditsAvailableCount: 4,
+      }),
+      {
+        status: 'error',
+        windows: [],
+        quotaInventoryObserved: true,
+        planType: 'plus',
+        subscriptionActiveUntil: 'plus-until',
+        creditsBalance: '10',
+        rateLimitResetCreditsAvailableCount: 0,
+        fetchedAtMs: 500,
+        observedAtMs: 500,
+        error: 'HTTP 503',
+        errorStatus: 503,
+        failedAtMs: 1_500,
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'error',
+      errorStatus: 503,
+      failedAtMs: 1_500,
+      planType: 'team',
+      subscriptionActiveUntil: 'team-until',
+      creditsBalance: '40',
+      rateLimitResetCreditsAvailableCount: 4,
+    });
+  });
+
   it('retains rate-limit reset credits and plan metadata alongside an error-only replacement', () => {
     const result = mergeConfirmedReauthCodexQuotaStates(
       providerQuota({
@@ -174,6 +249,60 @@ describe('confirmed reauth Codex quota state merge', () => {
       status: 'success',
       windows: [expect.objectContaining({ usedPercent: 20, resetLabel: 'new' })],
     });
+  });
+
+  it('lets an authoritative inventory clear stale quota-limit and diagnostic facts', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota({
+        activeLimit: 'secondary',
+        creditsOverageLimitReached: true,
+        spendControlReached: true,
+        spendControlIndividualLimit: 100,
+        rateLimitReachedType: 'secondary',
+        primaryOverSecondaryLimitPercent: 100,
+        observedFromUsageHeaders: true,
+        observedErrorKind: 'rate_limit',
+        observedErrorCode: 'usage_limit_reached',
+        rateLimitResetCreditsError: 'old error',
+      }),
+      providerQuota({
+        fetchedAtMs: 3_000,
+        observedAtMs: 3_000,
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly new',
+            usedPercent: 20,
+            resetLabel: 'new',
+            observedAtMs: 3_000,
+          },
+        ],
+        activeLimit: null,
+        creditsOverageLimitReached: false,
+        spendControlReached: null,
+        spendControlIndividualLimit: null,
+        rateLimitReachedType: null,
+        primaryOverSecondaryLimitPercent: null,
+        rateLimitResetCreditsError: null,
+      }),
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      windows: [expect.objectContaining({ usedPercent: 20 })],
+      activeLimit: null,
+      creditsOverageLimitReached: false,
+      spendControlReached: null,
+      spendControlIndividualLimit: null,
+      rateLimitReachedType: null,
+      primaryOverSecondaryLimitPercent: null,
+      rateLimitResetCreditsError: null,
+    });
+    expect(result?.observedFromUsageHeaders).toBeUndefined();
+    expect(result?.observedErrorKind).toBeUndefined();
+    expect(result?.observedErrorCode).toBeUndefined();
+    expect(isKnownHealthyCodexQuota(result)).toBe(true);
   });
 
   it('clears an older 401 before applying a newer complete quota inventory', () => {
