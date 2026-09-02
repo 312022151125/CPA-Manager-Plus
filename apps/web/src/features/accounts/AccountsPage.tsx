@@ -211,6 +211,7 @@ import {
   getAuthFileCodexStatus,
   getAuthFilePatchTarget,
   getAuthFileSelectionKey,
+  getAuthFileCredentialStatusCodes,
   getAuthFileScopedCodexQuota,
   getFreshAuthFileCodexStatusSources,
   hasPartialSharedAuthFileSelection,
@@ -379,6 +380,11 @@ interface CodexCredentialEvidenceInvalidation {
   invalidatedAtMs: number;
 }
 
+interface AccountDirectReauthReconciliationBatch {
+  files: AuthFileItem[];
+  reconciliations: Map<string, AccountDirectReauthReconciliation>;
+}
+
 interface AccountCredentialEvidenceBoundarySessionState {
   scopeKey: string;
   evidence: Map<string, AccountCredentialEvidenceBoundary>;
@@ -407,8 +413,10 @@ const EMPTY_ACCOUNT_CREDENTIAL_EVIDENCE_BOUNDARY: AccountCredentialEvidenceBound
   fallbackActionBaselinePending: false,
   fallbackCooldownAtMs: 0,
   fallbackCooldownBaselinePending: false,
+  authenticationAtMs: 0,
   rawStatusAtMs: 0,
   rawStatusMessages: [],
+  rawStatusCodes: [],
 };
 
 const mirrorAccountCredentialEvidenceBoundaryToFallback = (
@@ -428,6 +436,10 @@ const mirrorAccountCredentialEvidenceBoundaryToFallback = (
   fallbackCooldownAtMs: Math.max(boundary.fallbackCooldownAtMs, boundary.cooldownAtMs),
   fallbackCooldownBaselinePending:
     boundary.fallbackCooldownBaselinePending === true || boundary.cooldownBaselinePending === true,
+  authenticationAtMs: boundary.authenticationAtMs,
+  rawStatusAtMs: boundary.rawStatusAtMs,
+  rawStatusMessages: boundary.rawStatusMessages,
+  rawStatusCodes: boundary.rawStatusCodes,
 });
 
 const toFallbackAccountCredentialEvidenceBoundary = (
@@ -448,6 +460,10 @@ const toFallbackAccountCredentialEvidenceBoundary = (
   fallbackCooldownAtMs: Math.max(boundary.fallbackCooldownAtMs, boundary.cooldownAtMs),
   fallbackCooldownBaselinePending:
     boundary.fallbackCooldownBaselinePending === true || boundary.cooldownBaselinePending === true,
+  authenticationAtMs: boundary.authenticationAtMs,
+  rawStatusAtMs: boundary.rawStatusAtMs,
+  rawStatusMessages: boundary.rawStatusMessages,
+  rawStatusCodes: boundary.rawStatusCodes,
 });
 
 const getCredentialEvidenceUniqueFileNameBoundaryKey = (fileName: string): string =>
@@ -465,7 +481,9 @@ const releaseObservedRawStatusBoundaries = (
 ): Map<string, AccountCredentialEvidenceBoundary> => {
   let next: Map<string, AccountCredentialEvidenceBoundary> | null = null;
   current.forEach((boundary, key) => {
-    if (boundary.rawStatusMessages.length === 0) return;
+    const boundaryRawStatusMessages = boundary.rawStatusMessages ?? [];
+    const boundaryRawStatusCodes = boundary.rawStatusCodes ?? [];
+    if (boundaryRawStatusMessages.length === 0 && boundaryRawStatusCodes.length === 0) return;
     let matchingFiles: readonly AuthFileItem[];
     if (key.startsWith(CREDENTIAL_EVIDENCE_SOURCE_FILE_BOUNDARY_PREFIX)) {
       const fileName = key.slice(CREDENTIAL_EVIDENCE_SOURCE_FILE_BOUNDARY_PREFIX.length);
@@ -481,15 +499,30 @@ const releaseObservedRawStatusBoundaries = (
     }
     if (matchingFiles.length === 0) return;
     const currentMessages = new Set(matchingFiles.map(readAccountRawStatusMessage).filter(Boolean));
-    const remainingMessages = boundary.rawStatusMessages.filter((message) =>
+    const currentStatusCodes = new Set(
+      matchingFiles.flatMap((file) => getAuthFileCredentialStatusCodes(file))
+    );
+    const remainingMessages = boundaryRawStatusMessages.filter((message) =>
       currentMessages.has(message)
     );
-    if (remainingMessages.length === boundary.rawStatusMessages.length) return;
+    const remainingStatusCodes = boundaryRawStatusCodes.filter((statusCode) =>
+      currentStatusCodes.has(statusCode)
+    );
+    if (
+      remainingMessages.length === boundaryRawStatusMessages.length &&
+      remainingStatusCodes.length === boundaryRawStatusCodes.length
+    ) {
+      return;
+    }
     if (!next) next = new Map(current);
     next.set(key, {
       ...boundary,
-      rawStatusAtMs: remainingMessages.length > 0 ? boundary.rawStatusAtMs : 0,
+      rawStatusAtMs:
+        remainingMessages.length > 0 || remainingStatusCodes.length > 0
+          ? boundary.rawStatusAtMs
+          : 0,
       rawStatusMessages: remainingMessages,
+      rawStatusCodes: remainingStatusCodes,
     });
   });
   return next ?? current;
@@ -580,6 +613,7 @@ const mergeAccountCredentialEvidenceBoundaries = (
   ...boundaries: Array<AccountCredentialEvidenceBoundary | undefined>
 ): AccountCredentialEvidenceBoundary => {
   const rawStatusMessages = new Set<string>();
+  const rawStatusCodes = new Set<number>();
   let localAtMs = 0;
   let inspectionAtMs = 0;
   let inspectionBaselinePending = false;
@@ -601,6 +635,7 @@ const mergeAccountCredentialEvidenceBoundaries = (
   let fallbackActionBaselinePending = false;
   let fallbackCooldownAtMs = 0;
   let fallbackCooldownBaselinePending = false;
+  let authenticationAtMs = 0;
   let rawStatusAtMs = 0;
   boundaries.forEach((boundary) => {
     if (!boundary) return;
@@ -635,8 +670,10 @@ const mergeAccountCredentialEvidenceBoundaries = (
     fallbackCooldownAtMs = Math.max(fallbackCooldownAtMs, boundary.fallbackCooldownAtMs);
     fallbackCooldownBaselinePending =
       fallbackCooldownBaselinePending || boundary.fallbackCooldownBaselinePending === true;
+    authenticationAtMs = Math.max(authenticationAtMs, boundary.authenticationAtMs ?? 0);
     rawStatusAtMs = Math.max(rawStatusAtMs, boundary.rawStatusAtMs);
-    boundary.rawStatusMessages.forEach((message) => rawStatusMessages.add(message));
+    (boundary.rawStatusMessages ?? []).forEach((message) => rawStatusMessages.add(message));
+    (boundary.rawStatusCodes ?? []).forEach((statusCode) => rawStatusCodes.add(statusCode));
   });
   if (
     localAtMs === 0 &&
@@ -650,8 +687,10 @@ const mergeAccountCredentialEvidenceBoundaries = (
     fallbackHeaderAtMs === 0 &&
     fallbackActionAtMs === 0 &&
     fallbackCooldownAtMs === 0 &&
+    authenticationAtMs === 0 &&
     rawStatusAtMs === 0 &&
-    rawStatusMessages.size === 0
+    rawStatusMessages.size === 0 &&
+    rawStatusCodes.size === 0
   ) {
     return EMPTY_ACCOUNT_CREDENTIAL_EVIDENCE_BOUNDARY;
   }
@@ -677,8 +716,10 @@ const mergeAccountCredentialEvidenceBoundaries = (
     fallbackActionBaselinePending,
     fallbackCooldownAtMs,
     fallbackCooldownBaselinePending,
+    authenticationAtMs,
     rawStatusAtMs,
     rawStatusMessages: Array.from(rawStatusMessages),
+    rawStatusCodes: Array.from(rawStatusCodes),
   };
 };
 
@@ -857,12 +898,20 @@ const buildCredentialMutationRawStatusBoundary = (
 ): AccountCredentialEvidenceBoundary | null => {
   const updatedAtMs = readAuthFileUpdatedAtMs(file);
   const rawStatusMessage = readAccountRawStatusMessage(file);
-  if (updatedAtMs === null || updatedAtMs > createdAtMs || !rawStatusMessage) return null;
+  const rawStatusCodes = getAuthFileCredentialStatusCodes(file);
+  if (
+    updatedAtMs === null ||
+    updatedAtMs > createdAtMs ||
+    (!rawStatusMessage && rawStatusCodes.length === 0)
+  ) {
+    return null;
+  }
   return {
     ...EMPTY_ACCOUNT_CREDENTIAL_EVIDENCE_BOUNDARY,
     localAtMs: createdAtMs,
     rawStatusAtMs: createdAtMs,
-    rawStatusMessages: [rawStatusMessage],
+    rawStatusMessages: rawStatusMessage ? [rawStatusMessage] : [],
+    rawStatusCodes,
   };
 };
 
@@ -2064,23 +2113,31 @@ export function AccountsPage() {
   const buildCurrentCredentialEvidenceBoundary = useCallback(
     ({
       targetFiles,
+      inventoryFiles = files,
       fallbackFileNames = [],
       sourceFileNames = [],
       localAtMs = Date.now(),
+      authenticationAtMs = 0,
       actionCandidateItems,
       quotaCooldownItems,
     }: {
       targetFiles: AuthFileItem[];
+      inventoryFiles?: readonly AuthFileItem[];
       fallbackFileNames?: string[];
       sourceFileNames?: string[];
       localAtMs?: number;
+      authenticationAtMs?: number;
       actionCandidateItems?: readonly AccountActionCandidate[];
       quotaCooldownItems?: Iterable<QuotaCooldownInfo>;
     }): AccountCredentialEvidenceBoundary => {
       const currentInspectionSnapshot = inspectionSnapshotRef.current;
       const currentInspectionResults = currentInspectionSnapshot?.results ?? [];
+      const inventoryFileNameCounts = inventoryFiles.reduce((counts, file) => {
+        counts.set(file.name, (counts.get(file.name) ?? 0) + 1);
+        return counts;
+      }, new Map<string, number>());
       const currentInspectionBySelectionKey = buildAccountInspectionBySelectionKey(
-        files,
+        [...inventoryFiles],
         currentInspectionResults
       );
       const currentHeaderLookup = buildUsageHeaderSnapshotLookup(headerSnapshots);
@@ -2089,7 +2146,7 @@ export function AccountsPage() {
       const targetIdentityKeys = new Set(targetFiles.map(getAuthFileCodexInspectionKeyForFile));
       const uniqueTargetFileNames = new Set(
         targetFiles
-          .filter((file) => credentialFileNameCounts.get(file.name) === 1)
+          .filter((file) => inventoryFileNameCounts.get(file.name) === 1)
           .map((file) => file.name)
       );
       const getFilenameOnlyIdentityKey = (fileName: string) =>
@@ -2102,6 +2159,7 @@ export function AccountsPage() {
       let cooldownAtMs = 0;
       let rawStatusAtMs = 0;
       const rawStatusMessages = new Set<string>();
+      const rawStatusCodes = new Set<number>();
       const currentActionCandidates = actionCandidateItems ?? accountActionCandidatesRef.current;
       const currentQuotaCooldowns = quotaCooldownItems ?? quotaCooldownsRef.current.values();
 
@@ -2115,6 +2173,9 @@ export function AccountsPage() {
         headerAtMs = Math.max(headerAtMs, headerSnapshot?.timestamp_ms ?? 0);
         const rawStatusMessage = readAccountRawStatusMessage(file);
         if (rawStatusMessage) rawStatusMessages.add(rawStatusMessage);
+        getAuthFileCredentialStatusCodes(file).forEach((statusCode) =>
+          rawStatusCodes.add(statusCode)
+        );
         rawStatusAtMs = Math.max(rawStatusAtMs, readAuthFileUpdatedAtMs(file) ?? 0);
       });
 
@@ -2146,10 +2207,15 @@ export function AccountsPage() {
           if (!sourceNames.has(fileName) && (!fallbackNames.has(fileName) || authIndex)) return;
           headerAtMs = Math.max(headerAtMs, snapshot.timestamp_ms);
         });
-        files.forEach((file) => {
-          if (!sourceNames.has(file.name)) return;
+        inventoryFiles.forEach((file) => {
+          const isUniqueFallbackFile =
+            fallbackNames.has(file.name) && inventoryFileNameCounts.get(file.name) === 1;
+          if (!sourceNames.has(file.name) && !isUniqueFallbackFile) return;
           const rawStatusMessage = readAccountRawStatusMessage(file);
           if (rawStatusMessage) rawStatusMessages.add(rawStatusMessage);
+          getAuthFileCredentialStatusCodes(file).forEach((statusCode) =>
+            rawStatusCodes.add(statusCode)
+          );
           rawStatusAtMs = Math.max(rawStatusAtMs, readAuthFileUpdatedAtMs(file) ?? 0);
         });
       }
@@ -2216,12 +2282,13 @@ export function AccountsPage() {
         fallbackHeaderAtMs: 0,
         fallbackActionAtMs: 0,
         fallbackCooldownAtMs: 0,
+        authenticationAtMs,
         rawStatusAtMs,
         rawStatusMessages: Array.from(rawStatusMessages),
+        rawStatusCodes: Array.from(rawStatusCodes),
       };
     },
     [
-      credentialFileNameCounts,
       featureAvailability.checking,
       featureAvailability.managerServiceBase,
       featureAvailability.requestMonitoringAvailable,
@@ -2482,6 +2549,7 @@ export function AccountsPage() {
             ...mergeAccountCredentialEvidenceBoundaries(current.get(key), statusBoundary),
             rawStatusAtMs: statusBoundary.rawStatusAtMs,
             rawStatusMessages: statusBoundary.rawStatusMessages,
+            rawStatusCodes: statusBoundary.rawStatusCodes,
           });
         });
         return next;
@@ -2816,39 +2884,12 @@ export function AccountsPage() {
     invalidateCodexCredentialStatusForSelectionKeys(mutation.selectionKeys);
   };
 
-  const invalidateCodexCredentialEvidence = useCallback(
-    (target: CodexReauthTarget | null): CodexCredentialEvidenceInvalidation | null => {
-      if (!target?.fileName) return null;
-      const targetKey = getAuthFileCodexInspectionKeyForIdentity({
-        fileName: target.fileName,
-        runtimeId: target.runtimeId,
-        provider: target.provider ?? CODEX_CONFIG.type,
-        authIndex: target.authIndex,
-        accountId: target.accountId,
-        accountSnapshot: target.accountSnapshot,
-      });
-      const exactMatches = files.filter(
-        (file) => getAuthFileCodexInspectionKeyForFile(file) === targetKey
-      );
-      const hasStableIdentity = Boolean(
-        target.runtimeId ||
-        (target.authIndex !== null &&
-          target.authIndex !== undefined &&
-          String(target.authIndex).trim()) ||
-        target.accountId ||
-        target.accountSnapshot
-      );
-      const fallbackMatches = hasStableIdentity
-        ? []
-        : files.filter((file) => file.name === target.fileName);
-      const matchedFile =
-        exactMatches.length === 1
-          ? exactMatches[0]
-          : exactMatches.length === 0 && fallbackMatches.length === 1
-            ? fallbackMatches[0]
-            : null;
-      if (!matchedFile) return null;
-
+  const invalidateCodexCredentialEvidenceForMatchedFile = useCallback(
+    (
+      matchedFile: AuthFileItem,
+      inventoryFiles: readonly AuthFileItem[],
+      options: { authenticationAtMs?: number; invalidatedAtMs?: number } = {}
+    ): CodexCredentialEvidenceInvalidation => {
       headerSnapshotRequestGenerationRef.current += 1;
       invalidateInspectionSummaryRequest();
       quotaCooldownRequestIdRef.current += 1;
@@ -2859,15 +2900,20 @@ export function AccountsPage() {
         selectionKey,
         getCredentialEvidenceUniqueFileNameBoundaryKey(matchedFile.name),
       ];
-      const invalidatedAtMs = Date.now();
+      const invalidatedAtMs = options.invalidatedAtMs ?? Date.now();
+      const authenticationAtMs = options.authenticationAtMs ?? 0;
       const selectionBoundary = buildCurrentCredentialEvidenceBoundary({
         targetFiles: [matchedFile],
+        inventoryFiles,
         localAtMs: invalidatedAtMs,
+        authenticationAtMs,
       });
       const uniqueFileNameEvidence = buildCurrentCredentialEvidenceBoundary({
         targetFiles: [],
+        inventoryFiles,
         fallbackFileNames: [matchedFile.name],
         localAtMs: invalidatedAtMs,
+        authenticationAtMs,
       });
       const uniqueFileNameBoundary =
         toFallbackAccountCredentialEvidenceBoundary(uniqueFileNameEvidence);
@@ -2880,7 +2926,7 @@ export function AccountsPage() {
 
       const storeKey = CODEX_CONFIG.getStoreKey?.(matchedFile) ?? matchedFile.name;
       beginAccountQuotaRequest(quotaRequestVersionsRef.current, `${CODEX_CONFIG.type}:${storeKey}`);
-      const preservedFiles = files.filter(
+      const preservedFiles = inventoryFiles.filter(
         (file) => file.name === matchedFile.name && getAuthFileSelectionKey(file) !== selectionKey
       );
       setCodexQuota((current) =>
@@ -2894,7 +2940,6 @@ export function AccountsPage() {
     },
     [
       buildCurrentCredentialEvidenceBoundary,
-      files,
       invalidateInspectionSummaryRequest,
       setCredentialEvidenceBoundaries,
       setCodexQuota,
@@ -2902,19 +2947,24 @@ export function AccountsPage() {
   );
 
   const captureReloadedCodexOperationalEvidence = useCallback(
-    (invalidation: CodexCredentialEvidenceInvalidation | null): void => {
+    (
+      invalidation: CodexCredentialEvidenceInvalidation | null,
+      inventoryFiles: readonly AuthFileItem[] = files
+    ): void => {
       if (!invalidation) return;
       const { file, invalidatedAtMs } = invalidation;
       const actionCandidateItems = accountActionCandidatesRef.current;
       const quotaCooldownItems = Array.from(quotaCooldownsRef.current.values());
       const exactEvidence = buildCurrentCredentialEvidenceBoundary({
         targetFiles: [file],
+        inventoryFiles,
         localAtMs: invalidatedAtMs,
         actionCandidateItems,
         quotaCooldownItems,
       });
       const fallbackEvidence = buildCurrentCredentialEvidenceBoundary({
         targetFiles: [],
+        inventoryFiles,
         fallbackFileNames: [file.name],
         localAtMs: invalidatedAtMs,
         actionCandidateItems,
@@ -2937,21 +2987,23 @@ export function AccountsPage() {
         ])
       );
     },
-    [buildCurrentCredentialEvidenceBoundary, setCredentialEvidenceBoundaries]
+    [buildCurrentCredentialEvidenceBoundary, files, setCredentialEvidenceBoundaries]
   );
 
   const completeConfirmedAccountDirectReauth = useCallback(
     (
       baseline: AccountDirectReauthBaseline,
       confirmedFile: AuthFileItem,
+      inventoryFiles: readonly AuthFileItem[],
       pendingId?: string
     ): void => {
+      const completedAtMs = Date.now();
       if (baseline.resultKeys.length > 0) {
         recordCompletedAccountReauthSession({
           connectionFingerprint,
           oauthProvider: 'codex',
           resultKeys: baseline.resultKeys,
-          completedAtMs: Date.now(),
+          completedAtMs,
         });
         setSuppressedInspectionResultKeys((current) => {
           const next = new Set(current);
@@ -2960,10 +3012,12 @@ export function AccountsPage() {
         });
       }
       if (pendingId) acknowledgePendingAccountDirectReauths([pendingId]);
-      const invalidation = invalidateCodexCredentialEvidence(baseline.target);
-      captureReloadedCodexOperationalEvidence(
-        invalidation ?? { file: confirmedFile, invalidatedAtMs: Date.now() }
+      const invalidation = invalidateCodexCredentialEvidenceForMatchedFile(
+        confirmedFile,
+        inventoryFiles,
+        { authenticationAtMs: completedAtMs, invalidatedAtMs: completedAtMs }
       );
+      captureReloadedCodexOperationalEvidence(invalidation, inventoryFiles);
       publishAccountCredentialMutationRevision({
         connectionFingerprint,
         provider: 'codex',
@@ -2974,7 +3028,7 @@ export function AccountsPage() {
     [
       captureReloadedCodexOperationalEvidence,
       connectionFingerprint,
-      invalidateCodexCredentialEvidence,
+      invalidateCodexCredentialEvidenceForMatchedFile,
     ]
   );
 
@@ -2982,8 +3036,8 @@ export function AccountsPage() {
     async (
       pendingItems: readonly PendingAccountDirectReauth[],
       options: { reload?: boolean } = {}
-    ): Promise<Map<string, AccountDirectReauthReconciliation> | null> => {
-      if (pendingItems.length === 0) return new Map();
+    ): Promise<AccountDirectReauthReconciliationBatch | null> => {
+      if (pendingItems.length === 0) return { files, reconciliations: new Map() };
       const synchronizationScopeKey = credentialEvidenceScopeKey;
       let firstAttempt = true;
       const retry = await runCredentialVisibilityRetry<AuthFileItem[]>({
@@ -3018,16 +3072,16 @@ export function AccountsPage() {
       if (retry.error) {
         throw retry.error;
       }
-      const result = new Map<string, AccountDirectReauthReconciliation>();
+      const reconciliations = new Map<string, AccountDirectReauthReconciliation>();
       pendingItems.forEach((pending) => {
-        result.set(
+        reconciliations.set(
           pending.id,
           retry.value
             ? reconcileAccountDirectReauth(pending, retry.value)
             : { status: 'unconfirmed' }
         );
       });
-      return result;
+      return { files: retry.value ?? files, reconciliations };
     },
     [credentialEvidenceScopeKey, files, loadFiles, reloadInspectionCredentialArtifacts, t]
   );
@@ -3042,17 +3096,24 @@ export function AccountsPage() {
 
       const synchronization = (async () => {
         try {
-          const reconciliations = await reconcilePendingAccountDirectReauthsWithRetry(
+          const reconciliationBatch = await reconcilePendingAccountDirectReauthsWithRetry(
             pendingItems,
             options
           );
-          if (!reconciliations) return false;
+          if (!reconciliationBatch) return false;
 
           let synchronized = false;
           pendingItems.forEach((pending) => {
-            const reconciliation = reconciliations.get(pending.id) ?? { status: 'unconfirmed' };
+            const reconciliation = reconciliationBatch.reconciliations.get(pending.id) ?? {
+              status: 'unconfirmed',
+            };
             if (reconciliation.status === 'confirmed') {
-              completeConfirmedAccountDirectReauth(pending, reconciliation.file, pending.id);
+              completeConfirmedAccountDirectReauth(
+                pending,
+                reconciliation.file,
+                reconciliationBatch.files,
+                pending.id
+              );
               synchronized = true;
               return;
             }
@@ -3097,13 +3158,19 @@ export function AccountsPage() {
     if (!baseline) throw new Error(t('notification.refresh_failed'));
     const pending = recordPendingAccountDirectReauth({ connectionFingerprint, baseline });
     if (!pending) throw new Error(t('notification.refresh_failed'));
-    const reconciliations = await reconcilePendingAccountDirectReauthsWithRetry([pending], {
+    const reconciliationBatch = await reconcilePendingAccountDirectReauthsWithRetry([pending], {
       reload: true,
     });
-    if (!reconciliations) return;
-    const reconciliation = reconciliations.get(pending.id) ?? { status: 'unconfirmed' as const };
+    if (!reconciliationBatch) return;
+    const reconciliation =
+      reconciliationBatch.reconciliations.get(pending.id) ?? ({ status: 'unconfirmed' } as const);
     if (reconciliation.status === 'confirmed') {
-      completeConfirmedAccountDirectReauth(pending, reconciliation.file, pending.id);
+      completeConfirmedAccountDirectReauth(
+        pending,
+        reconciliation.file,
+        reconciliationBatch.files,
+        pending.id
+      );
       return;
     }
     if (reconciliation.status !== 'unconfirmed') {
@@ -3292,12 +3359,34 @@ export function AccountsPage() {
     [requestEvidenceBySelectionKey]
   );
   const getEffectiveCodexHeaderSnapshot = useCallback(
-    (file: AuthFileItem): UsageHeaderSnapshot | undefined =>
-      sanitizeSupersededAuthHeaderSnapshot(
+    (file: AuthFileItem): UsageHeaderSnapshot | undefined => {
+      const selectionKey = getAuthFileSelectionKey(file);
+      const authenticationBoundaryAtMs = Math.max(
+        getCredentialEvidenceBoundary(file).authenticationAtMs,
+        credentialStatusBoundaries.get(selectionKey)?.authenticationAtMs ?? 0
+      );
+      const authenticationAtMs = Math.max(
+        getAccountCredentialEvidenceCutoffs({
+          providerQuota: getActiveCodexQuota(file),
+          inspection: accountInspectionBySelectionKey.get(selectionKey),
+          boundaryAtMs: authenticationBoundaryAtMs,
+          credentialRefreshAtMs: readAuthFileCredentialRefreshAtMs(file) ?? 0,
+        }).authenticationAtMs,
+        getLatestPositiveRequestAtMs(file) ?? 0
+      );
+      return sanitizeSupersededAuthHeaderSnapshot(
         getFreshCodexHeaderSnapshot(file),
-        getLatestPositiveRequestAtMs(file)
-      ),
-    [getFreshCodexHeaderSnapshot, getLatestPositiveRequestAtMs]
+        authenticationAtMs > 0 ? authenticationAtMs : undefined
+      );
+    },
+    [
+      accountInspectionBySelectionKey,
+      credentialStatusBoundaries,
+      getActiveCodexQuota,
+      getCredentialEvidenceBoundary,
+      getFreshCodexHeaderSnapshot,
+      getLatestPositiveRequestAtMs,
+    ]
   );
   const getDisplayCodexHeaderSnapshot = useCallback(
     (file: AuthFileItem): UsageHeaderSnapshot | undefined => {
@@ -3344,15 +3433,23 @@ export function AccountsPage() {
           : undefined
       );
       const boundary = getCredentialEvidenceBoundary(file);
+      const authenticationBoundaryAtMs = Math.max(
+        boundary.authenticationAtMs,
+        credentialStatusBoundaries.get(selectionKey)?.authenticationAtMs ?? 0
+      );
       const reconciled = reconcileCodexQuotaEvidence({
         providerQuota: getActiveCodexQuota(file),
         headerQuota,
         inspectionQuota,
+        boundaryAtMs: authenticationBoundaryAtMs,
         credentialRefreshAtMs: readAuthFileCredentialRefreshAtMs(file) ?? 0,
       });
       return (
         reconciled ??
-        (boundary.localAtMs > 0 || boundary.inspectionAtMs > 0 || boundary.headerAtMs > 0
+        (boundary.localAtMs > 0 ||
+        boundary.inspectionAtMs > 0 ||
+        boundary.headerAtMs > 0 ||
+        authenticationBoundaryAtMs > 0
           ? { status: 'idle', windows: [] }
           : undefined)
       );
@@ -3589,15 +3686,6 @@ export function AccountsPage() {
       );
       const statusQuota =
         row.provider === CODEX_CONFIG.type ? getDisplayCodexQuota(row.raw) : undefined;
-      const authenticationAtMs = getAccountCredentialEvidenceCutoffs({
-        providerQuota: statusQuota,
-        inspection: row.inspection,
-        credentialRefreshAtMs: readAuthFileCredentialRefreshAtMs(row.raw) ?? 0,
-      }).authenticationAtMs;
-      const rawStatusSuperseded =
-        (readAccountRawStatusMessage(row.raw) !== '' && row.statusMessage === '') ||
-        (authenticationAtMs > 0 &&
-          (row.updatedAtMs === null || authenticationAtMs >= row.updatedAtMs));
       statusMap.set(
         row.selectionKey,
         getAuthFileCodexStatus(
@@ -3607,7 +3695,7 @@ export function AccountsPage() {
           sources.headerSnapshot,
           headerSnapshotGeneratedAtMs,
           {
-            ignoreRawStatusCode: rawStatusSuperseded,
+            ignoreRawStatusCode: row.rawCredentialStatusSuperseded,
             effectiveDisabled: row.disabled,
           }
         )
@@ -4771,14 +4859,20 @@ export function AccountsPage() {
           baseline: captured.baseline,
         });
         if (!pending) throw new Error(t('notification.refresh_failed'));
-        const reconciliations = await reconcilePendingAccountDirectReauthsWithRetry([pending], {
+        const reconciliationBatch = await reconcilePendingAccountDirectReauthsWithRetry([pending], {
           reload: true,
         });
-        if (!reconciliations) return;
+        if (!reconciliationBatch) return;
         const reconciliation =
-          reconciliations.get(pending.id) ?? ({ status: 'unconfirmed' } as const);
+          reconciliationBatch.reconciliations.get(pending.id) ??
+          ({ status: 'unconfirmed' } as const);
         if (reconciliation.status === 'confirmed') {
-          completeConfirmedAccountDirectReauth(pending, reconciliation.file, pending.id);
+          completeConfirmedAccountDirectReauth(
+            pending,
+            reconciliation.file,
+            reconciliationBatch.files,
+            pending.id
+          );
           return;
         }
         if (reconciliation.status !== 'unconfirmed') {

@@ -12,6 +12,7 @@ import {
   getAuthFileCodexInspectionKeyForFile,
   getAuthFileCodexInspectionKeyForIdentity,
   getAuthFileSelectionKey,
+  getAuthFileCredentialStatusCodes,
   isAuthFileInspectionAuthenticationFailure,
   hasActiveCodexInspectionAuthenticationFailure,
   type AuthFileCodexStatusSummary,
@@ -190,6 +191,8 @@ export interface AccountRow {
   priority: number | null;
   createdAtMs: number | null;
   updatedAtMs: number | null;
+  authenticationAtMs: number;
+  rawCredentialStatusSuperseded: boolean;
   quota: AccountQuotaSummary;
   usage: AccountUsageSummary;
   inspection: AccountInspectionSummary | null;
@@ -360,11 +363,18 @@ export const buildAccountInspectionBySelectionKey = (
       boundary?.inspectionAtMs ?? 0,
       usesExactInspection ? 0 : (boundary?.fallbackInspectionAtMs ?? 0)
     );
+    const authenticationBoundaryAtMs = boundary?.authenticationAtMs ?? 0;
     const inspectionBaselinePending = usesExactInspection
       ? boundary?.inspectionBaselinePending === true
       : boundary?.fallbackInspectionBaselinePending === true;
     if (inspectionBaselinePending) return;
     if (inspection.createdAtMs <= boundaryAtMs) return;
+    if (
+      inspection.createdAtMs <= authenticationBoundaryAtMs &&
+      hasActiveCodexInspectionAuthenticationFailure(inspection)
+    ) {
+      return;
+    }
     const credentialRefreshAtMs = readAuthFileCredentialRefreshAtMs(file) ?? 0;
     if (
       credentialRefreshAtMs > 0 &&
@@ -426,26 +436,61 @@ export const buildAccountRows = (
         ? (overrides?.codexQuotaBySelectionKey?.get(selectionKey) ??
           getCredentialScopedQuotaState(stores.codexQuota, file))
         : undefined;
+    const credentialAuthenticationBoundaryAtMs = Math.max(
+      evidenceBoundary?.authenticationAtMs ?? 0,
+      statusBoundary?.authenticationAtMs ?? 0
+    );
     const authenticationAtMs = getAccountCredentialEvidenceCutoffs({
       providerQuota: codexQuota,
       inspection,
+      boundaryAtMs: credentialAuthenticationBoundaryAtMs,
       credentialRefreshAtMs: readAuthFileCredentialRefreshAtMs(file) ?? 0,
     }).authenticationAtMs;
     const rawStatusMessage = resolveStatusMessage(file);
+    const rawStatusCodes = getAuthFileCredentialStatusCodes(file);
     const boundarySupersedesRawStatus = (
       boundary: AccountCredentialEvidenceBoundary | undefined
     ): boolean => {
-      if (!boundary || boundary.localAtMs <= 0) return false;
-      if (rawStatusMessage === '' || !boundary.rawStatusMessages.includes(rawStatusMessage)) {
+      if (!boundary) return false;
+      const rawStatusMessageMatches =
+        rawStatusMessage !== '' && (boundary.rawStatusMessages ?? []).includes(rawStatusMessage);
+      const rawStatusCodeMatches = rawStatusCodes.some((statusCode) =>
+        (boundary.rawStatusCodes ?? []).includes(statusCode)
+      );
+      if (!rawStatusMessageMatches && !rawStatusCodeMatches) {
         return false;
       }
       if (updatedAtMs === null) return true;
-      return updatedAtMs <= Math.max(boundary.rawStatusAtMs, boundary.localAtMs);
+      if (
+        (boundary.authenticationAtMs ?? 0) > 0 &&
+        updatedAtMs > (boundary.authenticationAtMs ?? 0)
+      ) {
+        return false;
+      }
+      const boundaryAtMs = Math.max(
+        boundary.rawStatusAtMs,
+        (boundary.authenticationAtMs ?? 0) > 0
+          ? (boundary.authenticationAtMs ?? 0)
+          : boundary.localAtMs
+      );
+      return boundaryAtMs > 0 && updatedAtMs <= boundaryAtMs;
     };
-    const rawStatusSuperseded =
+    const hasCapturedRawStatusBoundary = [evidenceBoundary, statusBoundary].some(
+      (boundary) =>
+        (boundary?.rawStatusMessages?.length ?? 0) > 0 ||
+        (boundary?.rawStatusCodes?.length ?? 0) > 0
+    );
+    const hasAuthenticationRecoveryBoundary = [evidenceBoundary, statusBoundary].some(
+      (boundary) => (boundary?.authenticationAtMs ?? 0) > 0
+    );
+    const rawCredentialStatusSuperseded =
       boundarySupersedesRawStatus(evidenceBoundary) ||
       boundarySupersedesRawStatus(statusBoundary) ||
-      (authenticationAtMs > 0 && updatedAtMs !== null && authenticationAtMs >= updatedAtMs);
+      (!hasCapturedRawStatusBoundary &&
+        !hasAuthenticationRecoveryBoundary &&
+        authenticationAtMs > 0 &&
+        updatedAtMs !== null &&
+        authenticationAtMs >= updatedAtMs);
     const quota = resolveAccountQuota(effectiveFile, stores, overrides);
     return {
       key: file.name,
@@ -458,13 +503,15 @@ export const buildAccountRows = (
       disabled: effectiveFile.disabled === true,
       runtimeOnly:
         file.runtimeOnly === true || file.runtimeOnly === 'true' || file.runtime_only === true,
-      statusMessage: rawStatusSuperseded ? '' : rawStatusMessage,
+      statusMessage: rawCredentialStatusSuperseded ? '' : rawStatusMessage,
       authIndex,
       projectId: readProjectId(file),
       note: readString(file.note),
       priority: readNumber(file.priority),
       createdAtMs: readAuthFileCreatedAtMs(file),
       updatedAtMs,
+      authenticationAtMs,
+      rawCredentialStatusSuperseded,
       quota,
       usage: buildUsageSummary(file),
       inspection,

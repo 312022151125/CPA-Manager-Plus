@@ -49,6 +49,8 @@ const makeRow = (overrides: Partial<AccountRow> = {}): AccountRow => {
     priority: null,
     createdAtMs: null,
     updatedAtMs: null,
+    authenticationAtMs: 0,
+    rawCredentialStatusSuperseded: false,
     quota: {
       status: 'ok',
       remainingPercent: 80,
@@ -302,6 +304,75 @@ describe('accountHealthEvidence', () => {
       expect(isAccountRequestHealthEvidenceCurrent(makeRow(), evidence)).toBe(true);
       expect(isAccountRequestCredentialEvidenceCurrent(makeRow(), evidence)).toBe(true);
     }
+  });
+
+  it('does not revive a raw HTTP 401 already superseded by the row boundary', () => {
+    const row = makeRow({
+      raw: { name: 'codex.json', type: 'codex', status_code: 401 },
+      rawCredentialStatusSuperseded: true,
+      statusMessage: '',
+    });
+
+    expect(classifyAccountCredentialStatusEvidence(row)).toBe('none');
+    expect(resolveAccountAuthenticationProblemEvidence(row)).toBeNull();
+  });
+
+  it('ignores request authentication failures at or before the reauthentication boundary', () => {
+    const row = makeRow({ authenticationAtMs: 2_000 });
+    const requestEvidence = resolveAccountRequestHealthEvidence({
+      latestRequest: makeRequest({ timestamp_ms: 1_000, failed: true, fail_status_code: 401 }),
+    });
+
+    expect(isAccountRequestCredentialEvidenceCurrent(row, requestEvidence)).toBe(false);
+    expect(isAccountRequestHealthEvidenceCurrent(row, requestEvidence)).toBe(false);
+    expect(resolveAccountAuthenticationProblemEvidence(row, requestEvidence)).toBeNull();
+  });
+
+  it('keeps a request authentication failure newer than reauthentication current', () => {
+    const row = makeRow({ authenticationAtMs: 2_000 });
+    const requestEvidence = resolveAccountRequestHealthEvidence({
+      latestRequest: makeRequest({ timestamp_ms: 3_000, failed: true, fail_status_code: 401 }),
+    });
+
+    expect(isAccountRequestCredentialEvidenceCurrent(row, requestEvidence)).toBe(true);
+    expect(isAccountRequestHealthEvidenceCurrent(row, requestEvidence)).toBe(true);
+    expect(resolveAccountAuthenticationProblemEvidence(row, requestEvidence)).toEqual({
+      source: 'request',
+      observedAtMs: 3_000,
+      statusCode: 401,
+    });
+  });
+
+  it('retains new transient failures while retiring an older request authentication failure', () => {
+    const row = makeRow({ authenticationAtMs: 2_000 });
+    const requestEvidence = resolveAccountRequestHealthEvidence({
+      recentRequests: [
+        makeRequest({ timestamp_ms: 3_100, failed: true, fail_status_code: 502 }),
+        makeRequest({ timestamp_ms: 3_000, failed: true, fail_status_code: 503 }),
+        makeRequest({ timestamp_ms: 1_000, failed: true, fail_status_code: 401 }),
+      ],
+    });
+
+    expect(requestEvidence).toMatchObject({
+      kind: 'transient_failure',
+      request: { timestamp_ms: 3_100 },
+    });
+    expect(isAccountRequestCredentialEvidenceCurrent(row, requestEvidence)).toBe(false);
+    expect(resolveAccountAuthenticationProblemEvidence(row, requestEvidence)).toBeNull();
+    expect(resolveAccountExceptionProblemEvidence(row, requestEvidence)).toEqual({
+      source: 'request',
+      observedAtMs: 3_100,
+    });
+  });
+
+  it('leaves a credential unconfirmed when the only request evidence is an old 401', () => {
+    const row = makeRow({ authenticationAtMs: 2_000 });
+    const requestEvidence = resolveAccountRequestHealthEvidence({
+      latestRequest: makeRequest({ timestamp_ms: 1_000, failed: true, fail_status_code: 401 }),
+    });
+
+    expect(resolveAccountAuthenticationProblemEvidence(row, requestEvidence)).toBeNull();
+    expect(resolveAccountExceptionProblemEvidence(row, requestEvidence)).toBeNull();
   });
 
   it('selects the latest current authentication failure across request, Header, refresh, and inspection', () => {

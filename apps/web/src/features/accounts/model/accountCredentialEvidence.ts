@@ -63,8 +63,10 @@ export interface AccountCredentialEvidenceBoundary {
   fallbackActionBaselinePending?: boolean;
   fallbackCooldownAtMs: number;
   fallbackCooldownBaselinePending?: boolean;
+  authenticationAtMs: number;
   rawStatusAtMs: number;
   rawStatusMessages: readonly string[];
+  rawStatusCodes: readonly number[];
 }
 
 const readFiniteTimestamp = (value: unknown): number | null =>

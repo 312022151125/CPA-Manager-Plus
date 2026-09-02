@@ -1433,6 +1433,308 @@ describe('AccountsPage replacement flows', () => {
     expect(getAccountCardText(renderer, selectionKey)).not.toContain('accounts.health_reauth');
   });
 
+  it('creates a persisted recovery boundary for a confirmed re-login with stale raw 401 evidence', async () => {
+    const file = {
+      ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
+      account_id: 'space-a',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const reloadedFile = {
+      ...file,
+      last_refresh: 3_000,
+      modified: 3_100,
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+    } as AuthFileItem;
+    mocks.files = [file];
+    const selectionKey = getAuthFileSelectionKey(file);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [reloadedFile];
+      return mocks.files;
+    });
+
+    expect(await runCodexReauthSuccessAndCaptureError()).toBeUndefined();
+    await flushPromises();
+
+    expect(getAccountCardText(renderer, selectionKey)).not.toContain('accounts.health_reauth');
+    expect(getAccountCardText(renderer, selectionKey)).not.toContain('accounts.health_available');
+
+    await act(async () => {
+      renderer.unmount();
+    });
+    mountedAccountsRenderers.delete(renderer);
+
+    const remountedRenderer = await renderAccountsPage();
+    await flushPromises();
+    expect(getAccountCardText(remountedRenderer, selectionKey)).not.toContain(
+      'accounts.health_reauth'
+    );
+  });
+
+  it('supersedes a stale Header authentication failure after confirmed re-login', async () => {
+    const file = {
+      ...makeCodexFile('header.codex.json', 'auth-1', 'header@example.com'),
+      account_id: 'space-header',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const reloadedFile = {
+      ...file,
+      last_refresh: 2_000,
+      modified: 2_100,
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 3_000,
+      from_ms: 0,
+      to_ms: 3_000,
+      items: [
+        {
+          event_hash: 'stale-auth-header',
+          timestamp_ms: 3_000,
+          model: CODEX_MAIN_MODEL,
+          auth_file_snapshot: file.name,
+          auth_index: 'auth-1',
+          account_snapshot: 'header@example.com',
+          auth_provider_snapshot: 'codex',
+          header_error_kind: 'auth',
+          header_error_code: 'invalid_token',
+          header_quota_used_percent: 20,
+        },
+      ],
+    });
+    const selectionKey = getAuthFileSelectionKey(file);
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    expect(getAccountCardText(renderer, selectionKey)).toContain('accounts.health_reauth');
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [reloadedFile];
+      return mocks.files;
+    });
+
+    expect(await runCodexReauthSuccessAndCaptureError()).toBeUndefined();
+    await flushPromises();
+
+    expect(getAccountCardText(renderer, selectionKey)).not.toContain('accounts.health_reauth');
+  });
+
+  it('applies the recovery boundary to a confirmed credential after identity rotation', async () => {
+    const original = {
+      ...makeCodexFile('codex-old.json', 'auth-1', 'workspace@example.com'),
+      account_id: 'space-a',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const replacement = {
+      ...makeCodexFile('codex-new.json', 'auth-2', 'workspace@example.com'),
+      account_id: 'space-a',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 3_000,
+      modified: 3_100,
+    } as AuthFileItem;
+    mocks.files = [original];
+    const originalSelectionKey = getAuthFileSelectionKey(original);
+    const replacementSelectionKey = getAuthFileSelectionKey(replacement);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        originalSelectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [replacement];
+      return mocks.files;
+    });
+
+    expect(await runCodexReauthSuccessAndCaptureError()).toBeUndefined();
+    await flushPromises();
+
+    expect(
+      renderer.root.findAllByProps({ 'data-account-card': originalSelectionKey })
+    ).toHaveLength(0);
+    expect(getAccountCardText(renderer, replacementSelectionKey)).not.toContain(
+      'accounts.health_reauth'
+    );
+  });
+
+  it('keeps stale raw authentication evidence isolated from a shared-file sibling', async () => {
+    const first = {
+      ...makeCodexFile('shared.codex.json', 'auth-1', 'first@example.com'),
+      account_id: 'space-first',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const second = {
+      ...makeCodexFile('shared.codex.json', 'auth-2', 'second@example.com'),
+      account_id: 'space-second',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const refreshedFirst = {
+      ...first,
+      last_refresh: 3_000,
+      modified: 3_100,
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+    } as AuthFileItem;
+    mocks.files = [first, second];
+    const firstSelectionKey = getAuthFileSelectionKey(first);
+    const secondSelectionKey = getAuthFileSelectionKey(second);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        firstSelectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [refreshedFirst, second];
+      return mocks.files;
+    });
+
+    expect(await runCodexReauthSuccessAndCaptureError()).toBeUndefined();
+    await flushPromises();
+
+    expect(getAccountCardText(renderer, firstSelectionKey)).not.toContain('accounts.health_reauth');
+    expect(getAccountCardText(renderer, secondSelectionKey)).toContain('accounts.health_reauth');
+  });
+
+  it('retires old request-history 401 evidence and recognizes a newer 401 after re-login', async () => {
+    const file = {
+      ...makeCodexFile('history.codex.json', 'auth-1', 'history@example.com'),
+      account_id: 'space-history',
+    } as AuthFileItem;
+    const refreshedFile = {
+      ...file,
+      last_refresh: Date.now() + 1,
+      modified: Date.now() + 2,
+    } as AuthFileItem;
+    const selectionKey = getAuthFileSelectionKey(file);
+    const makeHistoryItem = (timestampMs: number) => ({
+      row_key: selectionKey,
+      account_key: 'history@example.com',
+      matched: true,
+      total_requests: 1,
+      success_calls: 0,
+      failure_calls: 1,
+      total_tokens: 0,
+      total_cost: 0,
+      success_rate: 0,
+      first_seen_ms: timestampMs,
+      last_seen_ms: timestampMs,
+      latest_request: {
+        timestamp_ms: timestampMs,
+        failed: true,
+        fail_status_code: 401,
+      },
+      recent_requests: [
+        {
+          timestamp_ms: timestampMs,
+          failed: true,
+          fail_status_code: 401,
+        },
+      ],
+      sync_status: 'ready',
+    });
+    mocks.files = [file];
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      requestMonitoringAvailable: true,
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.getAccountHistory.mockResolvedValue(makeAccountHistoryResponse([makeHistoryItem(1_000)]));
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [refreshedFile];
+      return mocks.files;
+    });
+
+    expect(await runCodexReauthSuccessAndCaptureError()).toBeUndefined();
+    await flushPromises();
+    expect(getAccountCardText(renderer, selectionKey)).not.toContain('accounts.health_reauth');
+
+    const newerRequestAtMs = Date.now() + 1_000;
+    mocks.getAccountHistory.mockResolvedValue(
+      makeAccountHistoryResponse([makeHistoryItem(newerRequestAtMs)])
+    );
+    await act(async () => {
+      findButtonByText(renderer, 'common.refresh').props.onClick();
+    });
+    await flushPromises();
+
+    expect(getAccountCardText(renderer, selectionKey)).toContain('accounts.health_reauth');
+  });
+
   it('does not confirm a direct re-login when OAuth returns another account', async () => {
     const file = {
       ...makeCodexFile('codex.json', 'auth-1', 'codex@example.com'),
