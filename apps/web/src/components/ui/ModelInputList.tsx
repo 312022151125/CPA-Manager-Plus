@@ -8,13 +8,14 @@ import {
   MODEL_THINKING_LEVELS_CLEAR_MARKER,
   hasModelThinkingLevelsClearMarker,
   markModelThinkingLevelsForClear,
+  markModelThinkingLevelsForEdit,
 } from '@/types';
 import {
   buildThinkingWithLevels,
   cloneModelEntry,
-  getEffectiveThinkingLevels,
+  getEffectiveThinkingLevelsForEntry,
+  getEffectiveThinkingKnownLevels,
   getKnownThinkingLevels,
-  getThinkingLevels,
   getUnknownThinkingLevels,
   hasExplicitEmptyThinkingContainer,
   hasInvalidThinkingLevelEntry,
@@ -136,10 +137,11 @@ export function ModelInputList({
           entry.thinking,
           selectedLevels,
           unknownLevels,
-          getThinkingLevels(entry.thinking)
+          getEffectiveThinkingLevelsForEntry(entry)
         ),
       });
       delete nextEntry[MODEL_THINKING_LEVELS_CLEAR_MARKER];
+      markModelThinkingLevelsForEdit(nextEntry);
       return nextEntry;
     });
     onChange(next);
@@ -149,7 +151,7 @@ export function ModelInputList({
     const entry = currentEntries[index];
     if (!entry) return;
     if (custom) {
-      const levels = getThinkingLevels(entry.thinking);
+      const levels = getEffectiveThinkingLevelsForEntry(entry);
       const selectedLevels = getKnownThinkingLevels(levels);
       updateThinking(index, selectedLevels, getUnknownThinkingLevels(levels));
       return;
@@ -178,8 +180,8 @@ export function ModelInputList({
   const updateThinkingLevel = (index: number, level: ThinkingLevel, checked: boolean) => {
     const entry = currentEntries[index];
     if (!entry) return;
-    const levels = getThinkingLevels(entry.thinking);
-    const selectedLevels = new Set(getKnownThinkingLevels(levels));
+    const levels = getEffectiveThinkingLevelsForEntry(entry);
+    const selectedLevels = new Set(getEffectiveThinkingKnownLevels(entry));
     if (checked) selectedLevels.add(level);
     else selectedLevels.delete(level);
     updateThinking(index, Array.from(selectedLevels), getUnknownThinkingLevels(levels));
@@ -191,14 +193,14 @@ export function ModelInputList({
     updateThinking(
       index,
       KNOWN_THINKING_LEVELS,
-      getUnknownThinkingLevels(getThinkingLevels(entry.thinking))
+      getUnknownThinkingLevels(getEffectiveThinkingLevelsForEntry(entry))
     );
   };
 
   const clearThinkingLevels = (index: number) => {
     const entry = currentEntries[index];
     if (!entry) return;
-    updateThinking(index, [], getUnknownThinkingLevels(getThinkingLevels(entry.thinking)));
+    updateThinking(index, [], getUnknownThinkingLevels(getEffectiveThinkingLevelsForEntry(entry)));
   };
 
   const addEntry = () => {
@@ -223,7 +225,7 @@ export function ModelInputList({
           : modelOrdinal;
         const thinkingAccessibleName = `${modelContext} ${thinkingLabel}`;
         const thinkingTooltipAccessibleName = `${modelContext} ${thinkingTooltipAriaLabel}`;
-        const thinkingLevels = getEffectiveThinkingLevels(getThinkingLevels(entry.thinking));
+        const thinkingLevels = getEffectiveThinkingLevelsForEntry(entry);
         const knownThinkingLevels = getKnownThinkingLevels(thinkingLevels);
         const unknownThinkingLevels = getUnknownThinkingLevels(thinkingLevels);
         const modelContent = (

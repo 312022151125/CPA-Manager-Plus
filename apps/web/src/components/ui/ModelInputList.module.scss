@@ -55,6 +55,10 @@
   cursor: pointer;
 }
 
+.thinkingModeOption {
+  gap: $spacing-xs;
+}
+
 .thinkingModeOption input {
   flex: 0 0 auto;
   margin: 0;

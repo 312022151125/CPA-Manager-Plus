@@ -16,7 +16,7 @@ import { useConfigStore, useNotificationStore } from '@/stores';
 import {
   coolingPolicyFromOverride,
   coolingPolicyToOverride,
-  stripModelThinkingLevelsClearMarker,
+  stripModelThinkingLevelsMarkers,
   type ApiKeyEntry,
   type OpenAIProviderConfig,
 } from '@/types';
@@ -126,7 +126,7 @@ const buildOpenAIBaseline = (form: OpenAIFormState) => ({
   disableCooling: form.disableCooling,
   headers: normalizeHeaderEntries(form.headers),
   apiKeyEntries: normalizeApiKeyEntries(form.apiKeyEntries),
-  models: normalizeModelEntries(form.modelEntries).map(stripModelThinkingLevelsClearMarker),
+  models: normalizeModelEntries(form.modelEntries).map(stripModelThinkingLevelsMarkers),
 });
 
 const areNormalizedApiKeyEntriesEqual = (
@@ -711,7 +711,7 @@ export function OpenAIEditDrawer({
       updateConfigValue('openai-compatibility', syncedProviders);
       setForm({
         ...form,
-        modelEntries: form.modelEntries.map(stripModelThinkingLevelsClearMarker),
+        modelEntries: form.modelEntries.map(stripModelThinkingLevelsMarkers),
       });
       showNotification(
         editIndex !== null

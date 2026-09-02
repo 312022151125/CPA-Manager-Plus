@@ -1,7 +1,13 @@
 import {
   MODEL_THINKING_LEVELS_CLEAR_MARKER,
+  MODEL_THINKING_LEVELS_EDIT_MARKER,
   hasModelThinkingLevelsClearMarker,
+  hasModelThinkingLevelsEditMarker,
+  hasThinkingFlag,
   markModelThinkingLevelsForClear,
+  markModelThinkingLevelsForEdit,
+  THINKING_DYNAMIC_ALLOWED_FIELDS,
+  THINKING_ZERO_ALLOWED_FIELDS,
   type ModelAlias,
 } from '@/types';
 
@@ -15,6 +21,17 @@ export const KNOWN_THINKING_LEVELS = [
   'max',
   'auto',
 ] as const;
+
+export const THINKING_LEVEL_SERIALIZED_ORDER = [
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'none',
+  'auto',
+] as const satisfies readonly ThinkingLevel[];
 
 export type ThinkingLevel = (typeof KNOWN_THINKING_LEVELS)[number];
 
@@ -110,32 +127,68 @@ export const getUnknownThinkingLevels = (levels: readonly unknown[]) =>
     (level) => !normalizeKnownThinkingLevel(level)
   );
 
+export const rebuildThinkingLevelsDeterministically = (
+  currentLevels: readonly unknown[],
+  selectedKnownLevels: Iterable<unknown>
+): unknown[] => {
+  const normalizedCurrentLevels = normalizeThinkingLevelsPreservingOrder(currentLevels);
+  const selectedKnownSet = new Set<ThinkingLevel>();
+  for (const level of selectedKnownLevels) {
+    const normalized = normalizeKnownThinkingLevel(level);
+    if (normalized) selectedKnownSet.add(normalized);
+  }
+
+  const canonicalKnownLevels = THINKING_LEVEL_SERIALIZED_ORDER.filter((level) =>
+    selectedKnownSet.has(level)
+  );
+  let canonicalIndex = 0;
+
+  const result = normalizedCurrentLevels.reduce<unknown[]>((acc, level) => {
+    if (!normalizeKnownThinkingLevel(level)) {
+      acc.push(level);
+      return acc;
+    }
+    const replacement = canonicalKnownLevels[canonicalIndex];
+    canonicalIndex += 1;
+    if (replacement) acc.push(replacement);
+    return acc;
+  }, []);
+  result.push(...canonicalKnownLevels.slice(canonicalIndex));
+  return result;
+};
+
+export const getEffectiveThinkingLevelsForEntry = (
+  entry: Pick<ModelEntry, 'thinking'>
+): unknown[] => {
+  const levels = getThinkingLevels(entry.thinking);
+  if (hasModelThinkingLevelsEditMarker(entry)) {
+    return getEffectiveThinkingLevels(levels);
+  }
+
+  const effectiveLevels = [...levels];
+  if (hasThinkingFlag(entry.thinking, THINKING_ZERO_ALLOWED_FIELDS)) {
+    effectiveLevels.push('none');
+  }
+  if (hasThinkingFlag(entry.thinking, THINKING_DYNAMIC_ALLOWED_FIELDS)) {
+    effectiveLevels.push('auto');
+  }
+  return getEffectiveThinkingLevels(effectiveLevels);
+};
+
+export const getEffectiveThinkingKnownLevels = (
+  entry: Pick<ModelEntry, 'thinking'>
+): ThinkingLevel[] => getKnownThinkingLevels(getEffectiveThinkingLevelsForEntry(entry));
+
 export const buildThinkingWithLevels = (
   thinking: Record<string, unknown> | undefined,
   selectedLevels: readonly ThinkingLevel[],
   unknownLevels: readonly unknown[],
   currentLevels: readonly unknown[] = [...selectedLevels, ...unknownLevels]
 ) => {
-  const selectedKnownLevels = getKnownThinkingLevels(selectedLevels);
-  const selectedKnownSet = new Set(selectedKnownLevels);
-  const normalizedCurrentLevels = normalizeThinkingLevelsPreservingOrder([
-    ...currentLevels,
-    ...unknownLevels,
-  ]);
-  const nextLevels = normalizedCurrentLevels.filter((level) => {
-    const knownLevel = normalizeKnownThinkingLevel(level);
-    return !knownLevel || selectedKnownSet.has(knownLevel);
-  });
-  const presentKnownLevels = new Set(
-    nextLevels
-      .map((level) => normalizeKnownThinkingLevel(level))
-      .filter((level): level is ThinkingLevel => Boolean(level))
+  const nextLevels = rebuildThinkingLevelsDeterministically(
+    [...currentLevels, ...unknownLevels],
+    selectedLevels
   );
-  selectedKnownLevels.forEach((level) => {
-    if (!presentKnownLevels.has(level)) {
-      nextLevels.push(level);
-    }
-  });
 
   return {
     ...(isRecord(thinking) ? thinking : {}),
@@ -158,6 +211,9 @@ export const cloneModelEntry = (entry: ModelEntry, patch: Partial<ModelEntry> = 
   if (hasModelThinkingLevelsClearMarker(entry)) {
     markModelThinkingLevelsForClear(nextEntry);
   }
+  if (hasModelThinkingLevelsEditMarker(entry)) {
+    markModelThinkingLevelsForEdit(nextEntry);
+  }
   if (hasExplicitEmptyThinkingContainer(entry)) {
     markExplicitEmptyThinkingContainer(nextEntry);
   }
@@ -169,7 +225,7 @@ export const hasInvalidThinkingLevelEntry = (
 ): boolean =>
   Boolean(entry.name.trim()) &&
   Array.isArray(entry.thinking?.levels) &&
-  !hasEffectiveThinkingLevels(getThinkingLevels(entry.thinking));
+  !hasEffectiveThinkingLevels(getEffectiveThinkingLevelsForEntry(entry));
 
 export const hasInvalidThinkingLevels = (entries: readonly ModelEntry[]) =>
   entries.some(hasInvalidThinkingLevelEntry);
@@ -187,6 +243,7 @@ export interface ModelEntry {
   outputModalitiesDraft?: string;
   thinking?: Record<string, unknown>;
   [MODEL_THINKING_LEVELS_CLEAR_MARKER]?: true;
+  [MODEL_THINKING_LEVELS_EDIT_MARKER]?: true;
 }
 
 export const modelsToEntries = (models?: ModelAlias[]): ModelEntry[] => {
@@ -209,6 +266,9 @@ export const modelsToEntries = (models?: ModelAlias[]): ModelEntry[] => {
     };
     if (hasModelThinkingLevelsClearMarker(model)) {
       markModelThinkingLevelsForClear(entry);
+    }
+    if (hasModelThinkingLevelsEditMarker(model)) {
+      markModelThinkingLevelsForEdit(entry);
     }
     if (isRecord(model.thinking) && Object.keys(model.thinking).length === 0) {
       markExplicitEmptyThinkingContainer(entry);
@@ -246,7 +306,7 @@ export const entriesToModels = (entries: ModelEntry[]): ModelAlias[] => {
       }
       if (isRecord(entry.thinking)) {
         const thinking = { ...entry.thinking };
-        if (Array.isArray(thinking.levels)) {
+        if (Array.isArray(thinking.levels) && hasModelThinkingLevelsEditMarker(entry)) {
           thinking.levels = normalizeThinkingLevelsPreservingOrder(thinking.levels);
         }
         model.thinking = thinking;
@@ -255,6 +315,9 @@ export const entriesToModels = (entries: ModelEntry[]): ModelAlias[] => {
       }
       if (hasModelThinkingLevelsClearMarker(entry)) {
         markModelThinkingLevelsForClear(model);
+      }
+      if (hasModelThinkingLevelsEditMarker(entry)) {
+        markModelThinkingLevelsForEdit(model);
       }
       return model;
     });

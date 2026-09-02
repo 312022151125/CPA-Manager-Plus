@@ -224,15 +224,15 @@ describe('ModelInputList', () => {
       findButtonByText(renderer, 'Select all')?.props.onClick();
     });
     expect(entries[0]?.thinking?.levels).toEqual([
-      'high',
+      'minimal',
       'future-a',
       'low',
       'future-b',
-      'none',
-      'minimal',
       'medium',
+      'high',
       'xhigh',
       'max',
+      'none',
       'auto',
     ]);
 
@@ -327,6 +327,127 @@ describe('ModelInputList', () => {
     });
 
     expect(entries[0]?.thinking).toEqual({ levels: ['ultra'] });
+  });
+
+  it('uses deterministic order regardless of known-level click order', () => {
+    const run = (first: 'high' | 'max', second: 'high' | 'max') => {
+      let entries: ModelEntry[] = [{ name: 'ordered-model', alias: '', thinking: { levels: [] } }];
+      let renderer!: ReactTestRenderer;
+
+      const render = () => (
+        <ModelInputList
+          entries={entries}
+          onChange={(next) => {
+            entries = next;
+            renderer.update(render());
+          }}
+          showThinkingLevels
+          thinkingCustomLabel="Custom levels"
+        />
+      );
+
+      act(() => {
+        renderer = create(render());
+      });
+      act(() => {
+        findInputByLabelSuffix(renderer, ` ${first}`)?.props.onChange({
+          target: { checked: true },
+        });
+      });
+      act(() => {
+        findInputByLabelSuffix(renderer, ` ${second}`)?.props.onChange({
+          target: { checked: true },
+        });
+      });
+      const result = entries[0]?.thinking?.levels;
+      renderer.unmount();
+      return result;
+    };
+
+    expect(run('max', 'high')).toEqual(['high', 'max']);
+    expect(run('high', 'max')).toEqual(['high', 'max']);
+  });
+
+  it('includes legacy zero and dynamic flags until custom levels are edited', () => {
+    let entries: ModelEntry[] = [
+      {
+        name: 'legacy-model',
+        alias: '',
+        thinking: { levels: ['low'], zero_allowed: true, dynamicAllowed: true },
+      },
+    ];
+    let renderer!: ReactTestRenderer;
+
+    const render = () => (
+      <ModelInputList
+        entries={entries}
+        onChange={(next) => {
+          entries = next;
+          renderer.update(render());
+        }}
+        showThinkingLevels
+        thinkingCustomLabel="Custom levels"
+      />
+    );
+
+    act(() => {
+      renderer = create(render());
+    });
+    expect(findInputByLabelSuffix(renderer, ' none')?.props.checked).toBe(true);
+    expect(findInputByLabelSuffix(renderer, ' auto')?.props.checked).toBe(true);
+
+    act(() => {
+      findInputByLabelSuffix(renderer, ' none')?.props.onChange({ target: { checked: false } });
+    });
+    expect(findInputByLabelSuffix(renderer, ' none')?.props.checked).toBe(false);
+    expect(entries[0]?.thinking).toEqual({
+      levels: ['low', 'auto'],
+      zero_allowed: true,
+      dynamicAllowed: true,
+    });
+  });
+
+  it('turns legacy-only capabilities into explicit levels when entering custom mode', () => {
+    let entries: ModelEntry[] = [
+      {
+        name: 'legacy-only-model',
+        alias: '',
+        thinking: { zero_allowed: true, dynamic_allowed: true, future: 123 },
+      },
+    ];
+    let renderer!: ReactTestRenderer;
+
+    const render = () => (
+      <ModelInputList
+        entries={entries}
+        onChange={(next) => {
+          entries = next;
+          renderer.update(render());
+        }}
+        showThinkingLevels
+        thinkingDefaultLabel="Do not explicitly configure levels"
+        thinkingCustomLabel="Custom levels"
+      />
+    );
+
+    act(() => {
+      renderer = create(render());
+    });
+    expect(
+      findInputByLabelSuffix(renderer, 'Do not explicitly configure levels')?.props.checked
+    ).toBe(true);
+
+    act(() => {
+      findInputByLabelSuffix(renderer, 'Custom levels')?.props.onChange();
+    });
+
+    expect(entries[0]?.thinking).toEqual({
+      levels: ['none', 'auto'],
+      zero_allowed: true,
+      dynamic_allowed: true,
+      future: 123,
+    });
+    expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(0);
   });
 
   it('removes only levels when leaving them unconfigured and marks an empty thinking clear', () => {

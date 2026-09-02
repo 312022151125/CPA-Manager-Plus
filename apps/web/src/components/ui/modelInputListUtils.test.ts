@@ -4,17 +4,24 @@ import {
   entriesToModels,
   getKnownThinkingLevels,
   getEffectiveThinkingLevels,
+  getEffectiveThinkingLevelsForEntry,
+  getEffectiveThinkingKnownLevels,
   getUnknownThinkingLevels,
   hasInvalidThinkingLevels,
   modelsToEntries,
   normalizeKnownThinkingLevel,
   normalizeThinkingLevelsPreservingOrder,
+  rebuildThinkingLevelsDeterministically,
 } from './modelInputListUtils';
 import {
+  THINKING_DYNAMIC_ALLOWED_FIELDS,
+  THINKING_ZERO_ALLOWED_FIELDS,
   MODEL_THINKING_LEVELS_CLEAR_MARKER,
+  hasModelThinkingLevelsEditMarker,
   hasModelThinkingLevelsClearMarker,
   markModelThinkingLevelsForClear,
-  stripModelThinkingLevelsClearMarker,
+  markModelThinkingLevelsForEdit,
+  stripModelThinkingLevelsMarkers,
 } from '@/types';
 
 describe('modelInputListUtils', () => {
@@ -95,8 +102,51 @@ describe('modelInputListUtils', () => {
       normalizeThinkingLevelsPreservingOrder(['HIGH', 'future-level', 'low', ' high '])
     ).toEqual(['high', 'future-level', 'low']);
     expect(buildThinkingWithLevels(undefined, ['high', 'low', 'max'], [], ['high', 'low'])).toEqual(
-      { levels: ['high', 'low', 'max'] }
+      { levels: ['low', 'high', 'max'] }
     );
+  });
+
+  it('rebuilds selected known levels in deterministic serialized order', () => {
+    expect(rebuildThinkingLevelsDeterministically([], ['max', 'high'])).toEqual(['high', 'max']);
+    expect(
+      rebuildThinkingLevelsDeterministically(['HIGH', 'future', 'low'], ['max', 'high', 'low'])
+    ).toEqual(['low', 'future', 'high', 'max']);
+    expect(
+      rebuildThinkingLevelsDeterministically(
+        ['high', 'future-a', 'low', 'future-b'],
+        ['low', 'high']
+      )
+    ).toEqual(['low', 'future-a', 'high', 'future-b']);
+  });
+
+  it('keeps legacy zero and dynamic flags in the effective selection', () => {
+    expect(
+      getEffectiveThinkingKnownLevels({
+        thinking: { levels: ['low', 'high'], zero_allowed: true, dynamic_allowed: true },
+      })
+    ).toEqual(['low', 'high', 'none', 'auto']);
+    expect(
+      getEffectiveThinkingLevelsForEntry({
+        thinking: { levels: ['low'], 'zero-allowed': true, 'dynamic-allowed': true },
+      })
+    ).toEqual(['low', 'none', 'auto']);
+    expect(
+      getEffectiveThinkingLevelsForEntry({
+        thinking: { levels: ['low'], zeroAllowed: true, dynamic_allowed: true },
+      })
+    ).toEqual(['low', 'none', 'auto']);
+    expect(THINKING_ZERO_ALLOWED_FIELDS).toContain('zeroAllowed');
+    expect(THINKING_DYNAMIC_ALLOWED_FIELDS).toContain('dynamic-allowed');
+  });
+
+  it('uses levels only after an entry is explicitly edited', () => {
+    const edited = markModelThinkingLevelsForEdit({
+      name: 'model',
+      alias: '',
+      thinking: { levels: ['low'], zero_allowed: true, dynamic_allowed: true },
+    });
+
+    expect(getEffectiveThinkingKnownLevels(edited)).toEqual(['low']);
   });
 
   it('ignores blank levels when calculating effective levels', () => {
@@ -151,6 +201,20 @@ describe('modelInputListUtils', () => {
     expect(JSON.stringify(roundTripped)).not.toContain('model-thinking-levels-clear');
   });
 
+  it('preserves and round-trips the thinking-level edit marker', () => {
+    const model = markModelThinkingLevelsForEdit({
+      name: 'edited-model',
+      thinking: { levels: ['none', 'auto'], zero_allowed: true },
+    });
+
+    const entries = modelsToEntries([model]);
+    const roundTripped = entriesToModels(entries)[0];
+
+    expect(hasModelThinkingLevelsEditMarker(entries[0])).toBe(true);
+    expect(hasModelThinkingLevelsEditMarker(roundTripped)).toBe(true);
+    expect(JSON.stringify(roundTripped)).not.toContain('model-thinking-levels-edit');
+  });
+
   it('strips the clear marker into a committed model without mutating the source', () => {
     const model = markModelThinkingLevelsForClear({
       name: 'default-model',
@@ -158,7 +222,7 @@ describe('modelInputListUtils', () => {
       thinking: { futureOption: { enabled: true } },
       futureModelOption: 123,
     });
-    const committed = stripModelThinkingLevelsClearMarker(model);
+    const committed = stripModelThinkingLevelsMarkers(model);
 
     expect(hasModelThinkingLevelsClearMarker(model)).toBe(true);
     expect(hasModelThinkingLevelsClearMarker(committed)).toBe(false);

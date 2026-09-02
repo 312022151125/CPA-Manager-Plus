@@ -1,3 +1,11 @@
+import {
+  hasModelThinkingLevelsClearMarker,
+  hasModelThinkingLevelsEditMarker,
+  removeThinkingFlagAliases,
+  THINKING_DYNAMIC_ALLOWED_FIELDS,
+  THINKING_ZERO_ALLOWED_FIELDS,
+} from '@/types';
+
 export function areStringArraysEqual(a: readonly string[], b: readonly string[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
@@ -41,6 +49,26 @@ export function areJsonLikeValuesEqual(a: unknown, b: unknown): boolean {
   );
 }
 
+const comparableThinking = (entry: { thinking?: unknown }) => {
+  if (!entry.thinking || typeof entry.thinking !== 'object' || Array.isArray(entry.thinking)) {
+    return entry.thinking;
+  }
+
+  const thinking = entry.thinking as Record<string, unknown>;
+  if (hasModelThinkingLevelsEditMarker(entry)) {
+    return removeThinkingFlagAliases(thinking, [
+      ...THINKING_ZERO_ALLOWED_FIELDS,
+      ...THINKING_DYNAMIC_ALLOWED_FIELDS,
+    ]);
+  }
+  if (hasModelThinkingLevelsClearMarker(entry)) {
+    const next = { ...thinking };
+    delete next.levels;
+    return next;
+  }
+  return thinking;
+};
+
 export function areModelEntriesEqual(
   a: readonly {
     name: string;
@@ -71,7 +99,7 @@ export function areModelEntriesEqual(
       Boolean(left.forceMapping) !== Boolean(right.forceMapping) ||
       !areStringArraysEqual(left.inputModalities ?? [], right.inputModalities ?? []) ||
       !areStringArraysEqual(left.outputModalities ?? [], right.outputModalities ?? []) ||
-      !areJsonLikeValuesEqual(left.thinking, right.thinking)
+      !areJsonLikeValuesEqual(comparableThinking(left), comparableThinking(right))
     )
       return false;
   }

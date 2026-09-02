@@ -146,9 +146,10 @@ export function InfoTooltip({ content, ariaLabel, className = '' }: InfoTooltipP
   }, [closeTooltip]);
 
   const handleEscape = useCallback(
-    (event: { key: string; preventDefault: () => void }) => {
+    (event: { key: string; preventDefault: () => void; stopPropagation?: () => void }) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
+      event.stopPropagation?.();
       closeTooltip();
     },
     [closeTooltip]
@@ -168,11 +169,11 @@ export function InfoTooltip({ content, ariaLabel, className = '' }: InfoTooltipP
     if (!open || typeof window === 'undefined') return undefined;
     window.addEventListener('resize', updatePosition);
     window.addEventListener('scroll', updatePosition, true);
-    window.addEventListener('keydown', handleWindowKeyDown);
+    window.addEventListener('keydown', handleWindowKeyDown, true);
     return () => {
       window.removeEventListener('resize', updatePosition);
       window.removeEventListener('scroll', updatePosition, true);
-      window.removeEventListener('keydown', handleWindowKeyDown);
+      window.removeEventListener('keydown', handleWindowKeyDown, true);
     };
   }, [handleWindowKeyDown, open, updatePosition]);
 

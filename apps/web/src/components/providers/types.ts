@@ -1,5 +1,6 @@
 import {
   MODEL_THINKING_LEVELS_CLEAR_MARKER,
+  MODEL_THINKING_LEVELS_EDIT_MARKER,
   type ApiKeyEntry,
   type CoolingPolicy,
   type GeminiKeyConfig,
@@ -19,6 +20,7 @@ export interface ModelEntry {
   outputModalities?: string[];
   thinking?: Record<string, unknown>;
   [MODEL_THINKING_LEVELS_CLEAR_MARKER]?: true;
+  [MODEL_THINKING_LEVELS_EDIT_MARKER]?: true;
 }
 
 export interface OpenAIFormState {

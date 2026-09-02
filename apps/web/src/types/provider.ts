@@ -5,9 +5,15 @@
 
 /** Internal UI-to-serializer marker; never serialized into CPA configuration. */
 export const MODEL_THINKING_LEVELS_CLEAR_MARKER = Symbol('model-thinking-levels-clear');
+/** Internal UI-to-serializer marker; never serialized into CPA configuration. */
+export const MODEL_THINKING_LEVELS_EDIT_MARKER = Symbol('model-thinking-levels-edit');
 
 type ThinkingLevelsClearMarkerCarrier = {
   [MODEL_THINKING_LEVELS_CLEAR_MARKER]?: true;
+};
+
+type ThinkingLevelsEditMarkerCarrier = {
+  [MODEL_THINKING_LEVELS_EDIT_MARKER]?: true;
 };
 
 export const hasModelThinkingLevelsClearMarker = (value: unknown): boolean => {
@@ -15,9 +21,15 @@ export const hasModelThinkingLevelsClearMarker = (value: unknown): boolean => {
   return (value as ThinkingLevelsClearMarkerCarrier)[MODEL_THINKING_LEVELS_CLEAR_MARKER] === true;
 };
 
+export const hasModelThinkingLevelsEditMarker = (value: unknown): boolean => {
+  if (value === null || typeof value !== 'object') return false;
+  return (value as ThinkingLevelsEditMarkerCarrier)[MODEL_THINKING_LEVELS_EDIT_MARKER] === true;
+};
+
 export const markModelThinkingLevelsForClear = <T extends object>(
   value: T
 ): T & { [MODEL_THINKING_LEVELS_CLEAR_MARKER]: true } => {
+  delete (value as ThinkingLevelsEditMarkerCarrier)[MODEL_THINKING_LEVELS_EDIT_MARKER];
   Object.defineProperty(value, MODEL_THINKING_LEVELS_CLEAR_MARKER, {
     configurable: true,
     enumerable: false,
@@ -26,11 +38,58 @@ export const markModelThinkingLevelsForClear = <T extends object>(
   return value as T & { [MODEL_THINKING_LEVELS_CLEAR_MARKER]: true };
 };
 
-/** Remove the one-shot clear command before a provider becomes committed state. */
-export const stripModelThinkingLevelsClearMarker = <T extends object>(value: T): T => {
-  const next = { ...value } as T & ThinkingLevelsClearMarkerCarrier;
+export const markModelThinkingLevelsForEdit = <T extends object>(
+  value: T
+): T & { [MODEL_THINKING_LEVELS_EDIT_MARKER]: true } => {
+  delete (value as ThinkingLevelsClearMarkerCarrier)[MODEL_THINKING_LEVELS_CLEAR_MARKER];
+  Object.defineProperty(value, MODEL_THINKING_LEVELS_EDIT_MARKER, {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
+  return value as T & { [MODEL_THINKING_LEVELS_EDIT_MARKER]: true };
+};
+
+/** Remove one-shot UI commands before a provider becomes committed state. */
+export const stripModelThinkingLevelsMarkers = <T extends object>(value: T): T => {
+  const next = { ...value } as T &
+    ThinkingLevelsClearMarkerCarrier &
+    ThinkingLevelsEditMarkerCarrier;
   delete next[MODEL_THINKING_LEVELS_CLEAR_MARKER];
+  delete next[MODEL_THINKING_LEVELS_EDIT_MARKER];
   return next as T;
+};
+
+/** Backwards-compatible name; committed snapshots strip both thinking markers. */
+export const stripModelThinkingLevelsClearMarker = <T extends object>(value: T): T => {
+  return stripModelThinkingLevelsMarkers(value);
+};
+
+export const THINKING_ZERO_ALLOWED_FIELDS = [
+  'zero_allowed',
+  'zero-allowed',
+  'zeroAllowed',
+] as const;
+
+export const THINKING_DYNAMIC_ALLOWED_FIELDS = [
+  'dynamic_allowed',
+  'dynamic-allowed',
+  'dynamicAllowed',
+] as const;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+export const hasThinkingFlag = (thinking: unknown, fields: readonly string[]): boolean =>
+  isRecord(thinking) && fields.some((field) => thinking[field] === true);
+
+export const removeThinkingFlagAliases = (
+  thinking: Record<string, unknown>,
+  fields: readonly string[]
+): Record<string, unknown> => {
+  const next = { ...thinking };
+  fields.forEach((field) => delete next[field]);
+  return next;
 };
 
 export interface ModelAlias {
@@ -44,6 +103,7 @@ export interface ModelAlias {
   outputModalities?: string[];
   thinking?: Record<string, unknown>;
   [MODEL_THINKING_LEVELS_CLEAR_MARKER]?: true;
+  [MODEL_THINKING_LEVELS_EDIT_MARKER]?: true;
 }
 
 export interface ApiKeyEntry {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { hasModelThinkingLevelsClearMarker, markModelThinkingLevelsForClear } from '@/types';
+import {
+  hasModelThinkingLevelsClearMarker,
+  hasModelThinkingLevelsEditMarker,
+  markModelThinkingLevelsForClear,
+  markModelThinkingLevelsForEdit,
+} from '@/types';
 import {
   buildApiKeyEntry,
   buildCodexResponsesEndpoint,
@@ -37,11 +42,15 @@ describe('provider utils', () => {
       thinking: { futureOption: { enabled: true } },
       futureModelOption: 123,
     });
+    const editedModel = markModelThinkingLevelsForEdit({
+      name: 'edited-model',
+      thinking: { levels: ['high'] },
+    });
     const provider = {
       name: 'openai',
       baseUrl: 'https://api.example.com/v1',
       apiKeyEntries: [{ apiKey: 'key' }],
-      models: [markedModel],
+      models: [markedModel, editedModel],
       futureProviderOption: { enabled: true },
     };
 
@@ -51,7 +60,9 @@ describe('provider utils', () => {
     expect(committed.models).not.toBe(provider.models);
     expect(provider.models?.[0]).toBe(markedModel);
     expect(hasModelThinkingLevelsClearMarker(markedModel)).toBe(true);
+    expect(hasModelThinkingLevelsEditMarker(editedModel)).toBe(true);
     expect(hasModelThinkingLevelsClearMarker(committed.models?.[0])).toBe(false);
+    expect(hasModelThinkingLevelsEditMarker(committed.models?.[1])).toBe(false);
     expect(committed.models?.[0]).toMatchObject({
       name: 'model',
       thinking: markedModel.thinking,

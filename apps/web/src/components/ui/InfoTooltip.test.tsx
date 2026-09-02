@@ -71,6 +71,7 @@ describe('InfoTooltip', () => {
       renderer = create(<InfoTooltip ariaLabel="Information" content="Details" />);
     });
     const preventDefault = vi.fn();
+    const stopPropagation = vi.fn();
     const trigger = renderer.root.findByProps({ 'data-info-tooltip-trigger': 'true' });
 
     act(() => {
@@ -80,11 +81,63 @@ describe('InfoTooltip', () => {
       renderer.root.findByProps({ 'data-info-tooltip-trigger': 'true' }).props.onKeyDown({
         key: 'Escape',
         preventDefault,
+        stopPropagation,
       });
     });
 
     expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(stopPropagation).toHaveBeenCalledTimes(1);
     expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(0);
+  });
+
+  it('consumes Escape before a parent overlay handler', () => {
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+    vi.stubGlobal('window', {
+      addEventListener,
+      removeEventListener,
+      innerWidth: 1024,
+      innerHeight: 768,
+    });
+    let renderer!: ReactTestRenderer;
+    try {
+      act(() => {
+        renderer = create(<InfoTooltip ariaLabel="Information" content="Details" />);
+      });
+      const trigger = renderer.root.findByProps({ 'data-info-tooltip-trigger': 'true' });
+      act(() => {
+        trigger.props.onMouseEnter();
+      });
+      const keydownCall = addEventListener.mock.calls.find(
+        ([eventName]) => eventName === 'keydown'
+      );
+      const keydownHandler = keydownCall?.[1] as
+        | ((event: {
+            key: string;
+            preventDefault: () => void;
+            stopPropagation: () => void;
+          }) => void)
+        | undefined;
+      expect(keydownCall?.[2]).toBe(true);
+      expect(keydownHandler).toBeTypeOf('function');
+      const stopPropagation = vi.fn();
+      act(() => {
+        keydownHandler?.({
+          key: 'Escape',
+          preventDefault: vi.fn(),
+          stopPropagation,
+        });
+      });
+
+      expect(renderer.root.findAllByProps({ role: 'tooltip' })).toHaveLength(0);
+      expect(stopPropagation).toHaveBeenCalledTimes(1);
+    } finally {
+      act(() => {
+        renderer?.unmount();
+      });
+      expect(removeEventListener).toHaveBeenCalledWith('keydown', expect.any(Function), true);
+      vi.unstubAllGlobals();
+    }
   });
 
   it('closes a mouse-open tooltip from a window Escape event', () => {

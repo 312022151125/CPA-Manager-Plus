@@ -17,7 +17,16 @@ import type {
   ApiKeyEntry,
   ModelAlias,
 } from '@/types';
-import { hasModelThinkingLevelsClearMarker, markModelThinkingLevelsForClear } from '@/types';
+import {
+  hasModelThinkingLevelsClearMarker,
+  hasModelThinkingLevelsEditMarker,
+  markModelThinkingLevelsForClear,
+  markModelThinkingLevelsForEdit,
+  removeThinkingFlagAliases,
+  stripModelThinkingLevelsMarkers,
+  THINKING_DYNAMIC_ALLOWED_FIELDS,
+  THINKING_ZERO_ALLOWED_FIELDS,
+} from '@/types';
 
 const serializeHeaders = (headers?: Record<string, string>) =>
   headers && Object.keys(headers).length ? headers : undefined;
@@ -303,6 +312,7 @@ const mergeModelPayloads = (raw: unknown, models: unknown) =>
           const payloadThinking = payload.thinking;
           const clearThinkingLevels =
             hasModelThinkingLevelsClearMarker(payload) || payloadThinking === null;
+          const editThinkingLevels = hasModelThinkingLevelsEditMarker(payload);
           preserveOmittedRawField(rawModel, payload, next, ['image']);
           preserveOmittedRawField(rawModel, payload, next, [
             'force-mapping',
@@ -334,6 +344,17 @@ const mergeModelPayloads = (raw: unknown, models: unknown) =>
             } else {
               delete next.thinking;
             }
+          } else if (editThinkingLevels && isRecord(payloadThinking)) {
+            const rawThinking = isRecord(rawModel?.thinking) ? rawModel.thinking : undefined;
+            let nextThinking = {
+              ...(rawThinking ?? {}),
+              ...payloadThinking,
+            };
+            nextThinking = removeThinkingFlagAliases(nextThinking, [
+              ...THINKING_ZERO_ALLOWED_FIELDS,
+              ...THINKING_DYNAMIC_ALLOWED_FIELDS,
+            ]);
+            next.thinking = nextThinking;
           } else if (isRecord(payloadThinking)) {
             const rawThinking = isRecord(rawModel?.thinking) ? rawModel.thinking : undefined;
             next.thinking = {
@@ -438,7 +459,7 @@ const buildPreservedList = async <T>(
         ...payload,
         models: payload.models.map((model) => {
           if (!isRecord(model)) return model;
-          const next = { ...model };
+          const next = stripModelThinkingLevelsMarkers(model);
           if (hasModelThinkingLevelsClearMarker(model)) {
             const nextThinking = isRecord(model.thinking) ? { ...model.thinking } : {};
             delete nextThinking.levels;
@@ -449,6 +470,11 @@ const buildPreservedList = async <T>(
             } else {
               delete next.thinking;
             }
+          } else if (hasModelThinkingLevelsEditMarker(model) && isRecord(next.thinking)) {
+            next.thinking = removeThinkingFlagAliases(next.thinking, [
+              ...THINKING_ZERO_ALLOWED_FIELDS,
+              ...THINKING_DYNAMIC_ALLOWED_FIELDS,
+            ]);
           } else if (next.thinking === null) {
             delete next.thinking;
           }
@@ -710,6 +736,9 @@ const serializeModelAliases = (models?: ModelAlias[]) =>
           if (hasModelThinkingLevelsClearMarker(model)) {
             // The non-enumerable marker is consumed by the raw merge layer.
             markModelThinkingLevelsForClear(payload);
+          }
+          if (hasModelThinkingLevelsEditMarker(model)) {
+            markModelThinkingLevelsForEdit(payload);
           }
           return payload;
         })

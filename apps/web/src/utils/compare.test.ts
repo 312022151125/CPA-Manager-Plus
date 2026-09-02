@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { markModelThinkingLevelsForClear } from '@/types';
+import { markModelThinkingLevelsForClear, markModelThinkingLevelsForEdit } from '@/types';
 import { areModelEntriesEqual } from './compare';
 
 const baseline = [
@@ -92,5 +92,32 @@ describe('areModelEntriesEqual', () => {
         [unchanged]
       )
     ).toBe(false);
+  });
+
+  it('treats an edited legacy capability selection as dirty when aliases would be removed', () => {
+    const edited = markModelThinkingLevelsForEdit({
+      name: 'model',
+      alias: '',
+      thinking: { levels: ['low'], zero_allowed: true },
+    });
+
+    expect(
+      areModelEntriesEqual(
+        [{ name: 'model', alias: '', thinking: { levels: ['low'], zero_allowed: true } }],
+        [edited]
+      )
+    ).toBe(false);
+  });
+
+  it('does not make an edit marker alone dirty when its committed meaning is unchanged', () => {
+    const edited = markModelThinkingLevelsForEdit({
+      name: 'model',
+      alias: '',
+      thinking: { levels: ['low'] },
+    });
+
+    expect(
+      areModelEntriesEqual([{ name: 'model', alias: '', thinking: { levels: ['low'] } }], [edited])
+    ).toBe(true);
   });
 });
