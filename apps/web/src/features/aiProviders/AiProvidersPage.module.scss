@@ -559,7 +559,18 @@
 }
 
 .modelInputList {
-  gap: $spacing-xs;
+  gap: $spacing-md;
+  margin-top: $spacing-sm;
+}
+
+.modelInputItem {
+  min-width: 0;
+  padding-block: $spacing-sm;
+  border-bottom: 1px solid var(--border-subtle);
+
+  &:last-of-type {
+    border-bottom: none;
+  }
 }
 
 .modelInputRow {
@@ -886,10 +897,7 @@
 
 .keyTableHeader .keyTableColAction {
   z-index: 3;
-  background-image: linear-gradient(
-    var(--surface-subtle-strong),
-    var(--surface-subtle-strong)
-  );
+  background-image: linear-gradient(var(--surface-subtle-strong), var(--surface-subtle-strong));
 }
 
 .keyTableRow:hover .keyTableColAction {

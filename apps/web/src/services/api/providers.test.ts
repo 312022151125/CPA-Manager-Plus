@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MODEL_THINKING_CLEAR_MARKER } from '@/types';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
@@ -880,6 +881,133 @@ describe('providersApi v1.16 provider fields', () => {
             'output-modalities': [],
           },
         ],
+      },
+    ]);
+  });
+
+  it('serializes custom thinking levels without dropping unknown thinking fields', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'openai-compatibility': [
+        {
+          name: 'openai-compatible',
+          'base-url': 'https://api.example.com/v1',
+          'api-key-entries': [],
+          models: [{ name: 'openai-model', thinking: { levels: ['high', 'ultra'] } }],
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveOpenAIProviders([
+      {
+        name: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [],
+        models: [
+          {
+            name: 'openai-model',
+            thinking: {
+              levels: ['max', 'ultra'],
+              'future-option': { enabled: true },
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenCalledWith('/openai-compatibility', [
+      {
+        name: 'openai-compatible',
+        'base-url': 'https://api.example.com/v1',
+        'api-key-entries': [],
+        models: [
+          {
+            name: 'openai-model',
+            thinking: {
+              levels: ['max', 'ultra'],
+              'future-option': { enabled: true },
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('removes only thinking levels when returning to the CPA default', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'openai-compatibility': [
+        {
+          name: 'openai-compatible',
+          'base-url': 'https://api.example.com/v1',
+          'api-key-entries': [],
+          models: [
+            {
+              name: 'openai-model',
+              thinking: { levels: ['high'], 'future-option': { enabled: true } },
+            },
+          ],
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveOpenAIProviders([
+      {
+        name: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [],
+        models: [
+          {
+            name: 'openai-model',
+            thinking: { 'future-option': { enabled: true } },
+          },
+        ],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenCalledWith('/openai-compatibility', [
+      {
+        name: 'openai-compatible',
+        'base-url': 'https://api.example.com/v1',
+        'api-key-entries': [],
+        models: [
+          {
+            name: 'openai-model',
+            thinking: { 'future-option': { enabled: true } },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('lets the editor explicitly remove a raw thinking object', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'openai-compatibility': [
+        {
+          name: 'openai-compatible',
+          'base-url': 'https://api.example.com/v1',
+          'api-key-entries': [],
+          models: [{ name: 'openai-model', thinking: { levels: ['high'] } }],
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveOpenAIProviders([
+      {
+        name: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [],
+        models: [{ name: 'openai-model', [MODEL_THINKING_CLEAR_MARKER]: true }],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenCalledWith('/openai-compatibility', [
+      {
+        name: 'openai-compatible',
+        'base-url': 'https://api.example.com/v1',
+        'api-key-entries': [],
+        models: [{ name: 'openai-model' }],
       },
     ]);
   });

@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { HeaderInputList } from '@/components/ui/HeaderInputList';
 import { ModelInputList } from '@/components/ui/ModelInputList';
+import { InfoTooltip } from '@/components/ui/InfoTooltip';
 import { Modal } from '@/components/ui/Modal';
 import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
 import { OpenAIKeyTestStatusIndicator } from '@/components/providers';
@@ -21,7 +22,11 @@ import {
 import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/utils/headers';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { areKeyValueEntriesEqual, areModelEntriesEqual } from '@/utils/compare';
-import { entriesToModels, modelsToEntries } from '@/components/ui/modelInputListUtils';
+import {
+  entriesToModels,
+  hasInvalidThinkingLevels,
+  modelsToEntries,
+} from '@/components/ui/modelInputListUtils';
 import { buildApiKeyEntry, buildOpenAIChatCompletionsEndpoint } from '@/components/providers/utils';
 import {
   appendIdleKeyTestStatus,
@@ -285,7 +290,13 @@ export function OpenAIEditDrawer({
     getCredentialWeightError(entry.weight)
   );
   const canSave =
-    !disabled && !loading && !saving && !invalidIndex && !isTestingKeys && !hasInvalidWeight;
+    !disabled &&
+    !loading &&
+    !saving &&
+    !invalidIndex &&
+    !isTestingKeys &&
+    !hasInvalidWeight &&
+    !hasInvalidThinkingLevels(form.modelEntries);
 
   const isDirty = useMemo(() => {
     const normalizedPriority =
@@ -364,11 +375,7 @@ export function OpenAIEditDrawer({
 
   const configuredModelNames = useMemo(
     () =>
-      new Set(
-        form.modelEntries
-          .map((entry) => entry.name.trim().toLowerCase())
-          .filter(Boolean)
-      ),
+      new Set(form.modelEntries.map((entry) => entry.name.trim().toLowerCase()).filter(Boolean)),
     [form.modelEntries]
   );
 
@@ -425,7 +432,9 @@ export function OpenAIEditDrawer({
   );
 
   useEffect(() => {
-    const availableNames = new Set(discoveredModels.map((model) => String(model.name ?? '').trim()));
+    const availableNames = new Set(
+      discoveredModels.map((model) => String(model.name ?? '').trim())
+    );
     setModelDiscoverySelected((prev) => {
       let changed = false;
       const next = new Set<string>();
@@ -779,7 +788,6 @@ export function OpenAIEditDrawer({
             <div className={styles.keyTableColProxy}>{t('common.proxy_url')}</div>
             <div className={styles.keyTableColAction}>{t('common.action')}</div>
           </div>
-          <div className="hint">{t('ai_providers.model_discovery_proxy_version_hint')}</div>
           {list.map((entry, index) => {
             const keyStatus = keyTestStatuses[index]?.status ?? 'idle';
             const weightError = getCredentialWeightError(entry.weight);
@@ -992,6 +1000,10 @@ export function OpenAIEditDrawer({
                   >
                     {t('ai_providers.openai_models_fetch_button')}
                   </Button>
+                  <InfoTooltip
+                    content={t('ai_providers.openai_model_discovery_proxy_version_hint')}
+                    ariaLabel={t('ai_providers.model_discovery_proxy_version_info_label')}
+                  />
                 </div>
               </div>
               <div className={styles.sectionHint}>{t('ai_providers.openai_models_hint')}</div>
@@ -1005,14 +1017,27 @@ export function OpenAIEditDrawer({
                 className={styles.modelInputList}
                 rowClassName={styles.modelInputRow}
                 inputClassName={styles.modelInputField}
+                itemClassName={styles.modelInputItem}
                 removeButtonClassName={styles.modelRowRemoveButton}
                 removeButtonTitle={t('common.delete')}
                 removeButtonAriaLabel={t('common.delete')}
                 showForceMapping
                 showModalities
+                showThinkingLevels
                 forceMappingLabel={t('ai_providers.force_mapping_label')}
                 inputModalitiesPlaceholder={t('ai_providers.input_modalities_placeholder')}
                 outputModalitiesPlaceholder={t('ai_providers.output_modalities_placeholder')}
+                thinkingLabel={t('ai_providers.thinking_levels_label')}
+                thinkingTooltip={t('ai_providers.thinking_levels_tooltip')}
+                thinkingTooltipAriaLabel={t('ai_providers.thinking_levels_tooltip_aria_label')}
+                thinkingDefaultLabel={t('ai_providers.thinking_default_label')}
+                thinkingCustomLabel={t('ai_providers.thinking_custom_label')}
+                thinkingAllowedLevelsLabel={t('ai_providers.thinking_allowed_levels_label')}
+                thinkingSelectAllLabel={t('ai_providers.thinking_select_all_label')}
+                thinkingClearLabel={t('ai_providers.thinking_clear_label')}
+                thinkingRequiredError={t('ai_providers.thinking_required_error')}
+                thinkingUnknownLevelsLabel={t('ai_providers.thinking_unknown_levels_label')}
+                thinkingUnknownLevelsHint={t('ai_providers.thinking_unknown_levels_hint')}
               />
               <div className={styles.modelTestPanel}>
                 <div className={styles.modelTestMeta}>

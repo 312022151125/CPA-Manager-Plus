@@ -10,7 +10,11 @@ import {
   useNotificationStore,
   useOpenAIEditDraftStore,
 } from '@/stores';
-import { entriesToModels, modelsToEntries } from '@/components/ui/modelInputListUtils';
+import {
+  entriesToModels,
+  hasInvalidThinkingLevels,
+  modelsToEntries,
+} from '@/components/ui/modelInputListUtils';
 import {
   coolingPolicyFromOverride,
   coolingPolicyToOverride,
@@ -515,6 +519,7 @@ export function AiProvidersOpenAIEditLayout() {
       return;
     }
     if (hasInvalidWeight) return;
+    if (hasInvalidThinkingLevels(form.modelEntries)) return;
 
     setSaving(true);
     try {

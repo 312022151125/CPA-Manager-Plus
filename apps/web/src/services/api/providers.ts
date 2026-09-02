@@ -10,6 +10,7 @@ import {
   normalizeOpenAIProvider,
   normalizeProviderKeyConfig,
 } from './transformers';
+import { MODEL_THINKING_CLEAR_MARKER } from '@/types';
 import type {
   GeminiKeyConfig,
   OpenAIProviderConfig,
@@ -297,6 +298,7 @@ const mergeModelPayloads = (raw: unknown, models: unknown) =>
         return payloadItems.map((payload, index) => {
           const rawModel = findRawRecord(rawRecords, usedIndexes, payload, index, modelIdentity);
           const next = mergeKnownFields(rawModel, payload, MODEL_ALIAS_FIELDS);
+          const explicitlyClearedThinking = payload.thinking === null;
           preserveOmittedRawField(rawModel, payload, next, ['image']);
           preserveOmittedRawField(rawModel, payload, next, [
             'force-mapping',
@@ -313,7 +315,11 @@ const mergeModelPayloads = (raw: unknown, models: unknown) =>
             'outputModalities',
             'output_modalities',
           ]);
-          preserveOmittedRawField(rawModel, payload, next, ['thinking']);
+          if (explicitlyClearedThinking) {
+            delete next.thinking;
+          } else {
+            preserveOmittedRawField(rawModel, payload, next, ['thinking']);
+          }
           return next;
         });
       })()
@@ -398,7 +404,18 @@ const buildPreservedList = async <T>(
   try {
     rawConfig = await apiClient.get('/config');
   } catch {
-    return payloads;
+    return payloads.map((payload) => {
+      if (!Array.isArray(payload.models)) return payload;
+      return {
+        ...payload,
+        models: payload.models.map((model) => {
+          if (!isRecord(model) || model.thinking !== null) return model;
+          const next = { ...model };
+          delete next.thinking;
+          return next;
+        }),
+      };
+    });
   }
 
   const rawItems = getRawSectionList(rawConfig, section);
@@ -647,7 +664,10 @@ const serializeModelAliases = (models?: ModelAlias[]) =>
           if (model.outputModalities !== undefined) {
             payload['output-modalities'] = model.outputModalities;
           }
-          if (isRecord(model.thinking)) {
+          if (model[MODEL_THINKING_CLEAR_MARKER]) {
+            // Internal sentinel consumed by mergeModelPayloads; never send null to CPA.
+            payload.thinking = null;
+          } else if (isRecord(model.thinking)) {
             payload.thinking = model.thinking;
           }
           return payload;

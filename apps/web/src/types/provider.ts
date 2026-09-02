@@ -3,6 +3,9 @@
  * 基于原项目 src/modules/ai-providers.js
  */
 
+/** Internal UI-to-serializer marker; never serialized into CPA configuration. */
+export const MODEL_THINKING_CLEAR_MARKER = Symbol('model-thinking-clear');
+
 export interface ModelAlias {
   name: string;
   alias?: string;
@@ -13,6 +16,7 @@ export interface ModelAlias {
   inputModalities?: string[];
   outputModalities?: string[];
   thinking?: Record<string, unknown>;
+  [MODEL_THINKING_CLEAR_MARKER]?: true;
 }
 
 export interface ApiKeyEntry {

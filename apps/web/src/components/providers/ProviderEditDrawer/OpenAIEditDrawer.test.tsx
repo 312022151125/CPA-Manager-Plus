@@ -1,8 +1,9 @@
 import { createElement, type ReactNode } from 'react';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import '@/i18n';
+import i18n from '@/i18n';
 import { CoolingPolicySelect } from '@/components/providers/CoolingPolicySelect';
+import { ModelInputList } from '@/components/ui/ModelInputList';
 
 const authState = vi.hoisted(() => ({
   serverVersion: 'v7.2.93' as string | null,
@@ -44,8 +45,15 @@ vi.mock('@/components/ui/Drawer', () => ({
 }));
 
 vi.mock('@/components/ui/Modal', () => ({
-  Modal: ({ open, children }: { open: boolean; children: ReactNode }) =>
-    open ? createElement('div', null, children) : null,
+  Modal: ({
+    open,
+    children,
+    footer,
+  }: {
+    open: boolean;
+    children: ReactNode;
+    footer?: ReactNode;
+  }) => (open ? createElement('div', null, children, footer) : null),
 }));
 
 vi.mock('@/services/api', () => ({
@@ -173,4 +181,169 @@ describe('OpenAIEditDrawer model discovery', () => {
       act(() => renderer!.unmount());
     }
   );
+
+  it('saves thinking levels and preserves the rest of the thinking object', async () => {
+    mocks.getOpenAIProviders.mockResolvedValue([
+      {
+        name: 'openai-example',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [{ apiKey: 'openai-key' }],
+        models: [
+          {
+            name: 'thinking-model',
+            thinking: { levels: ['low'], 'future-option': { enabled: true } },
+          },
+        ],
+      },
+    ]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <OpenAIEditDrawer open editIndex={0} disabled={false} onClose={vi.fn()} onSaved={vi.fn()} />
+      );
+    });
+
+    const maxLevel = renderer!.root.findByProps({ 'aria-label': 'max' });
+    act(() => {
+      maxLevel.props.onChange({ target: { checked: true } });
+    });
+
+    const saveButton = findSaveButton(renderer!.root);
+    expect(saveButton?.props.disabled).not.toBe(true);
+    await act(async () => {
+      await saveButton?.props.onClick();
+    });
+
+    expect(mocks.updateOpenAIProvider).toHaveBeenCalledWith(
+      'openai-example',
+      0,
+      expect.objectContaining({
+        models: [
+          {
+            name: 'thinking-model',
+            thinking: { levels: ['low', 'max'], 'future-option': { enabled: true } },
+          },
+        ],
+      })
+    );
+
+    act(() => renderer!.unmount());
+  });
+
+  it('blocks saving a custom model with no thinking levels', async () => {
+    mocks.getOpenAIProviders.mockResolvedValue([
+      {
+        name: 'openai-example',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [{ apiKey: 'openai-key' }],
+        models: [{ name: 'thinking-model' }],
+      },
+    ]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <OpenAIEditDrawer open editIndex={0} disabled={false} onClose={vi.fn()} onSaved={vi.fn()} />
+      );
+    });
+
+    act(() => {
+      renderer!.root
+        .findByProps({ 'aria-label': i18n.t('ai_providers.thinking_custom_label') })
+        .props.onChange();
+    });
+
+    expect(renderer!.root.findByProps({ role: 'alert' }).children.join('')).toContain(
+      i18n.t('ai_providers.thinking_required_error')
+    );
+    const saveButton = findSaveButton(renderer!.root);
+    expect(saveButton?.props.disabled).toBe(true);
+    await act(async () => {
+      await saveButton?.props.onClick();
+    });
+    expect(mocks.updateOpenAIProvider).not.toHaveBeenCalled();
+
+    act(() => renderer!.unmount());
+  });
+
+  it('moves the CPA proxy compatibility message into a focusable tooltip', async () => {
+    mocks.getOpenAIProviders.mockResolvedValue([
+      {
+        name: 'openai-example',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [{ apiKey: 'openai-key' }],
+        models: [],
+      },
+    ]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <OpenAIEditDrawer open editIndex={0} disabled={false} onClose={vi.fn()} onSaved={vi.fn()} />
+      );
+    });
+
+    expect(
+      renderer!.root
+        .findAllByProps({ className: 'hint' })
+        .some((node) => node.children.join('').includes('CPA v7.2.130'))
+    ).toBe(false);
+    const tooltipTrigger = renderer!.root.findAllByProps({
+      'data-info-tooltip-trigger': 'true',
+    })[0];
+    expect(tooltipTrigger.props.tabIndex).not.toBe(-1);
+
+    act(() => {
+      tooltipTrigger.props.onFocus();
+    });
+    const tooltip = renderer!.root.findByProps({ role: 'tooltip' });
+    expect(tooltip.children.join('')).toContain('CPA v7.2.130');
+
+    act(() => renderer!.unmount());
+  });
+
+  it('adds discovered models without opting them into thinking levels', async () => {
+    mocks.getOpenAIProviders.mockResolvedValue([
+      {
+        name: 'openai-example',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEntries: [{ apiKey: 'openai-key' }],
+        models: [],
+      },
+    ]);
+    mocks.fetchModelsViaApiCall.mockResolvedValue([{ name: 'new-model' }]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <OpenAIEditDrawer open editIndex={0} disabled={false} onClose={vi.fn()} onSaved={vi.fn()} />
+      );
+    });
+
+    await act(async () => {
+      findModelsFetchButton(renderer!.root)!.props.onClick();
+    });
+    const discoveredModel = renderer!.root.findByProps({ 'aria-label': 'new-model' });
+    act(() => {
+      discoveredModel.props.onChange({ target: { checked: true } });
+    });
+
+    const applyLabel = i18n.t('ai_providers.openai_models_fetch_apply');
+    const applyButton = renderer!.root
+      .findAllByType('button')
+      .find((button) =>
+        button.findAllByType('span').some((span) => span.children.join('') === applyLabel)
+      );
+    expect(applyButton).toBeDefined();
+    expect(applyButton?.props.disabled).not.toBe(true);
+    await act(async () => {
+      applyButton?.props.onClick();
+    });
+
+    const modelList = renderer!.root.findByType(ModelInputList);
+    expect(modelList.props.entries).toEqual([{ name: 'new-model', alias: '' }]);
+
+    act(() => renderer!.unmount());
+  });
 });
