@@ -651,10 +651,10 @@ export function AiProvidersOpenAIEditPage() {
                 aliasPlaceholder={t('common.model_alias_placeholder')}
                 disabled={saving || disableControls || isTestingKeys}
                 hideAddButton
-                className={styles.modelInputList}
+                className={styles.openaiModelInputList}
                 rowClassName={styles.modelInputRow}
                 inputClassName={styles.modelInputField}
-                itemClassName={styles.modelInputItem}
+                itemClassName={styles.openaiModelInputItem}
                 removeButtonClassName={styles.modelRowRemoveButton}
                 removeButtonTitle={t('common.delete')}
                 removeButtonAriaLabel={t('common.delete')}
@@ -664,6 +664,7 @@ export function AiProvidersOpenAIEditPage() {
                 forceMappingLabel={t('ai_providers.force_mapping_label')}
                 inputModalitiesPlaceholder={t('ai_providers.input_modalities_placeholder')}
                 outputModalitiesPlaceholder={t('ai_providers.output_modalities_placeholder')}
+                modelFallbackLabel={t('ai_providers.thinking_model_fallback_label')}
                 thinkingLabel={t('ai_providers.thinking_levels_label')}
                 thinkingTooltip={t('ai_providers.thinking_levels_tooltip')}
                 thinkingTooltipAriaLabel={t('ai_providers.thinking_levels_tooltip_aria_label')}

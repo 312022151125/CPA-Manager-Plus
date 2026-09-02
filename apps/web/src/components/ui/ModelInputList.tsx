@@ -1,20 +1,24 @@
-import { useId } from 'react';
+import { Fragment, useId } from 'react';
 import { Button } from './Button';
 import { IconX } from './icons';
 import { InfoTooltip } from './InfoTooltip';
 import { SelectionCheckbox } from './SelectionCheckbox';
 import { ToggleSwitch } from './ToggleSwitch';
 import {
+  MODEL_THINKING_LEVELS_CLEAR_MARKER,
+  hasModelThinkingLevelsClearMarker,
+  markModelThinkingLevelsForClear,
+} from '@/types';
+import {
   buildThinkingWithLevels,
+  cloneModelEntry,
   getThinkingLevels,
   getUnknownThinkingLevels,
-  isRecord,
   KNOWN_THINKING_LEVELS,
   removeThinkingLevels,
   type ModelEntry,
   type ThinkingLevel,
 } from './modelInputListUtils';
-import { MODEL_THINKING_CLEAR_MARKER } from '@/types';
 import styles from './ModelInputList.module.scss';
 
 interface ModelInputListProps {
@@ -30,6 +34,7 @@ interface ModelInputListProps {
   rowClassName?: string;
   inputClassName?: string;
   itemClassName?: string;
+  modelFallbackLabel?: string;
   removeButtonClassName?: string;
   removeButtonTitle?: string;
   removeButtonAriaLabel?: string;
@@ -80,6 +85,7 @@ export function ModelInputList({
   forceMappingLabel = 'Rewrite response model',
   inputModalitiesPlaceholder = 'Input modalities: text, image',
   outputModalitiesPlaceholder = 'Output modalities: text, image',
+  modelFallbackLabel = 'Model',
   thinkingLabel = 'Thinking levels',
   thinkingTooltip = '',
   thinkingTooltipAriaLabel = 'Thinking levels information',
@@ -87,7 +93,7 @@ export function ModelInputList({
   thinkingCustomLabel = 'Custom',
   thinkingAllowedLevelsLabel = 'Allowed thinking levels',
   thinkingSelectAllLabel = 'Select all',
-  thinkingClearLabel = 'Clear',
+  thinkingClearLabel = 'Clear known levels',
   thinkingRequiredError = 'Select at least one thinking level',
   thinkingUnknownLevelsLabel = 'Other configured levels',
   thinkingUnknownLevelsHint = 'This level is preserved when saving.',
@@ -98,17 +104,18 @@ export function ModelInputList({
   const inputClassNames = ['input', inputClassName].filter(Boolean).join(' ');
   const rowClassNames = ['header-input-row', rowClassName].filter(Boolean).join(' ');
   const itemClassNames = [styles.modelItem, itemClassName].filter(Boolean).join(' ');
+  const shouldWrapModelItem = showThinkingLevels || Boolean(itemClassName);
 
   const updateEntry = (index: number, field: 'name' | 'alias', value: string) => {
     const next = currentEntries.map((entry, idx) =>
-      idx === index ? { ...entry, [field]: value } : entry
+      idx === index ? cloneModelEntry(entry, { [field]: value }) : entry
     );
     onChange(next);
   };
 
   const updateAdvancedEntry = (index: number, patch: Partial<ModelEntry>) => {
     const next = currentEntries.map((entry, idx) =>
-      idx === index ? { ...entry, ...patch } : entry
+      idx === index ? cloneModelEntry(entry, patch) : entry
     );
     onChange(next);
   };
@@ -124,7 +131,7 @@ export function ModelInputList({
         ...entry,
         thinking: buildThinkingWithLevels(entry.thinking, selectedLevels, unknownLevels),
       };
-      delete nextEntry[MODEL_THINKING_CLEAR_MARKER];
+      delete nextEntry[MODEL_THINKING_LEVELS_CLEAR_MARKER];
       return nextEntry;
     });
     onChange(next);
@@ -148,11 +155,12 @@ export function ModelInputList({
       if (idx !== index) return item;
       const nextEntry = { ...item };
       delete nextEntry.thinking;
-      delete nextEntry[MODEL_THINKING_CLEAR_MARKER];
+      delete nextEntry[MODEL_THINKING_LEVELS_CLEAR_MARKER];
       if (nextThinking) {
         nextEntry.thinking = nextThinking;
-      } else if (isRecord(item.thinking) || item[MODEL_THINKING_CLEAR_MARKER]) {
-        nextEntry[MODEL_THINKING_CLEAR_MARKER] = true;
+      }
+      if (Array.isArray(item.thinking?.levels) || hasModelThinkingLevelsClearMarker(item)) {
+        markModelThinkingLevelsForClear(nextEntry);
       }
       return nextEntry;
     });
@@ -205,186 +213,214 @@ export function ModelInputList({
 
   return (
     <div className={containerClassName}>
-      {currentEntries.map((entry, index) => (
-        <div key={index} className={itemClassNames}>
-          <div className={rowClassNames}>
-            <input
-              className={inputClassNames}
-              placeholder={namePlaceholder}
-              value={entry.name}
-              onChange={(e) => updateEntry(index, 'name', e.target.value)}
-              disabled={disabled}
-            />
-            <span className="header-separator">→</span>
-            <input
-              className={inputClassNames}
-              placeholder={aliasPlaceholder}
-              value={entry.alias}
-              onChange={(e) => updateEntry(index, 'alias', e.target.value)}
-              disabled={disabled}
-            />
-            <Button
-              variant="ghost"
-              size="xs"
-              iconOnly
-              onClick={() => removeEntry(index)}
-              disabled={disabled || currentEntries.length <= 1}
-              className={removeButtonClassName}
-              title={removeButtonTitle}
-              aria-label={removeButtonAriaLabel}
-            >
-              <IconX size={14} />
-            </Button>
-          </div>
-          {(showForceMapping || showModalities) && (
-            <div className={styles.advancedRow}>
-              {showForceMapping && (
-                <ToggleSwitch
-                  label={forceMappingLabel}
-                  labelPosition="left"
-                  checked={Boolean(entry.forceMapping)}
-                  onChange={(forceMapping) => updateAdvancedEntry(index, { forceMapping })}
-                  disabled={disabled}
-                />
-              )}
-              {showModalities && (
-                <>
-                  <input
-                    className={inputClassNames}
-                    placeholder={inputModalitiesPlaceholder}
-                    value={entry.inputModalitiesDraft ?? (entry.inputModalities ?? []).join(', ')}
-                    aria-label={inputModalitiesPlaceholder}
-                    onChange={(event) => {
-                      const inputModalitiesDraft = event.target.value;
-                      updateAdvancedEntry(index, {
-                        inputModalitiesDraft,
-                        inputModalities: parseModalities(inputModalitiesDraft),
-                      });
-                    }}
-                    disabled={disabled}
-                  />
-                  <input
-                    className={inputClassNames}
-                    placeholder={outputModalitiesPlaceholder}
-                    value={entry.outputModalitiesDraft ?? (entry.outputModalities ?? []).join(', ')}
-                    aria-label={outputModalitiesPlaceholder}
-                    onChange={(event) => {
-                      const outputModalitiesDraft = event.target.value;
-                      updateAdvancedEntry(index, {
-                        outputModalitiesDraft,
-                        outputModalities: parseModalities(outputModalitiesDraft),
-                      });
-                    }}
-                    disabled={disabled}
-                  />
-                </>
-              )}
+      {currentEntries.map((entry, index) => {
+        const modelOrdinal = `${modelFallbackLabel} ${index + 1}`;
+        const modelContext = entry.name.trim()
+          ? `${entry.name.trim()} (${modelOrdinal})`
+          : modelOrdinal;
+        const thinkingAccessibleName = `${modelContext} ${thinkingLabel}`;
+        const thinkingTooltipAccessibleName = `${modelContext} ${thinkingTooltipAriaLabel}`;
+        const modelContent = (
+          <>
+            <div className={rowClassNames}>
+              <input
+                className={inputClassNames}
+                placeholder={namePlaceholder}
+                value={entry.name}
+                onChange={(e) => updateEntry(index, 'name', e.target.value)}
+                disabled={disabled}
+              />
+              <span className="header-separator">→</span>
+              <input
+                className={inputClassNames}
+                placeholder={aliasPlaceholder}
+                value={entry.alias}
+                onChange={(e) => updateEntry(index, 'alias', e.target.value)}
+                disabled={disabled}
+              />
+              <Button
+                variant="ghost"
+                size="xs"
+                iconOnly
+                onClick={() => removeEntry(index)}
+                disabled={disabled || currentEntries.length <= 1}
+                className={removeButtonClassName}
+                title={removeButtonTitle}
+                aria-label={removeButtonAriaLabel}
+              >
+                <IconX size={14} />
+              </Button>
             </div>
-          )}
-          {showThinkingLevels && (
-            <div className={styles.thinkingSection}>
-              <div className={styles.thinkingHeader}>
-                <span className={styles.thinkingLabel}>{thinkingLabel}</span>
-                {thinkingTooltip ? (
-                  <InfoTooltip content={thinkingTooltip} ariaLabel={thinkingTooltipAriaLabel} />
-                ) : null}
-              </div>
-              <div className={styles.thinkingMode} role="radiogroup" aria-label={thinkingLabel}>
-                <label className={styles.thinkingModeOption}>
-                  <input
-                    type="radio"
-                    name={`thinking-mode-${thinkingModeId}-${index}`}
-                    aria-label={thinkingDefaultLabel}
-                    checked={!Array.isArray(entry.thinking?.levels)}
-                    onChange={() => setThinkingMode(index, false)}
+            {(showForceMapping || showModalities) && (
+              <div className={styles.advancedRow}>
+                {showForceMapping && (
+                  <ToggleSwitch
+                    label={forceMappingLabel}
+                    labelPosition="left"
+                    checked={Boolean(entry.forceMapping)}
+                    onChange={(forceMapping) => updateAdvancedEntry(index, { forceMapping })}
                     disabled={disabled}
                   />
-                  <span>{thinkingDefaultLabel}</span>
-                </label>
-                <label className={styles.thinkingModeOption}>
-                  <input
-                    type="radio"
-                    name={`thinking-mode-${thinkingModeId}-${index}`}
-                    aria-label={thinkingCustomLabel}
-                    checked={Array.isArray(entry.thinking?.levels)}
-                    onChange={() => setThinkingMode(index, true)}
-                    disabled={disabled}
-                  />
-                  <span>{thinkingCustomLabel}</span>
-                </label>
+                )}
+                {showModalities && (
+                  <>
+                    <input
+                      className={inputClassNames}
+                      placeholder={inputModalitiesPlaceholder}
+                      value={entry.inputModalitiesDraft ?? (entry.inputModalities ?? []).join(', ')}
+                      aria-label={inputModalitiesPlaceholder}
+                      onChange={(event) => {
+                        const inputModalitiesDraft = event.target.value;
+                        updateAdvancedEntry(index, {
+                          inputModalitiesDraft,
+                          inputModalities: parseModalities(inputModalitiesDraft),
+                        });
+                      }}
+                      disabled={disabled}
+                    />
+                    <input
+                      className={inputClassNames}
+                      placeholder={outputModalitiesPlaceholder}
+                      value={
+                        entry.outputModalitiesDraft ?? (entry.outputModalities ?? []).join(', ')
+                      }
+                      aria-label={outputModalitiesPlaceholder}
+                      onChange={(event) => {
+                        const outputModalitiesDraft = event.target.value;
+                        updateAdvancedEntry(index, {
+                          outputModalitiesDraft,
+                          outputModalities: parseModalities(outputModalitiesDraft),
+                        });
+                      }}
+                      disabled={disabled}
+                    />
+                  </>
+                )}
               </div>
-              {Array.isArray(entry.thinking?.levels) && (
-                <div className={styles.thinkingCustomPanel}>
-                  <div className={styles.thinkingOptionsHeader}>
-                    <span>{thinkingAllowedLevelsLabel}</span>
-                    <span className={styles.thinkingActions}>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => selectAllThinkingLevels(index)}
-                        disabled={disabled}
-                      >
-                        {thinkingSelectAllLabel}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => clearThinkingLevels(index)}
-                        disabled={disabled}
-                      >
-                        {thinkingClearLabel}
-                      </Button>
-                    </span>
-                  </div>
-                  <div className={styles.thinkingLevels}>
-                    {KNOWN_THINKING_LEVELS.map((level) => (
-                      <SelectionCheckbox
-                        key={level}
-                        checked={getThinkingLevels(entry.thinking).some(
-                          (configuredLevel) => configuredLevel === level
-                        )}
-                        onChange={(checked) => updateThinkingLevel(index, level, checked)}
-                        disabled={disabled}
-                        label={level}
-                        ariaLabel={level}
-                        className={styles.thinkingLevelOption}
-                        labelClassName={styles.thinkingLevelLabel}
-                      />
-                    ))}
-                  </div>
-                  {getUnknownThinkingLevels(getThinkingLevels(entry.thinking)).length > 0 && (
-                    <div className={styles.thinkingUnknown} role="note">
-                      <div className={styles.thinkingUnknownLabel}>
-                        {thinkingUnknownLevelsLabel}
-                      </div>
-                      <div className={styles.thinkingUnknownLevels}>
-                        {getUnknownThinkingLevels(getThinkingLevels(entry.thinking)).map(
-                          (level, levelIndex) => (
-                            <span
-                              key={`${String(level)}-${levelIndex}`}
-                              className={styles.thinkingUnknownChip}
-                            >
-                              {String(level)}
-                            </span>
-                          )
-                        )}
-                      </div>
-                      <div className={styles.thinkingUnknownHint}>{thinkingUnknownLevelsHint}</div>
-                    </div>
-                  )}
-                  {entry.thinking.levels.length === 0 && (
-                    <div className={styles.thinkingError} role="alert">
-                      {thinkingRequiredError}
-                    </div>
-                  )}
+            )}
+            {showThinkingLevels && (
+              <div className={styles.thinkingSection}>
+                <div className={styles.thinkingHeader}>
+                  <span className={styles.thinkingLabel}>{thinkingLabel}</span>
+                  {thinkingTooltip ? (
+                    <InfoTooltip
+                      content={thinkingTooltip}
+                      ariaLabel={thinkingTooltipAccessibleName}
+                    />
+                  ) : null}
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-      ))}
+                <div
+                  className={styles.thinkingMode}
+                  role="radiogroup"
+                  aria-label={thinkingAccessibleName}
+                >
+                  <label className={styles.thinkingModeOption}>
+                    <input
+                      type="radio"
+                      name={`thinking-mode-${thinkingModeId}-${index}`}
+                      aria-label={`${modelContext} ${thinkingDefaultLabel}`}
+                      checked={!Array.isArray(entry.thinking?.levels)}
+                      onChange={() => setThinkingMode(index, false)}
+                      disabled={disabled}
+                    />
+                    <span>{thinkingDefaultLabel}</span>
+                  </label>
+                  <label className={styles.thinkingModeOption}>
+                    <input
+                      type="radio"
+                      name={`thinking-mode-${thinkingModeId}-${index}`}
+                      aria-label={`${modelContext} ${thinkingCustomLabel}`}
+                      checked={Array.isArray(entry.thinking?.levels)}
+                      onChange={() => setThinkingMode(index, true)}
+                      disabled={disabled}
+                    />
+                    <span>{thinkingCustomLabel}</span>
+                  </label>
+                </div>
+                {Array.isArray(entry.thinking?.levels) && (
+                  <div className={styles.thinkingCustomPanel}>
+                    <div className={styles.thinkingOptionsHeader}>
+                      <span>{thinkingAllowedLevelsLabel}</span>
+                      <span className={styles.thinkingActions}>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => selectAllThinkingLevels(index)}
+                          disabled={disabled}
+                          aria-label={`${modelContext} ${thinkingSelectAllLabel}`}
+                        >
+                          {thinkingSelectAllLabel}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => clearThinkingLevels(index)}
+                          disabled={disabled}
+                          aria-label={`${modelContext} ${thinkingClearLabel}`}
+                        >
+                          {thinkingClearLabel}
+                        </Button>
+                      </span>
+                    </div>
+                    <div className={styles.thinkingLevels}>
+                      {KNOWN_THINKING_LEVELS.map((level) => (
+                        <SelectionCheckbox
+                          key={level}
+                          checked={getThinkingLevels(entry.thinking).some(
+                            (configuredLevel) => configuredLevel === level
+                          )}
+                          onChange={(checked) => updateThinkingLevel(index, level, checked)}
+                          disabled={disabled}
+                          label={level}
+                          ariaLabel={`${modelContext} ${level}`}
+                          className={styles.thinkingLevelOption}
+                          labelClassName={styles.thinkingLevelLabel}
+                        />
+                      ))}
+                    </div>
+                    {getUnknownThinkingLevels(getThinkingLevels(entry.thinking)).length > 0 && (
+                      <div className={styles.thinkingUnknown} role="note">
+                        <div className={styles.thinkingUnknownLabel}>
+                          {thinkingUnknownLevelsLabel}
+                        </div>
+                        <div className={styles.thinkingUnknownLevels}>
+                          {getUnknownThinkingLevels(getThinkingLevels(entry.thinking)).map(
+                            (level, levelIndex) => (
+                              <span
+                                key={`${String(level)}-${levelIndex}`}
+                                className={styles.thinkingUnknownChip}
+                              >
+                                {String(level)}
+                              </span>
+                            )
+                          )}
+                        </div>
+                        <div className={styles.thinkingUnknownHint}>
+                          {thinkingUnknownLevelsHint}
+                        </div>
+                      </div>
+                    )}
+                    {getThinkingLevels(entry.thinking).length === 0 && (
+                      <div className={styles.thinkingError} role="alert">
+                        {thinkingRequiredError}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        );
+        return shouldWrapModelItem ? (
+          <div key={index} className={itemClassNames}>
+            {modelContent}
+          </div>
+        ) : (
+          <Fragment key={index}>{modelContent}</Fragment>
+        );
+      })}
       {!hideAddButton && addLabel && (
         <Button
           variant="secondary"

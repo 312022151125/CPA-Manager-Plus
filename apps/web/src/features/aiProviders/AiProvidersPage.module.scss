@@ -559,11 +559,15 @@
 }
 
 .modelInputList {
+  gap: $spacing-xs;
+}
+
+.openaiModelInputList {
   gap: $spacing-md;
   margin-top: $spacing-sm;
 }
 
-.modelInputItem {
+.openaiModelInputItem {
   min-width: 0;
   padding-block: $spacing-sm;
   border-bottom: 1px solid var(--border-subtle);

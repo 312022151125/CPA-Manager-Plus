@@ -11,6 +11,7 @@ import {
   useOpenAIEditDraftStore,
 } from '@/stores';
 import {
+  cloneModelEntry,
   entriesToModels,
   hasInvalidThinkingLevels,
   modelsToEntries,
@@ -97,7 +98,7 @@ const normalizeModelEntries = (entries: ModelEntry[]) =>
       alias = '';
     }
     if (!name && !alias) return acc;
-    acc.push({ ...entry, name, alias });
+    acc.push(cloneModelEntry(entry, { name, alias }));
     return acc;
   }, []);
 
@@ -410,11 +411,13 @@ export function AiProvidersOpenAIEditLayout() {
         prev.modelEntries.forEach((entry) => {
           const name = entry.name.trim();
           if (!name) return;
-          mergedMap.set(name.toLowerCase(), {
-            ...entry,
-            name,
-            alias: entry.alias?.trim() || '',
-          });
+          mergedMap.set(
+            name.toLowerCase(),
+            cloneModelEntry(entry, {
+              name,
+              alias: entry.alias?.trim() || '',
+            })
+          );
         });
 
         selectedModels.forEach((model) => {

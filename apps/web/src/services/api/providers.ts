@@ -10,7 +10,6 @@ import {
   normalizeOpenAIProvider,
   normalizeProviderKeyConfig,
 } from './transformers';
-import { MODEL_THINKING_CLEAR_MARKER } from '@/types';
 import type {
   GeminiKeyConfig,
   OpenAIProviderConfig,
@@ -18,6 +17,7 @@ import type {
   ApiKeyEntry,
   ModelAlias,
 } from '@/types';
+import { hasModelThinkingLevelsClearMarker, markModelThinkingLevelsForClear } from '@/types';
 
 const serializeHeaders = (headers?: Record<string, string>) =>
   headers && Object.keys(headers).length ? headers : undefined;
@@ -123,7 +123,6 @@ const MODEL_ALIAS_FIELDS = [
   'output-modalities',
   'outputModalities',
   'output_modalities',
-  'thinking',
 ] as const;
 
 const API_KEY_ENTRY_FIELDS = [
@@ -298,7 +297,9 @@ const mergeModelPayloads = (raw: unknown, models: unknown) =>
         return payloadItems.map((payload, index) => {
           const rawModel = findRawRecord(rawRecords, usedIndexes, payload, index, modelIdentity);
           const next = mergeKnownFields(rawModel, payload, MODEL_ALIAS_FIELDS);
-          const explicitlyClearedThinking = payload.thinking === null;
+          const payloadThinking = payload.thinking;
+          const clearThinkingLevels =
+            hasModelThinkingLevelsClearMarker(payload) || payloadThinking === null;
           preserveOmittedRawField(rawModel, payload, next, ['image']);
           preserveOmittedRawField(rawModel, payload, next, [
             'force-mapping',
@@ -315,10 +316,27 @@ const mergeModelPayloads = (raw: unknown, models: unknown) =>
             'outputModalities',
             'output_modalities',
           ]);
-          if (explicitlyClearedThinking) {
+          if (clearThinkingLevels) {
+            const rawThinking = isRecord(rawModel?.thinking) ? rawModel.thinking : undefined;
+            const nextThinking = {
+              ...(rawThinking ?? {}),
+              ...(isRecord(payloadThinking) ? payloadThinking : {}),
+            };
+            delete nextThinking.levels;
+            if (Object.keys(nextThinking).length > 0) {
+              next.thinking = nextThinking;
+            } else {
+              delete next.thinking;
+            }
+          } else if (isRecord(payloadThinking)) {
+            const rawThinking = isRecord(rawModel?.thinking) ? rawModel.thinking : undefined;
+            next.thinking = {
+              ...(rawThinking ?? {}),
+              ...payloadThinking,
+            };
+          }
+          if (next.thinking === null) {
             delete next.thinking;
-          } else {
-            preserveOmittedRawField(rawModel, payload, next, ['thinking']);
           }
           return next;
         });
@@ -409,9 +427,19 @@ const buildPreservedList = async <T>(
       return {
         ...payload,
         models: payload.models.map((model) => {
-          if (!isRecord(model) || model.thinking !== null) return model;
+          if (!isRecord(model)) return model;
           const next = { ...model };
-          delete next.thinking;
+          if (hasModelThinkingLevelsClearMarker(model)) {
+            const nextThinking = isRecord(model.thinking) ? { ...model.thinking } : {};
+            delete nextThinking.levels;
+            if (Object.keys(nextThinking).length > 0) {
+              next.thinking = nextThinking;
+            } else {
+              delete next.thinking;
+            }
+          } else if (next.thinking === null) {
+            delete next.thinking;
+          }
           return next;
         }),
       };
@@ -664,11 +692,12 @@ const serializeModelAliases = (models?: ModelAlias[]) =>
           if (model.outputModalities !== undefined) {
             payload['output-modalities'] = model.outputModalities;
           }
-          if (model[MODEL_THINKING_CLEAR_MARKER]) {
-            // Internal sentinel consumed by mergeModelPayloads; never send null to CPA.
-            payload.thinking = null;
-          } else if (isRecord(model.thinking)) {
+          if (isRecord(model.thinking)) {
             payload.thinking = model.thinking;
+          }
+          if (hasModelThinkingLevelsClearMarker(model)) {
+            // The non-enumerable marker is consumed by the raw merge layer.
+            markModelThinkingLevelsForClear(payload);
           }
           return payload;
         })

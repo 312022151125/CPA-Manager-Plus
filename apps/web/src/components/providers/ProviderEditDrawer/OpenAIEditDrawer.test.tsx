@@ -84,6 +84,11 @@ const findSaveButton = (root: ReactTestInstance) =>
     .filter((button) => String(button.props.className ?? '').includes('btn-primary'))
     .slice(-1)[0];
 
+const findInputByLabelSuffix = (root: ReactTestInstance, suffix: string) =>
+  root
+    .findAllByType('input')
+    .find((input) => String(input.props['aria-label'] ?? '').endsWith(suffix));
+
 describe('OpenAIEditDrawer model discovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -204,9 +209,9 @@ describe('OpenAIEditDrawer model discovery', () => {
       );
     });
 
-    const maxLevel = renderer!.root.findByProps({ 'aria-label': 'max' });
+    const maxLevel = findInputByLabelSuffix(renderer!.root, ' max');
     act(() => {
-      maxLevel.props.onChange({ target: { checked: true } });
+      maxLevel?.props.onChange({ target: { checked: true } });
     });
 
     const saveButton = findSaveButton(renderer!.root);
@@ -249,9 +254,10 @@ describe('OpenAIEditDrawer model discovery', () => {
     });
 
     act(() => {
-      renderer!.root
-        .findByProps({ 'aria-label': i18n.t('ai_providers.thinking_custom_label') })
-        .props.onChange();
+      findInputByLabelSuffix(
+        renderer!.root,
+        i18n.t('ai_providers.thinking_custom_label')
+      )?.props.onChange();
     });
 
     expect(renderer!.root.findByProps({ role: 'alert' }).children.join('')).toContain(

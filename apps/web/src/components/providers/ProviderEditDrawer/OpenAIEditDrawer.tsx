@@ -23,6 +23,7 @@ import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/u
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { areKeyValueEntriesEqual, areModelEntriesEqual } from '@/utils/compare';
 import {
+  cloneModelEntry,
   entriesToModels,
   hasInvalidThinkingLevels,
   modelsToEntries,
@@ -74,7 +75,7 @@ const normalizeModelEntries = (entries: OpenAIFormState['modelEntries']) =>
     let alias = String(entry?.alias ?? '').trim();
     if (name && (alias === '' || alias === name)) alias = '';
     if (!name && !alias) return acc;
-    acc.push({ ...entry, name, alias });
+    acc.push(cloneModelEntry(entry, { name, alias }));
     return acc;
   }, []);
 
@@ -399,15 +400,17 @@ export function OpenAIEditDrawer({
       if (!selectedModels.length) return;
       let addedCount = 0;
       setForm((prev) => {
-        const mergedMap = new Map<string, { name: string; alias: string }>();
+        const mergedMap = new Map<string, OpenAIFormState['modelEntries'][number]>();
         prev.modelEntries.forEach((entry) => {
           const name = entry.name.trim();
           if (!name) return;
-          mergedMap.set(name.toLowerCase(), {
-            ...entry,
-            name,
-            alias: entry.alias?.trim() || '',
-          });
+          mergedMap.set(
+            name.toLowerCase(),
+            cloneModelEntry(entry, {
+              name,
+              alias: entry.alias?.trim() || '',
+            })
+          );
         });
         selectedModels.forEach((model) => {
           const name = model.name.trim();
@@ -1014,10 +1017,10 @@ export function OpenAIEditDrawer({
                 aliasPlaceholder={t('common.model_alias_placeholder')}
                 disabled={saving || disabled || isTestingKeys}
                 hideAddButton
-                className={styles.modelInputList}
+                className={styles.openaiModelInputList}
                 rowClassName={styles.modelInputRow}
                 inputClassName={styles.modelInputField}
-                itemClassName={styles.modelInputItem}
+                itemClassName={styles.openaiModelInputItem}
                 removeButtonClassName={styles.modelRowRemoveButton}
                 removeButtonTitle={t('common.delete')}
                 removeButtonAriaLabel={t('common.delete')}
@@ -1027,6 +1030,7 @@ export function OpenAIEditDrawer({
                 forceMappingLabel={t('ai_providers.force_mapping_label')}
                 inputModalitiesPlaceholder={t('ai_providers.input_modalities_placeholder')}
                 outputModalitiesPlaceholder={t('ai_providers.output_modalities_placeholder')}
+                modelFallbackLabel={t('ai_providers.thinking_model_fallback_label')}
                 thinkingLabel={t('ai_providers.thinking_levels_label')}
                 thinkingTooltip={t('ai_providers.thinking_levels_tooltip')}
                 thinkingTooltipAriaLabel={t('ai_providers.thinking_levels_tooltip_aria_label')}

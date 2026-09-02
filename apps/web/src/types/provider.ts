@@ -4,7 +4,27 @@
  */
 
 /** Internal UI-to-serializer marker; never serialized into CPA configuration. */
-export const MODEL_THINKING_CLEAR_MARKER = Symbol('model-thinking-clear');
+export const MODEL_THINKING_LEVELS_CLEAR_MARKER = Symbol('model-thinking-levels-clear');
+
+type ThinkingLevelsClearMarkerCarrier = {
+  [MODEL_THINKING_LEVELS_CLEAR_MARKER]?: true;
+};
+
+export const hasModelThinkingLevelsClearMarker = (value: unknown): boolean => {
+  if (value === null || typeof value !== 'object') return false;
+  return (value as ThinkingLevelsClearMarkerCarrier)[MODEL_THINKING_LEVELS_CLEAR_MARKER] === true;
+};
+
+export const markModelThinkingLevelsForClear = <T extends object>(
+  value: T
+): T & { [MODEL_THINKING_LEVELS_CLEAR_MARKER]: true } => {
+  Object.defineProperty(value, MODEL_THINKING_LEVELS_CLEAR_MARKER, {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
+  return value as T & { [MODEL_THINKING_LEVELS_CLEAR_MARKER]: true };
+};
 
 export interface ModelAlias {
   name: string;
@@ -16,7 +36,7 @@ export interface ModelAlias {
   inputModalities?: string[];
   outputModalities?: string[];
   thinking?: Record<string, unknown>;
-  [MODEL_THINKING_CLEAR_MARKER]?: true;
+  [MODEL_THINKING_LEVELS_CLEAR_MARKER]?: true;
 }
 
 export interface ApiKeyEntry {

@@ -1,4 +1,9 @@
-import { MODEL_THINKING_CLEAR_MARKER, type ModelAlias } from '@/types';
+import {
+  MODEL_THINKING_LEVELS_CLEAR_MARKER,
+  hasModelThinkingLevelsClearMarker,
+  markModelThinkingLevelsForClear,
+  type ModelAlias,
+} from '@/types';
 
 export const KNOWN_THINKING_LEVELS = [
   'none',
@@ -42,12 +47,20 @@ export const removeThinkingLevels = (thinking?: Record<string, unknown>) => {
   return Object.keys(nextThinking).length > 0 ? nextThinking : undefined;
 };
 
+export const cloneModelEntry = (entry: ModelEntry, patch: Partial<ModelEntry> = {}): ModelEntry => {
+  const nextEntry = { ...entry, ...patch };
+  if (hasModelThinkingLevelsClearMarker(entry)) {
+    markModelThinkingLevelsForClear(nextEntry);
+  }
+  return nextEntry;
+};
+
 export const hasInvalidThinkingLevels = (entries: readonly ModelEntry[]) =>
   entries.some(
     (entry) =>
-      entry.name.trim() &&
+      Boolean(entry.name.trim()) &&
       Array.isArray(entry.thinking?.levels) &&
-      entry.thinking.levels.length === 0
+      getThinkingLevels(entry.thinking).length === 0
   );
 
 export interface ModelEntry {
@@ -62,27 +75,32 @@ export interface ModelEntry {
   inputModalitiesDraft?: string;
   outputModalitiesDraft?: string;
   thinking?: Record<string, unknown>;
-  [MODEL_THINKING_CLEAR_MARKER]?: true;
+  [MODEL_THINKING_LEVELS_CLEAR_MARKER]?: true;
 }
 
 export const modelsToEntries = (models?: ModelAlias[]): ModelEntry[] => {
   if (!Array.isArray(models) || models.length === 0) {
     return [{ name: '', alias: '' }];
   }
-  return models.map((model) => ({
-    name: model.name || '',
-    alias: model.alias || '',
-    priority: model.priority,
-    testModel: model.testModel,
-    image: model.image,
-    forceMapping: model.forceMapping,
-    inputModalities: model.inputModalities,
-    outputModalities: model.outputModalities,
-    inputModalitiesDraft: model.inputModalities?.join(', '),
-    outputModalitiesDraft: model.outputModalities?.join(', '),
-    thinking: model.thinking,
-    ...(model[MODEL_THINKING_CLEAR_MARKER] ? { [MODEL_THINKING_CLEAR_MARKER]: true as const } : {}),
-  }));
+  return models.map((model) => {
+    const entry: ModelEntry = {
+      name: model.name || '',
+      alias: model.alias || '',
+      priority: model.priority,
+      testModel: model.testModel,
+      image: model.image,
+      forceMapping: model.forceMapping,
+      inputModalities: model.inputModalities,
+      outputModalities: model.outputModalities,
+      inputModalitiesDraft: model.inputModalities?.join(', '),
+      outputModalitiesDraft: model.outputModalities?.join(', '),
+      thinking: model.thinking,
+    };
+    if (hasModelThinkingLevelsClearMarker(model)) {
+      markModelThinkingLevelsForClear(entry);
+    }
+    return entry;
+  });
 };
 
 export const entriesToModels = (entries: ModelEntry[]): ModelAlias[] => {
@@ -115,8 +133,8 @@ export const entriesToModels = (entries: ModelEntry[]): ModelAlias[] => {
       if (entry.thinking && typeof entry.thinking === 'object') {
         model.thinking = entry.thinking;
       }
-      if (entry[MODEL_THINKING_CLEAR_MARKER]) {
-        model[MODEL_THINKING_CLEAR_MARKER] = true;
+      if (hasModelThinkingLevelsClearMarker(entry)) {
+        markModelThinkingLevelsForClear(model);
       }
       return model;
     });

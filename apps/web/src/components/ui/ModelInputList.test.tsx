@@ -1,8 +1,13 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it } from 'vitest';
-import { MODEL_THINKING_CLEAR_MARKER } from '@/types';
+import { MODEL_THINKING_LEVELS_CLEAR_MARKER } from '@/types';
 import { ModelInputList } from './ModelInputList';
 import type { ModelEntry } from './modelInputListUtils';
+
+const findInputByLabelSuffix = (renderer: ReactTestRenderer, suffix: string) =>
+  renderer.root
+    .findAllByType('input')
+    .find((input) => String(input.props['aria-label'] ?? '').endsWith(suffix));
 
 describe('ModelInputList', () => {
   it('updates and clears modalities without waiting for blur', () => {
@@ -72,11 +77,11 @@ describe('ModelInputList', () => {
       renderer = create(render());
     });
 
-    expect(renderer.root.findByProps({ 'aria-label': 'Use CPA default' }).props.checked).toBe(true);
-    expect(renderer.root.findByProps({ 'aria-label': 'Custom' }).props.checked).toBe(false);
+    expect(findInputByLabelSuffix(renderer, 'Use CPA default')?.props.checked).toBe(true);
+    expect(findInputByLabelSuffix(renderer, 'Custom')?.props.checked).toBe(false);
 
     act(() => {
-      renderer.root.findByProps({ 'aria-label': 'Custom' }).props.onChange();
+      findInputByLabelSuffix(renderer, 'Custom')?.props.onChange();
     });
 
     expect(entries[0]?.thinking).toEqual({ levels: [] });
@@ -113,13 +118,13 @@ describe('ModelInputList', () => {
       renderer = create(render());
     });
 
-    expect(renderer.root.findByProps({ 'aria-label': 'high' }).props.checked).toBe(true);
+    expect(findInputByLabelSuffix(renderer, ' high')?.props.checked).toBe(true);
     expect(
       renderer.root.findAllByType('span').some((node) => node.children.join('') === 'ultra')
     ).toBe(true);
 
     act(() => {
-      renderer.root.findByProps({ 'aria-label': 'high' }).props.onChange({
+      findInputByLabelSuffix(renderer, ' high')?.props.onChange({
         target: { checked: false },
       });
     });
@@ -129,7 +134,7 @@ describe('ModelInputList', () => {
     });
 
     act(() => {
-      renderer.root.findByProps({ 'aria-label': 'max' }).props.onChange({
+      findInputByLabelSuffix(renderer, ' max')?.props.onChange({
         target: { checked: true },
       });
     });
@@ -162,21 +167,83 @@ describe('ModelInputList', () => {
       renderer = create(render());
     });
     act(() => {
-      renderer.root.findByProps({ 'aria-label': 'Use CPA default' }).props.onChange();
+      findInputByLabelSuffix(renderer, 'Use CPA default')?.props.onChange();
     });
 
     expect(entries[0]?.thinking).toEqual({ future: true });
-    expect(entries[0]?.[MODEL_THINKING_CLEAR_MARKER]).toBeUndefined();
+    expect(entries[0]?.[MODEL_THINKING_LEVELS_CLEAR_MARKER]).toBe(true);
 
     entries = [{ name: 'configured-model', alias: '', thinking: { levels: ['high'] } }];
     act(() => {
       renderer.update(render());
     });
     act(() => {
-      renderer.root.findByProps({ 'aria-label': 'Use CPA default' }).props.onChange();
+      findInputByLabelSuffix(renderer, 'Use CPA default')?.props.onChange();
     });
 
     expect(entries[0]?.thinking).toBeUndefined();
-    expect(entries[0]?.[MODEL_THINKING_CLEAR_MARKER]).toBe(true);
+    expect(entries[0]?.[MODEL_THINKING_LEVELS_CLEAR_MARKER]).toBe(true);
+  });
+
+  it('gives each model thinking control a distinct accessible name', () => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <ModelInputList
+          entries={[
+            { name: 'model-a', alias: '', thinking: { levels: ['high'] } },
+            { name: 'model-b', alias: '', thinking: { levels: ['high'] } },
+          ]}
+          onChange={() => {}}
+          showThinkingLevels
+        />
+      );
+    });
+
+    const groups = renderer.root.findAllByProps({ role: 'radiogroup' });
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.props['aria-label']).not.toBe(groups[1]?.props['aria-label']);
+
+    const customRadios = renderer.root
+      .findAllByType('input')
+      .filter(
+        (input) => input.props.type === 'radio' && input.props['aria-label'].endsWith('Custom')
+      );
+    expect(customRadios.map((input) => input.props['aria-label'])).toEqual([
+      expect.stringContaining('model-a'),
+      expect.stringContaining('model-b'),
+    ]);
+
+    const highCheckboxes = renderer.root
+      .findAllByType('input')
+      .filter(
+        (input) => input.props.type === 'checkbox' && input.props['aria-label'].endsWith(' high')
+      );
+    expect(highCheckboxes.map((input) => input.props['aria-label'])).toEqual([
+      expect.stringContaining('model-a'),
+      expect.stringContaining('model-b'),
+    ]);
+  });
+
+  it('uses a non-empty accessible fallback for a blank model row', () => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <ModelInputList
+          entries={[{ name: '', alias: '' }]}
+          onChange={() => {}}
+          showThinkingLevels
+        />
+      );
+    });
+
+    const group = renderer.root.findByProps({ role: 'radiogroup' });
+    expect(group.props['aria-label']).toContain('Model 1');
+    expect(
+      renderer.root
+        .findAllByType('input')
+        .filter((input) => input.props.type === 'radio')
+        .every((input) => String(input.props['aria-label']).trim().length > 0)
+    ).toBe(true);
   });
 });

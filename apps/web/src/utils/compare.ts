@@ -48,7 +48,7 @@ export function areModelEntriesEqual(
     forceMapping?: boolean;
     inputModalities?: string[];
     outputModalities?: string[];
-    thinking?: Record<string, unknown>;
+    thinking?: unknown;
   }[],
   b: readonly {
     name: string;
@@ -56,7 +56,7 @@ export function areModelEntriesEqual(
     forceMapping?: boolean;
     inputModalities?: string[];
     outputModalities?: string[];
-    thinking?: Record<string, unknown>;
+    thinking?: unknown;
   }[]
 ): boolean {
   if (a === b) return true;
