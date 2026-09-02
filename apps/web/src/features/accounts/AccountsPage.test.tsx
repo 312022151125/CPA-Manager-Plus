@@ -1789,11 +1789,22 @@ describe('AccountsPage replacement flows', () => {
       fetchedAtMs: 1_000,
       ...buildQuotaCredentialIdentity(original),
     } satisfies CodexQuotaState;
-    mocks.files = [original];
-    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(original, quota);
-    installCodexQuotaStoreMutationMock();
     const originalStoreKey = getQuotaCredentialStoreKey(original);
     const replacementStoreKey = getQuotaCredentialStoreKey(replacement);
+    const replacementAuthFailure = {
+      status: 'error' as const,
+      windows: [],
+      error: 'HTTP 401 token expired',
+      errorStatus: 401,
+      failedAtMs: 1_500,
+      ...buildQuotaCredentialIdentity(replacement),
+    } satisfies CodexQuotaState;
+    mocks.files = [original];
+    mocks.quotaState.codexQuota = {
+      ...buildCredentialScopedQuotaRecord(original, quota),
+      [replacementStoreKey]: replacementAuthFailure,
+    };
+    installCodexQuotaStoreMutationMock();
     const originalSelectionKey = getAuthFileSelectionKey(original);
     const replacementSelectionKey = getAuthFileSelectionKey(replacement);
     const renderer = await renderAccountsPage();
@@ -2012,14 +2023,23 @@ describe('AccountsPage replacement flows', () => {
       fetchedAtMs: 1_000,
       ...buildQuotaCredentialIdentity(second),
     } satisfies CodexQuotaState;
+    const replacementStoreKey = getQuotaCredentialStoreKey(replacementFirst);
+    const replacementAuthFailure = {
+      status: 'error' as const,
+      windows: [],
+      error: 'HTTP 401 token expired',
+      errorStatus: 401,
+      failedAtMs: 1_500,
+      ...buildQuotaCredentialIdentity(replacementFirst),
+    } satisfies CodexQuotaState;
     mocks.files = [first, second];
     mocks.quotaState.codexQuota = {
       ...buildCredentialScopedQuotaRecord(first, firstQuota),
       ...buildCredentialScopedQuotaRecord(second, secondQuota),
+      [replacementStoreKey]: replacementAuthFailure,
     };
     installCodexQuotaStoreMutationMock();
     const firstStoreKey = getQuotaCredentialStoreKey(first);
-    const replacementStoreKey = getQuotaCredentialStoreKey(replacementFirst);
     const secondStoreKey = getQuotaCredentialStoreKey(second);
     const firstSelectionKey = getAuthFileSelectionKey(first);
     const replacementSelectionKey = getAuthFileSelectionKey(replacementFirst);

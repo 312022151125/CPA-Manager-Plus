@@ -118,6 +118,7 @@ import {
   getCodexQuotaEvidenceAtMs,
   isEvidenceOlderThan,
   isKnownHealthyCodexQuota,
+  mergeConfirmedReauthCodexQuotaStates,
   reconcileCodexQuotaEvidence,
   stripSupersededAccountInspectionStatus,
   type AccountCredentialEvidenceBoundary,
@@ -679,27 +680,23 @@ const migrateConfirmedReauthCodexQuotaState = (
   })[0];
   if (!sourceEntry) return current;
   const [, sourceState] = sourceEntry;
-  const sanitizedState =
-    sanitizeSupersededAuthQuotaState(sourceState, authenticationAtMs, {
-      allowUnknownFailureTimestamp: true,
-    }) ?? sourceState;
+  const existingNewState = current[newStoreKey];
+  const mergedState = mergeConfirmedReauthCodexQuotaStates(
+    sourceState,
+    existingNewState?.authFileKey?.trim() === newStoreKey ? existingNewState : undefined,
+    authenticationAtMs
+  );
+  if (!mergedState) return current;
   const migratedState: CodexQuotaState = {
-    ...sanitizedState,
+    ...mergedState,
     ...buildQuotaCredentialIdentity(confirmedFile),
   };
-  const existingNewState = current[newStoreKey];
-  const sourceAtMs = getCodexQuotaEvidenceAtMs(migratedState);
-  const existingAtMs = getCodexQuotaEvidenceAtMs(existingNewState);
-  const keepExistingNewState =
-    existingNewState?.authFileKey?.trim() === newStoreKey &&
-    existingAtMs !== null &&
-    (sourceAtMs === null || existingAtMs >= sourceAtMs);
 
   const next = { ...current };
   oldEntries.forEach(([key]) => {
     if (key !== newStoreKey) delete next[key];
   });
-  if (!keepExistingNewState) next[newStoreKey] = migratedState;
+  next[newStoreKey] = migratedState;
   return next;
 };
 

@@ -9,6 +9,7 @@ import {
 import {
   hasActiveCodexInspectionAuthenticationFailure,
   isObservedCodexAuthenticationError,
+  sanitizeSupersededAuthQuotaState,
 } from '@/features/authFiles/model/credentialStatus';
 
 export interface AccountInspectionSummary {
@@ -77,6 +78,13 @@ const readFiniteTimestamp = (value: unknown): number | null =>
 
 const readFinitePercent = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+const hasObservedValue = (value: unknown): boolean => {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (typeof value === 'number') return Number.isFinite(value);
+  return true;
+};
 
 const isHandledInspectionStatus = (status: string): boolean =>
   status === 'success' || status === 'skipped' || status === 'executed' || status === 'resolved';
@@ -335,7 +343,8 @@ const clearSupersededQuotaFailureMetadata = (state: CodexQuotaState): CodexQuota
 const mergeQuotaSuccessState = (
   current: CodexQuotaState | undefined,
   currentAtMs: number,
-  event: CodexQuotaEvidenceEvent
+  event: CodexQuotaEvidenceEvent,
+  replaceCompleteInventory = true
 ): CodexQuotaState => {
   const observedState: CodexQuotaState = {
     ...event.state,
@@ -359,7 +368,11 @@ const mergeQuotaSuccessState = (
     fetchedAtMs: event.atMs,
     observedAtMs: event.atMs,
   };
-  if (event.source !== 'header' && event.state.quotaInventoryObserved === true) {
+  if (
+    replaceCompleteInventory &&
+    event.source !== 'header' &&
+    event.state.quotaInventoryObserved === true
+  ) {
     next.windows = observedState.windows;
   }
   delete next.error;
@@ -369,6 +382,139 @@ const mergeQuotaSuccessState = (
     next.quotaInventoryObserved = event.state.quotaInventoryObserved;
   }
   return next;
+};
+
+const CODEX_QUOTA_FACT_KEYS = [
+  'quotaInventoryObserved',
+  'planType',
+  'activeLimit',
+  'creditsHasCredits',
+  'creditsUnlimited',
+  'creditsBalance',
+  'creditsOverageLimitReached',
+  'creditsApproxLocalMessages',
+  'creditsApproxCloudMessages',
+  'spendControlReached',
+  'spendControlIndividualLimit',
+  'rateLimitReachedType',
+  'primaryOverSecondaryLimitPercent',
+  'subscriptionActiveUntil',
+  'rateLimitResetCreditsAvailableCount',
+  'rateLimitResetCredits',
+  'rateLimitResetCreditsError',
+  'observedFromUsageHeaders',
+  'observedModelScope',
+  'observedResetCreditsUnknown',
+  'observedAtMs',
+  'observedTraceId',
+  'observedErrorKind',
+  'observedErrorCode',
+] as const satisfies readonly (keyof CodexQuotaState)[];
+
+const mergeObservedCodexQuotaFacts = (
+  current: CodexQuotaState,
+  observed: CodexQuotaState,
+  previous: CodexQuotaState | undefined
+): CodexQuotaState => {
+  const next = { ...current };
+  const apply = <K extends (typeof CODEX_QUOTA_FACT_KEYS)[number]>(key: K): void => {
+    const value = observed[key];
+    const previousValue = previous?.[key];
+    if (!hasObservedValue(value)) {
+      if (hasObservedValue(previousValue)) {
+        next[key] = previousValue as CodexQuotaState[K];
+      }
+      return;
+    }
+    if (
+      observed.status === 'error' &&
+      Array.isArray(value) &&
+      value.length === 0 &&
+      Array.isArray(previousValue) &&
+      previousValue.length > 0
+    ) {
+      next[key] = previousValue as CodexQuotaState[K];
+      return;
+    }
+    next[key] = value as CodexQuotaState[K];
+  };
+  CODEX_QUOTA_FACT_KEYS.forEach(apply);
+  return next;
+};
+
+const hasAuthoritativeCodexQuotaInventory = (state: CodexQuotaState): boolean =>
+  state.status === 'success' && state.quotaInventoryObserved === true;
+
+/**
+ * Merge the old and replacement credential states during a confirmed reauth.
+ *
+ * A replacement error is a newer lifecycle fact, but an empty error payload is
+ * not a newer quota inventory. Reuse the normal quota event merge rules so
+ * limit/error metadata can coexist with previously observed windows, while a
+ * complete successful inventory can still replace those windows.
+ */
+export const mergeConfirmedReauthCodexQuotaStates = (
+  sourceState: CodexQuotaState | undefined,
+  replacementState: CodexQuotaState | undefined,
+  authenticationAtMs: number
+): CodexQuotaState | undefined => {
+  const sanitize = (state: CodexQuotaState | undefined): CodexQuotaState | undefined =>
+    sanitizeSupersededAuthQuotaState(state, authenticationAtMs, {
+      allowUnknownFailureTimestamp: true,
+    });
+  const source = sanitize(sourceState);
+  const replacement = sanitize(replacementState);
+  const replacementWasSupersededAuthenticationFailure =
+    replacementState !== undefined && replacement !== replacementState;
+  const sourceAtMs = getCodexQuotaEvidenceAtMs(source);
+  const replacementAtMs = getCodexQuotaEvidenceAtMs(replacement);
+  const events: Array<CodexQuotaEvidenceEvent & { order: number; authoritativeInventory: boolean }> =
+    [];
+  if (source && sourceAtMs !== null) {
+    events.push({
+      order: 0,
+      source: 'provider',
+      atMs: sourceAtMs,
+      state: source,
+      authoritativeInventory: hasAuthoritativeCodexQuotaInventory(source),
+    });
+  }
+  if (replacement && replacementAtMs !== null) {
+    events.push({
+      order: 1,
+      source: 'provider',
+      atMs: replacementAtMs,
+      state: replacement,
+      authoritativeInventory:
+        !replacementWasSupersededAuthenticationFailure &&
+        hasAuthoritativeCodexQuotaInventory(replacement),
+    });
+  }
+  events.sort((left, right) => left.atMs - right.atMs || left.order - right.order);
+
+  let current: CodexQuotaState | undefined = sourceAtMs === null ? source : undefined;
+  let currentAtMs = 0;
+  for (const event of events) {
+    const previous = current;
+    current =
+      event.state.status === 'error'
+        ? mergeQuotaErrorState(previous, event)
+        : mergeQuotaSuccessState(previous, currentAtMs, event, event.authoritativeInventory);
+    current = mergeObservedCodexQuotaFacts(current, event.state, previous);
+    if (event.authoritativeInventory) {
+      current.windows = stampQuotaEvidenceWindows(event.state, event.source, event.atMs);
+    }
+    if (
+      previous?.quotaInventoryObserved === true &&
+      event.state.quotaInventoryObserved !== true
+    ) {
+      current.quotaInventoryObserved = true;
+    }
+    currentAtMs = event.atMs;
+  }
+
+  if (current) return current;
+  return source ?? replacement;
 };
 
 export const reconcileCodexQuotaEvidence = ({

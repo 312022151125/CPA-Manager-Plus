@@ -5,6 +5,7 @@ import {
   getAccountCredentialEvidenceCutoffs,
   getEffectiveAccountInspectionAction,
   hasPendingAccountInspectionAction,
+  mergeConfirmedReauthCodexQuotaStates,
   reconcileCodexQuotaEvidence,
   stripSupersededAccountInspectionStatus,
   type AccountInspectionSummary,
@@ -46,6 +47,183 @@ const inspection = (
   resultId: 1,
   createdAtMs: 2_000,
   ...overrides,
+});
+
+describe('confirmed reauth Codex quota state merge', () => {
+  it('retains older exhausted windows when replacement state is a stale 401', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota(),
+      {
+        status: 'error',
+        windows: [],
+        error: 'HTTP 401 token expired',
+        errorStatus: 401,
+        failedAtMs: 1_500,
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      quotaInventoryObserved: true,
+      windows: [expect.objectContaining({ usedPercent: 100 })],
+    });
+    expect(result?.error).toBeUndefined();
+    expect(result?.errorStatus).toBeUndefined();
+  });
+
+  it('does not treat a stale 401 with inherited inventory metadata as a new inventory', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota(),
+      {
+        status: 'error',
+        windows: [],
+        quotaInventoryObserved: true,
+        fetchedAtMs: 1_500,
+        error: 'HTTP 401 token expired',
+        errorStatus: 401,
+        failedAtMs: 1_500,
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      quotaInventoryObserved: true,
+      windows: [expect.objectContaining({ usedPercent: 100 })],
+    });
+  });
+
+  it.each([429, 503])('retains older windows alongside a replacement HTTP %s', (status) => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota(),
+      {
+        status: 'error',
+        windows: [],
+        error: `HTTP ${status}`,
+        errorStatus: status,
+        failedAtMs: 1_500,
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'error',
+      errorStatus: status,
+      windows: [expect.objectContaining({ usedPercent: 100 })],
+    });
+  });
+
+  it('retains rate-limit reset credits and plan metadata alongside an error-only replacement', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota({
+        planType: 'plus',
+        rateLimitResetCreditsAvailableCount: 2,
+        rateLimitResetCredits: [
+          {
+            id: 'credit-1',
+            status: 'available',
+            grantedAt: '2026-01-01T00:00:00Z',
+            expiresAt: '2026-01-02T00:00:00Z',
+          },
+        ],
+        rateLimitResetCreditsError: 'old refresh warning',
+      }),
+      {
+        status: 'error',
+        windows: [],
+        error: 'HTTP 429 rate limited',
+        errorStatus: 429,
+        failedAtMs: 1_500,
+        rateLimitResetCredits: [],
+        rateLimitResetCreditsAvailableCount: null,
+        rateLimitResetCreditsError: null,
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'error',
+      errorStatus: 429,
+      planType: 'plus',
+      rateLimitResetCreditsAvailableCount: 2,
+      rateLimitResetCredits: [expect.objectContaining({ id: 'credit-1' })],
+      rateLimitResetCreditsError: 'old refresh warning',
+    });
+  });
+
+  it('lets a newer complete quota inventory replace older windows', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota(),
+      providerQuota({
+        fetchedAtMs: 3_000,
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly',
+            usedPercent: 20,
+            resetLabel: 'new',
+            observedAtMs: 3_000,
+          },
+        ],
+      }),
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      windows: [expect.objectContaining({ usedPercent: 20, resetLabel: 'new' })],
+    });
+  });
+
+  it('clears an older 401 before applying a newer complete quota inventory', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      {
+        status: 'error',
+        windows: [],
+        error: 'HTTP 401 token expired',
+        errorStatus: 401,
+        failedAtMs: 1_000,
+      },
+      providerQuota({ fetchedAtMs: 3_000 }),
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      windows: [expect.objectContaining({ usedPercent: 100 })],
+    });
+    expect(result?.error).toBeUndefined();
+    expect(result?.errorStatus).toBeUndefined();
+  });
+
+  it('retains windows when an unknown-time old 401 is sanitized during migration', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      {
+        status: 'error',
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly',
+            usedPercent: 100,
+            resetLabel: 'later',
+            observedAtMs: 1_000,
+          },
+        ],
+        error: 'HTTP 401',
+        errorStatus: 401,
+      },
+      undefined,
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      error: undefined,
+      errorStatus: undefined,
+      windows: [expect.objectContaining({ usedPercent: 100 })],
+    });
+  });
 });
 
 const providerQuota = (overrides: Partial<CodexQuotaState> = {}): CodexQuotaState => ({
