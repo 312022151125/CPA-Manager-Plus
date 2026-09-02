@@ -261,6 +261,7 @@ export const isAccountInspectionHealthyEvidence = (row: AccountRow): boolean => 
   const inspection = row.inspection;
   if (
     !inspection ||
+    (row.authenticationAtMs > 0 && inspection.createdAtMs < row.authenticationAtMs) ||
     isAccountInspectionAuthenticationFailure(row) ||
     isInspectionQuotaCredentialEvidence(row)
   ) {

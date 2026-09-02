@@ -443,7 +443,7 @@ export const buildAccountRows = (
     const authenticationAtMs = getAccountCredentialEvidenceCutoffs({
       providerQuota: codexQuota,
       inspection,
-      boundaryAtMs: credentialAuthenticationBoundaryAtMs,
+      authenticationBoundaryAtMs: credentialAuthenticationBoundaryAtMs,
       credentialRefreshAtMs: readAuthFileCredentialRefreshAtMs(file) ?? 0,
     }).authenticationAtMs;
     const rawStatusMessage = resolveStatusMessage(file);
@@ -558,6 +558,20 @@ const hasOperationalItems = (
 const hasPartialGroupedQuota = (row: AccountRow): boolean =>
   row.quota.groupedAvailabilityState === 'partial';
 
+const getAccountQuotaEvidenceAtMs = (row: AccountRow): number | null => {
+  const value =
+    row.quota.source === 'observed-header'
+      ? (row.quota.observedQuotaAtMs ?? row.quota.observedAtMs ?? row.quota.fetchedAtMs)
+      : (row.quota.fetchedAtMs ?? row.quota.observedQuotaAtMs ?? row.quota.observedAtMs);
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+};
+
+const hasCurrentAccountQuotaEvidence = (row: AccountRow): boolean => {
+  if (row.authenticationAtMs <= 0) return true;
+  const observedAtMs = getAccountQuotaEvidenceAtMs(row);
+  return observedAtMs !== null && observedAtMs >= row.authenticationAtMs;
+};
+
 const getRowRequestHealthEvidence = (
   row: AccountRow,
   requestEvidenceBySelectionKey?: AccountRequestEvidenceBySelectionKey
@@ -617,7 +631,7 @@ const hasConfirmedAvailableEvidence = (
 ): boolean => {
   const requestEvidence = getRowRequestHealthEvidence(row, context.requestEvidenceBySelectionKey);
   return (
-    row.quota.status === 'ok' ||
+    (row.quota.status === 'ok' && hasCurrentAccountQuotaEvidence(row)) ||
     isAccountInspectionHealthyEvidence(row) ||
     (isAccountRequestHealthEvidenceCurrent(row, requestEvidence) &&
       requestEvidence?.direction === 'positive')

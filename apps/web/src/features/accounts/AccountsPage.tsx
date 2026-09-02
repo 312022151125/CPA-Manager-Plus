@@ -215,6 +215,7 @@ import {
   getAuthFileScopedCodexQuota,
   getFreshAuthFileCodexStatusSources,
   hasPartialSharedAuthFileSelection,
+  sanitizeSupersededAuthQuotaState,
   sanitizeSupersededAuthHeaderSnapshot,
   isObservedCodexAuthenticationError,
 } from '@/features/authFiles/model/credentialStatus';
@@ -475,6 +476,30 @@ const getCredentialEvidenceSourceFileBoundaryKey = (fileName: string): string =>
 const getCredentialEvidenceProviderBoundaryKey = (provider: string): string =>
   `${CREDENTIAL_EVIDENCE_PROVIDER_BOUNDARY_PREFIX}${provider}`;
 
+const clearCredentialSpecificFallbackEvidence = (
+  boundary: AccountCredentialEvidenceBoundary
+): AccountCredentialEvidenceBoundary => ({
+  ...boundary,
+  authenticationAtMs: 0,
+  rawStatusAtMs: 0,
+  rawStatusMessages: [],
+  rawStatusCodes: [],
+});
+
+const keepAuthenticationRecoveryBoundary = (
+  boundary: AccountCredentialEvidenceBoundary
+): AccountCredentialEvidenceBoundary => ({
+  ...boundary,
+  inspectionAtMs: 0,
+  inspectionBaselinePending: false,
+  headerAtMs: 0,
+  headerBaselinePending: false,
+  fallbackInspectionAtMs: 0,
+  fallbackInspectionBaselinePending: false,
+  fallbackHeaderAtMs: 0,
+  fallbackHeaderBaselinePending: false,
+});
+
 const releaseObservedRawStatusBoundaries = (
   current: Map<string, AccountCredentialEvidenceBoundary>,
   files: readonly AuthFileItem[]
@@ -483,7 +508,9 @@ const releaseObservedRawStatusBoundaries = (
   current.forEach((boundary, key) => {
     const boundaryRawStatusMessages = boundary.rawStatusMessages ?? [];
     const boundaryRawStatusCodes = boundary.rawStatusCodes ?? [];
-    if (boundaryRawStatusMessages.length === 0 && boundaryRawStatusCodes.length === 0) return;
+    const uniqueFileNameFallback = key.startsWith(
+      CREDENTIAL_EVIDENCE_UNIQUE_FILE_NAME_BOUNDARY_PREFIX
+    );
     let matchingFiles: readonly AuthFileItem[];
     if (key.startsWith(CREDENTIAL_EVIDENCE_SOURCE_FILE_BOUNDARY_PREFIX)) {
       const fileName = key.slice(CREDENTIAL_EVIDENCE_SOURCE_FILE_BOUNDARY_PREFIX.length);
@@ -491,24 +518,52 @@ const releaseObservedRawStatusBoundaries = (
     } else if (key.startsWith(CREDENTIAL_EVIDENCE_PROVIDER_BOUNDARY_PREFIX)) {
       const provider = key.slice(CREDENTIAL_EVIDENCE_PROVIDER_BOUNDARY_PREFIX.length);
       matchingFiles = files.filter((file) => normalizeAccountProvider(file) === provider);
-    } else if (key.startsWith(CREDENTIAL_EVIDENCE_UNIQUE_FILE_NAME_BOUNDARY_PREFIX)) {
+    } else if (uniqueFileNameFallback) {
       const fileName = key.slice(CREDENTIAL_EVIDENCE_UNIQUE_FILE_NAME_BOUNDARY_PREFIX.length);
       matchingFiles = files.filter((file) => file.name === fileName);
     } else {
       matchingFiles = files.filter((file) => getAuthFileSelectionKey(file) === key);
     }
-    if (matchingFiles.length === 0) return;
+    const hasCredentialSpecificFallbackEvidence =
+      boundary.authenticationAtMs > 0 ||
+      boundary.rawStatusAtMs > 0 ||
+      boundaryRawStatusMessages.length > 0 ||
+      boundaryRawStatusCodes.length > 0;
+    if (matchingFiles.length === 0) {
+      if (!uniqueFileNameFallback || !hasCredentialSpecificFallbackEvidence) return;
+      if (!next) next = new Map(current);
+      next.set(key, clearCredentialSpecificFallbackEvidence(boundary));
+      return;
+    }
+    const sharedUniqueFileNameFallback = uniqueFileNameFallback && matchingFiles.length > 1;
+    const boundaryForRelease = sharedUniqueFileNameFallback
+      ? clearCredentialSpecificFallbackEvidence(boundary)
+      : boundary;
+    const shouldReleaseCredentialSpecificFallback =
+      sharedUniqueFileNameFallback &&
+      (boundaryForRelease.authenticationAtMs !== boundary.authenticationAtMs ||
+        boundaryForRelease.rawStatusAtMs !== boundary.rawStatusAtMs ||
+        boundaryForRelease.rawStatusMessages.length !== boundaryRawStatusMessages.length ||
+        boundaryForRelease.rawStatusCodes.length !== boundaryRawStatusCodes.length);
+    if (
+      boundaryRawStatusMessages.length === 0 &&
+      boundaryRawStatusCodes.length === 0 &&
+      !shouldReleaseCredentialSpecificFallback
+    ) {
+      return;
+    }
     const currentMessages = new Set(matchingFiles.map(readAccountRawStatusMessage).filter(Boolean));
     const currentStatusCodes = new Set(
       matchingFiles.flatMap((file) => getAuthFileCredentialStatusCodes(file))
     );
-    const remainingMessages = boundaryRawStatusMessages.filter((message) =>
-      currentMessages.has(message)
-    );
-    const remainingStatusCodes = boundaryRawStatusCodes.filter((statusCode) =>
-      currentStatusCodes.has(statusCode)
-    );
+    const remainingMessages = sharedUniqueFileNameFallback
+      ? []
+      : boundaryRawStatusMessages.filter((message) => currentMessages.has(message));
+    const remainingStatusCodes = sharedUniqueFileNameFallback
+      ? []
+      : boundaryRawStatusCodes.filter((statusCode) => currentStatusCodes.has(statusCode));
     if (
+      !shouldReleaseCredentialSpecificFallback &&
       remainingMessages.length === boundaryRawStatusMessages.length &&
       remainingStatusCodes.length === boundaryRawStatusCodes.length
     ) {
@@ -516,10 +571,10 @@ const releaseObservedRawStatusBoundaries = (
     }
     if (!next) next = new Map(current);
     next.set(key, {
-      ...boundary,
+      ...boundaryForRelease,
       rawStatusAtMs:
         remainingMessages.length > 0 || remainingStatusCodes.length > 0
-          ? boundary.rawStatusAtMs
+          ? boundaryForRelease.rawStatusAtMs
           : 0,
       rawStatusMessages: remainingMessages,
       rawStatusCodes: remainingStatusCodes,
@@ -2902,18 +2957,22 @@ export function AccountsPage() {
       ];
       const invalidatedAtMs = options.invalidatedAtMs ?? Date.now();
       const authenticationAtMs = options.authenticationAtMs ?? 0;
-      const selectionBoundary = buildCurrentCredentialEvidenceBoundary({
-        targetFiles: [matchedFile],
-        inventoryFiles,
-        localAtMs: invalidatedAtMs,
-        authenticationAtMs,
-      });
+      const canUseCredentialAuthenticationFallback =
+        inventoryFiles.filter((file) => file.name === matchedFile.name).length === 1;
+      const selectionBoundary = keepAuthenticationRecoveryBoundary(
+        buildCurrentCredentialEvidenceBoundary({
+          targetFiles: [matchedFile],
+          inventoryFiles,
+          localAtMs: invalidatedAtMs,
+          authenticationAtMs,
+        })
+      );
       const uniqueFileNameEvidence = buildCurrentCredentialEvidenceBoundary({
         targetFiles: [],
         inventoryFiles,
         fallbackFileNames: [matchedFile.name],
         localAtMs: invalidatedAtMs,
-        authenticationAtMs,
+        authenticationAtMs: canUseCredentialAuthenticationFallback ? authenticationAtMs : 0,
       });
       const uniqueFileNameBoundary =
         toFallbackAccountCredentialEvidenceBoundary(uniqueFileNameEvidence);
@@ -2926,15 +2985,27 @@ export function AccountsPage() {
 
       const storeKey = CODEX_CONFIG.getStoreKey?.(matchedFile) ?? matchedFile.name;
       beginAccountQuotaRequest(quotaRequestVersionsRef.current, `${CODEX_CONFIG.type}:${storeKey}`);
-      const preservedFiles = inventoryFiles.filter(
-        (file) => file.name === matchedFile.name && getAuthFileSelectionKey(file) !== selectionKey
-      );
+      const preservedFiles = inventoryFiles.filter((file) => file.name === matchedFile.name);
       setCodexQuota((current) =>
-        pruneCodexQuotaStatesForCredentialMutation(current, {
-          affectedFileNames: new Set([matchedFile.name]),
-          invalidatedStoreKeys: new Set([storeKey]),
-          preservedFiles,
-        })
+        pruneCodexQuotaStatesForCredentialMutation(
+          Object.entries(current).reduce<Record<string, CodexQuotaState>>((next, [key, state]) => {
+            if (
+              authenticationAtMs <= 0 ||
+              getAuthFileScopedCodexQuota(matchedFile, state) !== state
+            ) {
+              next[key] = state;
+              return next;
+            }
+            next[key] = sanitizeSupersededAuthQuotaState(state, authenticationAtMs, {
+              allowUnknownFailureTimestamp: true,
+            }) as CodexQuotaState;
+            return next;
+          }, {}),
+          {
+            affectedFileNames: new Set([matchedFile.name]),
+            preservedFiles,
+          }
+        )
       );
       return { file: matchedFile, invalidatedAtMs };
     },
@@ -3340,7 +3411,7 @@ export function AccountsPage() {
           getHeaderSnapshotErrorCode(headerSnapshot)
         )
       ) {
-        return undefined;
+        return sanitizeSupersededAuthHeaderSnapshot(headerSnapshot, credentialRefreshAtMs);
       }
       return headerSnapshot;
     },
@@ -3369,7 +3440,7 @@ export function AccountsPage() {
         getAccountCredentialEvidenceCutoffs({
           providerQuota: getActiveCodexQuota(file),
           inspection: accountInspectionBySelectionKey.get(selectionKey),
-          boundaryAtMs: authenticationBoundaryAtMs,
+          authenticationBoundaryAtMs,
           credentialRefreshAtMs: readAuthFileCredentialRefreshAtMs(file) ?? 0,
         }).authenticationAtMs,
         getLatestPositiveRequestAtMs(file) ?? 0
@@ -3441,7 +3512,7 @@ export function AccountsPage() {
         providerQuota: getActiveCodexQuota(file),
         headerQuota,
         inspectionQuota,
-        boundaryAtMs: authenticationBoundaryAtMs,
+        authenticationBoundaryAtMs,
         credentialRefreshAtMs: readAuthFileCredentialRefreshAtMs(file) ?? 0,
       });
       return (
@@ -3725,6 +3796,10 @@ export function AccountsPage() {
         headerQuota:
           row.provider === CODEX_CONFIG.type ? getFreshCodexHeaderQuota(row.raw) : undefined,
         inspection: row.inspection,
+        authenticationBoundaryAtMs: Math.max(
+          evidenceBoundary.authenticationAtMs,
+          statusBoundary?.authenticationAtMs ?? 0
+        ),
         credentialRefreshAtMs: readAuthFileCredentialRefreshAtMs(row.raw) ?? 0,
       });
       const effectiveInspectionAction = getEffectiveAccountInspectionAction(row.inspection);
@@ -3822,6 +3897,10 @@ export function AccountsPage() {
         headerQuota:
           row.provider === CODEX_CONFIG.type ? getFreshCodexHeaderQuota(row.raw) : undefined,
         inspection: row.inspection,
+        authenticationBoundaryAtMs: Math.max(
+          evidenceBoundary.authenticationAtMs,
+          statusBoundary?.authenticationAtMs ?? 0
+        ),
         credentialRefreshAtMs: readAuthFileCredentialRefreshAtMs(row.raw) ?? 0,
       });
       itemsByRowKey.set(

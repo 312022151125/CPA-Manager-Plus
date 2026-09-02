@@ -287,6 +287,127 @@ describe('account credential evidence', () => {
     expect(result).toBeUndefined();
   });
 
+  it('keeps an older exhausted quota fact across an authentication recovery boundary', () => {
+    const result = reconcileCodexQuotaEvidence({
+      providerQuota: providerQuota({ fetchedAtMs: 1_000 }),
+      authenticationBoundaryAtMs: 2_000,
+    });
+
+    expect(result).toMatchObject({
+      status: 'success',
+      fetchedAtMs: 1_000,
+      windows: [expect.objectContaining({ usedPercent: 100 })],
+    });
+  });
+
+  it.each([402, 429])(
+    'keeps an older %s quota failure across an authentication recovery boundary',
+    (statusCode) => {
+      const result = reconcileCodexQuotaEvidence({
+        providerQuota: providerQuota({
+          status: 'error',
+          windows: [],
+          error: `HTTP ${statusCode} quota limit reached`,
+          errorStatus: statusCode,
+          fetchedAtMs: undefined,
+          failedAtMs: 1_000,
+        }),
+        authenticationBoundaryAtMs: 2_000,
+      });
+
+      expect(result).toMatchObject({
+        status: 'error',
+        errorStatus: statusCode,
+        failedAtMs: 1_000,
+      });
+    }
+  );
+
+  it('keeps an older inspection quota fact across an authentication recovery boundary', () => {
+    const inspectionQuota = buildInspectionCodexQuotaState(
+      file,
+      inspection({
+        createdAtMs: 1_000,
+        statusCode: 429,
+        isQuota: true,
+      })
+    );
+
+    expect(
+      reconcileCodexQuotaEvidence({
+        inspectionQuota,
+        authenticationBoundaryAtMs: 2_000,
+      })
+    ).toMatchObject({
+      status: 'success',
+      windows: [expect.objectContaining({ usedPercent: 30 })],
+    });
+  });
+
+  it('drops an older 401 quota failure at an authentication recovery boundary', () => {
+    const result = reconcileCodexQuotaEvidence({
+      providerQuota: providerQuota({
+        status: 'error',
+        windows: [],
+        error: 'HTTP 401 token expired',
+        errorStatus: 401,
+        fetchedAtMs: undefined,
+        failedAtMs: 1_000,
+      }),
+      authenticationBoundaryAtMs: 2_000,
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it('keeps a new 401 quota failure after an authentication recovery boundary', () => {
+    const result = reconcileCodexQuotaEvidence({
+      providerQuota: providerQuota({
+        status: 'error',
+        windows: [],
+        error: 'HTTP 401 token expired',
+        errorStatus: 401,
+        fetchedAtMs: undefined,
+        failedAtMs: 3_000,
+      }),
+      authenticationBoundaryAtMs: 2_000,
+    });
+
+    expect(result).toMatchObject({
+      status: 'error',
+      errorStatus: 401,
+      failedAtMs: 3_000,
+    });
+  });
+
+  it('retains old healthy quota for display without treating it as post-recovery authentication evidence', () => {
+    const quota = providerQuota({
+      fetchedAtMs: 1_000,
+      windows: [
+        {
+          id: 'weekly',
+          label: 'Weekly',
+          usedPercent: 30,
+          resetLabel: 'later',
+          observedAtMs: 1_000,
+        },
+      ],
+    });
+
+    expect(
+      reconcileCodexQuotaEvidence({
+        providerQuota: quota,
+        authenticationBoundaryAtMs: 2_000,
+      })
+    ).toMatchObject({ status: 'success', fetchedAtMs: 1_000 });
+    expect(
+      getAccountCredentialEvidenceCutoffs({
+        providerQuota: quota,
+        authenticationBoundaryAtMs: 2_000,
+      })
+    ).toEqual({ authenticationAtMs: 2_000, healthyQuotaAtMs: 0 });
+  });
+
   it.each([1_000, undefined])(
     'discards a persisted Provider 401 at or without timestamp after credential refresh: %s',
     (failedAtMs) => {

@@ -820,6 +820,53 @@ describe('accountListPresentation', () => {
     expect(item.recommendation.hasRecommendation).toBe(false);
   });
 
+  it('keeps pre-recovery healthy quota displayable without marking the account available', () => {
+    const item = buildAccountListItem(
+      makeRow({
+        authenticationAtMs: 2_000,
+        quota: {
+          status: 'ok',
+          remainingPercent: 70,
+          usedPercent: 30,
+          fetchedAtMs: 1_000,
+        },
+      })
+    );
+
+    expect(item.quota).toMatchObject({ statusLabelKey: 'accounts.quota_status_ok' });
+    expect(item.health.status).toBe('raw');
+  });
+
+  it('does not use pre-recovery healthy inspection as available evidence', () => {
+    const item = buildAccountListItem(
+      makeRow({
+        authenticationAtMs: 2_000,
+        quota: {
+          status: 'unknown',
+          remainingPercent: null,
+          usedPercent: null,
+          fetchedAtMs: undefined,
+          source: 'none',
+        },
+        inspection: {
+          source: 'server',
+          action: 'keep',
+          actionReason: 'healthy',
+          actionStatus: 'success',
+          statusCode: 200,
+          usedPercent: 20,
+          isQuota: false,
+          errorKind: 'inference_healthy',
+          runId: 1,
+          resultId: 3,
+          createdAtMs: 1_000,
+        },
+      })
+    );
+
+    expect(item.health.status).toBe('raw');
+  });
+
   it('does not let stale derived Codex status revive a raw 401 after Provider recovery', () => {
     const item = buildAccountListItem(
       makeRow({

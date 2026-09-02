@@ -33,7 +33,9 @@ import {
   getAuthFileSelectionKey,
 } from '@/features/authFiles/model/credentialStatus';
 import type { AuthFilesCredentialMutation } from '@/features/authFiles/hooks/useAuthFilesData';
-import { clearAccountCredentialEvidenceBoundaryStateCache } from './model/accountCredentialEvidenceStorage';
+import {
+  clearAccountCredentialEvidenceBoundaryStateCache,
+} from './model/accountCredentialEvidenceStorage';
 import {
   clearAccountCredentialMutationMarkersForTests,
   createAccountCredentialMutationBaseline,
@@ -1487,7 +1489,143 @@ describe('AccountsPage replacement flows', () => {
     );
   });
 
-  it('supersedes a stale Header authentication failure after confirmed re-login', async () => {
+  it('keeps an older exhausted quota while clearing an unknown-time quota 401 after re-login', async () => {
+    const file = {
+      ...makeCodexFile('quota-auth.codex.json', 'auth-1', 'quota-auth@example.com'),
+      account_id: 'space-quota-auth',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const reloadedFile = {
+      ...file,
+      last_refresh: 3_000,
+      modified: 3_100,
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+    } as AuthFileItem;
+    const quota = {
+      status: 'error' as const,
+      windows: [
+        makeCodexQuotaWindow({
+          id: 'weekly',
+          usedPercent: 100,
+          observedAtMs: 1_000,
+          resetLabel: 'later',
+          limitWindowSeconds: 604_800,
+        }),
+      ],
+      quotaInventoryObserved: true,
+      error: 'HTTP 401 token expired',
+      errorStatus: 401,
+      ...buildQuotaCredentialIdentity(file),
+    } satisfies CodexQuotaState;
+    mocks.files = [file];
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, quota);
+    installCodexQuotaStoreMutationMock();
+    const selectionKey = getAuthFileSelectionKey(file);
+    const quotaStoreKey = getQuotaCredentialStoreKey(file);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [reloadedFile];
+      return mocks.files;
+    });
+
+    expect(await runCodexReauthSuccessAndCaptureError()).toBeUndefined();
+    await flushPromises();
+
+    const retainedQuota = (mocks.quotaState.codexQuota as Record<string, CodexQuotaState>)[
+      quotaStoreKey
+    ];
+    expect(retainedQuota).toMatchObject({
+      status: 'success',
+      error: undefined,
+      errorStatus: undefined,
+      windows: [expect.objectContaining({ id: 'weekly', usedPercent: 100 })],
+    });
+    const accountCard = findAccountCardByKey(renderer, selectionKey);
+    expect(readText(accountCard)).not.toContain('accounts.health_reauth');
+    expect(readText(accountCard)).not.toContain('accounts.health_available');
+    expect(readText(accountCard)).toContain('accounts.health_weekly_exhausted');
+  });
+
+  it('keeps an older 429 quota limit after confirmed re-login', async () => {
+    const file = {
+      ...makeCodexFile('quota-429.codex.json', 'auth-1', 'quota-429@example.com'),
+      account_id: 'space-quota-429',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const reloadedFile = {
+      ...file,
+      last_refresh: 3_000,
+      modified: 3_100,
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+    } as AuthFileItem;
+    const quota = {
+      status: 'error' as const,
+      windows: [],
+      error: 'HTTP 429 rate limit reached',
+      errorStatus: 429,
+      failedAtMs: 1_000,
+      ...buildQuotaCredentialIdentity(file),
+    } satisfies CodexQuotaState;
+    mocks.files = [file];
+    mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(file, quota);
+    installCodexQuotaStoreMutationMock();
+    const selectionKey = getAuthFileSelectionKey(file);
+    const quotaStoreKey = getQuotaCredentialStoreKey(file);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        selectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [reloadedFile];
+      return mocks.files;
+    });
+
+    expect(await runCodexReauthSuccessAndCaptureError()).toBeUndefined();
+    await flushPromises();
+
+    const retainedQuota = (mocks.quotaState.codexQuota as Record<string, CodexQuotaState>)[
+      quotaStoreKey
+    ];
+    expect(retainedQuota).toMatchObject({
+      status: 'error',
+      errorStatus: 429,
+      failedAtMs: 1_000,
+    });
+    const accountCard = findAccountCardByKey(renderer, selectionKey);
+    expect(readText(accountCard)).not.toContain('accounts.health_reauth');
+    expect(readText(accountCard)).toContain('accounts.health_limited');
+  });
+
+  it('supersedes stale Header authentication while retaining its quota evidence', async () => {
     const file = {
       ...makeCodexFile('header.codex.json', 'auth-1', 'header@example.com'),
       account_id: 'space-header',
@@ -1554,6 +1692,17 @@ describe('AccountsPage replacement flows', () => {
     await flushPromises();
 
     expect(getAccountCardText(renderer, selectionKey)).not.toContain('accounts.health_reauth');
+
+    await act(async () => {
+      findDetailButtonByName(renderer, file.name).props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    const quotaDetailView = renderer.root.findByType(AccountQuotaTab).props.detailView;
+    expect(quotaDetailView.quota.windows).toEqual(
+      expect.arrayContaining([expect.objectContaining({ usedPercent: 20 })])
+    );
   });
 
   it('applies the recovery boundary to a confirmed credential after identity rotation', async () => {
@@ -1656,6 +1805,137 @@ describe('AccountsPage replacement flows', () => {
     await flushPromises();
 
     expect(getAccountCardText(renderer, firstSelectionKey)).not.toContain('accounts.health_reauth');
+    expect(getAccountCardText(renderer, secondSelectionKey)).toContain('accounts.health_reauth');
+  });
+
+  it('does not leak a shared-file recovery boundary when the reauthenticated sibling is removed', async () => {
+    const first = {
+      ...makeCodexFile('shared.codex.json', 'auth-1', 'first@example.com'),
+      account_id: 'space-first',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const second = {
+      ...makeCodexFile('shared.codex.json', 'auth-2', 'second@example.com'),
+      account_id: 'space-second',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const refreshedFirst = {
+      ...first,
+      last_refresh: 3_000,
+      modified: 3_100,
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+    } as AuthFileItem;
+    mocks.files = [first, second];
+    const firstSelectionKey = getAuthFileSelectionKey(first);
+    const secondSelectionKey = getAuthFileSelectionKey(second);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        firstSelectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [refreshedFirst, second];
+      return mocks.files;
+    });
+
+    expect(await runCodexReauthSuccessAndCaptureError()).toBeUndefined();
+    await flushPromises();
+    expect(getAccountCardText(renderer, firstSelectionKey)).not.toContain('accounts.health_reauth');
+    expect(getAccountCardText(renderer, secondSelectionKey)).toContain('accounts.health_reauth');
+
+    mocks.files = [second];
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+
+    expect(getAccountCardText(renderer, secondSelectionKey)).toContain('accounts.health_reauth');
+  });
+
+  it('clears unique-file recovery before a shared filename can become unique again', async () => {
+    const first = {
+      ...makeCodexFile('shared.codex.json', 'auth-1', 'first@example.com'),
+      account_id: 'space-first',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    const refreshedFirst = {
+      ...first,
+      last_refresh: 3_000,
+      modified: 3_100,
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+    } as AuthFileItem;
+    const second = {
+      ...makeCodexFile('shared.codex.json', 'auth-2', 'second@example.com'),
+      account_id: 'space-second',
+      status: 'error',
+      statusMessage: 'token_expired',
+      status_code: 401,
+      error_status: 401,
+      last_refresh: 1_000,
+      modified: 1_100,
+    } as AuthFileItem;
+    mocks.files = [first];
+    const firstSelectionKey = getAuthFileSelectionKey(first);
+    const secondSelectionKey = getAuthFileSelectionKey(second);
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findAccountCardButtonByAriaLabel(
+        renderer,
+        firstSelectionKey,
+        'accounts.recommend_action_reauth'
+      ).props.onClick();
+    });
+    mocks.loadFiles.mockImplementationOnce(async () => {
+      mocks.files = [refreshedFirst];
+      return mocks.files;
+    });
+
+    expect(await runCodexReauthSuccessAndCaptureError()).toBeUndefined();
+    await flushPromises();
+    expect(getAccountCardText(renderer, firstSelectionKey)).not.toContain('accounts.health_reauth');
+
+    mocks.files = [refreshedFirst, second];
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+    expect(getAccountCardText(renderer, secondSelectionKey)).toContain('accounts.health_reauth');
+
+    mocks.files = [second];
+    await act(async () => {
+      renderer.update(<AccountsPage />);
+      await Promise.resolve();
+    });
+    await flushPromises();
+
     expect(getAccountCardText(renderer, secondSelectionKey)).toContain('accounts.health_reauth');
   });
 
@@ -5405,7 +5685,22 @@ describe('AccountsPage replacement flows', () => {
       });
     });
     const setterCallsAfterInvalidation = mocks.quotaState.setCodexQuota.mock.calls.length;
-    expect(mocks.quotaState.codexQuota).not.toHaveProperty(getQuotaCredentialStoreKey(first));
+    expect(mocks.quotaState.codexQuota).toHaveProperty(getQuotaCredentialStoreKey(first));
+    expect(mocks.quotaState.codexQuota).toMatchObject({
+      [getQuotaCredentialStoreKey(first)]: expect.objectContaining({
+        status: 'success',
+        error: undefined,
+        errorStatus: undefined,
+        failedAtMs: 1_000,
+      }),
+    });
+    expect(mocks.quotaState.codexQuota).toMatchObject({
+      [getQuotaCredentialStoreKey(second)]: expect.objectContaining({
+        status: 'error',
+        errorStatus: 401,
+        failedAtMs: 1_000,
+      }),
+    });
     expect(mocks.quotaState.codexQuota).toHaveProperty(getQuotaCredentialStoreKey(second));
 
     quotaResult.resolve({
@@ -6717,7 +7012,7 @@ describe('AccountsPage replacement flows', () => {
       });
     });
 
-    expect(mocks.quotaState.codexQuota).not.toHaveProperty(getQuotaCredentialStoreKey(original));
+    expect(mocks.quotaState.codexQuota).toHaveProperty(getQuotaCredentialStoreKey(original));
     expect(mocks.quotaState.codexQuota).not.toHaveProperty(getQuotaCredentialStoreKey(replacement));
     mocks.files = [replacement];
     await act(async () => {

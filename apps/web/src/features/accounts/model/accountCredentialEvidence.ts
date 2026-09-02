@@ -6,7 +6,10 @@ import {
   canonicalizeCodexProviderWindowId,
   inferCodexQuotaScopeFromProviderWindowId,
 } from '@/utils/quota/codexQuota';
-import { hasActiveCodexInspectionAuthenticationFailure } from '@/features/authFiles/model/credentialStatus';
+import {
+  hasActiveCodexInspectionAuthenticationFailure,
+  isObservedCodexAuthenticationError,
+} from '@/features/authFiles/model/credentialStatus';
 
 export interface AccountInspectionSummary {
   source: 'local' | 'server';
@@ -265,6 +268,7 @@ const toEvidenceEvent = (
   source: CodexQuotaEvidenceSource,
   state: CodexQuotaState | null | undefined,
   boundaryAtMs: number,
+  authenticationBoundaryAtMs: number,
   credentialRefreshAtMs: number
 ): CodexQuotaEvidenceEvent | null => {
   if (!state) return null;
@@ -273,6 +277,14 @@ const toEvidenceEvent = (
     credentialRefreshAtMs > 0 &&
     hasCodexAuthenticationErrorSignal(state) &&
     (recordedAtMs === null || recordedAtMs <= credentialRefreshAtMs)
+  ) {
+    return null;
+  }
+  if (
+    authenticationBoundaryAtMs > 0 &&
+    recordedAtMs !== null &&
+    recordedAtMs <= authenticationBoundaryAtMs &&
+    hasCodexAuthenticationErrorSignal(state)
   ) {
     return null;
   }
@@ -364,18 +376,38 @@ export const reconcileCodexQuotaEvidence = ({
   headerQuota,
   inspectionQuota,
   boundaryAtMs = 0,
+  authenticationBoundaryAtMs = 0,
   credentialRefreshAtMs = 0,
 }: {
   providerQuota?: CodexQuotaState;
   headerQuota?: CodexQuotaState;
   inspectionQuota?: CodexQuotaState;
   boundaryAtMs?: number;
+  authenticationBoundaryAtMs?: number;
   credentialRefreshAtMs?: number;
 }): CodexQuotaState | undefined => {
   const events = [
-    toEvidenceEvent('provider', providerQuota, boundaryAtMs, credentialRefreshAtMs),
-    toEvidenceEvent('header', headerQuota, boundaryAtMs, credentialRefreshAtMs),
-    toEvidenceEvent('inspection', inspectionQuota, boundaryAtMs, credentialRefreshAtMs),
+    toEvidenceEvent(
+      'provider',
+      providerQuota,
+      boundaryAtMs,
+      authenticationBoundaryAtMs,
+      credentialRefreshAtMs
+    ),
+    toEvidenceEvent(
+      'header',
+      headerQuota,
+      boundaryAtMs,
+      authenticationBoundaryAtMs,
+      credentialRefreshAtMs
+    ),
+    toEvidenceEvent(
+      'inspection',
+      inspectionQuota,
+      boundaryAtMs,
+      authenticationBoundaryAtMs,
+      credentialRefreshAtMs
+    ),
   ]
     .filter((event): event is CodexQuotaEvidenceEvent => event !== null)
     .sort(
@@ -430,15 +462,11 @@ export const isKnownHealthyCodexQuota = (quota: CodexQuotaState | null | undefin
 
 function hasCodexAuthenticationErrorSignal(quota: CodexQuotaState | null | undefined): boolean {
   if (quota?.errorStatus === 401) return true;
-  const signal = `${quota?.observedErrorKind ?? ''} ${quota?.observedErrorCode ?? ''}`
-    .trim()
-    .toLowerCase();
   return (
-    signal.includes('auth') ||
-    signal.includes('unauthorized') ||
-    signal.includes('invalid') ||
-    signal.includes('expired') ||
-    signal.includes('revoked')
+    isObservedCodexAuthenticationError(
+      quota?.observedErrorKind ?? '',
+      quota?.observedErrorCode ?? ''
+    ) || isObservedCodexAuthenticationError(quota?.error ?? '', '')
   );
 }
 
@@ -481,29 +509,48 @@ export const getAccountCredentialEvidenceCutoffs = ({
   headerQuota,
   inspection,
   boundaryAtMs = 0,
+  authenticationBoundaryAtMs = 0,
   credentialRefreshAtMs = 0,
 }: {
   providerQuota?: CodexQuotaState;
   headerQuota?: CodexQuotaState;
   inspection?: AccountInspectionSummary | null;
   boundaryAtMs?: number;
+  authenticationBoundaryAtMs?: number;
   credentialRefreshAtMs?: number;
 }): AccountCredentialEvidenceCutoffs => {
-  let authenticationAtMs = Math.max(0, boundaryAtMs, credentialRefreshAtMs);
+  let authenticationAtMs = Math.max(
+    0,
+    boundaryAtMs,
+    authenticationBoundaryAtMs,
+    credentialRefreshAtMs
+  );
   let healthyQuotaAtMs = Math.max(0, boundaryAtMs);
   for (const [source, quota] of [
     ['provider', providerQuota],
     ['header', headerQuota],
   ] as const) {
     const quotaAtMs = getCodexQuotaEvidenceAtMs(quota);
-    if (codexQuotaProvesAuthentication(quota, source) && quotaAtMs !== null) {
+    const isPostAuthenticationBoundary =
+      authenticationBoundaryAtMs <= 0 ||
+      (quotaAtMs !== null && quotaAtMs > authenticationBoundaryAtMs);
+    if (
+      codexQuotaProvesAuthentication(quota, source) &&
+      quotaAtMs !== null &&
+      isPostAuthenticationBoundary
+    ) {
       authenticationAtMs = Math.max(authenticationAtMs, quotaAtMs);
       if (isKnownHealthyCodexQuota(quota)) {
         healthyQuotaAtMs = Math.max(healthyQuotaAtMs, quotaAtMs);
       }
     }
   }
-  if (inspection && inspectionProvesAuthentication(inspection)) {
+  const inspectionAtMs = inspection?.createdAtMs ?? 0;
+  if (
+    inspection &&
+    inspectionProvesAuthentication(inspection) &&
+    (authenticationBoundaryAtMs <= 0 || inspectionAtMs > authenticationBoundaryAtMs)
+  ) {
     authenticationAtMs = Math.max(authenticationAtMs, inspection.createdAtMs);
     if (
       isKnownHealthyCodexQuota(buildInspectionCodexQuotaState({ name: 'inspection' }, inspection))

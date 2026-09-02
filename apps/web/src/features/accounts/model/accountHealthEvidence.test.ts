@@ -11,6 +11,7 @@ import {
   isAccountCredentialStatusProblemCurrent,
   isAccountInspectionAuthenticationFailure,
   isAccountInspectionActionable,
+  isAccountInspectionHealthyEvidence,
   isAccountInspectionStatusEvidenceCurrent,
   isAccountObservedDiagnosticProblemCurrent,
   isAccountQuotaRefreshProblemCurrent,
@@ -915,6 +916,28 @@ describe('accountHealthEvidence', () => {
 
     expect(isAccountInspectionStatusEvidenceCurrent(healthyRow)).toBe(true);
     expect(isAccountInspectionStatusEvidenceCurrent(handledReauthRow)).toBe(false);
+  });
+
+  it('does not treat healthy inspection evidence from before reauthentication as current', () => {
+    const row = makeRow({
+      authenticationAtMs: 2_000,
+      inspection: {
+        source: 'server',
+        action: 'keep',
+        actionReason: 'healthy',
+        actionStatus: 'success',
+        statusCode: 200,
+        usedPercent: 20,
+        isQuota: false,
+        errorKind: 'inference_healthy',
+        runId: 1,
+        resultId: 4,
+        createdAtMs: 1_000,
+      },
+    });
+
+    expect(isAccountInspectionHealthyEvidence(row)).toBe(false);
+    expect(resolveAccountAuthenticationProblemEvidence(row)).toBeNull();
   });
 
   it('keeps a keep plus HTTP 401 inspection as authentication evidence until recovery', () => {
