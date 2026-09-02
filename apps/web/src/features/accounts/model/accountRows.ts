@@ -634,7 +634,7 @@ const hasConfirmedAvailableEvidence = (
     (row.quota.status === 'ok' && hasCurrentAccountQuotaEvidence(row)) ||
     isAccountInspectionHealthyEvidence(row) ||
     (isAccountRequestHealthEvidenceCurrent(row, requestEvidence) &&
-      requestEvidence?.direction === 'positive')
+      requestEvidence?.kind === 'success')
   );
 };
 

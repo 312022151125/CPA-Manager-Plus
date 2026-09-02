@@ -344,6 +344,79 @@ describe('accountHealthEvidence', () => {
     });
   });
 
+  it('does not use a pre-reauth success request as current authentication proof', () => {
+    const row = makeRow({ authenticationAtMs: 2_000 });
+    const requestEvidence = resolveAccountRequestHealthEvidence({
+      latestRequest: makeRequest({ timestamp_ms: 1_000, failed: false }),
+    });
+
+    expect(isAccountRequestHealthEvidenceCurrent(row, requestEvidence)).toBe(false);
+    expect(isAccountRequestCredentialEvidenceCurrent(row, requestEvidence)).toBe(false);
+    expect(resolveAccountAuthenticationProblemEvidence(row, requestEvidence)).toBeNull();
+  });
+
+  it('accepts a post-reauth success request as current authentication proof', () => {
+    const row = makeRow({ authenticationAtMs: 2_000 });
+    const requestEvidence = resolveAccountRequestHealthEvidence({
+      latestRequest: makeRequest({ timestamp_ms: 3_000, failed: false }),
+    });
+
+    expect(isAccountRequestHealthEvidenceCurrent(row, requestEvidence)).toBe(true);
+    expect(isAccountRequestCredentialEvidenceCurrent(row, requestEvidence)).toBe(true);
+  });
+
+  it('retains a pre-reauth quota request as current quota evidence', () => {
+    const row = makeRow({ authenticationAtMs: 2_000 });
+    const requestEvidence = resolveAccountRequestHealthEvidence({
+      latestRequest: makeRequest({ timestamp_ms: 1_000, failed: true, fail_status_code: 429 }),
+    });
+
+    expect(requestEvidence).toMatchObject({ kind: 'quota', direction: 'positive' });
+    expect(isAccountRequestHealthEvidenceCurrent(row, requestEvidence)).toBe(true);
+    expect(isAccountRequestCredentialEvidenceCurrent(row, requestEvidence)).toBe(true);
+    expect(hasAccountQuotaLimitEvidence(row, { latestRequest: requestEvidence?.request })).toBe(
+      true
+    );
+  });
+
+  it('keeps new transient failures actionable without reviving an old success request', () => {
+    const row = makeRow({ authenticationAtMs: 2_000 });
+    const requestEvidence = resolveAccountRequestHealthEvidence({
+      recentRequests: [
+        makeRequest({ timestamp_ms: 3_100, failed: true, fail_status_code: 503 }),
+        makeRequest({ timestamp_ms: 3_000, failed: true, fail_status_code: 502 }),
+        makeRequest({ timestamp_ms: 1_000, failed: false }),
+      ],
+    });
+
+    expect(requestEvidence).toMatchObject({
+      kind: 'transient_failure',
+      request: { timestamp_ms: 3_100 },
+    });
+    expect(isAccountRequestHealthEvidenceCurrent(row, requestEvidence)).toBe(true);
+    expect(resolveAccountExceptionProblemEvidence(row, requestEvidence)).toEqual({
+      source: 'request',
+      observedAtMs: 3_100,
+    });
+  });
+
+  it('keeps a new request 401 actionable when an older success precedes recovery', () => {
+    const row = makeRow({ authenticationAtMs: 2_000 });
+    const requestEvidence = resolveAccountRequestHealthEvidence({
+      recentRequests: [
+        makeRequest({ timestamp_ms: 3_000, failed: true, fail_status_code: 401 }),
+        makeRequest({ timestamp_ms: 1_000, failed: false }),
+      ],
+    });
+
+    expect(isAccountRequestHealthEvidenceCurrent(row, requestEvidence)).toBe(true);
+    expect(resolveAccountAuthenticationProblemEvidence(row, requestEvidence)).toMatchObject({
+      source: 'request',
+      observedAtMs: 3_000,
+      statusCode: 401,
+    });
+  });
+
   it('retains new transient failures while retiring an older request authentication failure', () => {
     const row = makeRow({ authenticationAtMs: 2_000 });
     const requestEvidence = resolveAccountRequestHealthEvidence({

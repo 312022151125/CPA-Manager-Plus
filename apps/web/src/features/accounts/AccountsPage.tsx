@@ -318,6 +318,7 @@ import {
   isUsageHeaderQuotaSnapshotExpired,
 } from '@/utils/usageHeaderSnapshots';
 import {
+  buildQuotaCredentialIdentity,
   getCredentialScopedQuotaState,
   getQuotaCredentialStoreKey,
 } from '@/utils/quota/credentialScope';
@@ -618,6 +619,88 @@ const pruneCodexQuotaStatesForCredentialMutation = (
     changed = true;
   });
   return changed ? next : current;
+};
+
+const getBaselineCodexQuotaStoreKey = (baseline: AccountDirectReauthBaseline): string =>
+  getQuotaCredentialStoreKey({
+    name: baseline.target.fileName ?? '',
+    type: 'codex',
+    provider: baseline.target.provider ?? 'codex',
+    id: baseline.target.runtimeId ?? undefined,
+    authIndex: baseline.target.authIndex ?? null,
+    account_id: baseline.target.accountId ?? undefined,
+    accountSnapshot: baseline.target.accountSnapshot ?? undefined,
+    account: baseline.target.account,
+  });
+
+const migrateConfirmedReauthCodexQuotaState = (
+  current: Record<string, CodexQuotaState>,
+  {
+    baseline,
+    confirmedFile,
+    inventoryFiles,
+    authenticationAtMs,
+  }: {
+    baseline: AccountDirectReauthBaseline;
+    confirmedFile: AuthFileItem;
+    inventoryFiles: readonly AuthFileItem[];
+    authenticationAtMs: number;
+  }
+): Record<string, CodexQuotaState> => {
+  const oldStoreKey = getBaselineCodexQuotaStoreKey(baseline);
+  const newStoreKey = getQuotaCredentialStoreKey(confirmedFile);
+  if (!oldStoreKey || oldStoreKey === newStoreKey || authenticationAtMs <= 0) return current;
+
+  // If the old exact key is still owned by a different post-OAuth credential,
+  // the state cannot be attributed safely to the confirmed credential.
+  if (
+    inventoryFiles.some(
+      (file) =>
+        getQuotaCredentialStoreKey(file) === oldStoreKey &&
+        getQuotaCredentialStoreKey(file) !== newStoreKey
+    )
+  ) {
+    return current;
+  }
+
+  const oldEntries = Object.entries(current).filter(
+    ([, state]) => state.authFileKey?.trim() === oldStoreKey
+  );
+  if (oldEntries.length === 0) return current;
+
+  const sourceEntry = [...oldEntries].sort(([leftKey, leftState], [rightKey, rightState]) => {
+    const leftAtMs = getCodexQuotaEvidenceAtMs(leftState) ?? 0;
+    const rightAtMs = getCodexQuotaEvidenceAtMs(rightState) ?? 0;
+    return (
+      rightAtMs - leftAtMs ||
+      Number(rightKey === oldStoreKey) - Number(leftKey === oldStoreKey) ||
+      rightState.windows.length - leftState.windows.length
+    );
+  })[0];
+  if (!sourceEntry) return current;
+  const [, sourceState] = sourceEntry;
+  const sanitizedState =
+    sanitizeSupersededAuthQuotaState(sourceState, authenticationAtMs, {
+      allowUnknownFailureTimestamp: true,
+    }) ?? sourceState;
+  const migratedState: CodexQuotaState = {
+    ...sanitizedState,
+    ...buildQuotaCredentialIdentity(confirmedFile),
+  };
+  const existingNewState = current[newStoreKey];
+  const sourceAtMs = getCodexQuotaEvidenceAtMs(migratedState);
+  const existingAtMs = getCodexQuotaEvidenceAtMs(existingNewState);
+  const keepExistingNewState =
+    existingNewState?.authFileKey?.trim() === newStoreKey &&
+    existingAtMs !== null &&
+    (sourceAtMs === null || existingAtMs >= sourceAtMs);
+
+  const next = { ...current };
+  oldEntries.forEach(([key]) => {
+    if (key !== newStoreKey) delete next[key];
+  });
+  if (!keepExistingNewState) next[newStoreKey] = migratedState;
+  return next;
 };
 
 const pruneCredentialQuotaStatesForProviderMutation = <
@@ -2941,6 +3024,7 @@ export function AccountsPage() {
 
   const invalidateCodexCredentialEvidenceForMatchedFile = useCallback(
     (
+      baseline: AccountDirectReauthBaseline,
       matchedFile: AuthFileItem,
       inventoryFiles: readonly AuthFileItem[],
       options: { authenticationAtMs?: number; invalidatedAtMs?: number } = {}
@@ -2984,11 +3068,22 @@ export function AccountsPage() {
       );
 
       const storeKey = CODEX_CONFIG.getStoreKey?.(matchedFile) ?? matchedFile.name;
-      beginAccountQuotaRequest(quotaRequestVersionsRef.current, `${CODEX_CONFIG.type}:${storeKey}`);
+      const previousStoreKey = getBaselineCodexQuotaStoreKey(baseline);
+      new Set([previousStoreKey, storeKey]).forEach((key) => {
+        if (key) {
+          beginAccountQuotaRequest(quotaRequestVersionsRef.current, `${CODEX_CONFIG.type}:${key}`);
+        }
+      });
       const preservedFiles = inventoryFiles.filter((file) => file.name === matchedFile.name);
-      setCodexQuota((current) =>
-        pruneCodexQuotaStatesForCredentialMutation(
-          Object.entries(current).reduce<Record<string, CodexQuotaState>>((next, [key, state]) => {
+      setCodexQuota((current) => {
+        const migrated = migrateConfirmedReauthCodexQuotaState(current, {
+          baseline,
+          confirmedFile: matchedFile,
+          inventoryFiles,
+          authenticationAtMs,
+        });
+        const sanitized = Object.entries(migrated).reduce<Record<string, CodexQuotaState>>(
+          (next, [key, state]) => {
             if (
               authenticationAtMs <= 0 ||
               getAuthFileScopedCodexQuota(matchedFile, state) !== state
@@ -2996,17 +3091,19 @@ export function AccountsPage() {
               next[key] = state;
               return next;
             }
-            next[key] = sanitizeSupersededAuthQuotaState(state, authenticationAtMs, {
-              allowUnknownFailureTimestamp: true,
-            }) as CodexQuotaState;
+            next[key] =
+              sanitizeSupersededAuthQuotaState(state, authenticationAtMs, {
+                allowUnknownFailureTimestamp: true,
+              }) ?? state;
             return next;
-          }, {}),
-          {
-            affectedFileNames: new Set([matchedFile.name]),
-            preservedFiles,
-          }
-        )
-      );
+          },
+          {}
+        );
+        return pruneCodexQuotaStatesForCredentialMutation(sanitized, {
+          affectedFileNames: new Set([matchedFile.name]),
+          preservedFiles,
+        });
+      });
       return { file: matchedFile, invalidatedAtMs };
     },
     [
@@ -3084,6 +3181,7 @@ export function AccountsPage() {
       }
       if (pendingId) acknowledgePendingAccountDirectReauths([pendingId]);
       const invalidation = invalidateCodexCredentialEvidenceForMatchedFile(
+        baseline,
         confirmedFile,
         inventoryFiles,
         { authenticationAtMs: completedAtMs, invalidatedAtMs: completedAtMs }

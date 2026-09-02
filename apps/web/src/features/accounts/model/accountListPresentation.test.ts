@@ -207,6 +207,21 @@ describe('accountListPresentation', () => {
     expect(item.recommendation.hasRecommendation).toBe(false);
   });
 
+  it('does not surface a pre-reauth success request as available', () => {
+    const row = makeRow({ authenticationAtMs: 2_000 });
+
+    expect(
+      buildAccountListItem(row, {
+        requestEvidence: { latestRequest: { timestamp_ms: 1_000, failed: false } },
+      }).health.status
+    ).toBe('raw');
+    expect(
+      buildAccountListItem(row, {
+        requestEvidence: { latestRequest: { timestamp_ms: 3_000, failed: false } },
+      }).health.status
+    ).toBe('available');
+  });
+
   it('lets a newer successful request clear stale quota refresh failure advice', () => {
     const row = makeRow({
       quota: {

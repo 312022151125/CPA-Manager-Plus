@@ -767,7 +767,7 @@ export const isAccountRequestHealthEvidenceCurrent = (
     return false;
   }
   if (
-    evidence.kind === 'credential_failure' &&
+    (evidence.kind === 'success' || evidence.kind === 'credential_failure') &&
     evidence.request.timestamp_ms <= row.authenticationAtMs
   ) {
     return false;
@@ -794,7 +794,7 @@ export const isAccountRequestCredentialEvidenceCurrent = (
     return false;
   }
   if (
-    credentialEvidence.direction === 'negative' &&
+    (credentialEvidence.kind === 'success' || credentialEvidence.kind === 'credential_failure') &&
     credentialEvidence.request.timestamp_ms <= row.authenticationAtMs
   ) {
     return false;

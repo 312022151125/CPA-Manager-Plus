@@ -642,6 +642,39 @@ describe('accountRows', () => {
     });
   });
 
+  it('requires post-reauth request success for available metrics', () => {
+    const file: AuthFileItem = {
+      name: 'post-reauth.json',
+      type: 'codex',
+      authIndex: 'auth-1',
+      account_id: 'space-a',
+    };
+    const selectionKey = getAuthFileSelectionKey(file);
+    const [row] = buildAccountRows(
+      [file],
+      emptyStores(),
+      undefined,
+      undefined,
+      undefined,
+      new Map([[selectionKey, evidenceBoundary({ authenticationAtMs: 2_000 })]])
+    );
+
+    expect(
+      buildAccountMetrics([row], {
+        requestEvidenceBySelectionKey: new Map([
+          [selectionKey, { latestRequest: { timestamp_ms: 1_000, failed: false } }],
+        ]),
+      })
+    ).toMatchObject({ available: 0, unconfirmed: 1 });
+    expect(
+      buildAccountMetrics([row], {
+        requestEvidenceBySelectionKey: new Map([
+          [selectionKey, { latestRequest: { timestamp_ms: 3_000, failed: false } }],
+        ]),
+      })
+    ).toMatchObject({ available: 1, unconfirmed: 0 });
+  });
+
   it('marks observed Codex usage header quota and searches header diagnostics', () => {
     const rows = buildAccountRows(
       [
