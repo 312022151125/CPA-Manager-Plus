@@ -1479,6 +1479,85 @@ describe('authFilesApi patchFieldsForAuthIndexes', () => {
 
     expect(mocks.postForm).not.toHaveBeenCalled();
   });
+
+  it('rejects conflicting Codex member evidence before reuploading the source file', async () => {
+    mocks.getRaw.mockResolvedValue({
+      data: new Blob([
+        JSON.stringify({
+          type: 'codex',
+          auth_index: 'auth-1',
+          account_id: 'workspace-a',
+          accountSnapshot: 'alice@example.com',
+          account_snapshot: 'bob@example.com',
+        }),
+      ]),
+    });
+    const target = {
+      name: 'codex.json',
+      runtimeId: 'runtime-1',
+      authIndex: 'auth-1',
+      provider: 'codex',
+      accountId: 'workspace-a',
+    };
+
+    await expect(
+      authFilesApi.patchFieldsForAuthIndexes('codex.json', [target], [target], { priority: 10 })
+    ).rejects.toThrow('Auth file patch target changed');
+
+    expect(mocks.postForm).not.toHaveBeenCalled();
+  });
+
+  it('uses a runtime locator when the Codex member snapshot is only a display value', async () => {
+    const rawText = JSON.stringify({
+      type: 'codex',
+      account_id: 'workspace-a',
+      account: 'Alice',
+      priority: 1,
+    });
+    mocks.getRaw.mockResolvedValue({ data: new Blob([rawText]) });
+    mocks.postForm.mockResolvedValue({
+      status: 'ok',
+      uploaded: 1,
+      files: ['codex.json'],
+      failed: [],
+    });
+    const target = {
+      name: 'codex.json',
+      runtimeId: 'runtime-auth-1',
+      provider: 'codex',
+      accountId: 'workspace-a',
+      accountSnapshot: 'Alice',
+    };
+
+    await expect(
+      authFilesApi.patchFieldsForAuthIndexes('codex.json', [target], [target], { priority: 10 })
+    ).resolves.toBeUndefined();
+
+    await expect(getUploadedFile().text()).resolves.toBe(
+      JSON.stringify({ type: 'codex', account_id: 'workspace-a', account: 'Alice', priority: 10 })
+    );
+  });
+
+  it('rejects a weak Codex member snapshot without a credential locator', async () => {
+    const rawText = JSON.stringify({
+      type: 'codex',
+      account_id: 'workspace-a',
+      account: 'Alice',
+    });
+    mocks.getRaw.mockResolvedValue({ data: new Blob([rawText]) });
+    const target = {
+      name: 'codex.json',
+      provider: 'codex',
+      accountId: 'workspace-a',
+      accountSnapshot: 'Alice',
+    };
+
+    await expect(
+      authFilesApi.patchFieldsForAuthIndexes('codex.json', [target], [target], { priority: 10 })
+    ).rejects.toThrow('Auth file patch target changed');
+
+    expect(mocks.postForm).not.toHaveBeenCalled();
+  });
 });
 
 describe('applyAuthFileFieldsPatchToRecord', () => {

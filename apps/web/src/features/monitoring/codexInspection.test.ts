@@ -152,7 +152,7 @@ const createCurrentAuthFile = (
     type: item.provider,
     auth_index: item.authIndex,
     ...(item.accountId ? { id_token: { account_id: item.accountId } } : {}),
-    ...(!item.accountId && item.accountSnapshot && item.accountSnapshot !== item.fileName
+    ...(item.accountSnapshot && item.accountSnapshot !== item.fileName
       ? { account: item.accountSnapshot }
       : {}),
     disabled: item.disabled,
@@ -1907,6 +1907,7 @@ describe('executeCodexInspectionActions', () => {
             statusCode: 401,
             provider: 'xai',
             accountId: '',
+            runtimeId: 'reauth-runtime-1',
           })
         ),
       ],
@@ -2054,7 +2055,12 @@ describe('executeCodexInspectionActions', () => {
       settings: createRunResult().settings,
       items: [
         toReauthDeleteExecutionItem(
-          createResultItem('reauth', { fileName: 'reauth.json', provider: 'xai', accountId: '' })
+          createResultItem('reauth', {
+            fileName: 'reauth.json',
+            provider: 'xai',
+            accountId: '',
+            runtimeId: 'reauth-runtime-1',
+          })
         ),
       ],
       previousFiles: [],
@@ -2215,6 +2221,50 @@ describe('executeCodexInspectionActions', () => {
     expect(deleteSpy).not.toHaveBeenCalled();
     expect(execution.outcomes).toEqual([
       expect.objectContaining({ action: 'delete', status: 'failed', success: false }),
+    ]);
+  });
+
+  it('rejects a Codex Workspace-only delete when the credential runtime ID changes', async () => {
+    const deleteSpy = vi.spyOn(authFilesApi, 'deleteFileByName').mockResolvedValue({
+      status: 'ok',
+      deleted: 1,
+      files: ['workspace.json'],
+      failed: [],
+    });
+    const item = createResultItem('delete', {
+      key: 'workspace.json::workspace-only',
+      fileName: 'workspace.json',
+      runtimeId: 'runtime-original',
+      authIndex: null,
+      accountId: 'workspace-1',
+      accountSnapshot: null,
+    });
+    vi.spyOn(authFilesApi, 'list').mockResolvedValue({
+      files: [
+        createCurrentAuthFile(item, {
+          id: 'runtime-replacement',
+          auth_index: null,
+          account: 'bob@example.com',
+        }),
+      ],
+    });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-codex-workspace-only-runtime-drift',
+      source: 'manual',
+    });
+
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        action: 'delete',
+        status: 'failed',
+        success: false,
+        error: expect.stringContaining('账号标识已变化'),
+      }),
     ]);
   });
 
@@ -3092,7 +3142,7 @@ describe('executeCodexInspectionActions', () => {
           authIndex: 'auth-1',
           provider: 'codex',
           accountId: 'account-1',
-          accountSnapshot: null,
+          accountSnapshot: 'first-plugin@example.com',
         },
         {
           name: 'plugin-source.json',
@@ -3100,7 +3150,7 @@ describe('executeCodexInspectionActions', () => {
           authIndex: 'auth-2',
           provider: 'codex',
           accountId: 'account-2',
-          accountSnapshot: null,
+          accountSnapshot: 'second-plugin@example.com',
         },
       ]);
       expect(execution.outcomes).toEqual(
@@ -3505,7 +3555,7 @@ describe('executeCodexInspectionActions', () => {
           authIndex: 'auth-1',
           provider: 'codex',
           accountId: 'account-1',
-          accountSnapshot: null,
+          accountSnapshot: 'disable@example.com',
         },
         {
           name: 'shared.json',
@@ -3513,7 +3563,7 @@ describe('executeCodexInspectionActions', () => {
           authIndex: 'auth-2',
           provider: 'codex',
           accountId: 'account-2',
-          accountSnapshot: null,
+          accountSnapshot: 'disable@example.com',
         },
       ]
     );
@@ -3544,12 +3594,14 @@ describe('executeCodexInspectionActions', () => {
           provider: 'codex',
           authIndex: 'auth-1',
           accountId: 'account-1',
+          accountSnapshot: 'disable@example.com',
         }),
         getCodexInspectionOwnershipIdentityKey({
           fileName: 'shared.json',
           provider: 'codex',
           authIndex: 'auth-2',
           accountId: 'account-2',
+          accountSnapshot: 'disable@example.com',
         }),
       ])
     );
@@ -3918,6 +3970,7 @@ describe('executeCodexInspectionActions', () => {
         key: 'shared.json::second',
         fileName: 'shared.json',
         displayAccount: 'second@example.com',
+        accountSnapshot: 'first@example.com',
       }),
     ];
     vi.spyOn(authFilesApi, 'list')

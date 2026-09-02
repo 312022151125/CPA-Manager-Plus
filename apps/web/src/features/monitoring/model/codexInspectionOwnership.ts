@@ -4,6 +4,8 @@ import {
   readAuthFileStatusAccountId,
   readAuthFileStatusAccountSnapshot,
   readAuthFileStatusProvider,
+  readAuthFileStatusCodexMember,
+  normalizeCodexMemberSnapshot,
 } from '@/utils/authFileStatusMutation';
 
 const STORAGE_KEY = 'cli-proxy-codex-inspection-disable-ownership-v2';
@@ -44,8 +46,13 @@ const normalizeProvider = (value: unknown): string => {
   return normalized;
 };
 
-const normalizeAccountSnapshot = (value: unknown, fileName: string): string | null => {
+const normalizeAccountSnapshot = (
+  value: unknown,
+  fileName: string,
+  provider: string
+): string | null => {
   const normalized = typeof value === 'string' ? value.trim() : '';
+  if (provider === 'codex') return normalizeCodexMemberSnapshot(normalized) || null;
   return normalized && normalized !== fileName ? normalized : null;
 };
 
@@ -57,8 +64,12 @@ type NormalizedOwnershipIdentity = {
   accountSnapshot: string | null;
 };
 
-const hasStableLocator = (identity: NormalizedOwnershipIdentity): boolean =>
-  Boolean(identity.authIndex || identity.accountId || identity.accountSnapshot);
+const hasStableLocator = (identity: NormalizedOwnershipIdentity): boolean => {
+  if (identity.provider === 'codex') {
+    return Boolean(identity.authIndex || identity.accountSnapshot);
+  }
+  return Boolean(identity.authIndex || identity.accountId || identity.accountSnapshot);
+};
 
 const normalizeIdentity = (identity: unknown): NormalizedOwnershipIdentity => {
   const source =
@@ -66,13 +77,14 @@ const normalizeIdentity = (identity: unknown): NormalizedOwnershipIdentity => {
       ? (identity as Record<string, unknown>)
       : {};
   const fileName = typeof source.fileName === 'string' ? source.fileName.trim() : '';
+  const provider = normalizeProvider(source.provider);
   const accountId = normalizeAccountId(source.accountId);
   return {
     fileName,
-    provider: normalizeProvider(source.provider),
+    provider,
     authIndex: normalizeAuthIndex(source.authIndex),
     accountId,
-    accountSnapshot: normalizeAccountSnapshot(source.accountSnapshot, fileName),
+    accountSnapshot: normalizeAccountSnapshot(source.accountSnapshot, fileName, provider),
   };
 };
 
@@ -85,7 +97,11 @@ export const getCodexInspectionOwnershipIdentityKey = (
     normalized.provider,
     normalized.authIndex,
     normalized.accountId,
-    normalized.accountId ? null : normalized.accountSnapshot,
+    normalized.provider === 'codex'
+      ? normalized.accountSnapshot
+      : normalized.accountId
+        ? null
+        : normalized.accountSnapshot,
   ]);
 };
 
@@ -246,13 +262,19 @@ const readStore = (): DisableOwnershipStore => readStoreResult().store;
 
 export const getCodexInspectionOwnershipIdentityForFile = (
   file: AuthFileItem
-): CodexInspectionOwnershipIdentity => ({
-  fileName: file.name,
-  provider: readAuthFileStatusProvider(file),
-  authIndex: normalizeAuthIndex(file['auth_index'] ?? file.authIndex ?? file['auth-index']),
-  accountId: readAuthFileStatusAccountId(file),
-  accountSnapshot: readAuthFileStatusAccountSnapshot(file),
-});
+): CodexInspectionOwnershipIdentity => {
+  const provider = readAuthFileStatusProvider(file);
+  return {
+    fileName: file.name,
+    provider,
+    authIndex: normalizeAuthIndex(file['auth_index'] ?? file.authIndex ?? file['auth-index']),
+    accountId: readAuthFileStatusAccountId(file),
+    accountSnapshot:
+      provider === 'codex'
+        ? readAuthFileStatusCodexMember(file)
+        : readAuthFileStatusAccountSnapshot(file),
+  };
+};
 
 const matchesIdentityForRecovery = (
   record: DisableOwnershipRecord,
@@ -269,6 +291,19 @@ const matchesIdentityForRecovery = (
     return false;
   if (normalizedRecord.authIndex && normalizedRecord.authIndex !== normalizedIdentity.authIndex)
     return false;
+  if (normalizedRecord.provider === 'codex') {
+    if (normalizedRecord.accountId) {
+      if (normalizedRecord.accountId !== normalizedIdentity.accountId) return false;
+      if (normalizedRecord.accountSnapshot) {
+        return normalizedRecord.accountSnapshot === normalizedIdentity.accountSnapshot;
+      }
+      return normalizedRecord.authIndex !== null;
+    }
+    if (normalizedRecord.accountSnapshot) {
+      return normalizedRecord.accountSnapshot === normalizedIdentity.accountSnapshot;
+    }
+    return normalizedRecord.authIndex !== null;
+  }
   if (normalizedRecord.accountId) {
     return normalizedRecord.accountId === normalizedIdentity.accountId;
   }
@@ -289,6 +324,18 @@ const matchesIdentityForCleanup = (
     return false;
   if (normalizedRecord.authIndex && normalizedRecord.authIndex !== normalizedIdentity.authIndex)
     return false;
+  if (normalizedRecord.provider === 'codex') {
+    if (normalizedRecord.accountId && normalizedRecord.accountId !== normalizedIdentity.accountId) {
+      return false;
+    }
+    if (
+      normalizedRecord.accountSnapshot &&
+      normalizedRecord.accountSnapshot !== normalizedIdentity.accountSnapshot
+    ) {
+      return false;
+    }
+    return true;
+  }
   if (normalizedRecord.accountId && normalizedRecord.accountId !== normalizedIdentity.accountId)
     return false;
   if (normalizedRecord.accountId) return true;

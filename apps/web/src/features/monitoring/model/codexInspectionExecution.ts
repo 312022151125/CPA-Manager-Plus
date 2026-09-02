@@ -17,10 +17,12 @@ import { normalizeAuthIndex } from '@/utils/authIndex';
 import {
   readAuthFileStatusAccountId,
   readAuthFileStatusAccountSnapshot,
+  readAuthFileStatusCodexMember,
   readAuthFileStatusRuntimeId,
   resolveAuthFileStatusMutationTarget,
   type AuthFileStatusMutationResolution,
 } from '@/utils/authFileStatusMutation';
+import { normalizeCodexMemberSnapshot } from '@/utils/authFileCredentialIdentity';
 import { resolveAuthProvider } from '@/utils/quota/validators';
 import { clampPositiveInteger } from './codexInspectionSettings';
 import {
@@ -390,14 +392,20 @@ const normalizeProvider = (value: unknown): string => {
 
 const readCurrentFileName = (file: AuthFileItem): string => String(file.name ?? '').trim();
 
-const buildDeleteIdentityTarget = (file: AuthFileItem): AuthFileDeleteIdentityTarget => ({
-  name: readCurrentFileName(file),
-  runtimeId: readAuthFileStatusRuntimeId(file) || null,
-  authIndex: normalizeAuthIndex(file['auth_index'] ?? file.authIndex ?? file['auth-index']),
-  provider: resolveAuthProvider(file),
-  accountId: readAuthFileStatusAccountId(file) || null,
-  accountSnapshot: readAuthFileStatusAccountSnapshot(file) || null,
-});
+const buildDeleteIdentityTarget = (file: AuthFileItem): AuthFileDeleteIdentityTarget => {
+  const provider = normalizeProvider(resolveAuthProvider(file));
+  return {
+    name: readCurrentFileName(file),
+    runtimeId: readAuthFileStatusRuntimeId(file) || null,
+    authIndex: normalizeAuthIndex(file['auth_index'] ?? file.authIndex ?? file['auth-index']),
+    provider,
+    accountId: readAuthFileStatusAccountId(file) || null,
+    accountSnapshot:
+      (provider === 'codex'
+        ? readAuthFileStatusCodexMember(file)
+        : readAuthFileStatusAccountSnapshot(file)) || null,
+  };
+};
 
 const getAuthFileSourceMemberIdentityKey = (file: AuthFileItem): string =>
   JSON.stringify(buildDeleteIdentityTarget(file));
@@ -414,7 +422,17 @@ const authFileSourceMembershipMatches = (
 
 const readInspectionAccountSnapshot = (item: CodexInspectionResultItem): string => {
   const snapshot = item.accountSnapshot?.trim() ?? '';
-  return snapshot && snapshot !== item.fileName.trim() ? snapshot : '';
+  if (!snapshot || snapshot === item.fileName.trim()) return '';
+  return normalizeProvider(item.provider) === 'codex'
+    ? normalizeCodexMemberSnapshot(snapshot)
+    : snapshot;
+};
+
+const readCurrentInspectionAccountSnapshot = (file: AuthFileItem): string => {
+  const provider = normalizeProvider(resolveAuthProvider(file));
+  return provider === 'codex'
+    ? readAuthFileStatusCodexMember(file)
+    : readAuthFileStatusAccountSnapshot(file);
 };
 
 const matchesCurrentActionIdentity = (
@@ -425,14 +443,25 @@ const matchesCurrentActionIdentity = (
   const currentProvider = normalizeProvider(resolveAuthProvider(file));
   const expectedProvider = normalizeProvider(item.provider);
   if (!currentProvider || !expectedProvider || currentProvider !== expectedProvider) return false;
+  const runtimeId = readAuthFileStatusRuntimeId(file);
+  const expectedRuntimeId = item.runtimeId?.trim() ?? '';
+  if (expectedRuntimeId && runtimeId !== expectedRuntimeId) return false;
   const authIndex = normalizeAuthIndex(file['auth_index'] ?? file.authIndex ?? file['auth-index']);
   if (item.authIndex && authIndex !== normalizeAuthIndex(item.authIndex)) return false;
   const accountId = readAuthFileStatusAccountId(file);
   const expectedAccountId = item.accountId?.trim() ?? '';
-  if (expectedAccountId) return accountId === expectedAccountId;
+  if (expectedAccountId) {
+    if (accountId !== expectedAccountId) return false;
+    const expectedMember = readInspectionAccountSnapshot(item);
+    return (
+      normalizeProvider(item.provider) !== 'codex' ||
+      !expectedMember ||
+      readCurrentInspectionAccountSnapshot(file) === expectedMember
+    );
+  }
   const expectedSnapshot = readInspectionAccountSnapshot(item);
   if (!expectedSnapshot) return normalizeAuthIndex(item.authIndex) !== null;
-  return readAuthFileStatusAccountSnapshot(file) === expectedSnapshot;
+  return readCurrentInspectionAccountSnapshot(file) === expectedSnapshot;
 };
 
 type ResolvedStatusActionItem = {

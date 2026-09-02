@@ -1,21 +1,29 @@
 import type { AuthFileItem } from '@/types';
 import {
   readAuthFileStatusAccountId,
+  readAuthFileStatusAccountIdInvalid,
   readAuthFileStatusAccountSnapshot,
   readAuthFileStatusAuthIndex,
+  readAuthFileStatusCodexMember,
+  readAuthFileStatusCodexMemberInvalid,
   readAuthFileStatusPhysicalName,
   readAuthFileStatusProvider,
   readAuthFileStatusRuntimeId,
+  normalizeCodexMemberSnapshot,
   resolveCredentialIdentity,
 } from '@/utils/authFileCredentialIdentity';
 
 export {
   readAuthFileStatusAccountId,
+  readAuthFileStatusAccountIdInvalid,
   readAuthFileStatusAccountSnapshot,
   readAuthFileStatusAuthIndex,
+  readAuthFileStatusCodexMember,
+  readAuthFileStatusCodexMemberInvalid,
   readAuthFileStatusPhysicalName,
   readAuthFileStatusProvider,
   readAuthFileStatusRuntimeId,
+  normalizeCodexMemberSnapshot,
 } from '@/utils/authFileCredentialIdentity';
 
 const SELECTION_KEY_SEPARATOR = '\u0000';
@@ -53,6 +61,8 @@ export type AuthFileStatusMutationResolution = {
 
 const normalizeIdentityTarget = (target: AuthFileStatusIdentityTarget) => {
   const identity = resolveCredentialIdentity(target as AuthFileItem & AuthFileStatusMutationTarget);
+  const requestedAccountSnapshot =
+    typeof target.accountSnapshot === 'string' ? target.accountSnapshot.trim() : '';
   return {
     name: identity.physicalName,
     runtimeId: identity.runtimeId,
@@ -60,26 +70,37 @@ const normalizeIdentityTarget = (target: AuthFileStatusIdentityTarget) => {
     provider: identity.provider,
     accountId: identity.accountId,
     accountSnapshot: identity.accountSnapshot,
+    accountSnapshotProvided:
+      requestedAccountSnapshot.length > 0 || Boolean(identity.accountSnapshot),
   };
 };
 
 const normalizeTarget = (target: AuthFileStatusMutationTarget) => normalizeIdentityTarget(target);
+
+const hasCredentialLocator = (target: ReturnType<typeof normalizeTarget>): boolean =>
+  Boolean(target.runtimeId || target.authIndex);
 
 export const getAuthFileStatusIdentityKey = (target: AuthFileStatusIdentityTarget): string => {
   const normalized = normalizeIdentityTarget(target);
   if (normalized.authIndex) return `${normalized.name}::${normalized.authIndex}`;
 
   const accountSnapshot =
-    normalized.accountSnapshot && normalized.accountSnapshot !== normalized.name
-      ? normalized.accountSnapshot
-      : '';
-  if (normalized.accountId || accountSnapshot) {
+    normalized.provider === 'codex'
+      ? normalizeCodexMemberSnapshot(normalized.accountSnapshot)
+      : normalized.accountSnapshot && normalized.accountSnapshot !== normalized.name
+        ? normalized.accountSnapshot
+        : '';
+  const fallbackAccountSnapshot =
+    normalized.accountId && normalized.provider !== 'codex' ? '' : accountSnapshot;
+  const stableAccountId =
+    normalized.provider === 'codex' && !accountSnapshot ? '' : normalized.accountId;
+  if (stableAccountId || fallbackAccountSnapshot) {
     return `${normalized.name}::-::${JSON.stringify([
       normalized.name,
       normalized.provider,
       null,
-      normalized.accountId || null,
-      normalized.accountId ? null : accountSnapshot || null,
+      stableAccountId || null,
+      fallbackAccountSnapshot || null,
     ])}`;
   }
 
@@ -97,20 +118,44 @@ const authFileMatchesRequestedIdentity = (
   target: ReturnType<typeof normalizeTarget>
 ): boolean => {
   const provider = readAuthFileStatusProvider(file);
+  const credentialLocatorPresent = hasCredentialLocator(target);
   if (!provider || !target.provider || provider !== target.provider) return false;
+  if (provider === 'codex' && readAuthFileStatusAccountIdInvalid(file)) return false;
+  if (provider === 'codex' && readAuthFileStatusCodexMemberInvalid(file)) return false;
 
   if (target.accountId) {
-    return readAuthFileStatusAccountId(file) === target.accountId;
+    if (readAuthFileStatusAccountId(file) !== target.accountId) return false;
+    if (target.provider === 'codex') {
+      const expectedMember = target.accountSnapshotProvided
+        ? normalizeCodexMemberSnapshot(target.accountSnapshot)
+        : '';
+      // A Workspace id without a strong member snapshot is only safe when the
+      // request still carries a credential-level locator (runtime id/auth
+      // index). Never let a Workspace-only target select a Team member.
+      if (!expectedMember) return credentialLocatorPresent;
+      return readAuthFileStatusCodexMember(file) === expectedMember;
+    }
+    return true;
   }
 
   if (target.accountSnapshot && target.accountSnapshot !== target.name) {
+    if (target.provider === 'codex') {
+      const expectedMember = normalizeCodexMemberSnapshot(target.accountSnapshot);
+      // Member email without its Workspace is not a complete Codex identity;
+      // use it only as an additional check on an exact credential locator.
+      return (
+        credentialLocatorPresent &&
+        Boolean(expectedMember) &&
+        readAuthFileStatusCodexMember(file) === expectedMember
+      );
+    }
     return readAuthFileStatusAccountSnapshot(file) === target.accountSnapshot;
   }
 
   // CPA auth entries are allowed to omit account metadata. A stable auth index,
   // together with the already-checked runtime ID, physical name, and provider,
   // still identifies the current credential without falling back to a filename-only match.
-  return target.authIndex !== null;
+  return credentialLocatorPresent;
 };
 
 export const getAuthFileStatusSelectionKey = (target: AuthFileStatusIdentityTarget): string => {
@@ -133,6 +178,38 @@ const findTargetWithoutRuntimeId = (
     if (target.authIndex === null) return true;
     return readAuthFileStatusAuthIndex(file) === target.authIndex;
   });
+
+const narrowCodexSelectorMatches = (
+  matches: AuthFileItem[],
+  target: ReturnType<typeof normalizeTarget>
+): AuthFileItem[] | null => {
+  if (
+    matches.length <= 1 ||
+    target.provider !== 'codex' ||
+    !target.accountId ||
+    !normalizeCodexMemberSnapshot(target.accountSnapshot)
+  ) {
+    return null;
+  }
+
+  // Disambiguate a shared file/auth-index selector only when every candidate
+  // has complete Workspace+member evidence. An unknown or conflicting sibling
+  // must remain visible as ambiguity rather than being hidden by a known match.
+  if (
+    matches.some(
+      (file) =>
+        readAuthFileStatusAccountIdInvalid(file) ||
+        readAuthFileStatusCodexMemberInvalid(file) ||
+        !readAuthFileStatusAccountId(file) ||
+        !readAuthFileStatusCodexMember(file)
+    )
+  ) {
+    return null;
+  }
+
+  const narrowed = matches.filter((file) => authFileMatchesRequestedIdentity(file, target));
+  return narrowed.length > 0 ? narrowed : null;
+};
 
 export const resolveAuthFileStatusMutationTarget = (
   files: AuthFileItem[],
@@ -159,6 +236,8 @@ export const resolveAuthFileStatusMutationTarget = (
     if (matches.length === 0) {
       return { target: null, scope: 'ambiguous', affectedFiles: [], failure: 'not-found' };
     }
+    const narrowed = narrowCodexSelectorMatches(matches, target);
+    if (narrowed) matches = narrowed;
   }
 
   if (matches.length !== 1) {

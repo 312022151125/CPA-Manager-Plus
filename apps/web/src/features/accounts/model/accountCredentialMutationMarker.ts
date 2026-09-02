@@ -7,13 +7,14 @@ import {
 import {
   readAuthFileStatusAccountId,
   readAuthFileStatusAuthIndex,
+  readAuthFileStatusCodexMember,
   readAuthFileStatusPhysicalName,
   readAuthFileStatusProvider,
   readAuthFileStatusRuntimeId,
 } from '@/utils/authFileCredentialIdentity';
 
-const STORAGE_KEY = 'cpa.accounts.credential-mutation-markers.v2';
-const STORAGE_VERSION = 2;
+const STORAGE_KEY = 'cpa.accounts.credential-mutation-markers.v3';
+const STORAGE_VERSION = 3;
 const MAX_MARKERS = 32;
 const MAX_MARKER_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -60,6 +61,7 @@ const buildCredentialIdentityKey = (file: AuthFileItem): string =>
   JSON.stringify([
     readAuthFileStatusProvider(file),
     readAuthFileStatusAccountId(file),
+    readAuthFileStatusCodexMember(file),
     readAuthFileStatusPhysicalName(file),
     readAuthFileStatusRuntimeId(file),
     readAuthFileStatusAuthIndex(file) ?? '',

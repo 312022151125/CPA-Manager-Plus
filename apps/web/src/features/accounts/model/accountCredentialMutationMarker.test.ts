@@ -47,7 +47,7 @@ describe('account credential mutation markers', () => {
       provider: 'xai',
       createdAtMs,
     });
-    const rawStorage = window.sessionStorage.getItem('cpa.accounts.credential-mutation-markers.v2');
+    const rawStorage = window.sessionStorage.getItem('cpa.accounts.credential-mutation-markers.v3');
     expect(rawStorage).toContain('v1:opaque-connection');
     expect(rawStorage).not.toContain('http://');
     expect(rawStorage).not.toContain('management-key');
@@ -193,5 +193,29 @@ describe('account credential mutation markers', () => {
         createdAtMs: Date.now(),
       })
     ).toBeNull();
+  });
+
+  it('keeps same-Workspace Codex members as distinct credential evidence', () => {
+    const baseline = createAccountCredentialMutationBaseline(
+      [
+        {
+          name: 'alice.json',
+          provider: 'codex',
+          account_id: 'workspace-1',
+          account: 'alice@example.com',
+          authIndex: 'auth-a',
+        },
+        {
+          name: 'bob.json',
+          provider: 'codex',
+          account_id: 'workspace-1',
+          account: 'bob@example.com',
+          authIndex: 'auth-b',
+        },
+      ] as AuthFileItem[],
+      'codex'
+    );
+
+    expect(baseline?.credentials[0]?.identityKey).not.toBe(baseline?.credentials[1]?.identityKey);
   });
 });
