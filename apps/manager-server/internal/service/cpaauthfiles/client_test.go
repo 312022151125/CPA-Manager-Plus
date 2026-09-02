@@ -65,7 +65,7 @@ func TestParseAndVerifyIdentity(t *testing.T) {
 	}
 }
 
-func TestVerifyIdentityDisambiguatesDuplicateSelectorCandidatesByCodexMember(t *testing.T) {
+func TestVerifyIdentityKeepsDuplicateCodexSelectorAmbiguous(t *testing.T) {
 	files := []File{
 		FromMap(map[string]any{
 			"id":         "runtime-alice",
@@ -85,15 +85,14 @@ func TestVerifyIdentityDisambiguatesDuplicateSelectorCandidatesByCodexMember(t *
 		}),
 	}
 
-	file, err := VerifyIdentity(files, Identity{
+	if _, err := VerifyIdentity(files, Identity{
 		AuthFileName:      "team.json",
 		AuthIndex:         "auth-1",
 		Provider:          "codex",
 		AccountIDSnapshot: "workspace-1",
 		AccountSnapshot:   "alice@example.com",
-	})
-	if err != nil || file.ID != "runtime-alice" {
-		t.Fatalf("duplicate selector verification = %#v, %v; want Alice", file, err)
+	}); !errors.Is(err, ErrAuthFileAmbiguous) {
+		t.Fatalf("duplicate selector verification error = %v, want ErrAuthFileAmbiguous", err)
 	}
 	if found, ok := Find(files, "team.json", "auth-1"); !ok || found.ID != "runtime-alice" {
 		t.Fatalf("legacy Find semantics = %#v, %t; want first match", found, ok)
@@ -158,7 +157,7 @@ func TestVerifyIdentityPreservesNonCodexFirstMatch(t *testing.T) {
 	}
 }
 
-func TestClientVerifyDisambiguatesWithoutChangingLegacyFindSemantics(t *testing.T) {
+func TestClientVerifyKeepsDuplicateCodexSelectorAmbiguousWithoutChangingLegacyFindSemantics(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("name"); got != "team.json" {
 			t.Fatalf("name query = %q", got)
@@ -187,8 +186,8 @@ func TestClientVerifyDisambiguatesWithoutChangingLegacyFindSemantics(t *testing.
 		t.Fatalf("Client.Find() = %#v, ok:%t err:%v; want legacy first match", found, ok, err)
 	}
 	file, err := client.Verify(context.Background(), server.URL, "mgmt", identity)
-	if err != nil || file.ID != "runtime-alice" {
-		t.Fatalf("Client.Verify() = %#v, %v; want Alice", file, err)
+	if !errors.Is(err, ErrAuthFileAmbiguous) {
+		t.Fatalf("Client.Verify() = %#v, %v; want ErrAuthFileAmbiguous", file, err)
 	}
 }
 
@@ -666,7 +665,7 @@ func TestClientPatchDisabledTargetKeepsVerifiedRuntimeIdentity(t *testing.T) {
 	}
 }
 
-func TestClientResolveVerifiedStatusMutationTargetUsesAccountIdentityWithoutAuthIndex(t *testing.T) {
+func TestClientResolveVerifiedStatusMutationTargetRejectsWorkspaceMemberWithoutCredentialLocator(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v0/management/auth-files" {
 			http.NotFound(w, r)
@@ -691,7 +690,7 @@ func TestClientResolveVerifiedStatusMutationTargetUsesAccountIdentityWithoutAuth
 	}))
 	defer server.Close()
 
-	target, err := New(server.Client()).ResolveVerifiedStatusMutationTarget(
+	_, err := New(server.Client()).ResolveVerifiedStatusMutationTarget(
 		context.Background(),
 		server.URL,
 		"mgmt",
@@ -702,11 +701,43 @@ func TestClientResolveVerifiedStatusMutationTargetUsesAccountIdentityWithoutAuth
 			AccountSnapshot:   "second@example.com",
 		},
 	)
-	if err != nil {
-		t.Fatalf("resolve verified target by workspace+member: %v", err)
+	if !errors.Is(err, ErrStatusMutationScopeAmbiguous) {
+		t.Fatalf("resolve verified target by workspace+member error = %v, want ErrStatusMutationScopeAmbiguous", err)
 	}
-	if target.Selector != "runtime-second" || target.File.AccountSnapshot != "second@example.com" || target.Scope != StatusMutationScopeCredential {
-		t.Fatalf("target = %#v, want second credential runtime target", target)
+}
+
+func TestClientResolveVerifiedStatusMutationTargetAllowsUniqueCredentialWithoutMember(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v0/management/auth-files" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{{
+			"id":         "runtime-alice",
+			"name":       "team.json",
+			"auth_index": "auth-1",
+			"provider":   "codex",
+			"account_id": "workspace-1",
+		}})
+	}))
+	defer server.Close()
+
+	target, err := New(server.Client()).ResolveVerifiedStatusMutationTarget(
+		context.Background(),
+		server.URL,
+		"mgmt",
+		Identity{
+			AuthFileName:      "team.json",
+			AuthIndex:         "auth-1",
+			Provider:          "codex",
+			AccountIDSnapshot: "workspace-1",
+		},
+	)
+	if err != nil {
+		t.Fatalf("resolve verified target without member: %v", err)
+	}
+	if target.Selector != "runtime-alice" || target.Scope != StatusMutationScopeCredential {
+		t.Fatalf("target = %#v, want unique credential runtime target", target)
 	}
 }
 

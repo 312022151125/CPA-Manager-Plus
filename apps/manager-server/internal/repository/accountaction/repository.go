@@ -90,6 +90,34 @@ func (r *repository) Upsert(ctx context.Context, input model.AccountActionCandid
 			return model.AccountActionCandidate{}, err
 		}
 	}
+	if found && normalizeProvider(input.Provider) == "codex" && input.AuthIndex != "" {
+		existing, err := getByID(ctx, tx, id)
+		if err != nil {
+			return model.AccountActionCandidate{}, err
+		}
+		if reason := codexCandidateIdentityConflict(existing, input); reason != "" {
+			_, err = tx.ExecContext(ctx, `update account_action_candidates set
+				last_error = ?, last_seen_at_ms = ?, hit_count = hit_count + 1, updated_at_ms = ?
+				where id = ? and status = ?`,
+				"Codex identity conflict: "+reason,
+				seenAt,
+				now,
+				id,
+				model.AccountActionStatusPending,
+			)
+			if err != nil {
+				return model.AccountActionCandidate{}, err
+			}
+			item, err := getByID(ctx, tx, id)
+			if err != nil {
+				return model.AccountActionCandidate{}, err
+			}
+			if err := tx.Commit(); err != nil {
+				return model.AccountActionCandidate{}, err
+			}
+			return item, fmt.Errorf("account action candidate identity conflict: %s", reason)
+		}
+	}
 	if !found {
 		res, execErr := tx.ExecContext(ctx, `insert into account_action_candidates (
 			action_type, status, provider, auth_file_name, auth_index, account_snapshot, account_id_snapshot, auth_label,
@@ -166,17 +194,6 @@ func findPendingCandidateID(ctx context.Context, tx *sql.Tx, input model.Account
 				and coalesce(trim(auth_index), '') = ?
 				and (coalesce(lower(replace(trim(provider), '_', '-')), '') = '' or coalesce(lower(replace(trim(provider), '_', '-')), '') = 'codex')`
 			args = append(args, input.AuthIndex)
-			if input.AccountIDSnapshot != "" {
-				query += ` and (coalesce(trim(account_id_snapshot), '') = '' or trim(account_id_snapshot) = ?)`
-				args = append(args, input.AccountIDSnapshot)
-			}
-			if input.AccountSnapshot != "" {
-				// A workspace-only pending row is not owned by the new member.
-				// Require exact strong-member evidence before reusing it; otherwise
-				// the update below would silently bind the row to this member.
-				query += ` and lower(trim(account_snapshot)) = ?`
-				args = append(args, input.AccountSnapshot)
-			}
 			return querySingleCandidateID(ctx, tx, query+` order by id asc limit 2`, args...)
 		}
 		if input.AccountIDSnapshot == "" || input.AccountSnapshot == "" {
@@ -220,6 +237,21 @@ func candidateIdentity(input model.AccountActionCandidateUpsert) (authIndex stri
 		return "", accountID, normalizeProvider(input.Provider), ""
 	}
 	return "", "", normalizeProvider(input.Provider), strings.TrimSpace(input.AccountSnapshot)
+}
+
+func codexCandidateIdentityConflict(existing model.AccountActionCandidate, input model.AccountActionCandidateUpsert) string {
+	if existingProvider := normalizeProvider(existing.Provider); existingProvider != "" && existingProvider != "codex" {
+		return "provider changed"
+	}
+	if existingWorkspace := strings.TrimSpace(existing.AccountIDSnapshot); existingWorkspace != "" && input.AccountIDSnapshot != "" && existingWorkspace != input.AccountIDSnapshot {
+		return fmt.Sprintf("workspace changed from %q to %q", existingWorkspace, input.AccountIDSnapshot)
+	}
+	existingMember, existingMemberOK := usageidentity.NormalizeCodexMemberSnapshot(existing.AccountSnapshot)
+	inputMember, inputMemberOK := usageidentity.NormalizeCodexMemberSnapshot(input.AccountSnapshot)
+	if existingMemberOK && inputMemberOK && existingMember != inputMember {
+		return fmt.Sprintf("member changed from %q to %q", existingMember, inputMember)
+	}
+	return ""
 }
 
 func findUpgradeableCandidateID(ctx context.Context, tx *sql.Tx, input model.AccountActionCandidateUpsert) (int64, bool, error) {

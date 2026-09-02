@@ -466,7 +466,7 @@ func TestAccountActionCandidateWorkerRejectsAmbiguousStatusMutationScope(t *test
 	}
 }
 
-func TestAccountActionCandidateWorkerSelectsCodexMemberWithinSharedWorkspace(t *testing.T) {
+func TestAccountActionCandidateWorkerRejectsDuplicateCodexCredentialLocator(t *testing.T) {
 	st, err := store.Open(t.TempDir() + "/usage.sqlite")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -534,15 +534,15 @@ func TestAccountActionCandidateWorkerSelectsCodexMemberWithinSharedWorkspace(t *
 		Reason:              "token revoked",
 	})
 
-	if patchCalls != 1 || patchedName != "runtime-alice" {
-		t.Fatalf("patch target = %q with %d calls, want runtime-alice once", patchedName, patchCalls)
+	if patchCalls != 0 || patchedName != "" {
+		t.Fatalf("patch target = %q with %d calls, want no mutation for duplicate locator", patchedName, patchCalls)
 	}
 	items, err := st.ListAccountActionCandidates(context.Background(), model.AccountActionStatusPending, 10)
 	if err != nil {
 		t.Fatalf("list candidates: %v", err)
 	}
-	if len(items) != 1 || items[0].AutoDisabledAtMS == 0 || items[0].LastError != "" {
-		t.Fatalf("items = %#v, want Alice candidate auto-disabled", items)
+	if len(items) != 1 || items[0].AutoDisabledAtMS != 0 || !strings.Contains(items[0].LastError, "scope is ambiguous") {
+		t.Fatalf("items = %#v, want pending ambiguous failure", items)
 	}
 }
 
@@ -953,7 +953,7 @@ func TestAccountActionCandidateWorkerAutoDisableRejectsWeakIdentity(t *testing.T
 	if err != nil {
 		t.Fatalf("list candidates: %v", err)
 	}
-	if len(items) != 1 || items[0].AutoDisabledAtMS != 0 || !strings.Contains(items[0].LastError, "workspace+member identity") {
+	if len(items) != 1 || items[0].AutoDisabledAtMS != 0 || !strings.Contains(items[0].LastError, "auth_index") {
 		t.Fatalf("items = %#v, want weak-identity failure", items)
 	}
 }

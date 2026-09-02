@@ -3230,6 +3230,14 @@ func (s *Service) applyDisableOwnership(ctx context.Context, accounts []account,
 		return
 	}
 	for _, item := range items {
+		if disableOwnershipHasDuplicateCredentialLocator(item, accounts) {
+			logger.warning(ctx, "巡检禁用所有权凭证定位不唯一，跳过自动恢复", map[string]any{
+				"fileName":  item.FileName,
+				"authIndex": item.AuthIndex,
+				"provider":  item.Provider,
+			})
+			continue
+		}
 		matchedIndexes := make([]int, 0, 1)
 		disabledMatchCount := 0
 		for index := range accounts {
@@ -3239,6 +3247,18 @@ func (s *Service) applyDisableOwnership(ctx context.Context, accounts []account,
 					disabledMatchCount++
 				}
 			}
+		}
+		if len(matchedIndexes) > 1 && strings.TrimSpace(item.AuthIndex) != "" {
+			// A legacy ownership row with a credential locator is still useful,
+			// but duplicate credentials must not be narrowed by Workspace/member
+			// evidence. Keep the row for a later unambiguous inventory instead of
+			// authorizing recovery or deleting the ownership record.
+			logger.warning(ctx, "巡检禁用所有权匹配到多个凭证，跳过自动恢复", map[string]any{
+				"fileName":  item.FileName,
+				"authIndex": item.AuthIndex,
+				"provider":  item.Provider,
+			})
+			continue
 		}
 		if len(matchedIndexes) != 1 || disabledMatchCount == 0 {
 			if err := s.store.DeleteCodexInspectionDisableOwnership(ctx, disableOwnershipTarget(item)); err != nil {
@@ -3254,6 +3274,31 @@ func (s *Service) applyDisableOwnership(ctx context.Context, accounts []account,
 	}
 }
 
+func disableOwnershipHasDuplicateCredentialLocator(
+	item model.CodexInspectionDisableOwnership,
+	accounts []account,
+) bool {
+	fileName := strings.TrimSpace(item.FileName)
+	authIndex := strings.TrimSpace(item.AuthIndex)
+	provider := normalizeInspectionProvider(item.Provider)
+	if fileName == "" || authIndex == "" || provider == "" {
+		return false
+	}
+	count := 0
+	for _, candidate := range accounts {
+		if strings.TrimSpace(candidate.FileName) != fileName ||
+			normalizeInspectionProvider(candidate.Provider) != provider ||
+			strings.TrimSpace(candidate.AuthIndex) != authIndex {
+			continue
+		}
+		count++
+		if count > 1 {
+			return true
+		}
+	}
+	return false
+}
+
 func disableOwnershipMatchesAccount(item model.CodexInspectionDisableOwnership, candidate account) bool {
 	provider := normalizeInspectionProvider(item.Provider)
 	candidateProvider := normalizeInspectionProvider(candidate.Provider)
@@ -3262,14 +3307,6 @@ func disableOwnershipMatchesAccount(item model.CodexInspectionDisableOwnership, 
 	}
 	if strings.TrimSpace(candidate.FileName) != strings.TrimSpace(item.FileName) ||
 		candidateProvider != provider {
-		return false
-	}
-	if provider == "codex" && strings.TrimSpace(item.AccountID) != "" &&
-		inspectionAccountSnapshot(provider, item.FileName, item.AccountSnapshot) == "" {
-		// A Workspace-only ownership row is not sufficient to authorize recovery
-		// for a Team credential. auth_index remains a valid credential locator
-		// for ordinary action verification, but it cannot repair this ambiguous
-		// persisted ownership record.
 		return false
 	}
 	return inspectionIdentityMatchesAccount(

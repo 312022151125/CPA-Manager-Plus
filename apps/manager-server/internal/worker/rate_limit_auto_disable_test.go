@@ -526,13 +526,14 @@ func TestExtendExistingCooldownKeepsWinningRecoveryMetadata(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	existingRecoverAt := now.Add(12 * time.Hour)
+	existingEvidence := fmt.Sprintf(`{"source":"codex-window","recover_at_ms":%d}`, existingRecoverAt.UnixMilli())
 	if _, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
 		AuthFileName: "codex-auth.json",
 		AuthIndex:    "auth-codex-1",
 		Provider:     "codex",
 		ReasonCode:   "weekly_limit",
 		WindowKind:   "weekly",
-		EvidenceJSON: codexCooldownIdentityEvidenceJSON("workspace-1", "user@example.com"),
+		EvidenceJSON: existingEvidence,
 		RecoverAtMS:  existingRecoverAt.UnixMilli(),
 		Owner:        model.QuotaCooldownOwnerUsage429,
 		EventHash:    "evt-weekly",
@@ -569,7 +570,7 @@ func TestExtendExistingCooldownKeepsWinningRecoveryMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list active cooldowns: %v", err)
 	}
-	if len(active) != 1 || active[0].RecoverAtMS != existingRecoverAt.UnixMilli() || active[0].ReasonCode != "weekly_limit" || active[0].WindowKind != "weekly" || active[0].EventHash != "evt-weekly" {
+	if len(active) != 1 || active[0].RecoverAtMS != existingRecoverAt.UnixMilli() || active[0].ReasonCode != "weekly_limit" || active[0].WindowKind != "weekly" || active[0].EvidenceJSON != existingEvidence || active[0].EventHash != "evt-weekly" {
 		t.Fatalf("active cooldown = %#v", active)
 	}
 }
@@ -1570,7 +1571,7 @@ func TestRateLimitAutoDisableWorkerDoesNotRecoverAmbiguousStatusMutationScope(t 
 	}
 }
 
-func TestRateLimitAutoDisableWorkerSelectsCodexMemberWithinSharedWorkspace(t *testing.T) {
+func TestRateLimitAutoDisableWorkerRejectsDuplicateCodexCredentialLocator(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -1638,20 +1639,19 @@ func TestRateLimitAutoDisableWorkerSelectsCodexMemberWithinSharedWorkspace(t *te
 		EventHash:       "evt-shared-alice",
 	})
 
-	if patchCalls != 1 || patchedName != "runtime-alice" {
-		t.Fatalf("patch target = %q with %d calls, want runtime-alice once", patchedName, patchCalls)
+	if patchCalls != 0 || patchedName != "" {
+		t.Fatalf("patch target = %q with %d calls, want no mutation for duplicate locator", patchedName, patchCalls)
 	}
 	active, err := st.QuotaCooldowns.ListActive(context.Background())
 	if err != nil {
 		t.Fatalf("list active cooldowns: %v", err)
 	}
-	if len(active) != 1 || active[0].AccountSnapshot != "alice@example.com" ||
-		active[0].AuthIndex != "shared-auth" || active[0].EvidenceJSON != codexCooldownIdentityEvidenceJSON("workspace-1", "alice@example.com") {
-		t.Fatalf("active cooldowns = %#v, want Alice identity", active)
+	if len(active) != 0 {
+		t.Fatalf("active cooldowns = %#v, want no cooldown for duplicate locator", active)
 	}
 }
 
-func TestRateLimitAutoDisableWorkerRecoversCodexMemberWithinSharedWorkspace(t *testing.T) {
+func TestRateLimitAutoDisableWorkerRejectsDuplicateCodexRecoveryLocator(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -1726,15 +1726,86 @@ func TestRateLimitAutoDisableWorkerRecoversCodexMemberWithinSharedWorkspace(t *t
 		ManagementKey:  "mgmt",
 	}).enableDue(ctx, time.Now())
 
-	if patchCalls != 1 || patchedName != "runtime-alice" {
-		t.Fatalf("patch target = %q with %d calls, want runtime-alice once", patchedName, patchCalls)
+	if patchCalls != 0 || patchedName != "" {
+		t.Fatalf("patch target = %q with %d calls, want no mutation for duplicate locator", patchedName, patchCalls)
+	}
+	active, err := st.QuotaCooldowns.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("list active cooldowns: %v", err)
+	}
+	if len(active) != 1 || !strings.Contains(active[0].LastError, "scope is ambiguous") {
+		t.Fatalf("active cooldowns = %#v, want retained ambiguous failure", active)
+	}
+}
+
+func TestRateLimitAutoDisableWorkerRecoversLegacyCodexCooldownWithoutIdentityEvidence(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	patchCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"id":         "runtime-alice",
+				"name":       "codex-auth.json",
+				"auth_index": "auth-1",
+				"provider":   "codex",
+				"account":    "alice@example.com",
+				"account_id": "workspace-1",
+				"disabled":   true,
+			}})
+		case "PATCH /v0/management/auth-files/status":
+			var payload struct {
+				Disabled bool `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			patchCalls++
+			if payload.Disabled {
+				http.Error(w, "expected enable", http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	if _, err := st.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
+		AuthFileName:     "codex-auth.json",
+		AuthIndex:        "auth-1",
+		Provider:         "codex",
+		EvidenceJSON:     "",
+		RecoverAtMS:      time.Now().Add(-time.Minute).UnixMilli(),
+		Owner:            model.QuotaCooldownOwnerUsage429,
+		PreDisabledState: false,
+		DisabledAtMS:     time.Now().Add(-time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("seed legacy cooldown: %v", err)
+	}
+
+	NewRateLimitAutoDisableWorker(st, collectorpkg.RuntimeConfig{
+		CPAUpstreamURL: server.URL,
+		ManagementKey:  "mgmt",
+	}).enableDue(ctx, time.Now())
+
+	if patchCalls != 1 {
+		t.Fatalf("patch calls = %d, want one enable for legacy cooldown", patchCalls)
 	}
 	active, err := st.QuotaCooldowns.ListActive(ctx)
 	if err != nil {
 		t.Fatalf("list active cooldowns: %v", err)
 	}
 	if len(active) != 0 {
-		t.Fatalf("active cooldowns = %#v, want Alice cooldown recovered", active)
+		t.Fatalf("active cooldowns = %#v, want legacy cooldown recovered", active)
 	}
 }
 

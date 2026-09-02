@@ -285,8 +285,8 @@ func accountActionCandidateIdentity(item model.AccountActionCandidate) (cpaauthf
 				accountSnapshot = member
 			}
 		}
-		if strings.TrimSpace(item.AuthIndex) == "" && (accountIDSnapshot == "" || accountSnapshot == "") {
-			return cpaauthfiles.Identity{}, fmt.Errorf("%w: Codex candidate requires auth_index or workspace+member identity", cpaauthfiles.ErrIdentityMismatch)
+		if strings.TrimSpace(item.AuthIndex) == "" {
+			return cpaauthfiles.Identity{}, fmt.Errorf("%w: Codex credential mutation requires auth_index", cpaauthfiles.ErrIdentityMismatch)
 		}
 	}
 	identity := cpaauthfiles.Identity{

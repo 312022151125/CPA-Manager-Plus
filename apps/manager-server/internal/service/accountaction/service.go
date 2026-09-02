@@ -387,8 +387,8 @@ func accountActionIdentity(item model.AccountActionCandidate) (cpaauthfiles.Iden
 				accountSnapshot = ""
 			}
 		}
-		if authIndex == "" && (accountIDSnapshot == "" || accountSnapshot == "") {
-			return cpaauthfiles.Identity{}, fmt.Errorf("%w: Codex candidate requires auth_index or workspace+member identity", cpaauthfiles.ErrIdentityMismatch)
+		if authIndex == "" {
+			return cpaauthfiles.Identity{}, fmt.Errorf("%w: Codex credential mutation requires auth_index", cpaauthfiles.ErrIdentityMismatch)
 		}
 	}
 	identity := cpaauthfiles.Identity{

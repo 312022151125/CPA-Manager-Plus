@@ -3056,7 +3056,7 @@ func TestApplyDisableOwnershipRequiresCodexMemberMatch(t *testing.T) {
 	}
 }
 
-func TestApplyDisableOwnershipRejectsWorkspaceOnlyCodexOwnership(t *testing.T) {
+func TestApplyDisableOwnershipRestoresWorkspaceOnlyCodexOwnershipByUniqueLocator(t *testing.T) {
 	db := newCodexInspectionTestStore(t)
 	if err := db.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
 		FileName:     "shared-auth.json",
@@ -3077,15 +3077,100 @@ func TestApplyDisableOwnershipRejectsWorkspaceOnlyCodexOwnership(t *testing.T) {
 		Disabled:        true,
 	}}
 	New(db, nil).applyDisableOwnership(context.Background(), accounts, runLogger{})
-	if accounts[0].AutoRecoverOwned {
-		t.Fatalf("workspace-only Codex ownership granted Bob recovery: %#v", accounts[0])
+	if !accounts[0].AutoRecoverOwned {
+		t.Fatalf("unique workspace-only Codex ownership was not restored: %#v", accounts[0])
 	}
 	ownership, err := db.ListCodexInspectionDisableOwnership(context.Background())
 	if err != nil {
 		t.Fatalf("list ownership: %v", err)
 	}
-	if len(ownership) != 0 {
-		t.Fatalf("workspace-only ownership = %#v, want stale ownership removed", ownership)
+	if len(ownership) != 1 || ownership[0].AuthIndex != "auth-1" {
+		t.Fatalf("workspace-only ownership = %#v, want preserved ownership", ownership)
+	}
+}
+
+func TestApplyDisableOwnershipKeepsAmbiguousCodexOwnership(t *testing.T) {
+	db := newCodexInspectionTestStore(t)
+	if err := db.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
+		FileName:  "shared-auth.json",
+		Provider:  "codex",
+		AuthIndex: "auth-1",
+		AccountID: "workspace-1",
+	}); err != nil {
+		t.Fatalf("save workspace-only inspection disable ownership: %v", err)
+	}
+
+	accounts := []account{
+		{
+			FileName:        "shared-auth.json",
+			Provider:        "codex",
+			AuthIndex:       "auth-1",
+			AccountID:       "workspace-1",
+			AccountSnapshot: "alice@example.com",
+			Disabled:        true,
+		},
+		{
+			FileName:        "shared-auth.json",
+			Provider:        "codex",
+			AuthIndex:       "auth-1",
+			AccountID:       "workspace-1",
+			AccountSnapshot: "bob@example.com",
+			Disabled:        true,
+		},
+	}
+	New(db, nil).applyDisableOwnership(context.Background(), accounts, runLogger{})
+	if accounts[0].AutoRecoverOwned || accounts[1].AutoRecoverOwned {
+		t.Fatalf("ambiguous workspace-only ownership granted recovery: %#v", accounts)
+	}
+	ownership, err := db.ListCodexInspectionDisableOwnership(context.Background())
+	if err != nil {
+		t.Fatalf("list ownership after ambiguity: %v", err)
+	}
+	if len(ownership) != 1 || ownership[0].AuthIndex != "auth-1" {
+		t.Fatalf("ambiguous workspace-only ownership = %#v, want preserved ownership", ownership)
+	}
+}
+
+func TestApplyDisableOwnershipDoesNotNarrowDuplicateLocatorByMember(t *testing.T) {
+	db := newCodexInspectionTestStore(t)
+	if err := db.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
+		FileName:        "shared-auth.json",
+		Provider:        "codex",
+		AuthIndex:       "auth-1",
+		AccountID:       "workspace-1",
+		AccountSnapshot: "alice@example.com",
+	}); err != nil {
+		t.Fatalf("save member-specific inspection disable ownership: %v", err)
+	}
+
+	accounts := []account{
+		{
+			FileName:        "shared-auth.json",
+			Provider:        "codex",
+			AuthIndex:       "auth-1",
+			AccountID:       "workspace-1",
+			AccountSnapshot: "alice@example.com",
+			Disabled:        true,
+		},
+		{
+			FileName:        "shared-auth.json",
+			Provider:        "codex",
+			AuthIndex:       "auth-1",
+			AccountID:       "workspace-1",
+			AccountSnapshot: "bob@example.com",
+			Disabled:        true,
+		},
+	}
+	New(db, nil).applyDisableOwnership(context.Background(), accounts, runLogger{})
+	if accounts[0].AutoRecoverOwned || accounts[1].AutoRecoverOwned {
+		t.Fatalf("duplicate locator ownership was narrowed by member: %#v", accounts)
+	}
+	ownership, err := db.ListCodexInspectionDisableOwnership(context.Background())
+	if err != nil {
+		t.Fatalf("list ownership after duplicate locator: %v", err)
+	}
+	if len(ownership) != 1 || ownership[0].AccountSnapshot != "alice@example.com" {
+		t.Fatalf("duplicate locator ownership = %#v, want preserved Alice record", ownership)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
@@ -284,7 +285,7 @@ func TestUpsertUpgradesFallbackIdentityWhenStableLocatorAppears(t *testing.T) {
 	}
 }
 
-func TestUpsertDoesNotBindNewCodexMemberToWorkspaceOnlyCandidate(t *testing.T) {
+func TestUpsertEnrichesWorkspaceOnlyCodexCandidateWithMember(t *testing.T) {
 	ctx := context.Background()
 	st := testutil.NewStore(t, testutil.NewConfig(t))
 	repo := st.AccountActions
@@ -317,18 +318,63 @@ func TestUpsertDoesNotBindNewCodexMemberToWorkspaceOnlyCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert member candidate: %v", err)
 	}
-	if member.ID == workspaceOnly.ID {
-		t.Fatalf("new Codex member reused workspace-only candidate %d", member.ID)
+	if member.ID != workspaceOnly.ID {
+		t.Fatalf("Codex member created a second candidate: workspace-only=%d member=%d", workspaceOnly.ID, member.ID)
 	}
-	if workspaceOnly.AccountSnapshot != "" || member.AccountSnapshot != "bob@example.com" {
-		t.Fatalf("candidate identities = workspace-only %#v, member %#v", workspaceOnly, member)
+	if workspaceOnly.AccountSnapshot != "" || member.AccountSnapshot != "bob@example.com" || member.AccountIDSnapshot != "workspace-1" {
+		t.Fatalf("candidate identities = workspace-only %#v, enriched %#v", workspaceOnly, member)
 	}
 
 	items, err := repo.List(ctx, model.AccountActionStatusPending, 10)
 	if err != nil {
 		t.Fatalf("list pending candidates: %v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("pending candidates = %#v, want workspace-only and member-specific rows", items)
+	if len(items) != 1 || items[0].ID != member.ID || items[0].HitCount != 2 {
+		t.Fatalf("pending candidates = %#v, want one enriched candidate", items)
+	}
+}
+
+func TestUpsertKeepsConflictingCodexMemberOnExistingCandidate(t *testing.T) {
+	ctx := context.Background()
+	st := testutil.NewStore(t, testutil.NewConfig(t))
+	repo := st.AccountActions
+
+	first, err := repo.Upsert(ctx, model.AccountActionCandidateUpsert{
+		ActionType:        model.AccountActionTypeDelete,
+		Provider:          "codex",
+		AuthFileName:      "shared.json",
+		AuthIndex:         "auth-1",
+		AccountIDSnapshot: "workspace-1",
+		AccountSnapshot:   "alice@example.com",
+		ReasonCode:        "token_revoked",
+		Reason:            "Alice token revoked",
+	})
+	if err != nil {
+		t.Fatalf("upsert first candidate: %v", err)
+	}
+
+	conflicting, err := repo.Upsert(ctx, model.AccountActionCandidateUpsert{
+		ActionType:        model.AccountActionTypeDelete,
+		Provider:          "codex",
+		AuthFileName:      "shared.json",
+		AuthIndex:         "auth-1",
+		AccountIDSnapshot: "workspace-1",
+		AccountSnapshot:   "bob@example.com",
+		ReasonCode:        "token_revoked",
+		Reason:            "Bob token revoked",
+	})
+	if err == nil || !strings.Contains(err.Error(), "member changed") {
+		t.Fatalf("conflicting upsert error = %v, want member conflict", err)
+	}
+	if conflicting.ID != first.ID || conflicting.AccountSnapshot != "alice@example.com" {
+		t.Fatalf("conflicting candidate = %#v, want original identity preserved", conflicting)
+	}
+
+	items, err := repo.List(ctx, model.AccountActionStatusPending, 10)
+	if err != nil {
+		t.Fatalf("list pending candidates: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != first.ID || !strings.Contains(items[0].LastError, "member changed") {
+		t.Fatalf("pending candidates = %#v, want one conflict-marked candidate", items)
 	}
 }

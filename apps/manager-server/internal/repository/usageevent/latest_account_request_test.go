@@ -201,8 +201,8 @@ func TestRecentAccountRequestsFiltersCodexWorkspaceMembers(t *testing.T) {
 	if len(byIndex[8]) != 1 || byIndex[8][0].TimestampMS != 1_700_000_030_000 {
 		t.Fatalf("Bob requests = %#v", byIndex[8])
 	}
-	if _, ok := byIndex[9]; ok {
-		t.Fatalf("workspace-only Codex target returned requests: %#v", byIndex[9])
+	if len(byIndex[9]) != 4 || byIndex[9][0].TimestampMS != 1_700_000_040_000 {
+		t.Fatalf("workspace-only Codex target did not use credential fallback: %#v", byIndex[9])
 	}
 	if _, ok := byIndex[10]; ok {
 		t.Fatalf("conflicting Codex target returned requests: %#v", byIndex[10])

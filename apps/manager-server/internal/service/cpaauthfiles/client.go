@@ -289,7 +289,11 @@ func responseTooLargeError(label string, limit int64) error {
 
 func (c *Client) Verify(ctx context.Context, baseURL string, managementKey string, identity Identity) (File, error) {
 	files := make([]File, 0, 1)
-	err := c.visit(ctx, baseURL, managementKey, identity.AuthFileName, identity.AuthIndex, func(file File) (bool, error) {
+	selector := strings.TrimSpace(identity.RuntimeID)
+	if selector == "" {
+		selector = strings.TrimSpace(identity.AuthFileName)
+	}
+	err := c.visit(ctx, baseURL, managementKey, selector, identity.AuthIndex, func(file File) (bool, error) {
 		files = append(files, file)
 		return false, nil
 	})
@@ -305,93 +309,20 @@ func (c *Client) ResolveVerifiedStatusMutationTarget(
 	managementKey string,
 	identity Identity,
 ) (StatusMutationTarget, error) {
-	target, err := c.ResolveStatusMutationTarget(
+	selector := strings.TrimSpace(identity.RuntimeID)
+	if selector == "" {
+		selector = strings.TrimSpace(identity.AuthFileName)
+	}
+	target, err := c.resolveStatusMutationTarget(
 		ctx,
 		baseURL,
 		managementKey,
-		identity.AuthFileName,
+		selector,
 		identity.AuthIndex,
-	)
-	if err == nil {
-		if identityErr := verifyFileIdentity(target.File, identity); identityErr != nil {
-			return StatusMutationTarget{}, identityErr
-		}
-		return target, nil
-	} else if !errors.Is(err, ErrAuthFileNotFound) && !errors.Is(err, ErrStatusMutationScopeAmbiguous) {
-		return StatusMutationTarget{}, err
-	}
-
-	files, fetchErr := c.fetchStatusMutationCandidates(
-		ctx,
-		baseURL,
-		managementKey,
-		strings.TrimSpace(identity.AuthFileName),
-	)
-	if fetchErr != nil {
-		return StatusMutationTarget{}, fetchErr
-	}
-	candidates := statusMutationMatches(
-		files,
-		strings.TrimSpace(identity.AuthFileName),
-		strings.TrimSpace(identity.AuthIndex),
-	)
-	verified := make([]File, 0, 1)
-	var identityErr error
-	for _, candidate := range candidates {
-		if candidateErr := verifyFileIdentity(candidate, identity); candidateErr != nil {
-			if identityErr == nil {
-				identityErr = candidateErr
-			}
-			continue
-		}
-		verified = append(verified, candidate)
-	}
-	if len(verified) == 0 {
-		if len(candidates) == 1 && identityErr != nil {
-			return StatusMutationTarget{}, identityErr
-		}
-		return StatusMutationTarget{}, fmt.Errorf(
-			"%w: selector %q auth_index %q credential identity changed",
-			ErrIdentityMismatch,
-			strings.TrimSpace(identity.AuthFileName),
-			strings.TrimSpace(identity.AuthIndex),
-		)
-	}
-	if len(verified) > 1 {
-		return StatusMutationTarget{}, fmt.Errorf(
-			"%w: selector %q auth_index %q identity maps to multiple credentials",
-			ErrStatusMutationScopeAmbiguous,
-			strings.TrimSpace(identity.AuthFileName),
-			strings.TrimSpace(identity.AuthIndex),
-		)
-	}
-
-	matched := verified[0]
-	runtimeID := strings.TrimSpace(matched.ID)
-	if runtimeID == "" {
-		return StatusMutationTarget{}, fmt.Errorf(
-			"%w: %q has no runtime id",
-			ErrStatusMutationScopeAmbiguous,
-			strings.TrimSpace(matched.Name),
-		)
-	}
-	target, err = c.ResolveStatusMutationTarget(
-		ctx,
-		baseURL,
-		managementKey,
-		runtimeID,
-		strings.TrimSpace(matched.AuthIndex),
+		strings.TrimSpace(identity.RuntimeID) != "",
 	)
 	if err != nil {
 		return StatusMutationTarget{}, err
-	}
-	if strings.TrimSpace(target.File.ID) != runtimeID {
-		return StatusMutationTarget{}, fmt.Errorf(
-			"%w: runtime target changed (expected %q, got %q)",
-			ErrIdentityMismatch,
-			runtimeID,
-			strings.TrimSpace(target.File.ID),
-		)
 	}
 	if err := verifyFileIdentity(target.File, identity); err != nil {
 		return StatusMutationTarget{}, err
@@ -405,7 +336,43 @@ func (c *Client) ResolveVerifiedDeleteMutationTarget(
 	managementKey string,
 	identity Identity,
 ) (DeleteMutationTarget, error) {
-	return c.resolveVerifiedPhysicalFileDeleteTarget(ctx, baseURL, managementKey, []Identity{identity}, false)
+	selector := strings.TrimSpace(identity.RuntimeID)
+	if selector == "" {
+		selector = strings.TrimSpace(identity.AuthFileName)
+	}
+	target, err := c.resolveStatusMutationTarget(
+		ctx,
+		baseURL,
+		managementKey,
+		selector,
+		identity.AuthIndex,
+		strings.TrimSpace(identity.RuntimeID) != "",
+	)
+	if err != nil {
+		return DeleteMutationTarget{}, err
+	}
+	if target.Scope != StatusMutationScopeCredential {
+		return DeleteMutationTarget{}, fmt.Errorf(
+			"%w: selector %q affects multiple credentials",
+			ErrDeleteMutationScopeAmbiguous,
+			selector,
+		)
+	}
+	if err := verifyFileIdentity(target.File, identity); err != nil {
+		return DeleteMutationTarget{}, err
+	}
+	if strings.TrimSpace(target.File.ID) == "" {
+		return DeleteMutationTarget{}, fmt.Errorf(
+			"%w: selector %q has no runtime id",
+			ErrDeleteMutationScopeAmbiguous,
+			selector,
+		)
+	}
+	return DeleteMutationTarget{
+		Selector:      target.Selector,
+		File:          target.File,
+		AffectedFiles: target.AffectedFiles,
+	}, nil
 }
 
 func (c *Client) ResolveVerifiedPhysicalFileDeleteTarget(
@@ -459,31 +426,33 @@ func (c *Client) resolveVerifiedPhysicalFileDeleteTarget(
 	used := make([]bool, len(members))
 	for _, identity := range identities {
 		locatorMatches := make([]int, 0, 1)
-		verifiedMatches := make([]int, 0, 1)
-		var identityErr error
 		for index, member := range members {
-			if used[index] || (strings.TrimSpace(identity.AuthIndex) != "" && strings.TrimSpace(member.AuthIndex) != strings.TrimSpace(identity.AuthIndex)) {
+			if used[index] {
+				continue
+			}
+			runtimeID := strings.TrimSpace(identity.RuntimeID)
+			authIndex := strings.TrimSpace(identity.AuthIndex)
+			switch {
+			case runtimeID != "" && strings.TrimSpace(member.ID) == runtimeID:
+			case runtimeID == "" && authIndex != "" && strings.TrimSpace(member.AuthIndex) == authIndex:
+			default:
 				continue
 			}
 			locatorMatches = append(locatorMatches, index)
-			if err := verifyFileIdentity(member, identity); err != nil {
-				if identityErr == nil {
-					identityErr = err
-				}
-				continue
-			}
-			verifiedMatches = append(verifiedMatches, index)
 		}
-		if len(verifiedMatches) == 0 {
-			if len(locatorMatches) == 1 && identityErr != nil {
-				return DeleteMutationTarget{}, identityErr
+		if len(locatorMatches) == 0 {
+			if strings.TrimSpace(identity.RuntimeID) == "" && strings.TrimSpace(identity.AuthIndex) == "" {
+				return DeleteMutationTarget{}, fmt.Errorf("%w: physical file %q identity has no credential locator", ErrDeleteMutationScopeAmbiguous, physicalName)
 			}
 			return DeleteMutationTarget{}, fmt.Errorf("%w: physical file %q credential identity changed", ErrIdentityMismatch, physicalName)
 		}
-		if len(verifiedMatches) > 1 {
-			return DeleteMutationTarget{}, fmt.Errorf("%w: physical file %q identity maps to multiple credentials", ErrDeleteMutationScopeAmbiguous, physicalName)
+		if len(locatorMatches) > 1 {
+			return DeleteMutationTarget{}, fmt.Errorf("%w: physical file %q credential locator maps to multiple credentials", ErrDeleteMutationScopeAmbiguous, physicalName)
 		}
-		matchIndex := verifiedMatches[0]
+		matchIndex := locatorMatches[0]
+		if err := verifyFileIdentity(members[matchIndex], identity); err != nil {
+			return DeleteMutationTarget{}, err
+		}
 		used[matchIndex] = true
 		matched = append(matched, members[matchIndex])
 	}
@@ -522,6 +491,17 @@ func (c *Client) ResolveStatusMutationTarget(
 	selector string,
 	authIndex string,
 ) (StatusMutationTarget, error) {
+	return c.resolveStatusMutationTarget(ctx, baseURL, managementKey, selector, authIndex, false)
+}
+
+func (c *Client) resolveStatusMutationTarget(
+	ctx context.Context,
+	baseURL string,
+	managementKey string,
+	selector string,
+	authIndex string,
+	runtimeOnly bool,
+) (StatusMutationTarget, error) {
 	selector = strings.TrimSpace(selector)
 	authIndex = strings.TrimSpace(authIndex)
 	if selector == "" {
@@ -532,7 +512,7 @@ func (c *Client) ResolveStatusMutationTarget(
 	if err != nil {
 		return StatusMutationTarget{}, err
 	}
-	candidates := statusMutationMatches(files, selector, authIndex)
+	candidates := statusMutationMatches(files, selector, authIndex, runtimeOnly)
 	if len(candidates) == 0 {
 		return StatusMutationTarget{}, fmt.Errorf("%w: selector %q auth_index %q", ErrAuthFileNotFound, selector, authIndex)
 	}
@@ -552,7 +532,7 @@ func (c *Client) ResolveStatusMutationTarget(
 			return StatusMutationTarget{}, fetchErr
 		}
 		files = mergeStatusMutationFiles(files, siblings)
-		candidates = statusMutationMatches(files, selector, authIndex)
+		candidates = statusMutationMatches(files, selector, authIndex, runtimeOnly)
 		if len(candidates) == 0 {
 			return StatusMutationTarget{}, fmt.Errorf("%w: selector %q auth_index %q", ErrAuthFileNotFound, selector, authIndex)
 		}
@@ -707,20 +687,35 @@ func verifySourceFileStatusMutationMembers(files []File, physicalName string, ex
 		if strings.TrimSpace(identity.AuthFileName) != physicalName {
 			return fmt.Errorf("%w: source member belongs to a different physical file", ErrIdentityMismatch)
 		}
-		matches := make([]int, 0, 1)
+		locatorMatches := make([]int, 0, 1)
 		for index, file := range files {
-			if used[index] || verifyFileIdentity(file, identity) != nil {
+			if used[index] {
 				continue
 			}
-			matches = append(matches, index)
+			runtimeID := strings.TrimSpace(identity.RuntimeID)
+			authIndex := strings.TrimSpace(identity.AuthIndex)
+			switch {
+			case runtimeID != "" && strings.TrimSpace(file.ID) == runtimeID:
+			case runtimeID == "" && authIndex != "" && strings.TrimSpace(file.AuthIndex) == authIndex:
+			default:
+				continue
+			}
+			locatorMatches = append(locatorMatches, index)
 		}
-		if len(matches) == 0 {
+		if len(locatorMatches) == 0 {
+			if strings.TrimSpace(identity.RuntimeID) == "" && strings.TrimSpace(identity.AuthIndex) == "" {
+				return fmt.Errorf("%w: physical file %q source member has no credential locator", ErrStatusMutationScopeAmbiguous, physicalName)
+			}
 			return fmt.Errorf("%w: physical file %q member identity changed", ErrIdentityMismatch, physicalName)
 		}
-		if len(matches) > 1 {
-			return fmt.Errorf("%w: physical file %q member identity is ambiguous", ErrStatusMutationScopeAmbiguous, physicalName)
+		if len(locatorMatches) > 1 {
+			return fmt.Errorf("%w: physical file %q source member locator is ambiguous", ErrStatusMutationScopeAmbiguous, physicalName)
 		}
-		used[matches[0]] = true
+		matchIndex := locatorMatches[0]
+		if err := verifyFileIdentity(files[matchIndex], identity); err != nil {
+			return err
+		}
+		used[matchIndex] = true
 	}
 	return nil
 }
@@ -741,7 +736,7 @@ func (c *Client) fetchStatusMutationCandidates(
 	return files, nil
 }
 
-func statusMutationMatches(files []File, selector string, authIndex string) []File {
+func statusMutationMatches(files []File, selector string, authIndex string, runtimeOnly bool) []File {
 	idMatches := make([]File, 0, 1)
 	nameMatches := make([]File, 0, 1)
 	selectorMatchesRuntimeID := false
@@ -751,6 +746,9 @@ func statusMutationMatches(files []File, selector string, authIndex string) []Fi
 			if authIndex == "" || strings.TrimSpace(file.AuthIndex) == authIndex {
 				idMatches = append(idMatches, file)
 			}
+			continue
+		}
+		if runtimeOnly {
 			continue
 		}
 		if strings.TrimSpace(file.Name) == selector &&
@@ -1025,31 +1023,13 @@ func matches(file File, fileName string, authIndex string) bool {
 
 func VerifyIdentity(files []File, identity Identity) (File, error) {
 	candidates := matchingFiles(files, identity.AuthFileName, identity.AuthIndex)
+	if runtimeID := strings.TrimSpace(identity.RuntimeID); runtimeID != "" {
+		candidates = matchingRuntimeID(files, runtimeID, identity.AuthIndex)
+	}
 	if len(candidates) == 0 {
 		return File{}, ErrAuthFileNotFound
 	}
 	codexSelector := normalizeAuthProvider(identity.Provider) == "codex"
-	if codexSelector && len(candidates) > 1 {
-		narrowed, applicable := narrowCodexIdentityCandidates(candidates, identity)
-		if !applicable {
-			return File{}, fmt.Errorf(
-				"%w: file %q auth_index %q matched %d credentials",
-				ErrAuthFileAmbiguous,
-				strings.TrimSpace(identity.AuthFileName),
-				strings.TrimSpace(identity.AuthIndex),
-				len(candidates),
-			)
-		}
-		if len(narrowed) == 0 {
-			return File{}, fmt.Errorf(
-				"%w: file %q auth_index %q has no matching Codex Workspace member",
-				ErrIdentityMismatch,
-				strings.TrimSpace(identity.AuthFileName),
-				strings.TrimSpace(identity.AuthIndex),
-			)
-		}
-		candidates = narrowed
-	}
 	if codexSelector && len(candidates) > 1 {
 		return File{}, fmt.Errorf(
 			"%w: file %q auth_index %q matched %d credentials",
@@ -1068,36 +1048,20 @@ func VerifyIdentity(files []File, identity Identity) (File, error) {
 	return file, nil
 }
 
-// narrowCodexIdentityCandidates disambiguates a shared file/auth-index
-// selector only when every candidate exposes complete, non-conflicting
-// Workspace+member evidence. A missing or invalid candidate keeps the selector
-// ambiguous; an unknown Team member must never be hidden by a known match.
-func narrowCodexIdentityCandidates(candidates []File, identity Identity) ([]File, bool) {
-	if len(candidates) <= 1 || normalizeAuthProvider(identity.Provider) != "codex" {
-		return nil, false
-	}
-	expectedWorkspace, workspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(identity.AccountIDSnapshot)
-	expectedMember, memberOK := usageidentity.NormalizeCodexMemberSnapshot(identity.AccountSnapshot)
-	if !workspaceOK || !memberOK {
-		return nil, false
-	}
-
+func matchingRuntimeID(files []File, runtimeID string, authIndex string) []File {
+	runtimeID = strings.TrimSpace(runtimeID)
+	authIndex = strings.TrimSpace(authIndex)
 	matched := make([]File, 0, 1)
-	for _, candidate := range candidates {
-		if candidate.AccountIDInvalid || candidate.AccountSnapshotInvalid ||
-			normalizeAuthProvider(candidate.Provider) != "codex" {
-			return nil, false
+	for _, file := range files {
+		if strings.TrimSpace(file.ID) != runtimeID {
+			continue
 		}
-		workspace, candidateWorkspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(candidate.AccountID)
-		member, candidateMemberOK := usageidentity.NormalizeCodexMemberSnapshot(candidate.AccountSnapshot)
-		if !candidateWorkspaceOK || !candidateMemberOK {
-			return nil, false
+		if authIndex != "" && strings.TrimSpace(file.AuthIndex) != authIndex {
+			continue
 		}
-		if workspace == expectedWorkspace && member == expectedMember && verifyFileIdentity(candidate, identity) == nil {
-			matched = append(matched, candidate)
-		}
+		matched = append(matched, file)
 	}
-	return matched, true
+	return matched
 }
 
 func VerifyResolvedIdentity(file File, identity Identity) error {
@@ -1115,76 +1079,54 @@ func verifyFileIdentity(file File, identity Identity) error {
 		return fmt.Errorf("%w: auth_index mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.AuthIndex), strings.TrimSpace(file.AuthIndex))
 	}
 	provider := normalizeAuthProvider(file.Provider)
-	hasCodexCredentialLocator := strings.TrimSpace(identity.AuthIndex) != "" || strings.TrimSpace(identity.RuntimeID) != ""
+	if identity.Provider != "" && provider != normalizeAuthProvider(identity.Provider) {
+		return fmt.Errorf("%w: provider mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.Provider), file.Provider)
+	}
 	if provider == "codex" {
-		expectedAccountID := strings.TrimSpace(identity.AccountIDSnapshot)
-		expectedMember := strings.TrimSpace(identity.AccountSnapshot)
-		if !hasCodexCredentialLocator {
-			if expectedAccountID != "" {
-				normalizedWorkspace, workspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(expectedAccountID)
-				if !workspaceOK {
-					return fmt.Errorf(
-						"%w: Codex workspace identity is invalid",
-						ErrIdentityMismatch,
-					)
-				}
-				expectedAccountID = normalizedWorkspace
-			}
-			if expectedMember != "" {
-				normalizedMember, memberOK := usageidentity.NormalizeCodexMemberSnapshot(expectedMember)
-				if !memberOK {
-					return fmt.Errorf(
-						"%w: Codex member identity is invalid",
-						ErrIdentityMismatch,
-					)
-				}
-				expectedMember = normalizedMember
-			}
-			if expectedAccountID == "" || expectedMember == "" {
-				return fmt.Errorf(
-					"%w: Codex mutation requires workspace+member identity",
-					ErrIdentityMismatch,
-				)
-			}
-		}
 		if file.AccountIDInvalid {
 			return fmt.Errorf("%w: account_id evidence is invalid or conflicting", ErrIdentityMismatch)
 		}
 		if file.AccountSnapshotInvalid {
 			return fmt.Errorf("%w: account_snapshot evidence is invalid or conflicting", ErrIdentityMismatch)
 		}
-		if expectedAccountID != "" {
-			normalizedExpected, expectedOK := usageidentity.NormalizeCodexWorkspaceSnapshot(expectedAccountID)
-			if !expectedOK || file.AccountID != normalizedExpected {
-				return fmt.Errorf("%w: account_id mismatch (expected %q, got %q)", ErrIdentityMismatch, expectedAccountID, file.AccountID)
+
+		hasCredentialLocator := strings.TrimSpace(identity.AuthIndex) != "" || strings.TrimSpace(identity.RuntimeID) != ""
+		expectedWorkspace := ""
+		if raw := strings.TrimSpace(identity.AccountIDSnapshot); raw != "" {
+			var ok bool
+			expectedWorkspace, ok = usageidentity.NormalizeCodexWorkspaceSnapshot(raw)
+			if !ok {
+				return fmt.Errorf("%w: Codex workspace identity is invalid", ErrIdentityMismatch)
+			}
+		}
+		expectedMember := ""
+		if raw := strings.TrimSpace(identity.AccountSnapshot); raw != "" {
+			var ok bool
+			expectedMember, ok = usageidentity.NormalizeCodexMemberSnapshot(raw)
+			if !ok && !hasCredentialLocator {
+				return fmt.Errorf("%w: Codex member identity is invalid", ErrIdentityMismatch)
+			}
+		}
+
+		if !hasCredentialLocator && (expectedWorkspace == "" || expectedMember == "") {
+			return fmt.Errorf("%w: Codex mutation requires workspace+member identity", ErrIdentityMismatch)
+		}
+		if expectedWorkspace != "" && strings.TrimSpace(file.AccountID) != "" {
+			actualWorkspace, ok := usageidentity.NormalizeCodexWorkspaceSnapshot(file.AccountID)
+			if !ok || actualWorkspace != expectedWorkspace {
+				return fmt.Errorf("%w: account_id mismatch (expected %q, got %q)", ErrIdentityMismatch, expectedWorkspace, file.AccountID)
+			}
+		}
+		if expectedMember != "" && strings.TrimSpace(file.AccountSnapshot) != "" {
+			actualMember, ok := usageidentity.NormalizeCodexMemberSnapshot(file.AccountSnapshot)
+			if ok && actualMember != expectedMember {
+				return fmt.Errorf("%w: account_snapshot mismatch (expected %q, got %q)", ErrIdentityMismatch, expectedMember, file.AccountSnapshot)
 			}
 		}
 	} else if identity.AccountIDSnapshot != "" && file.AccountID != strings.TrimSpace(identity.AccountIDSnapshot) {
 		return fmt.Errorf("%w: account_id mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.AccountIDSnapshot), file.AccountID)
 	}
-	if identity.Provider != "" && normalizeAuthProvider(file.Provider) != normalizeAuthProvider(identity.Provider) {
-		return fmt.Errorf("%w: provider mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.Provider), file.Provider)
-	}
-	if provider == "codex" && strings.TrimSpace(identity.AccountSnapshot) != "" {
-		expectedMember, expectedOK := usageidentity.NormalizeCodexMemberSnapshot(identity.AccountSnapshot)
-		if !expectedOK && hasCodexCredentialLocator {
-			// A label or filename can remain in a legacy caller's
-			// account_snapshot field. It is not member evidence, but an explicit
-			// auth_index/runtime id still identifies the physical credential.
-			// Ignore only this weak value; workspace and all strong evidence above
-			// remain enforced.
-			if identity.Provider != "" && provider != normalizeAuthProvider(identity.Provider) {
-				return fmt.Errorf("%w: provider mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.Provider), file.Provider)
-			}
-			return nil
-		}
-		actualMember, actualOK := usageidentity.NormalizeCodexMemberSnapshot(file.AccountSnapshot)
-		if !expectedOK || !actualOK || expectedMember != actualMember {
-			return fmt.Errorf("%w: account_snapshot mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.AccountSnapshot), file.AccountSnapshot)
-		}
-		return nil
-	}
-	if identity.AccountIDSnapshot == "" && identity.AccountSnapshot != "" && file.AccountSnapshot != strings.TrimSpace(identity.AccountSnapshot) {
+	if provider != "codex" && identity.AccountIDSnapshot == "" && identity.AccountSnapshot != "" && file.AccountSnapshot != strings.TrimSpace(identity.AccountSnapshot) {
 		return fmt.Errorf("%w: account_snapshot mismatch (expected %q, got %q)", ErrIdentityMismatch, strings.TrimSpace(identity.AccountSnapshot), file.AccountSnapshot)
 	}
 	return nil

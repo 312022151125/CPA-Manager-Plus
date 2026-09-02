@@ -284,14 +284,24 @@ func (w *RateLimitAutoDisableWorker) handleCandidateLocked(ctx context.Context, 
 	resolvedProvider := normalizeQuotaProvider(firstNonEmpty(provider, current.Provider))
 	resolvedAccountID := firstNonEmpty(accountID, current.AccountID)
 	if resolvedProvider == "codex" {
-		workspace, workspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(resolvedAccountID)
-		member, memberOK := usageidentity.NormalizeCodexMemberSnapshot(resolvedAccountSnapshot)
-		if !workspaceOK || !memberOK {
-			log.Printf("[quota-auto-disable] auth file %q has incomplete Codex workspace+member evidence; skip quota ownership", candidate.FileName)
-			return
+		if strings.TrimSpace(resolvedAccountID) != "" {
+			workspace, workspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(resolvedAccountID)
+			if !workspaceOK {
+				log.Printf("[quota-auto-disable] auth file %q has invalid Codex workspace evidence; skip quota ownership", candidate.FileName)
+				return
+			}
+			resolvedAccountID = workspace
 		}
-		resolvedAccountID = workspace
-		resolvedAccountSnapshot = member
+		if strings.TrimSpace(resolvedAccountSnapshot) != "" {
+			member, memberOK := usageidentity.NormalizeCodexMemberSnapshot(resolvedAccountSnapshot)
+			if memberOK {
+				resolvedAccountSnapshot = member
+			} else {
+				// Account snapshots can be display labels or filenames. They are
+				// optional quota diagnostics once the credential locator is known.
+				resolvedAccountSnapshot = ""
+			}
+		}
 	}
 	if resolvedProvider == "codex" && resolvedAuthIndex == "" {
 		// quota_cooldowns has no Workspace column. Without the credential locator,
@@ -326,13 +336,6 @@ func (w *RateLimitAutoDisableWorker) handleCandidateLocked(ctx context.Context, 
 
 	owner := firstNonEmpty(candidate.Owner, model.QuotaCooldownOwnerUsage429)
 	cooldownEvidenceJSON := candidate.EvidenceJSON
-	if resolvedProvider == "codex" {
-		cooldownEvidenceJSON = codexCooldownIdentityEvidenceJSON(resolvedAccountID, resolvedAccountSnapshot)
-		if cooldownEvidenceJSON == "" {
-			log.Printf("[quota-auto-disable] auth file %q has invalid Codex cooldown identity evidence; skip quota ownership", candidate.FileName)
-			return
-		}
-	}
 	persisted, err := w.store.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
 		AuthFileName:        candidate.FileName,
 		AuthIndex:           resolvedAuthIndex,
@@ -392,19 +395,27 @@ func (w *RateLimitAutoDisableWorker) extendExistingCooldown(ctx context.Context,
 	)
 	currentAccountID := firstNonEmpty(candidate.AccountID, current.AccountID)
 	if currentProvider == "codex" && currentIndex == "" {
-		// There is no Workspace column in quota_cooldowns. A no-index Codex
-		// record cannot be safely resumed or merged across same-name members.
+		// Codex mutation ownership requires a credential locator. Workspace and
+		// member evidence are not a substitute for file+authIndex.
 		return false
 	}
 	if currentProvider == "codex" {
-		workspace, workspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(currentAccountID)
-		member, memberOK := usageidentity.NormalizeCodexMemberSnapshot(currentSnapshot)
-		if !workspaceOK || !memberOK {
-			log.Printf("[quota-auto-disable] Codex cooldown for auth file %q has incomplete workspace+member evidence", candidate.FileName)
-			return false
+		if strings.TrimSpace(currentAccountID) != "" {
+			workspace, workspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(currentAccountID)
+			if !workspaceOK {
+				log.Printf("[quota-auto-disable] Codex cooldown for auth file %q has invalid workspace evidence", candidate.FileName)
+				return false
+			}
+			currentAccountID = workspace
 		}
-		currentAccountID = workspace
-		currentSnapshot = member
+		if strings.TrimSpace(currentSnapshot) != "" {
+			member, memberOK := usageidentity.NormalizeCodexMemberSnapshot(currentSnapshot)
+			if memberOK {
+				currentSnapshot = member
+			} else {
+				currentSnapshot = ""
+			}
+		}
 	}
 	var existing store.QuotaCooldown
 	for _, item := range active {
@@ -421,14 +432,6 @@ func (w *RateLimitAutoDisableWorker) extendExistingCooldown(ctx context.Context,
 		return false
 	}
 	existingSnapshot := quotaActionAccountSnapshot(existing.AuthFileName, existing.AccountSnapshot)
-	if currentProvider == "codex" {
-		storedWorkspace, storedMember, evidenceOK := codexCooldownIdentity(existing)
-		if !evidenceOK || storedWorkspace != currentAccountID || storedMember != currentSnapshot {
-			log.Printf("[quota-auto-disable] Codex cooldown identity mismatch for auth file %q", candidate.FileName)
-			return false
-		}
-		existingSnapshot = storedMember
-	}
 	if existing.AuthIndex == "" {
 		existingProvider := normalizeQuotaProvider(existing.Provider)
 		if existingProvider != "" && currentProvider != "" && existingProvider != currentProvider {
@@ -464,8 +467,6 @@ func (w *RateLimitAutoDisableWorker) extendExistingCooldown(ctx context.Context,
 	}
 	if owner == model.QuotaCooldownOwnerXAIFreeUsage {
 		evidenceJSON = mergeXAIProviderUsageEvidence(primaryEvidence, supplementalEvidence, finalRecoverAtMS)
-	} else if currentProvider == "codex" {
-		evidenceJSON = codexCooldownIdentityEvidenceJSON(currentAccountID, currentSnapshot)
 	}
 	_, err = w.store.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
 		AuthFileName:     candidate.FileName,
@@ -625,17 +626,29 @@ func (w *RateLimitAutoDisableWorker) recoverCooldown(ctx context.Context, baseUR
 	provider := normalizeQuotaProvider(item.Provider)
 	accountID := ""
 	if provider == "codex" {
-		var evidenceOK bool
-		accountID, accountSnapshot, evidenceOK = codexCooldownIdentity(item)
-		if !evidenceOK {
-			reason := "Codex cooldown has no verifiable workspace+member evidence"
+		if strings.TrimSpace(accountSnapshot) != "" {
+			member, memberOK := usageidentity.NormalizeCodexMemberSnapshot(accountSnapshot)
+			if memberOK {
+				accountSnapshot = member
+			} else {
+				accountSnapshot = ""
+			}
+		}
+		var member string
+		var identityPresent, identityOK bool
+		accountID, member, identityPresent, identityOK = codexCooldownIdentity(item)
+		if !identityOK {
+			reason := "Codex cooldown has conflicting workspace/member evidence"
 			_ = w.store.MarkQuotaCooldownSkipped(ctx, item.ID, reason)
 			log.Printf("[quota-auto-disable] skip cooldown recovery id=%d authFile=%q reason=%s", item.ID, item.AuthFileName, reason)
 			return
 		}
+		if identityPresent && accountSnapshot == "" {
+			accountSnapshot = member
+		}
 	}
 	if provider == "codex" && authIndex == "" {
-		reason := "Codex cooldown has no auth index; workspace-only cooldown identity is not recoverable"
+		reason := "Codex cooldown has no auth index; credential locator is not recoverable"
 		_ = w.store.MarkQuotaCooldownSkipped(ctx, item.ID, reason)
 		log.Printf("[quota-auto-disable] skip cooldown recovery id=%d authFile=%q reason=%s", item.ID, item.AuthFileName, reason)
 		return
@@ -1396,10 +1409,24 @@ func quotaCooldownMatchesIdentity(item store.QuotaCooldown, authIndex string, pr
 		if provider != "codex" || itemProvider != "codex" || itemAuthIndex == "" || authIndex == "" || itemAuthIndex != authIndex {
 			return false
 		}
-		storedWorkspace, storedMember, evidenceOK := codexCooldownIdentity(item)
-		currentWorkspace, workspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(accountID)
-		currentMember, memberOK := usageidentity.NormalizeCodexMemberSnapshot(accountSnapshot)
-		return evidenceOK && workspaceOK && memberOK && storedWorkspace == currentWorkspace && storedMember == currentMember
+		storedWorkspace, storedMember, identityPresent, identityOK := codexCooldownIdentity(item)
+		if !identityOK {
+			return false
+		}
+		currentWorkspace, workspaceOK := optionalCodexWorkspace(accountID)
+		currentMember, memberOK := optionalCodexMember(accountSnapshot)
+		if storedMemberFromColumn, ok := optionalCodexMember(item.AccountSnapshot); ok && memberOK && storedMemberFromColumn != currentMember {
+			return false
+		}
+		if identityPresent {
+			if workspaceOK && storedWorkspace != currentWorkspace {
+				return false
+			}
+			if memberOK && storedMember != currentMember {
+				return false
+			}
+		}
+		return true
 	}
 	if itemAuthIndex != "" {
 		return authIndex != "" && itemAuthIndex == authIndex
@@ -1425,23 +1452,52 @@ func codexCooldownIdentityEvidenceJSON(workspace string, member string) string {
 	return string(raw)
 }
 
-func codexCooldownIdentity(item store.QuotaCooldown) (workspace string, member string, ok bool) {
-	var evidence codexCooldownIdentityEvidence
-	if err := json.Unmarshal([]byte(strings.TrimSpace(item.EvidenceJSON)), &evidence); err != nil {
-		return "", "", false
+func optionalCodexWorkspace(value string) (string, bool) {
+	if strings.TrimSpace(value) == "" {
+		return "", false
 	}
-	workspace, workspaceOK := usageidentity.NormalizeCodexWorkspaceSnapshot(evidence.Workspace)
-	member, memberOK := usageidentity.NormalizeCodexMemberSnapshot(evidence.Member)
+	return usageidentity.NormalizeCodexWorkspaceSnapshot(value)
+}
+
+func optionalCodexMember(value string) (string, bool) {
+	if strings.TrimSpace(value) == "" {
+		return "", false
+	}
+	return usageidentity.NormalizeCodexMemberSnapshot(value)
+}
+
+// codexCooldownIdentity reads only the optional identity-shaped fields from
+// EvidenceJSON. Quota/provider evidence may use the same column and must not
+// become an implicit recovery prerequisite.
+func codexCooldownIdentity(item store.QuotaCooldown) (workspace string, member string, present bool, ok bool) {
+	raw := strings.TrimSpace(item.EvidenceJSON)
+	if raw == "" {
+		return "", "", false, true
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		return "", "", false, true
+	}
+	workspaceRaw, workspacePresent := fields["workspace"]
+	memberRaw, memberPresent := fields["member"]
+	if !workspacePresent && !memberPresent {
+		return "", "", false, true
+	}
+	if err := json.Unmarshal(workspaceRaw, &workspace); err != nil {
+		return "", "", true, false
+	}
+	if err := json.Unmarshal(memberRaw, &member); err != nil {
+		return "", "", true, false
+	}
+	workspace, workspaceOK := optionalCodexWorkspace(workspace)
+	member, memberOK := optionalCodexMember(member)
 	if !workspaceOK || !memberOK {
-		return "", "", false
+		return "", "", true, false
 	}
-	if storedMember := strings.TrimSpace(item.AccountSnapshot); storedMember != "" {
-		normalizedStoredMember, storedMemberOK := usageidentity.NormalizeCodexMemberSnapshot(storedMember)
-		if !storedMemberOK || normalizedStoredMember != member {
-			return "", "", false
-		}
+	if storedMember, storedMemberOK := optionalCodexMember(item.AccountSnapshot); storedMemberOK && storedMember != member {
+		return "", "", true, false
 	}
-	return workspace, member, true
+	return workspace, member, true, true
 }
 
 func (w *RateLimitAutoDisableWorker) patchAuthFileTarget(ctx context.Context, baseURL string, managementKey string, target cpaauthfiles.StatusMutationTarget, disabled bool) error {
