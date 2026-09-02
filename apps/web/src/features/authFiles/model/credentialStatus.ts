@@ -144,6 +144,33 @@ const normalizeNumber = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+export const normalizeAuthFileCredentialStatusCode = (value: unknown): number | null => {
+  const normalized = normalizeNumber(value);
+  return normalized !== null &&
+    Number.isInteger(normalized) &&
+    normalized >= 100 &&
+    normalized <= 599
+    ? normalized
+    : null;
+};
+
+export const getAuthFileCredentialStatusCodes = (file: AuthFileItem): number[] => {
+  const statusCodes = new Set<number>();
+  for (const value of [
+    file.errorStatus,
+    file['error_status'],
+    file.statusCode,
+    file['status_code'],
+  ]) {
+    const statusCode = normalizeAuthFileCredentialStatusCode(value);
+    if (statusCode !== null) statusCodes.add(statusCode);
+  }
+  return Array.from(statusCodes);
+};
+
+export const getAuthFileCredentialStatusCode = (file: AuthFileItem): number | null =>
+  getAuthFileCredentialStatusCodes(file)[0] ?? null;
+
 const HANDLED_CODEX_INSPECTION_ACTION_STATUSES = new Set([
   'success',
   'skipped',
@@ -776,9 +803,7 @@ const readCredentialText = (...values: unknown[]): string =>
     .join(' ');
 
 const getAuthFileCredentialEvidence = (file: AuthFileItem): AuthFileCredentialEvidence | null => {
-  const statusCode = normalizeNumber(
-    file.errorStatus ?? file['error_status'] ?? file.statusCode ?? file['status_code']
-  );
+  const statusCode = getAuthFileCredentialStatusCode(file);
   const statusValues = [
     file.statusMessage,
     file['status_message'],
@@ -931,9 +956,7 @@ const hasCurrentAuthFileRawStatusWarning = (
   if (!statusMessage || isHealthyAuthFileStatusMessage(statusMessage)) return false;
 
   const statusCode =
-    normalizeNumber(
-      file.errorStatus ?? file['error_status'] ?? file.statusCode ?? file['status_code']
-    ) ?? readHttpStatusCodeFromText(statusMessage);
+    getAuthFileCredentialStatusCode(file) ?? readHttpStatusCodeFromText(statusMessage);
   const statusText = readCredentialText(statusMessage, file.status, file.state, file.error);
   if (statusCode === 401 || isObservedAuthError('', statusText)) {
     return currentAuthenticationFailure !== null;
