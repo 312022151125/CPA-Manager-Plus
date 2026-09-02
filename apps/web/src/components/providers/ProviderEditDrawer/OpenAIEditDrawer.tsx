@@ -16,6 +16,7 @@ import { useConfigStore, useNotificationStore } from '@/stores';
 import {
   coolingPolicyFromOverride,
   coolingPolicyToOverride,
+  stripModelThinkingLevelsClearMarker,
   type ApiKeyEntry,
   type OpenAIProviderConfig,
 } from '@/types';
@@ -28,7 +29,11 @@ import {
   hasInvalidThinkingLevels,
   modelsToEntries,
 } from '@/components/ui/modelInputListUtils';
-import { buildApiKeyEntry, buildOpenAIChatCompletionsEndpoint } from '@/components/providers/utils';
+import {
+  buildApiKeyEntry,
+  buildOpenAIChatCompletionsEndpoint,
+  toCommittedOpenAIProviderSnapshot,
+} from '@/components/providers/utils';
 import {
   appendIdleKeyTestStatus,
   removeKeyTestStatusAtIndex,
@@ -121,7 +126,7 @@ const buildOpenAIBaseline = (form: OpenAIFormState) => ({
   disableCooling: form.disableCooling,
   headers: normalizeHeaderEntries(form.headers),
   apiKeyEntries: normalizeApiKeyEntries(form.apiKeyEntries),
-  models: normalizeModelEntries(form.modelEntries),
+  models: normalizeModelEntries(form.modelEntries).map(stripModelThinkingLevelsClearMarker),
 });
 
 const areNormalizedApiKeyEntriesEqual = (
@@ -684,10 +689,11 @@ export function OpenAIEditDrawer({
       if (resolvedTestModel) payload.testModel = resolvedTestModel;
       const models = entriesToModels(form.modelEntries);
       if (models.length) payload.models = models;
+      const committedPayload = toCommittedOpenAIProviderSnapshot(payload);
       const nextList =
         editIndex !== null
-          ? providers.map((item, idx) => (idx === editIndex ? payload : item))
-          : [...providers, payload];
+          ? providers.map((item, idx) => (idx === editIndex ? committedPayload : item))
+          : [...providers, committedPayload];
       if (editIndex !== null) {
         await providersApi.updateOpenAIProvider(providers[editIndex].name, editIndex, payload);
       } else {
@@ -695,12 +701,18 @@ export function OpenAIEditDrawer({
       }
       let syncedProviders = nextList;
       try {
-        syncedProviders = await providersApi.getOpenAIProviders();
+        syncedProviders = (await providersApi.getOpenAIProviders()).map(
+          toCommittedOpenAIProviderSnapshot
+        );
       } catch {
         /* fallback */
       }
       setProviders(syncedProviders);
       updateConfigValue('openai-compatibility', syncedProviders);
+      setForm({
+        ...form,
+        modelEntries: form.modelEntries.map(stripModelThinkingLevelsClearMarker),
+      });
       showNotification(
         editIndex !== null
           ? t('notification.openai_provider_updated')

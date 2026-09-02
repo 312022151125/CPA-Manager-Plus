@@ -26,6 +26,13 @@ export const markModelThinkingLevelsForClear = <T extends object>(
   return value as T & { [MODEL_THINKING_LEVELS_CLEAR_MARKER]: true };
 };
 
+/** Remove the one-shot clear command before a provider becomes committed state. */
+export const stripModelThinkingLevelsClearMarker = <T extends object>(value: T): T => {
+  const next = { ...value } as T & ThinkingLevelsClearMarkerCarrier;
+  delete next[MODEL_THINKING_LEVELS_CLEAR_MARKER];
+  return next as T;
+};
+
 export interface ModelAlias {
   name: string;
   alias?: string;

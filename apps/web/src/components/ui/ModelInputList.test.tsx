@@ -9,6 +9,11 @@ const findInputByLabelSuffix = (renderer: ReactTestRenderer, suffix: string) =>
     .findAllByType('input')
     .find((input) => String(input.props['aria-label'] ?? '').endsWith(suffix));
 
+const findButtonByText = (renderer: ReactTestRenderer, text: string) =>
+  renderer.root
+    .findAllByType('button')
+    .find((button) => button.findAllByType('span').some((span) => span.children.join('') === text));
+
 describe('ModelInputList', () => {
   it('updates and clears modalities without waiting for blur', () => {
     let entries: ModelEntry[] = [
@@ -52,7 +57,7 @@ describe('ModelInputList', () => {
     expect(renderer.root.findByProps({ 'aria-label': 'Input modalities' }).props.value).toBe('');
   });
 
-  it('defaults to CPA behavior and creates an empty custom levels array on selection', () => {
+  it('leaves levels unconfigured and creates an empty custom levels array on selection', () => {
     let entries: ModelEntry[] = [{ name: 'thinking-model', alias: '' }];
     let renderer!: ReactTestRenderer;
 
@@ -66,8 +71,8 @@ describe('ModelInputList', () => {
         showThinkingLevels
         thinkingLabel="Thinking levels"
         thinkingTooltip="Thinking help"
-        thinkingDefaultLabel="Use CPA default"
-        thinkingCustomLabel="Custom"
+        thinkingDefaultLabel="Do not explicitly configure levels"
+        thinkingCustomLabel="Custom levels"
         thinkingAllowedLevelsLabel="Allowed thinking levels"
         thinkingRequiredError="Select at least one thinking level"
       />
@@ -77,11 +82,13 @@ describe('ModelInputList', () => {
       renderer = create(render());
     });
 
-    expect(findInputByLabelSuffix(renderer, 'Use CPA default')?.props.checked).toBe(true);
-    expect(findInputByLabelSuffix(renderer, 'Custom')?.props.checked).toBe(false);
+    expect(
+      findInputByLabelSuffix(renderer, 'Do not explicitly configure levels')?.props.checked
+    ).toBe(true);
+    expect(findInputByLabelSuffix(renderer, 'Custom levels')?.props.checked).toBe(false);
 
     act(() => {
-      findInputByLabelSuffix(renderer, 'Custom')?.props.onChange();
+      findInputByLabelSuffix(renderer, 'Custom levels')?.props.onChange();
     });
 
     expect(entries[0]?.thinking).toEqual({ levels: [] });
@@ -95,7 +102,10 @@ describe('ModelInputList', () => {
       {
         name: 'future-model',
         alias: '',
-        thinking: { levels: ['high', 'ultra'], 'future-option': { enabled: true } },
+        thinking: {
+          levels: ['HIGH', ' medium ', 'ultra'],
+          'future-option': { enabled: true },
+        },
       },
     ];
     let renderer!: ReactTestRenderer;
@@ -108,8 +118,8 @@ describe('ModelInputList', () => {
           renderer.update(render());
         }}
         showThinkingLevels
-        thinkingDefaultLabel="Use CPA default"
-        thinkingCustomLabel="Custom"
+        thinkingDefaultLabel="Do not explicitly configure levels"
+        thinkingCustomLabel="Custom levels"
         thinkingAllowedLevelsLabel="Allowed thinking levels"
       />
     );
@@ -119,9 +129,16 @@ describe('ModelInputList', () => {
     });
 
     expect(findInputByLabelSuffix(renderer, ' high')?.props.checked).toBe(true);
+    expect(findInputByLabelSuffix(renderer, ' medium')?.props.checked).toBe(true);
     expect(
       renderer.root.findAllByType('span').some((node) => node.children.join('') === 'ultra')
     ).toBe(true);
+    expect(
+      renderer.root.findAllByType('span').some((node) => node.children.join('') === 'HIGH')
+    ).toBe(false);
+    expect(
+      renderer.root.findAllByType('span').some((node) => node.children.join('') === ' medium ')
+    ).toBe(false);
 
     act(() => {
       findInputByLabelSuffix(renderer, ' high')?.props.onChange({
@@ -129,7 +146,7 @@ describe('ModelInputList', () => {
       });
     });
     expect(entries[0]?.thinking).toEqual({
-      levels: ['ultra'],
+      levels: ['medium', 'ultra'],
       'future-option': { enabled: true },
     });
 
@@ -139,12 +156,42 @@ describe('ModelInputList', () => {
       });
     });
     expect(entries[0]?.thinking).toEqual({
-      levels: ['max', 'ultra'],
+      levels: ['medium', 'max', 'ultra'],
       'future-option': { enabled: true },
     });
   });
 
-  it('removes only levels when returning to CPA default and marks an empty thinking clear', () => {
+  it('clears known level variants while retaining unknown levels', () => {
+    let entries: ModelEntry[] = [
+      { name: 'future-model', alias: '', thinking: { levels: ['HIGH', 'ultra'] } },
+    ];
+    let renderer!: ReactTestRenderer;
+
+    const render = () => (
+      <ModelInputList
+        entries={entries}
+        onChange={(next) => {
+          entries = next;
+          renderer.update(render());
+        }}
+        showThinkingLevels
+        thinkingDefaultLabel="Do not explicitly configure levels"
+        thinkingCustomLabel="Custom levels"
+        thinkingClearLabel="Clear known levels"
+      />
+    );
+
+    act(() => {
+      renderer = create(render());
+    });
+    act(() => {
+      findButtonByText(renderer, 'Clear known levels')?.props.onClick();
+    });
+
+    expect(entries[0]?.thinking).toEqual({ levels: ['ultra'] });
+  });
+
+  it('removes only levels when leaving them unconfigured and marks an empty thinking clear', () => {
     let entries: ModelEntry[] = [
       { name: 'future-model', alias: '', thinking: { levels: ['high'], future: true } },
     ];
@@ -158,8 +205,8 @@ describe('ModelInputList', () => {
           renderer.update(render());
         }}
         showThinkingLevels
-        thinkingDefaultLabel="Use CPA default"
-        thinkingCustomLabel="Custom"
+        thinkingDefaultLabel="Do not explicitly configure levels"
+        thinkingCustomLabel="Custom levels"
       />
     );
 
@@ -167,7 +214,7 @@ describe('ModelInputList', () => {
       renderer = create(render());
     });
     act(() => {
-      findInputByLabelSuffix(renderer, 'Use CPA default')?.props.onChange();
+      findInputByLabelSuffix(renderer, 'Do not explicitly configure levels')?.props.onChange();
     });
 
     expect(entries[0]?.thinking).toEqual({ future: true });
@@ -178,7 +225,7 @@ describe('ModelInputList', () => {
       renderer.update(render());
     });
     act(() => {
-      findInputByLabelSuffix(renderer, 'Use CPA default')?.props.onChange();
+      findInputByLabelSuffix(renderer, 'Do not explicitly configure levels')?.props.onChange();
     });
 
     expect(entries[0]?.thinking).toBeUndefined();
@@ -207,7 +254,8 @@ describe('ModelInputList', () => {
     const customRadios = renderer.root
       .findAllByType('input')
       .filter(
-        (input) => input.props.type === 'radio' && input.props['aria-label'].endsWith('Custom')
+        (input) =>
+          input.props.type === 'radio' && input.props['aria-label'].endsWith('Custom levels')
       );
     expect(customRadios.map((input) => input.props['aria-label'])).toEqual([
       expect.stringContaining('model-a'),

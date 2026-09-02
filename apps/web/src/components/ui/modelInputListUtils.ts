@@ -18,6 +18,23 @@ export const KNOWN_THINKING_LEVELS = [
 
 export type ThinkingLevel = (typeof KNOWN_THINKING_LEVELS)[number];
 
+export const normalizeKnownThinkingLevel = (value: unknown): ThinkingLevel | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  return KNOWN_THINKING_LEVELS.includes(normalized as ThinkingLevel)
+    ? (normalized as ThinkingLevel)
+    : undefined;
+};
+
+export const getKnownThinkingLevels = (levels: readonly unknown[]): ThinkingLevel[] => {
+  const knownLevels = new Set<ThinkingLevel>();
+  levels.forEach((level) => {
+    const normalized = normalizeKnownThinkingLevel(level);
+    if (normalized) knownLevels.add(normalized);
+  });
+  return KNOWN_THINKING_LEVELS.filter((level) => knownLevels.has(level));
+};
+
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -25,21 +42,19 @@ export const getThinkingLevels = (thinking?: Record<string, unknown>): unknown[]
   Array.isArray(thinking?.levels) ? thinking.levels : [];
 
 export const getUnknownThinkingLevels = (levels: readonly unknown[]) =>
-  levels.filter(
-    (level) => typeof level !== 'string' || !KNOWN_THINKING_LEVELS.includes(level as ThinkingLevel)
-  );
+  levels.filter((level) => !normalizeKnownThinkingLevel(level));
 
 export const buildThinkingWithLevels = (
   thinking: Record<string, unknown> | undefined,
   selectedLevels: readonly ThinkingLevel[],
   unknownLevels: readonly unknown[]
-) => ({
-  ...(isRecord(thinking) ? thinking : {}),
-  levels: [
-    ...KNOWN_THINKING_LEVELS.filter((level) => selectedLevels.includes(level)),
-    ...unknownLevels,
-  ],
-});
+) => {
+  const normalizedSelectedLevels = getKnownThinkingLevels(selectedLevels);
+  return {
+    ...(isRecord(thinking) ? thinking : {}),
+    levels: [...normalizedSelectedLevels, ...unknownLevels],
+  };
+};
 
 export const removeThinkingLevels = (thinking?: Record<string, unknown>) => {
   const nextThinking = isRecord(thinking) ? { ...thinking } : {};

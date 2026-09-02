@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { hasModelThinkingLevelsClearMarker, markModelThinkingLevelsForClear } from '@/types';
 import {
   buildApiKeyEntry,
   buildCodexResponsesEndpoint,
   resolveClaudeFingerprintSelection,
+  toCommittedOpenAIProviderSnapshot,
 } from './utils';
 
 describe('provider utils', () => {
@@ -27,6 +29,35 @@ describe('provider utils', () => {
       weight: 0,
     });
     expect(buildApiKeyEntry()).toHaveProperty('weight', undefined);
+  });
+
+  it('strips one-shot model markers from committed OpenAI provider snapshots', () => {
+    const markedModel = markModelThinkingLevelsForClear({
+      name: 'model',
+      thinking: { futureOption: { enabled: true } },
+      futureModelOption: 123,
+    });
+    const provider = {
+      name: 'openai',
+      baseUrl: 'https://api.example.com/v1',
+      apiKeyEntries: [{ apiKey: 'key' }],
+      models: [markedModel],
+      futureProviderOption: { enabled: true },
+    };
+
+    const committed = toCommittedOpenAIProviderSnapshot(provider);
+
+    expect(committed).not.toBe(provider);
+    expect(committed.models).not.toBe(provider.models);
+    expect(provider.models?.[0]).toBe(markedModel);
+    expect(hasModelThinkingLevelsClearMarker(markedModel)).toBe(true);
+    expect(hasModelThinkingLevelsClearMarker(committed.models?.[0])).toBe(false);
+    expect(committed.models?.[0]).toMatchObject({
+      name: 'model',
+      thinking: markedModel.thinking,
+      futureModelOption: 123,
+    });
+    expect(committed.futureProviderOption).toBe(provider.futureProviderOption);
   });
 });
 

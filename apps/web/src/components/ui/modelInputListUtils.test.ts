@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { entriesToModels, getUnknownThinkingLevels, modelsToEntries } from './modelInputListUtils';
+import {
+  buildThinkingWithLevels,
+  entriesToModels,
+  getKnownThinkingLevels,
+  getUnknownThinkingLevels,
+  modelsToEntries,
+  normalizeKnownThinkingLevel,
+} from './modelInputListUtils';
 import {
   MODEL_THINKING_LEVELS_CLEAR_MARKER,
   hasModelThinkingLevelsClearMarker,
   markModelThinkingLevelsForClear,
+  stripModelThinkingLevelsClearMarker,
 } from '@/types';
 
 describe('modelInputListUtils', () => {
@@ -58,6 +66,35 @@ describe('modelInputListUtils', () => {
     ]);
   });
 
+  it('normalizes known thinking levels while preserving unknown values', () => {
+    const levels = ['HIGH', ' medium ', 'Low', 'ultra'];
+
+    expect(getKnownThinkingLevels(levels)).toEqual(['low', 'medium', 'high']);
+    expect(getUnknownThinkingLevels(levels)).toEqual(['ultra']);
+    expect(normalizeKnownThinkingLevel(' High ')).toBe('high');
+    expect(normalizeKnownThinkingLevel('experimental')).toBeUndefined();
+  });
+
+  it('deduplicates equivalent known levels when rebuilding thinking levels', () => {
+    const levels = ['high', 'HIGH', ' high ', 'ultra'];
+
+    expect(
+      buildThinkingWithLevels(
+        undefined,
+        getKnownThinkingLevels(levels),
+        getUnknownThinkingLevels(levels)
+      )
+    ).toEqual({ levels: ['high', 'ultra'] });
+  });
+
+  it('clears known variants while retaining unknown levels', () => {
+    const levels = ['HIGH', 'ultra'];
+
+    expect(
+      buildThinkingWithLevels({ futureOption: true }, [], getUnknownThinkingLevels(levels))
+    ).toEqual({ futureOption: true, levels: ['ultra'] });
+  });
+
   it('preserves the thinking-level clear marker through entry conversion', () => {
     const model = markModelThinkingLevelsForClear({
       name: 'default-model',
@@ -75,5 +112,25 @@ describe('modelInputListUtils', () => {
         ?.enumerable
     ).toBe(false);
     expect(JSON.stringify(roundTripped)).not.toContain('model-thinking-levels-clear');
+  });
+
+  it('strips the clear marker into a committed model without mutating the source', () => {
+    const model = markModelThinkingLevelsForClear({
+      name: 'default-model',
+      alias: 'default',
+      thinking: { futureOption: { enabled: true } },
+      futureModelOption: 123,
+    });
+    const committed = stripModelThinkingLevelsClearMarker(model);
+
+    expect(hasModelThinkingLevelsClearMarker(model)).toBe(true);
+    expect(hasModelThinkingLevelsClearMarker(committed)).toBe(false);
+    expect(committed).toEqual({
+      name: 'default-model',
+      alias: 'default',
+      thinking: model.thinking,
+      futureModelOption: 123,
+    });
+    expect(committed.thinking).toBe(model.thinking);
   });
 });

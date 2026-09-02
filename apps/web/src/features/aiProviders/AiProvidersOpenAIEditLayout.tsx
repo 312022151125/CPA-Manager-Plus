@@ -19,6 +19,7 @@ import {
 import {
   coolingPolicyFromOverride,
   coolingPolicyToOverride,
+  stripModelThinkingLevelsClearMarker,
   type ApiKeyEntry,
   type OpenAIProviderConfig,
 } from '@/types';
@@ -26,7 +27,7 @@ import type { ModelInfo } from '@/utils/models';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/utils/headers';
 import { areKeyValueEntriesEqual, areModelEntriesEqual } from '@/utils/compare';
-import { buildApiKeyEntry } from '@/components/providers/utils';
+import { buildApiKeyEntry, toCommittedOpenAIProviderSnapshot } from '@/components/providers/utils';
 import {
   buildProviderDraftKey,
   parseProviderIndexParam,
@@ -145,7 +146,7 @@ const buildOpenAIBaseline = (form: OpenAIFormState, testModel: string): OpenAIEd
   disableCooling: form.disableCooling,
   headers: normalizeHeaderEntries(form.headers),
   apiKeyEntries: normalizeApiKeyEntries(form.apiKeyEntries),
-  models: normalizeModelEntries(form.modelEntries),
+  models: normalizeModelEntries(form.modelEntries).map(stripModelThinkingLevelsClearMarker),
   testModel: String(testModel ?? '').trim(),
 });
 
@@ -550,11 +551,12 @@ export function AiProvidersOpenAIEditLayout() {
       if (resolvedTestModel) payload.testModel = resolvedTestModel;
       const models = entriesToModels(form.modelEntries);
       if (models.length) payload.models = models;
+      const committedPayload = toCommittedOpenAIProviderSnapshot(payload);
 
       const nextList =
         editIndex !== null
-          ? providers.map((item, idx) => (idx === editIndex ? payload : item))
-          : [...providers, payload];
+          ? providers.map((item, idx) => (idx === editIndex ? committedPayload : item))
+          : [...providers, committedPayload];
 
       if (editIndex !== null) {
         await providersApi.updateOpenAIProvider(providers[editIndex].name, editIndex, payload);
@@ -564,13 +566,20 @@ export function AiProvidersOpenAIEditLayout() {
 
       let syncedProviders = nextList;
       try {
-        syncedProviders = await providersApi.getOpenAIProviders();
+        syncedProviders = (await providersApi.getOpenAIProviders()).map(
+          toCommittedOpenAIProviderSnapshot
+        );
       } catch {
         // 保存成功后刷新失败时，回退到本地计算结果，避免页面数据为空或回退
       }
 
       setProviders(syncedProviders);
       updateConfigValue('openai-compatibility', syncedProviders);
+      const committedForm = {
+        ...form,
+        modelEntries: form.modelEntries.map(stripModelThinkingLevelsClearMarker),
+      };
+      setForm(committedForm);
       showNotification(
         editIndex !== null
           ? t('notification.openai_provider_updated')
@@ -578,7 +587,7 @@ export function AiProvidersOpenAIEditLayout() {
         'success'
       );
       allowNextNavigation();
-      setDraftBaseline(draftKey, buildOpenAIBaseline(form, testModel));
+      setDraftBaseline(draftKey, buildOpenAIBaseline(committedForm, testModel));
       handleBack();
     } catch (err: unknown) {
       showNotification(`${t('notification.update_failed')}: ${getErrorMessage(err)}`, 'error');
@@ -594,6 +603,7 @@ export function AiProvidersOpenAIEditLayout() {
     initialData?.disabled,
     providers,
     setDraftBaseline,
+    setForm,
     showNotification,
     t,
     testModel,

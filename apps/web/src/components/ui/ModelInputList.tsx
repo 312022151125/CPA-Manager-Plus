@@ -12,6 +12,7 @@ import {
 import {
   buildThinkingWithLevels,
   cloneModelEntry,
+  getKnownThinkingLevels,
   getThinkingLevels,
   getUnknownThinkingLevels,
   KNOWN_THINKING_LEVELS,
@@ -89,8 +90,8 @@ export function ModelInputList({
   thinkingLabel = 'Thinking levels',
   thinkingTooltip = '',
   thinkingTooltipAriaLabel = 'Thinking levels information',
-  thinkingDefaultLabel = 'Use CPA default',
-  thinkingCustomLabel = 'Custom',
+  thinkingDefaultLabel = 'Do not explicitly configure levels',
+  thinkingCustomLabel = 'Custom levels',
   thinkingAllowedLevelsLabel = 'Allowed thinking levels',
   thinkingSelectAllLabel = 'Select all',
   thinkingClearLabel = 'Clear known levels',
@@ -142,10 +143,7 @@ export function ModelInputList({
     if (!entry) return;
     if (custom) {
       const levels = getThinkingLevels(entry.thinking);
-      const selectedLevels = levels.filter(
-        (level): level is ThinkingLevel =>
-          typeof level === 'string' && KNOWN_THINKING_LEVELS.includes(level as ThinkingLevel)
-      );
+      const selectedLevels = getKnownThinkingLevels(levels);
       updateThinking(index, selectedLevels, getUnknownThinkingLevels(levels));
       return;
     }
@@ -171,12 +169,7 @@ export function ModelInputList({
     const entry = currentEntries[index];
     if (!entry) return;
     const levels = getThinkingLevels(entry.thinking);
-    const selectedLevels = new Set<ThinkingLevel>();
-    levels.forEach((item) => {
-      if (typeof item === 'string' && KNOWN_THINKING_LEVELS.includes(item as ThinkingLevel)) {
-        selectedLevels.add(item as ThinkingLevel);
-      }
-    });
+    const selectedLevels = new Set(getKnownThinkingLevels(levels));
     if (checked) selectedLevels.add(level);
     else selectedLevels.delete(level);
     updateThinking(index, Array.from(selectedLevels), getUnknownThinkingLevels(levels));
@@ -368,9 +361,9 @@ export function ModelInputList({
                       {KNOWN_THINKING_LEVELS.map((level) => (
                         <SelectionCheckbox
                           key={level}
-                          checked={getThinkingLevels(entry.thinking).some(
-                            (configuredLevel) => configuredLevel === level
-                          )}
+                          checked={getKnownThinkingLevels(
+                            getThinkingLevels(entry.thinking)
+                          ).includes(level)}
                           onChange={(checked) => updateThinkingLevel(index, level, checked)}
                           disabled={disabled}
                           label={level}

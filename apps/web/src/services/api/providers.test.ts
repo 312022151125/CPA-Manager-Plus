@@ -940,7 +940,7 @@ describe('providersApi v1.16 provider fields', () => {
     ]);
   });
 
-  it('removes only thinking levels when returning to the CPA default', async () => {
+  it('removes only thinking levels when leaving them unconfigured', async () => {
     mocks.get.mockResolvedValueOnce({
       'openai-compatibility': [
         {
