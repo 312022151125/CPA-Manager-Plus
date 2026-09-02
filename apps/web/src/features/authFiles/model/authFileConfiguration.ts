@@ -244,6 +244,12 @@ const recordHasFileIdentityConflict = (
   const candidateProvider = normalizeProviderIdentityKey(readAuthFileStatusProvider(candidate));
   if (expectedProvider && candidateProvider && candidateProvider !== expectedProvider) return true;
 
+  const expectedAuthIndex = readAuthFileStatusAuthIndex(file);
+  const candidateAuthIndex = normalizeRecordAuthIndex(record);
+  if (expectedAuthIndex && candidateAuthIndex && candidateAuthIndex !== expectedAuthIndex) {
+    return true;
+  }
+
   const identityProvider = expectedProvider || candidateProvider;
   if (identityProvider === 'codex') {
     if (
@@ -264,12 +270,6 @@ const recordHasFileIdentityConflict = (
     const expectedMember = readAuthFileStatusCodexMember(file);
     const candidateMember = readAuthFileStatusCodexMember(candidate);
     return Boolean(expectedMember && candidateMember && expectedMember !== candidateMember);
-  }
-
-  const expectedAuthIndex = readAuthFileStatusAuthIndex(file);
-  const candidateAuthIndex = normalizeRecordAuthIndex(record);
-  if (expectedAuthIndex && candidateAuthIndex && candidateAuthIndex !== expectedAuthIndex) {
-    return true;
   }
 
   const expectedAccountId = readAuthFileStatusAccountId(file);

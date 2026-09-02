@@ -167,6 +167,20 @@ describe('parseAuthFileConfigurationSource', () => {
       )
     ).toThrow(AUTH_FILE_CONFIGURATION_TARGET_NOT_FOUND);
   });
+
+  it('rejects a Codex record with a conflicting auth index before member fallback', () => {
+    expect(() =>
+      parseAuthFileConfigurationSource(
+        JSON.stringify({
+          type: 'codex',
+          auth_index: 'auth-a',
+          account_id: 'workspace-1',
+          account: 'alice@example.com',
+        }),
+        makeFile({ authIndex: 'auth-b', account_id: 'workspace-1', account: 'alice@example.com' })
+      )
+    ).toThrow(AUTH_FILE_CONFIGURATION_TARGET_NOT_FOUND);
+  });
 });
 
 describe('buildAuthFileConfigurationPatch', () => {

@@ -1741,7 +1741,7 @@ describe('Server Codex inspection action presentation', () => {
     expect(Array.from(getMixedServerCodexInspectionActionIds(results))).toEqual([]);
   });
 
-  it('keeps same-file status actions independent by account snapshot when auth_index is absent', () => {
+  it('does not expose same-file status actions without a credential locator', () => {
     const results = [
       {
         id: 1,
@@ -1763,7 +1763,7 @@ describe('Server Codex inspection action presentation', () => {
       },
     ];
 
-    expect(Array.from(getCanonicalServerCodexInspectionActionIds(results))).toEqual([1, 2]);
+    expect(Array.from(getCanonicalServerCodexInspectionActionIds(results))).toEqual([]);
     expect(Array.from(getMixedServerCodexInspectionActionIds(results))).toEqual([]);
   });
 

@@ -29,6 +29,7 @@ type DisableOwnershipReadResult = {
 
 export type CodexInspectionOwnershipIdentity = {
   fileName: string;
+  runtimeId?: string | null;
   provider?: string | null;
   authIndex?: string | number | null;
   accountId?: string | null;
@@ -58,6 +59,7 @@ const normalizeAccountSnapshot = (
 
 type NormalizedOwnershipIdentity = {
   fileName: string;
+  runtimeId: string;
   provider: string;
   authIndex: string | null;
   accountId: string | null;
@@ -66,7 +68,7 @@ type NormalizedOwnershipIdentity = {
 
 const hasStableLocator = (identity: NormalizedOwnershipIdentity): boolean => {
   if (identity.provider === 'codex') {
-    return Boolean(identity.authIndex || identity.accountSnapshot);
+    return Boolean(identity.runtimeId || identity.authIndex);
   }
   return Boolean(identity.authIndex || identity.accountId || identity.accountSnapshot);
 };
@@ -77,10 +79,12 @@ const normalizeIdentity = (identity: unknown): NormalizedOwnershipIdentity => {
       ? (identity as Record<string, unknown>)
       : {};
   const fileName = typeof source.fileName === 'string' ? source.fileName.trim() : '';
+  const runtimeId = typeof source.runtimeId === 'string' ? source.runtimeId.trim() : '';
   const provider = normalizeProvider(source.provider);
   const accountId = normalizeAccountId(source.accountId);
   return {
     fileName,
+    runtimeId,
     provider,
     authIndex: normalizeAuthIndex(source.authIndex),
     accountId,
@@ -471,11 +475,36 @@ export const getCodexInspectionOwnedDisableIdentityKeys = (
   const owned = new Set<string>();
   let changed = false;
   Object.entries(scoped).forEach(([key, record]) => {
-    const matches = files.filter(
-      (file) =>
-        file.disabled === true &&
-        matchesIdentityForRecovery(record, getCodexInspectionOwnershipIdentityForFile(file))
-    );
+    const normalizedRecord = normalizeIdentity(record);
+    const locatorMatches =
+      normalizedRecord.provider === 'codex' && normalizedRecord.authIndex
+        ? files.filter((file) => {
+            const identity = getCodexInspectionOwnershipIdentityForFile(file);
+            const normalizedIdentity = normalizeIdentity(identity);
+            return (
+              normalizedIdentity.fileName === normalizedRecord.fileName &&
+              normalizedIdentity.provider === normalizedRecord.provider &&
+              normalizedIdentity.authIndex === normalizedRecord.authIndex
+            );
+          })
+        : [];
+    if (normalizedRecord.provider === 'codex' && locatorMatches.length > 1) {
+      // Member evidence is verification data, not a selector. Keep an
+      // ambiguous ownership record until the inventory has one credential for
+      // the persisted file/auth-index locator.
+      return;
+    }
+    const matches =
+      normalizedRecord.provider === 'codex'
+        ? locatorMatches.filter((file) =>
+            file.disabled === true &&
+            matchesIdentityForRecovery(record, getCodexInspectionOwnershipIdentityForFile(file))
+          )
+        : files.filter(
+            (file) =>
+              file.disabled === true &&
+              matchesIdentityForRecovery(record, getCodexInspectionOwnershipIdentityForFile(file))
+          );
     if (matches.length === 1) {
       owned.add(
         getCodexInspectionOwnershipIdentityKey(

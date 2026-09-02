@@ -311,6 +311,7 @@ const planExecutionItems = (
     if (
       !hasCodexInspectionStableIdentity({
         fileName: item.fileName,
+        runtimeId: item.runtimeId,
         provider: item.provider,
         authIndex: item.authIndex,
         accountId: item.accountId,
@@ -418,6 +419,25 @@ const authFileSourceMembershipMatches = (
   const expectedKeys = expectedMembers.map(getAuthFileSourceMemberIdentityKey).sort();
   const currentKeys = currentMembers.map(getAuthFileSourceMemberIdentityKey).sort();
   return expectedKeys.every((key, index) => key === currentKeys[index]);
+};
+
+const hasAmbiguousCredentialLocator = (
+  currentCandidates: AuthFileItem[],
+  referenceItems: CodexInspectionResultItem[]
+): boolean => {
+  const candidatesByAuthIndex = new Map<string, number>();
+  currentCandidates.forEach((file) => {
+    const authIndex = normalizeAuthIndex(
+      file['auth_index'] ?? file.authIndex ?? file['auth-index']
+    );
+    if (authIndex === null) return;
+    candidatesByAuthIndex.set(authIndex, (candidatesByAuthIndex.get(authIndex) ?? 0) + 1);
+  });
+  return referenceItems.some((item) => {
+    if (item.runtimeId?.trim()) return false;
+    const authIndex = normalizeAuthIndex(item.authIndex);
+    return authIndex !== null && (candidatesByAuthIndex.get(authIndex) ?? 0) > 1;
+  });
 };
 
 const readInspectionAccountSnapshot = (item: CodexInspectionResultItem): string => {
@@ -534,6 +554,10 @@ const deleteActionCoversCurrentFile = (
 ): boolean => {
   if (currentFiles.length === 0) return false;
   const normalizedFileName = fileName.trim();
+  const currentCandidates = currentFiles.filter(
+    (file) => readCurrentFileName(file) === normalizedFileName
+  );
+  if (hasAmbiguousCredentialLocator(currentCandidates, referenceItems)) return false;
   const deleteByIdentity = new Map<string, CodexInspectionResultItem>();
   for (const item of referenceItems) {
     if (item.fileName.trim() !== normalizedFileName) continue;

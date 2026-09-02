@@ -129,10 +129,10 @@ const authFileMatchesRequestedIdentity = (
       const expectedMember = target.accountSnapshotProvided
         ? normalizeCodexMemberSnapshot(target.accountSnapshot)
         : '';
-      // A Workspace id without a strong member snapshot is only safe when the
-      // request still carries a credential-level locator (runtime id/auth
-      // index). Never let a Workspace-only target select a Team member.
-      if (!expectedMember) return credentialLocatorPresent;
+      // Workspace/member is verification evidence, not a credential locator.
+      // Require runtime ID or auth index before any Codex mutation can use it.
+      if (!credentialLocatorPresent) return false;
+      if (!expectedMember) return true;
       return readAuthFileStatusCodexMember(file) === expectedMember;
     }
     return true;
@@ -179,38 +179,6 @@ const findTargetWithoutRuntimeId = (
     return readAuthFileStatusAuthIndex(file) === target.authIndex;
   });
 
-const narrowCodexSelectorMatches = (
-  matches: AuthFileItem[],
-  target: ReturnType<typeof normalizeTarget>
-): AuthFileItem[] | null => {
-  if (
-    matches.length <= 1 ||
-    target.provider !== 'codex' ||
-    !target.accountId ||
-    !normalizeCodexMemberSnapshot(target.accountSnapshot)
-  ) {
-    return null;
-  }
-
-  // Disambiguate a shared file/auth-index selector only when every candidate
-  // has complete Workspace+member evidence. An unknown or conflicting sibling
-  // must remain visible as ambiguity rather than being hidden by a known match.
-  if (
-    matches.some(
-      (file) =>
-        readAuthFileStatusAccountIdInvalid(file) ||
-        readAuthFileStatusCodexMemberInvalid(file) ||
-        !readAuthFileStatusAccountId(file) ||
-        !readAuthFileStatusCodexMember(file)
-    )
-  ) {
-    return null;
-  }
-
-  const narrowed = matches.filter((file) => authFileMatchesRequestedIdentity(file, target));
-  return narrowed.length > 0 ? narrowed : null;
-};
-
 export const resolveAuthFileStatusMutationTarget = (
   files: AuthFileItem[],
   requestedTarget: AuthFileStatusMutationTarget
@@ -236,8 +204,6 @@ export const resolveAuthFileStatusMutationTarget = (
     if (matches.length === 0) {
       return { target: null, scope: 'ambiguous', affectedFiles: [], failure: 'not-found' };
     }
-    const narrowed = narrowCodexSelectorMatches(matches, target);
-    if (narrowed) matches = narrowed;
   }
 
   if (matches.length !== 1) {

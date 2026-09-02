@@ -262,7 +262,7 @@ describe('resolveAuthFileStatusMutationTarget', () => {
     });
   });
 
-  it('disambiguates a shared file/auth-index selector by Codex Workspace member', () => {
+  it('keeps a duplicate file/auth-index selector ambiguous despite Codex member evidence', () => {
     const alice = {
       id: 'runtime-alice',
       name: 'team.json',
@@ -288,7 +288,7 @@ describe('resolveAuthFileStatusMutationTarget', () => {
         accountId: 'workspace-1',
         accountSnapshot: 'ALICE@EXAMPLE.COM',
       })
-    ).toMatchObject({ target: alice, scope: 'credential', failure: null });
+    ).toMatchObject({ target: null, scope: 'ambiguous', failure: 'ambiguous' });
   });
 
   it('keeps a shared selector ambiguous when a sibling lacks member evidence', () => {
@@ -388,6 +388,25 @@ describe('resolveAuthFileStatusMutationTarget', () => {
         accountSnapshot: 'Alice',
       })
     ).toMatchObject({ target: current, scope: 'credential', failure: null });
+  });
+
+  it('does not use Workspace/member alone for a Codex mutation', () => {
+    const current = {
+      id: 'runtime-auth-1',
+      name: 'same.json',
+      type: 'codex',
+      account_id: 'workspace-1',
+      account: 'alice@example.com',
+    } as AuthFileItem;
+
+    expect(
+      resolveAuthFileStatusMutationTarget([current], {
+        name: 'same.json',
+        provider: 'codex',
+        accountId: 'workspace-1',
+        accountSnapshot: 'alice@example.com',
+      })
+    ).toMatchObject({ target: current, scope: 'ambiguous', failure: 'identity-changed' });
   });
 
   it('fails closed for a weak Codex member snapshot without a credential locator', () => {
