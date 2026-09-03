@@ -37,6 +37,8 @@ import {
 const identityT = ((key: string) => key) as TFunction;
 const STATUS_MUTATION_SCOPE_REASON =
   '认证凭证缺少唯一 runtime ID，或 runtime ID 与物理文件选择器冲突，已阻止状态修改，请人工确认';
+const AUTOMATIC_PERSISTED_LOCATOR_REASON =
+  '自动禁用凭证的物理文件与 authIndex 不是唯一定位，已阻止状态修改，请人工确认';
 const FILE_DELETE_COVERAGE_REASON =
   '删除动作未完整覆盖该物理认证文件当前包含的全部凭证，已阻止删除，请人工确认';
 const PLUGIN_SOURCE_STATUS_CHANGED_REASON =
@@ -427,16 +429,68 @@ const buildDeleteIdentityTarget = (file: AuthFileItem): AuthFileDeleteIdentityTa
 };
 
 const getAuthFileSourceMemberIdentityKey = (file: AuthFileItem): string =>
+  JSON.stringify([
+    readCurrentFileName(file),
+    normalizeProvider(resolveAuthProvider(file)),
+    readAuthFileStatusRuntimeId(file),
+    normalizeAuthIndex(file['auth_index'] ?? file.authIndex ?? file['auth-index']),
+  ]);
+
+const getAuthFileSourceMemberEvidenceKey = (file: AuthFileItem): string =>
   JSON.stringify(buildDeleteIdentityTarget(file));
+
+const matchesAuthFileIdentityTarget = (
+  file: AuthFileItem,
+  target: AuthFileStatusTarget
+): boolean => {
+  const resolution = resolveAuthFileStatusMutationTarget([file], target);
+  // The caller may still need the resolver's scope/failure to reject a missing
+  // runtime ID or an ambiguous mutation target. This helper only answers the
+  // identity question, so retain a uniquely matched file when the resolver's
+  // later operational checks report ambiguity.
+  return (
+    resolution.target === file &&
+    (resolution.failure === null || resolution.failure === 'ambiguous')
+  );
+};
+
+const authFileSourceMemberMatches = (
+  expectedMember: AuthFileItem,
+  currentMember: AuthFileItem
+): boolean => {
+  if (
+    getAuthFileSourceMemberIdentityKey(expectedMember) !==
+    getAuthFileSourceMemberIdentityKey(currentMember)
+  ) {
+    return false;
+  }
+
+  const expectedProvider = normalizeProvider(resolveAuthProvider(expectedMember));
+  if (expectedProvider !== 'codex') {
+    return (
+      getAuthFileSourceMemberEvidenceKey(expectedMember) ===
+      getAuthFileSourceMemberEvidenceKey(currentMember)
+    );
+  }
+
+  return matchesAuthFileIdentityTarget(currentMember, buildDeleteIdentityTarget(expectedMember));
+};
 
 const authFileSourceMembershipMatches = (
   expectedMembers: AuthFileItem[],
   currentMembers: AuthFileItem[]
 ): boolean => {
   if (expectedMembers.length !== currentMembers.length) return false;
-  const expectedKeys = expectedMembers.map(getAuthFileSourceMemberIdentityKey).sort();
-  const currentKeys = currentMembers.map(getAuthFileSourceMemberIdentityKey).sort();
-  return expectedKeys.every((key, index) => key === currentKeys[index]);
+  const usedCurrentIndexes = new Set<number>();
+  return expectedMembers.every((expectedMember) => {
+    const currentIndex = currentMembers.findIndex(
+      (currentMember, index) =>
+        !usedCurrentIndexes.has(index) && authFileSourceMemberMatches(expectedMember, currentMember)
+    );
+    if (currentIndex < 0) return false;
+    usedCurrentIndexes.add(currentIndex);
+    return true;
+  });
 };
 
 const hasAmbiguousCredentialLocator = (
@@ -458,6 +512,24 @@ const hasAmbiguousCredentialLocator = (
   });
 };
 
+const hasDuplicateCodexPersistedLocator = (
+  currentFiles: AuthFileItem[],
+  item: CodexInspectionResultItem
+): boolean => {
+  if (normalizeProvider(item.provider) !== 'codex') return false;
+  const fileName = item.fileName.trim();
+  const authIndex = normalizeAuthIndex(item.authIndex);
+  if (!fileName || !authIndex) return false;
+  return (
+    currentFiles.filter(
+      (file) =>
+        readCurrentFileName(file) === fileName &&
+        normalizeProvider(resolveAuthProvider(file)) === 'codex' &&
+        normalizeAuthIndex(file['auth_index'] ?? file.authIndex ?? file['auth-index']) === authIndex
+    ).length > 1
+  );
+};
+
 const readInspectionAccountSnapshot = (item: CodexInspectionResultItem): string => {
   const snapshot = item.accountSnapshot?.trim() ?? '';
   if (!snapshot || snapshot === item.fileName.trim()) return '';
@@ -466,40 +538,22 @@ const readInspectionAccountSnapshot = (item: CodexInspectionResultItem): string 
     : snapshot;
 };
 
-const readCurrentInspectionAccountSnapshot = (file: AuthFileItem): string => {
-  const provider = normalizeProvider(resolveAuthProvider(file));
-  return provider === 'codex'
-    ? readAuthFileStatusCodexMember(file)
-    : readAuthFileStatusAccountSnapshot(file);
-};
-
 const matchesCurrentActionIdentity = (
   file: AuthFileItem,
   item: CodexInspectionResultItem
 ): boolean => {
-  if (readCurrentFileName(file) !== item.fileName) return false;
-  const currentProvider = normalizeProvider(resolveAuthProvider(file));
-  const expectedProvider = normalizeProvider(item.provider);
-  if (!currentProvider || !expectedProvider || currentProvider !== expectedProvider) return false;
-  const runtimeId = readAuthFileStatusRuntimeId(file);
-  const expectedRuntimeId = item.runtimeId?.trim() ?? '';
-  if (expectedRuntimeId && runtimeId !== expectedRuntimeId) return false;
-  const authIndex = normalizeAuthIndex(file['auth_index'] ?? file.authIndex ?? file['auth-index']);
-  if (item.authIndex && authIndex !== normalizeAuthIndex(item.authIndex)) return false;
-  const accountId = readAuthFileStatusAccountId(file);
-  const expectedAccountId = item.accountId?.trim() ?? '';
-  if (expectedAccountId) {
-    if (accountId !== expectedAccountId) return false;
-    const expectedMember = readInspectionAccountSnapshot(item);
-    return (
-      normalizeProvider(item.provider) !== 'codex' ||
-      !expectedMember ||
-      readCurrentInspectionAccountSnapshot(file) === expectedMember
-    );
-  }
-  const expectedSnapshot = readInspectionAccountSnapshot(item);
-  if (!expectedSnapshot) return normalizeAuthIndex(item.authIndex) !== null;
-  return readCurrentInspectionAccountSnapshot(file) === expectedSnapshot;
+  const resolution = resolveAuthFileStatusMutationTarget([file], {
+    name: item.fileName,
+    runtimeId: item.runtimeId,
+    authIndex: item.authIndex,
+    provider: item.provider,
+    accountId: item.accountId,
+    accountSnapshot: readInspectionAccountSnapshot(item),
+  });
+  return (
+    resolution.target === file &&
+    (resolution.failure === null || resolution.failure === 'ambiguous')
+  );
 };
 
 type ResolvedStatusActionItem = {
@@ -1210,6 +1264,19 @@ export const executeCodexInspectionActions = async ({
         filesByName.set(fileName, siblings);
         return filesByName;
       }, new Map<string, AuthFileItem[]>());
+      const automaticDuplicatePersistedLocatorFiles =
+        source === 'auto'
+          ? new Set(
+              dedupedItems
+                .filter(
+                  (item) =>
+                    item.action === 'disable' &&
+                    normalizeProvider(item.provider) === 'codex' &&
+                    hasDuplicateCodexPersistedLocator(currentFiles, item)
+                )
+                .map((item) => item.fileName.trim())
+            )
+          : new Set<string>();
       const statusResolutionByKey = new Map<string, AuthFileStatusMutationResolution>();
       const resolvedStatusItems = new Map<string, ResolvedStatusActionItem>();
       dedupedItems.filter(isStatusExecutionAction).forEach((item) => {
@@ -1255,8 +1322,19 @@ export const executeCodexInspectionActions = async ({
               currentFile ? readCurrentFileName(currentFile) : item.fileName.trim()
             )
           : undefined;
+        const automaticPersistedLocatorAmbiguous =
+          source === 'auto' &&
+          item.action === 'disable' &&
+          normalizeProvider(item.provider) === 'codex' &&
+          automaticDuplicatePersistedLocatorFiles.has(item.fileName.trim());
         let outcome: CodexInspectionExecutionOutcome | null = null;
-        if (!currentFile) {
+        if (automaticPersistedLocatorAmbiguous) {
+          outcome = buildActionValidationOutcome(
+            item,
+            'needs_review',
+            AUTOMATIC_PERSISTED_LOCATOR_REASON
+          );
+        } else if (!currentFile) {
           outcome = buildActionValidationOutcome(
             item,
             'failed',

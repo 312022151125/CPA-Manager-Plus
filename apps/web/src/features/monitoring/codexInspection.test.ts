@@ -2301,6 +2301,200 @@ describe('executeCodexInspectionActions', () => {
     ]);
   });
 
+  it('allows delete when Codex optional evidence temporarily disappears', async () => {
+    const item = createResultItem('delete', {
+      key: 'alice.json::auth-1',
+      fileName: 'alice.json',
+      runtimeId: 'runtime-alice',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+    const currentFile = {
+      id: 'runtime-alice',
+      name: 'alice.json',
+      type: 'codex',
+      auth_index: 'auth-1',
+      disabled: false,
+    } as AuthFileItem;
+    const deleteSpy = vi.spyOn(authFilesApi, 'deleteFileByName').mockResolvedValue({
+      status: 'ok',
+      deleted: 1,
+      files: ['alice.json'],
+      failed: [],
+    });
+    vi.spyOn(authFilesApi, 'list').mockResolvedValue({ files: [currentFile] });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-codex-delete-missing-evidence',
+      source: 'manual',
+    });
+
+    expect(deleteSpy).toHaveBeenCalledTimes(1);
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        accountKey: item.key,
+        action: 'delete',
+        status: 'success',
+        success: true,
+      }),
+    ]);
+  });
+
+  it.each([
+    {
+      label: 'Workspace evidence conflicts',
+      currentFile: {
+        id_token: { account_id: 'workspace-1' },
+        metadata: { id_token: { chatgpt_account_id: 'workspace-2' } },
+        account: 'alice@example.com',
+      },
+    },
+    {
+      label: 'member evidence conflicts',
+      currentFile: {
+        id_token: { account_id: 'workspace-1' },
+        account: 'alice@example.com',
+        email: 'bob@example.com',
+      },
+    },
+  ])('rejects delete when current Codex $label', async ({ currentFile }) => {
+    const item = createResultItem('delete', {
+      key: 'alice.json::auth-1',
+      fileName: 'alice.json',
+      runtimeId: 'runtime-alice',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+    const deleteSpy = vi.spyOn(authFilesApi, 'deleteFileByName').mockResolvedValue({
+      status: 'ok',
+      deleted: 1,
+      files: ['alice.json'],
+      failed: [],
+    });
+    vi.spyOn(authFilesApi, 'list').mockResolvedValueOnce({
+      files: [
+        {
+          id: 'runtime-alice',
+          name: 'alice.json',
+          type: 'codex',
+          auth_index: 'auth-1',
+          disabled: false,
+          ...currentFile,
+        } as AuthFileItem,
+      ],
+    });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-codex-delete-invalid-evidence',
+      source: 'manual',
+    });
+
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        accountKey: item.key,
+        action: 'delete',
+        status: 'failed',
+        success: false,
+      }),
+    ]);
+  });
+
+  it('rejects delete when current Codex Workspace conflicts even without expected evidence', async () => {
+    const item = createResultItem('delete', {
+      key: 'workspace-only.json::auth-1',
+      fileName: 'workspace-only.json',
+      runtimeId: 'runtime-workspace-only',
+      authIndex: 'auth-1',
+      accountId: null,
+      accountSnapshot: null,
+    });
+    const deleteSpy = vi.spyOn(authFilesApi, 'deleteFileByName').mockResolvedValue({
+      status: 'ok',
+      deleted: 1,
+      files: ['workspace-only.json'],
+      failed: [],
+    });
+    vi.spyOn(authFilesApi, 'list').mockResolvedValueOnce({
+      files: [
+        {
+          id: 'runtime-workspace-only',
+          name: 'workspace-only.json',
+          type: 'codex',
+          auth_index: 'auth-1',
+          id_token: {
+            account_id: 'workspace-1',
+            metadata: { id_token: { chatgpt_account_id: 'workspace-2' } },
+          },
+          disabled: false,
+        } as AuthFileItem,
+      ],
+    });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-codex-delete-unexpected-invalid-evidence',
+      source: 'manual',
+    });
+
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(execution.outcomes[0]).toMatchObject({ status: 'failed', success: false });
+  });
+
+  it('rejects delete without a credential locator even when Codex evidence matches', async () => {
+    const item = {
+      ...createResultItem('delete', {
+        key: 'workspace-only.json::workspace-only',
+        fileName: 'workspace-only.json',
+        runtimeId: null,
+        authIndex: null,
+        accountId: 'workspace-1',
+        accountSnapshot: 'alice@example.com',
+      }),
+      authIndex: null,
+    };
+    const deleteSpy = vi.spyOn(authFilesApi, 'deleteFileByName').mockResolvedValue({
+      status: 'ok',
+      deleted: 1,
+      files: ['workspace-only.json'],
+      failed: [],
+    });
+    vi.spyOn(authFilesApi, 'list').mockResolvedValueOnce({
+      files: [
+        {
+          id: 'runtime-workspace-only',
+          name: 'workspace-only.json',
+          type: 'codex',
+          auth_index: null,
+          id_token: { account_id: 'workspace-1' },
+          account: 'alice@example.com',
+          disabled: false,
+        } as AuthFileItem,
+      ],
+    });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-codex-delete-no-locator',
+      source: 'manual',
+    });
+
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(execution.outcomes[0]).toMatchObject({ status: 'needs_review', success: true });
+  });
+
   it('rejects disable and enable when the current auth identities changed', async () => {
     const statusSpy = vi
       .spyOn(authFilesApi, 'setStatusWithFallback')
@@ -3030,6 +3224,366 @@ describe('executeCodexInspectionActions', () => {
         }),
       ])
     );
+  });
+
+  it('blocks automatic Codex disable when the persisted file/auth-index locator is duplicated', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const item = createResultItem('disable', {
+      key: 'shared.json::auth-1::alice',
+      fileName: 'shared.json',
+      runtimeId: 'runtime-alice',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+    const alice = createCurrentAuthFile(item, { disabled: false });
+    const bob = {
+      ...alice,
+      id: 'runtime-bob',
+      account: 'bob@example.com',
+    } as AuthFileItem;
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockResolvedValue({} as Awaited<ReturnType<typeof authFilesApi.setStatusWithFallback>>);
+    vi.spyOn(authFilesApi, 'list').mockResolvedValueOnce({ files: [alice, bob] });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-duplicate-locator',
+      source: 'auto',
+    });
+
+    expect(statusSpy).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        accountKey: item.key,
+        status: 'needs_review',
+        success: true,
+        error: expect.stringContaining('authIndex'),
+      }),
+    ]);
+  });
+
+  it('blocks an automatic source-file group when any Codex persisted locator is duplicated', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const sourceItem = createResultItem('disable', {
+      key: 'shared.json::auth-1::alice',
+      fileName: 'shared.json',
+      runtimeId: 'shared.json',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+    const childItem = createResultItem('disable', {
+      key: 'shared.json::auth-2::bob',
+      fileName: 'shared.json',
+      runtimeId: 'runtime-bob',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'bob@example.com',
+    });
+    const source = createCurrentAuthFile(sourceItem, { disabled: false });
+    const child = createCurrentAuthFile(childItem, { disabled: false });
+    const duplicateChild = {
+      ...child,
+      id: 'runtime-other-bob',
+      account: 'other-bob@example.com',
+    } as AuthFileItem;
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockResolvedValue({} as Awaited<ReturnType<typeof authFilesApi.setStatusWithFallback>>);
+    const sourceStatusSpy = vi
+      .spyOn(authFilesApi, 'setVerifiedSourceFileStatus')
+      .mockResolvedValue({ status: 'ok', disabled: true, mutationScope: 'source-file' });
+    vi.spyOn(authFilesApi, 'list').mockResolvedValueOnce({
+      files: [source, child, duplicateChild],
+    });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [sourceItem, childItem],
+      referenceItems: [sourceItem, childItem],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-source-duplicate-locator',
+      source: 'auto',
+    });
+
+    expect(statusSpy).not.toHaveBeenCalled();
+    expect(sourceStatusSpy).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountKey: sourceItem.key,
+          status: 'needs_review',
+          success: true,
+        }),
+        expect.objectContaining({
+          accountKey: childItem.key,
+          status: 'needs_review',
+          success: true,
+        }),
+      ])
+    );
+  });
+
+  it('keeps manual unique runtime-id mutation available without an auth index', async () => {
+    const item = {
+      ...createResultItem('disable', {
+        key: 'manual-runtime-only.json::runtime-manual',
+        fileName: 'manual-runtime-only.json',
+        runtimeId: 'runtime-manual',
+        authIndex: null,
+        accountId: null,
+        accountSnapshot: null,
+      }),
+      authIndex: null,
+    };
+    const currentFile = {
+      id: 'runtime-manual',
+      name: 'manual-runtime-only.json',
+      type: 'codex',
+      auth_index: null,
+      disabled: false,
+    } as AuthFileItem;
+    const statusSpy = vi.spyOn(authFilesApi, 'setStatusWithFallback').mockResolvedValue({
+      status: 'ok',
+      disabled: true,
+      mutationScope: 'credential',
+    });
+    vi.spyOn(authFilesApi, 'list').mockResolvedValue({ files: [currentFile] });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-manual-runtime-only',
+      source: 'manual',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        accountKey: item.key,
+        status: 'success',
+        success: true,
+      }),
+    ]);
+  });
+
+  it('allows a status mutation when Codex optional evidence temporarily disappears', async () => {
+    const item = createResultItem('disable', {
+      key: 'alice.json::auth-1',
+      fileName: 'alice.json',
+      runtimeId: 'runtime-alice',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+    const currentFile = {
+      id: 'runtime-alice',
+      name: 'alice.json',
+      type: 'codex',
+      auth_index: 'auth-1',
+      disabled: false,
+    } as AuthFileItem;
+    const statusSpy = vi.spyOn(authFilesApi, 'setStatusWithFallback').mockResolvedValue({
+      status: 'ok',
+      disabled: true,
+      mutationScope: 'credential',
+    });
+    vi.spyOn(authFilesApi, 'list').mockResolvedValue({ files: [currentFile] });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-codex-missing-evidence',
+      source: 'manual',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        accountKey: item.key,
+        action: 'disable',
+        status: 'success',
+        success: true,
+      }),
+    ]);
+  });
+
+  it.each([
+    {
+      label: 'Workspace evidence conflicts',
+      currentFile: {
+        id_token: { account_id: 'workspace-1' },
+        metadata: { id_token: { chatgpt_account_id: 'workspace-2' } },
+        account: 'alice@example.com',
+      },
+    },
+    {
+      label: 'member evidence conflicts',
+      currentFile: {
+        id_token: { account_id: 'workspace-1' },
+        account: 'alice@example.com',
+        email: 'bob@example.com',
+      },
+    },
+  ])('rejects status mutation when current Codex $label', async ({ currentFile }) => {
+    const item = createResultItem('disable', {
+      key: 'alice.json::auth-1',
+      fileName: 'alice.json',
+      runtimeId: 'runtime-alice',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockResolvedValue({} as Awaited<ReturnType<typeof authFilesApi.setStatusWithFallback>>);
+    vi.spyOn(authFilesApi, 'list').mockResolvedValueOnce({
+      files: [
+        {
+          id: 'runtime-alice',
+          name: 'alice.json',
+          type: 'codex',
+          auth_index: 'auth-1',
+          disabled: false,
+          ...currentFile,
+        } as AuthFileItem,
+      ],
+    });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-codex-invalid-evidence',
+      source: 'manual',
+    });
+
+    expect(statusSpy).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        accountKey: item.key,
+        status: 'failed',
+        success: false,
+      }),
+    ]);
+  });
+
+  it('keeps plugin source membership stable when Codex evidence temporarily disappears', async () => {
+    const item = createResultItem('disable', {
+      key: 'plugin-source.json::auth-1',
+      fileName: 'plugin-source.json',
+      runtimeId: 'runtime-plugin-1',
+      provider: 'codex',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'plugin@example.com',
+    });
+    const snapshotFile = createCurrentAuthFile(item, { disabled: false });
+    const currentFile = {
+      id: 'runtime-plugin-1',
+      name: 'plugin-source.json',
+      type: 'codex',
+      auth_index: 'auth-1',
+      disabled: false,
+    } as AuthFileItem;
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockImplementation(async (_target, _disabled, verifyFallback) => {
+        expect(verifyFallback).toBeDefined();
+        await verifyFallback?.();
+        return { status: 'ok', disabled: true, mutationScope: 'source-file' };
+      });
+    vi.spyOn(authFilesApi, 'list')
+      .mockResolvedValueOnce({ files: [snapshotFile] })
+      .mockResolvedValueOnce({ files: [snapshotFile] })
+      .mockResolvedValueOnce({ files: [currentFile] })
+      .mockResolvedValueOnce({ files: [{ ...currentFile, disabled: true }] });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-plugin-missing-evidence',
+      source: 'manual',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        accountKey: item.key,
+        status: 'success',
+        success: true,
+      }),
+    ]);
+  });
+
+  it.each([
+    {
+      label: 'Workspace evidence conflicts',
+      currentOverrides: { id_token: { account_id: 'workspace-2' } },
+    },
+    {
+      label: 'member evidence conflicts',
+      currentOverrides: { account: 'other-member@example.com' },
+    },
+    {
+      label: 'Workspace evidence is invalid',
+      currentOverrides: {
+        id_token: { account_id: 'workspace-1' },
+        metadata: { id_token: { chatgpt_account_id: 'workspace-2' } },
+      },
+    },
+  ])('rejects plugin source fallback when current Codex $label', async ({ currentOverrides }) => {
+    const item = createResultItem('disable', {
+      key: 'plugin-source.json::auth-1',
+      fileName: 'plugin-source.json',
+      runtimeId: 'runtime-plugin-1',
+      provider: 'codex',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'plugin@example.com',
+    });
+    const snapshotFile = createCurrentAuthFile(item, { disabled: false });
+    const freshFile = { ...snapshotFile, ...currentOverrides } as AuthFileItem;
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockImplementation(async (_target, _disabled, verifyFallback) => {
+        await verifyFallback?.();
+        return { status: 'ok', disabled: true, mutationScope: 'source-file' };
+      });
+    vi.spyOn(authFilesApi, 'list')
+      .mockResolvedValueOnce({ files: [snapshotFile] })
+      .mockResolvedValueOnce({ files: [snapshotFile] })
+      .mockResolvedValueOnce({ files: [freshFile] })
+      .mockResolvedValue({ files: [freshFile] });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-plugin-conflicting-evidence',
+      source: 'manual',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        accountKey: item.key,
+        status: 'failed',
+        success: false,
+        error: expect.stringContaining('成员'),
+      }),
+    ]);
   });
 
   it('uses a verified source-file fallback for a single plugin virtual credential', async () => {
@@ -4508,9 +5062,7 @@ describe('Codex inspection disable ownership', () => {
     });
 
     expect(
-      getCodexInspectionOwnedDisableIdentityKeys('scope-evidence-conflict', [
-        file as AuthFileItem,
-      ])
+      getCodexInspectionOwnedDisableIdentityKeys('scope-evidence-conflict', [file as AuthFileItem])
     ).toEqual(new Set());
   });
 
