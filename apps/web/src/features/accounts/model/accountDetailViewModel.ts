@@ -622,6 +622,8 @@ const buildValueSummary = (
   };
 };
 
+const FORECAST_COST_EPSILON = 1e-9;
+
 const buildQuotaWindows = (
   row: AccountRow,
   quotaWindows: AccountDetailQuotaWindowInput[],
@@ -681,10 +683,17 @@ const buildQuotaWindows = (
       window.observedAtMs > 0
         ? window.observedAtMs
         : null;
-    const currentForecastUsage =
-      currentUsage?.matched &&
+    const hasReliableCurrentUsage =
+      currentUsage?.matched === true &&
       currentUsage.scopeMatchStatus === 'complete' &&
-      currentForecastEligible &&
+      currentForecastEligible;
+    const currentUsageAheadOfQuotaObservation =
+      hasReliableCurrentUsage &&
+      quotaObservedAtMs !== null &&
+      currentUsage.lastSeenMs !== null &&
+      currentUsage.lastSeenMs > quotaObservedAtMs;
+    const currentForecastUsage =
+      hasReliableCurrentUsage &&
       quotaObservedAtMs !== null &&
       currentUsage.lastSeenMs !== null &&
       currentUsage.lastSeenMs <= quotaObservedAtMs
@@ -705,8 +714,9 @@ const buildQuotaWindows = (
             usedPercent: window.usedPercent,
             current: currentForecastUsage,
             previous:
+              !currentUsageAheadOfQuotaObservation &&
               previousForecastEligible &&
-              previousUsage?.matched &&
+              previousUsage?.matched === true &&
               previousUsage.scopeMatchStatus === 'complete'
                 ? {
                     requests: previousUsage.totalRequests,
@@ -716,6 +726,27 @@ const buildQuotaWindows = (
                 : null,
           })
         : null;
+    const trustedCurrentActual =
+      currentUsage?.matched === true &&
+      currentUsage.scopeMatchStatus === 'complete' &&
+      Number.isFinite(currentUsage.totalRequests) &&
+      currentUsage.totalRequests >= 0 &&
+      Number.isFinite(currentUsage.totalTokens) &&
+      currentUsage.totalTokens >= 0 &&
+      Number.isFinite(currentUsage.totalCost) &&
+      currentUsage.totalCost >= 0
+        ? {
+            requests: currentUsage.totalRequests,
+            tokens: currentUsage.totalTokens,
+            cost: currentUsage.totalCost,
+          }
+        : null;
+    const forecastIsConsistentWithCurrentActual =
+      forecast === null ||
+      trustedCurrentActual === null ||
+      (forecast.requests >= trustedCurrentActual.requests &&
+        forecast.tokens >= trustedCurrentActual.tokens &&
+        forecast.cost + FORECAST_COST_EPSILON >= trustedCurrentActual.cost);
     return {
       ...window,
       providerWindowId,
@@ -725,7 +756,7 @@ const buildQuotaWindows = (
       currentUsage,
       previousUsage,
       previousPeriod,
-      forecast,
+      forecast: forecastIsConsistentWithCurrentActual ? forecast : null,
     };
   });
 
