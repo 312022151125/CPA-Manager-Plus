@@ -108,6 +108,188 @@ describe('confirmed reauth Codex quota state merge', () => {
     });
   });
 
+  it('clears stale scalar values from a newer partial Provider success', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota({
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly source',
+            usedPercent: 100,
+            resetLabel: 'old',
+            observedAtMs: 1_000,
+          },
+        ],
+        planType: 'team',
+        subscriptionActiveUntil: 'old-until',
+        creditsHasCredits: true,
+        creditsUnlimited: false,
+        creditsBalance: '120',
+        creditsOverageLimitReached: true,
+        creditsApproxLocalMessages: 24,
+        creditsApproxCloudMessages: 12,
+        spendControlReached: true,
+        spendControlIndividualLimit: 200,
+        primaryOverSecondaryLimitPercent: 100,
+        rateLimitResetCreditsAvailableCount: 2,
+        rateLimitResetCredits: [
+          {
+            id: 'credit-1',
+            status: 'available',
+            grantedAt: '2026-01-01T00:00:00Z',
+            expiresAt: '2026-01-02T00:00:00Z',
+          },
+        ],
+        rateLimitResetCreditsError: 'old reset error',
+      }),
+      {
+        status: 'success',
+        quotaInventoryObserved: false,
+        windows: [],
+        fetchedAtMs: 1_500,
+        observedAtMs: 1_500,
+        planType: null,
+        subscriptionActiveUntil: null,
+        creditsHasCredits: null,
+        creditsUnlimited: undefined,
+        creditsBalance: null,
+        creditsOverageLimitReached: false,
+        creditsApproxLocalMessages: null,
+        creditsApproxCloudMessages: null,
+        spendControlReached: null,
+        spendControlIndividualLimit: null,
+        primaryOverSecondaryLimitPercent: 0,
+        rateLimitResetCreditsAvailableCount: null,
+        rateLimitResetCredits: [],
+        rateLimitResetCreditsError: null,
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      quotaInventoryObserved: false,
+      windows: [expect.objectContaining({ id: 'weekly', usedPercent: 100 })],
+      planType: null,
+      subscriptionActiveUntil: null,
+      creditsHasCredits: null,
+      creditsBalance: null,
+      creditsOverageLimitReached: false,
+      creditsApproxLocalMessages: null,
+      creditsApproxCloudMessages: null,
+      spendControlReached: null,
+      spendControlIndividualLimit: null,
+      primaryOverSecondaryLimitPercent: 0,
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      rateLimitResetCreditsError: null,
+    });
+    expect(result?.creditsUnlimited).toBeUndefined();
+  });
+
+  it('preserves newer authoritative empty Provider inventory under a non-auth error lifecycle', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota(),
+      {
+        status: 'error',
+        quotaInventoryObserved: true,
+        windows: [],
+        fetchedAtMs: 1_500,
+        observedAtMs: 1_500,
+        error: 'HTTP 503',
+        errorStatus: 503,
+        failedAtMs: 1_600,
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'error',
+      error: 'HTTP 503',
+      errorStatus: 503,
+      failedAtMs: 1_600,
+      quotaInventoryObserved: true,
+      windows: [],
+    });
+  });
+
+  it('preserves newer Provider scalar clears under a non-auth error lifecycle', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota({
+        planType: 'team',
+        creditsBalance: '100',
+        spendControlIndividualLimit: 200,
+        rateLimitResetCreditsAvailableCount: 2,
+        rateLimitResetCredits: [
+          {
+            id: 'credit-1',
+            status: 'available',
+            grantedAt: '2026-01-01T00:00:00Z',
+            expiresAt: '2026-01-02T00:00:00Z',
+          },
+        ],
+      }),
+      {
+        status: 'error',
+        quotaInventoryObserved: false,
+        windows: [],
+        fetchedAtMs: 1_500,
+        observedAtMs: 1_500,
+        planType: null,
+        creditsBalance: null,
+        spendControlIndividualLimit: null,
+        rateLimitResetCreditsAvailableCount: null,
+        rateLimitResetCredits: [],
+        error: 'HTTP 503',
+        errorStatus: 503,
+        failedAtMs: 1_600,
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'error',
+      errorStatus: 503,
+      failedAtMs: 1_600,
+      planType: null,
+      creditsBalance: null,
+      spendControlIndividualLimit: null,
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      windows: [expect.objectContaining({ usedPercent: 100 })],
+    });
+  });
+
+  it('preserves a cached Provider snapshot when a stale 401 lifecycle is superseded', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota({ planType: 'team', creditsBalance: '100' }),
+      {
+        status: 'error',
+        quotaInventoryObserved: true,
+        windows: [],
+        fetchedAtMs: 1_500,
+        observedAtMs: 1_500,
+        planType: null,
+        creditsBalance: null,
+        error: 'HTTP 401 token expired',
+        errorStatus: 401,
+        failedAtMs: 1_600,
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      error: undefined,
+      errorStatus: undefined,
+      failedAtMs: undefined,
+      quotaInventoryObserved: true,
+      windows: [],
+      planType: null,
+      creditsBalance: null,
+    });
+  });
+
   it('preserves quota-limit facts from a partial Provider success', () => {
     const result = mergeConfirmedReauthCodexQuotaStates(
       providerQuota({
@@ -256,14 +438,12 @@ describe('confirmed reauth Codex quota state merge', () => {
     });
   });
 
-  it('does not treat a stale 401 with inherited inventory metadata as a new inventory', () => {
+  it('keeps old quota facts when a pure stale 401 is sanitized', () => {
     const result = mergeConfirmedReauthCodexQuotaStates(
       providerQuota(),
       {
         status: 'error',
         windows: [],
-        quotaInventoryObserved: true,
-        fetchedAtMs: 1_500,
         error: 'HTTP 401 token expired',
         errorStatus: 401,
         failedAtMs: 1_500,

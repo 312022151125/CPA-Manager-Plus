@@ -411,7 +411,7 @@ const CODEX_QUOTA_FACT_KEYS = [
   'observedErrorCode',
 ] as const satisfies readonly (keyof CodexQuotaState)[];
 
-const mergeObservedCodexQuotaFacts = (
+const mergeConservativeCodexQuotaFacts = (
   current: CodexQuotaState,
   observed: CodexQuotaState,
   previous: CodexQuotaState | undefined
@@ -452,6 +452,17 @@ const getCodexQuotaFactAtMs = (quota: CodexQuotaState | null | undefined): numbe
   return candidates.length > 0 ? Math.max(...candidates) : null;
 };
 
+const hasCodexQuotaFactPayload = (state: CodexQuotaState): boolean =>
+  state.windows.length > 0 || CODEX_QUOTA_FACT_KEYS.some((key) => hasObservedValue(state[key]));
+
+const getCodexQuotaFactAuthority = (
+  state: CodexQuotaState,
+  factAtMs: number | null
+): ConfirmedReauthCodexQuotaFactAuthority => {
+  if (factAtMs !== null) return 'provider_snapshot';
+  return hasCodexQuotaFactPayload(state) ? 'conservative_cached' : 'none';
+};
+
 const clearSupersededAuthenticationLifecycle = (state: CodexQuotaState): CodexQuotaState => {
   const next = { ...state };
   next.error = undefined;
@@ -461,6 +472,7 @@ const clearSupersededAuthenticationLifecycle = (state: CodexQuotaState): CodexQu
 };
 
 type ConfirmedReauthCodexQuotaLifecycleKind = 'error' | 'success' | 'other';
+type ConfirmedReauthCodexQuotaFactAuthority = 'provider_snapshot' | 'conservative_cached' | 'none';
 
 interface ConfirmedReauthCodexQuotaEvent {
   order: number;
@@ -468,6 +480,7 @@ interface ConfirmedReauthCodexQuotaEvent {
   state: CodexQuotaState;
   factState: CodexQuotaState;
   factAtMs: number | null;
+  factAuthority: ConfirmedReauthCodexQuotaFactAuthority;
   lifecycleAtMs: number | null;
   lifecycleKind: ConfirmedReauthCodexQuotaLifecycleKind | null;
   authoritativeInventory: boolean;
@@ -500,6 +513,7 @@ const getConfirmedReauthCodexQuotaEvent = (
     ? { ...sanitizedState, status: 'error' }
     : sanitizedState;
   const factAtMs = getCodexQuotaFactAtMs(factState);
+  const factAuthority = getCodexQuotaFactAuthority(factState, factAtMs);
   const lifecycleKind: ConfirmedReauthCodexQuotaLifecycleKind | null =
     authenticationFailureWasSuperseded
       ? null
@@ -515,44 +529,54 @@ const getConfirmedReauthCodexQuotaEvent = (
     state: sanitizedState,
     factState,
     factAtMs,
-    lifecycleAtMs:
-      lifecycleKind === null ? null : getCodexQuotaLifecycleAtMs(state, factAtMs),
+    factAuthority,
+    lifecycleAtMs: lifecycleKind === null ? null : getCodexQuotaLifecycleAtMs(state, factAtMs),
     lifecycleKind,
     authoritativeInventory:
-      state.status === 'success' && state.quotaInventoryObserved === true,
+      factAuthority === 'provider_snapshot' && state.quotaInventoryObserved === true,
     authenticationFailureWasSuperseded,
   };
 };
 
-const replaceWithConfirmedReauthAuthoritativeInventory = (
+const applyProviderQuotaSnapshot = (
+  current: CodexQuotaState | undefined,
   event: ConfirmedReauthCodexQuotaEvent
 ): CodexQuotaState => {
   const factAtMs = event.factAtMs;
   const observedAtMs = readFiniteTimestamp(event.state.observedAtMs) ?? factAtMs;
   const fetchedAtMs = readFiniteTimestamp(event.state.fetchedAtMs) ?? event.factAtMs;
   const next: CodexQuotaState = {
+    ...(current ?? {}),
     ...event.state,
     status: 'success',
     windows:
-      factAtMs === null
-        ? event.state.windows
-        : stampQuotaEvidenceWindows(event.state, event.source, factAtMs),
-    ...(observedAtMs !== null ? { observedAtMs } : {}),
-    ...(fetchedAtMs !== null ? { fetchedAtMs } : {}),
+      event.state.quotaInventoryObserved === true || event.state.windows.length > 0
+        ? factAtMs === null
+          ? event.state.windows
+          : stampQuotaEvidenceWindows(event.state, event.source, factAtMs)
+        : (current?.windows ?? []),
   };
+  const apply = <K extends (typeof CODEX_QUOTA_FACT_KEYS)[number]>(key: K): void => {
+    next[key] = event.state[key] as CodexQuotaState[K];
+  };
+  CODEX_QUOTA_FACT_KEYS.forEach(apply);
+  if (observedAtMs !== null) next.observedAtMs = observedAtMs;
+  else delete next.observedAtMs;
+  if (fetchedAtMs !== null) next.fetchedAtMs = fetchedAtMs;
+  else delete next.fetchedAtMs;
   next.error = undefined;
   next.errorStatus = undefined;
   next.failedAtMs = undefined;
   return next;
 };
 
-const mergeConfirmedReauthObservedQuotaFacts = (
+const mergeConservativeReauthQuotaFacts = (
   current: CodexQuotaState,
   observed: CodexQuotaState,
   factAtMs: number
 ): CodexQuotaState => {
   const previous = current;
-  const next = mergeObservedCodexQuotaFacts(current, observed, previous);
+  const next = mergeConservativeCodexQuotaFacts(current, observed, previous);
   if (observed.windows.length > 0) {
     next.windows = stampQuotaEvidenceWindows(observed, 'provider', factAtMs);
   }
@@ -568,7 +592,10 @@ const mergeConfirmedReauthObservedQuotaFacts = (
 
   const currentObservedAtMs = readFiniteTimestamp(current.observedAtMs);
   const observedAtMs = readFiniteTimestamp(observed.observedAtMs);
-  if (currentObservedAtMs !== null && (observedAtMs === null || observedAtMs < currentObservedAtMs)) {
+  if (
+    currentObservedAtMs !== null &&
+    (observedAtMs === null || observedAtMs < currentObservedAtMs)
+  ) {
     next.observedAtMs = currentObservedAtMs;
   }
 
@@ -586,9 +613,11 @@ const mergeConfirmedReauthObservedQuotaFacts = (
  * Merge the old and replacement credential states during a confirmed reauth.
  *
  * A replacement error is a newer lifecycle fact, but an empty or inherited
- * error payload is not a newer quota inventory. Keep those concerns separate
- * so limit/error metadata can coexist with previously observed quota facts,
- * while a complete successful inventory can still replace them.
+ * error payload is not a newer quota inventory. A failed refresh can also
+ * carry a cached Provider snapshot, so fact authority must not be inferred
+ * from its outer lifecycle status. Keep those concerns separate so
+ * limit/error metadata can coexist with previously observed quota facts,
+ * while an authoritative Provider inventory can still replace them.
  */
 export const mergeConfirmedReauthCodexQuotaStates = (
   sourceState: CodexQuotaState | undefined,
@@ -603,7 +632,7 @@ export const mergeConfirmedReauthCodexQuotaStates = (
 
   const baseEvent = events[0];
   let current = baseEvent.authoritativeInventory
-    ? replaceWithConfirmedReauthAuthoritativeInventory(baseEvent)
+    ? applyProviderQuotaSnapshot(undefined, baseEvent)
     : baseEvent.authenticationFailureWasSuperseded
       ? clearSupersededAuthenticationLifecycle(baseEvent.state)
       : { ...baseEvent.state };
@@ -612,24 +641,17 @@ export const mergeConfirmedReauthCodexQuotaStates = (
   const factEvents = [...events]
     .filter((event) => event.factAtMs !== null)
     .sort(
-      (left, right) =>
-        (left.factAtMs ?? 0) - (right.factAtMs ?? 0) || left.order - right.order
+      (left, right) => (left.factAtMs ?? 0) - (right.factAtMs ?? 0) || left.order - right.order
     );
   for (const event of factEvents) {
     if (event === baseEvent || event.factAtMs === null) continue;
     if (currentFactAtMs !== null && event.factAtMs < currentFactAtMs) continue;
-    if (event.authoritativeInventory) {
-      current = replaceWithConfirmedReauthAuthoritativeInventory(event);
-    } else {
+    if (event.factAuthority === 'provider_snapshot') {
       const factMergeBase =
-        event.lifecycleKind === 'success'
-          ? clearSupersededQuotaFailureMetadata(current)
-          : current;
-      current = mergeConfirmedReauthObservedQuotaFacts(
-        factMergeBase,
-        event.factState,
-        event.factAtMs
-      );
+        event.lifecycleKind === 'success' ? clearSupersededQuotaFailureMetadata(current) : current;
+      current = applyProviderQuotaSnapshot(factMergeBase, event);
+    } else {
+      current = mergeConservativeReauthQuotaFacts(current, event.factState, event.factAtMs);
     }
     currentFactAtMs = event.factAtMs;
   }
@@ -639,9 +661,7 @@ export const mergeConfirmedReauthCodexQuotaStates = (
       (event): event is ConfirmedReauthCodexQuotaEvent & { lifecycleAtMs: number } =>
         event.lifecycleKind !== null && event.lifecycleAtMs !== null
     )
-    .sort(
-      (left, right) => left.lifecycleAtMs - right.lifecycleAtMs || left.order - right.order
-    );
+    .sort((left, right) => left.lifecycleAtMs - right.lifecycleAtMs || left.order - right.order);
   const latestLifecycle = lifecycleEvents[lifecycleEvents.length - 1];
   if (!latestLifecycle) return current;
 
@@ -651,8 +671,7 @@ export const mergeConfirmedReauthCodexQuotaStates = (
       status: 'error',
       error: latestLifecycle.state.error,
       errorStatus: latestLifecycle.state.errorStatus,
-      failedAtMs:
-        latestLifecycle.state.failedAtMs ?? latestLifecycle.lifecycleAtMs,
+      failedAtMs: latestLifecycle.state.failedAtMs ?? latestLifecycle.lifecycleAtMs,
     };
   }
   if (latestLifecycle.lifecycleKind === 'success') {
