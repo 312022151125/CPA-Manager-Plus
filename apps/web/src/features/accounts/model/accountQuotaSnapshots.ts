@@ -86,6 +86,33 @@ const snapshotFieldTieBreakKey = (snapshot: AccountQuotaSnapshotWindow, field: s
     snapshot.window_kind,
   ].join('\u0000');
 
+const isFiniteQuotaProgress = (value: number | undefined): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+const resolveSnapshotQuotaProgressObservedAtMs = (
+  snapshot: AccountQuotaSnapshotWindow
+): number | null => {
+  if (
+    !isFiniteQuotaProgress(snapshot.used_percent) &&
+    !isFiniteQuotaProgress(snapshot.remaining_percent)
+  ) {
+    return null;
+  }
+  const quotaObservedAtMs = snapshot.field_sources?.quota?.observed_at_ms;
+  if (
+    typeof quotaObservedAtMs === 'number' &&
+    Number.isFinite(quotaObservedAtMs) &&
+    quotaObservedAtMs > 0
+  ) {
+    return quotaObservedAtMs;
+  }
+  return typeof snapshot.observed_at_ms === 'number' &&
+    Number.isFinite(snapshot.observed_at_ms) &&
+    snapshot.observed_at_ms > 0
+    ? snapshot.observed_at_ms
+    : null;
+};
+
 const compareSnapshotFieldFreshness =
   (field: string) => (left: AccountQuotaSnapshotWindow, right: AccountQuotaSnapshotWindow) => {
     const observedAtDelta =
@@ -188,6 +215,13 @@ const toSnapshotWindow = (
     scopeComplete && hasModels ? definition.boundaryAccuracy : ('unknown' as const);
   const windowMode = scopeComplete && hasModels ? definition.windowMode : ('unknown' as const);
   const resetCredits = definition.provider === 'codex' ? toResetCredits(codexQuota) : [];
+  const snapshotObservedAtMs =
+    observation?.observed_at_ms ?? definition.observedAtMs ?? nowMs;
+  const quotaProgressBelongsToObservation =
+    typeof definition.quotaProgressObservedAtMs === 'number' &&
+    Number.isFinite(definition.quotaProgressObservedAtMs) &&
+    definition.quotaProgressObservedAtMs > 0 &&
+    definition.quotaProgressObservedAtMs === snapshotObservedAtMs;
   return {
     provider_window_id: definition.providerWindowId,
     provider_window_aliases: definition.providerWindowAliases,
@@ -198,13 +232,17 @@ const toSnapshotWindow = (
     model_ids: persistedModelIDs,
     source: observation?.source ?? definition.observationSource,
     source_observation_id: observation?.source_observation_id,
-    observed_at_ms: observation?.observed_at_ms ?? definition.observedAtMs ?? nowMs,
+    observed_at_ms: snapshotObservedAtMs,
     boundary_accuracy: boundaryAccuracy,
     cycle_start_ms: definition.cycleStartMs ?? undefined,
     cycle_end_ms: definition.cycleEndMs ?? undefined,
     duration_seconds: definition.durationSeconds ?? undefined,
-    used_percent: definition.usedPercent ?? undefined,
-    remaining_percent: definition.remainingPercent ?? undefined,
+    ...(quotaProgressBelongsToObservation
+      ? {
+          used_percent: definition.usedPercent ?? undefined,
+          remaining_percent: definition.remainingPercent ?? undefined,
+        }
+      : {}),
     reset_credits_available:
       definition.provider === 'codex'
         ? (codexQuota?.rateLimitResetCreditsAvailableCount ?? undefined)
@@ -577,6 +615,14 @@ export const mergeAccountQuotaSnapshotWindows = (
       return definition;
     }
     const currentCycle = snapshotCycleDefinition(snapshot.current_cycle);
+    const mergedRemainingPercent = isFiniteQuotaProgress(snapshot.remaining_percent)
+      ? snapshot.remaining_percent
+      : definition.remainingPercent;
+    const mergedUsedPercent = isFiniteQuotaProgress(snapshot.used_percent)
+      ? snapshot.used_percent
+      : definition.usedPercent;
+    const quotaProgressObservedAtMs =
+      resolveSnapshotQuotaProgressObservedAtMs(snapshot) ?? definition.quotaProgressObservedAtMs;
     return {
       ...definition,
       windowMode: snapshot.window_mode,
@@ -586,10 +632,19 @@ export const mergeAccountQuotaSnapshotWindows = (
       cycleStartMs: currentCycle?.actualStartMs ?? snapshot.cycle_start_ms ?? null,
       cycleEndMs: currentCycle?.scheduledEndMs ?? snapshot.cycle_end_ms ?? null,
       durationSeconds: currentCycle?.durationSeconds ?? snapshot.duration_seconds ?? null,
-      remainingPercent: snapshot.remaining_percent ?? definition.remainingPercent,
-      usedPercent: snapshot.used_percent ?? definition.usedPercent,
+      remainingPercent: mergedRemainingPercent,
+      usedPercent: mergedUsedPercent,
+      quotaProgressObservedAtMs,
       modelScope: snapshotModelScope(snapshot),
       stale: snapshot.stale,
+      display: {
+        ...definition.display,
+        observationSource: snapshot.source,
+        observedAtMs: snapshot.observed_at_ms,
+        quotaProgressObservedAtMs,
+        remainingPercent: mergedRemainingPercent,
+        usedPercent: mergedUsedPercent,
+      },
       ...snapshotLifecycleDefinition(snapshot),
     };
   });
@@ -739,6 +794,7 @@ const snapshotDefinition = (
   const durationSeconds =
     lifecycle.currentCycle?.durationSeconds ?? snapshot.duration_seconds ?? null;
   const modelScope = snapshotModelScope(snapshot);
+  const quotaProgressObservedAtMs = resolveSnapshotQuotaProgressObservedAtMs(snapshot);
   const display: AccountQuotaDisplayWindow = {
     key,
     label: options.getLabel?.(snapshot) ?? snapshot.provider_window_id,
@@ -758,6 +814,7 @@ const snapshotDefinition = (
     source: provider,
     observationSource: snapshot.source,
     observedAtMs: snapshot.observed_at_ms,
+    quotaProgressObservedAtMs,
     windowMode: snapshot.window_mode,
     cycleStartMs: currentStartMs,
     cycleEndMs: currentEndMs,
@@ -775,6 +832,7 @@ const snapshotDefinition = (
     providerWindowAliases: snapshot.provider_window_aliases,
     observationSource: snapshot.source,
     observedAtMs: snapshot.observed_at_ms,
+    quotaProgressObservedAtMs,
     boundaryAccuracy: snapshot.boundary_accuracy,
     cycleStartMs: currentStartMs,
     cycleEndMs: currentEndMs,

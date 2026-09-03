@@ -61,6 +61,7 @@ export interface AccountQuotaDisplayWindow {
   source?: AccountQuotaWindowSource;
   observationSource?: QuotaObservationSource;
   observedAtMs?: number | null;
+  quotaProgressObservedAtMs?: number | null;
   windowMode?: QuotaWindowMode;
   cycleStartMs?: number | null;
   cycleEndMs?: number | null;
@@ -309,6 +310,33 @@ export const buildQuotaWindowRange = (
   return { resetAtMs, fromMs, toMs };
 };
 
+const resolveQuotaProgressObservedAtMs = ({
+  usedPercent,
+  remainingPercent,
+  quotaProgressObservedAtMs,
+  observedAtMs,
+}: {
+  usedPercent: number | null;
+  remainingPercent: number | null;
+  quotaProgressObservedAtMs: number | null | undefined;
+  observedAtMs: number | null | undefined;
+}): number | null => {
+  const hasQuotaProgress =
+    (typeof usedPercent === 'number' && Number.isFinite(usedPercent)) ||
+    (typeof remainingPercent === 'number' && Number.isFinite(remainingPercent));
+  if (!hasQuotaProgress) return null;
+  if (quotaProgressObservedAtMs !== undefined) {
+    return typeof quotaProgressObservedAtMs === 'number' &&
+      Number.isFinite(quotaProgressObservedAtMs) &&
+      quotaProgressObservedAtMs > 0
+      ? quotaProgressObservedAtMs
+      : null;
+  }
+  return typeof observedAtMs === 'number' && Number.isFinite(observedAtMs) && observedAtMs > 0
+    ? observedAtMs
+    : null;
+};
+
 export const buildAccountQuotaDisplayWindow = ({
   key,
   label,
@@ -325,6 +353,7 @@ export const buildAccountQuotaDisplayWindow = ({
   source,
   observationSource = 'api_query',
   observedAtMs = null,
+  quotaProgressObservedAtMs,
   windowMode,
   cycleStartMs,
   cycleEndMs,
@@ -347,6 +376,7 @@ export const buildAccountQuotaDisplayWindow = ({
   source?: AccountQuotaWindowSource;
   observationSource?: QuotaObservationSource;
   observedAtMs?: number | null;
+  quotaProgressObservedAtMs?: number | null;
   windowMode?: QuotaWindowMode;
   cycleStartMs?: number | null;
   cycleEndMs?: number | null;
@@ -396,6 +426,12 @@ export const buildAccountQuotaDisplayWindow = ({
     source,
     observationSource,
     observedAtMs,
+    quotaProgressObservedAtMs: resolveQuotaProgressObservedAtMs({
+      usedPercent,
+      remainingPercent,
+      quotaProgressObservedAtMs,
+      observedAtMs,
+    }),
     windowMode: resolvedMode,
     cycleStartMs: cycleStartMs ?? range.fromMs,
     cycleEndMs: cycleEndMs ?? range.resetAtMs,
@@ -432,6 +468,7 @@ const buildCodexQuotaDisplayWindows = (
           ? 'response_header'
           : 'api_query'),
       observedAtMs: window.observedAtMs ?? quota.observedAtMs ?? quota.fetchedAtMs ?? null,
+      quotaProgressObservedAtMs: window.quotaProgressObservedAtMs,
       nowMs: options.nowMs,
     })
   );

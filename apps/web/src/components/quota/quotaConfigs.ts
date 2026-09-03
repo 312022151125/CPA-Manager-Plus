@@ -158,11 +158,22 @@ const stampCodexQuotaWindows = (
   observationSource: NonNullable<CodexQuotaWindow['observationSource']>,
   observedAtMs: number | null
 ): CodexQuotaWindow[] | undefined =>
-  windows?.map((window) => ({
-    ...window,
-    observationSource: window.observationSource ?? observationSource,
-    observedAtMs: readFiniteTimestamp(window.observedAtMs) ?? observedAtMs,
-  }));
+  windows?.map((window) => {
+    const stampedObservedAtMs = readFiniteTimestamp(window.observedAtMs) ?? observedAtMs;
+    const hasQuotaProgress =
+      typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent);
+    const quotaProgressObservedAtMs = !hasQuotaProgress
+      ? null
+      : window.quotaProgressObservedAtMs !== undefined
+        ? readFiniteTimestamp(window.quotaProgressObservedAtMs)
+        : stampedObservedAtMs;
+    return {
+      ...window,
+      observationSource: window.observationSource ?? observationSource,
+      observedAtMs: stampedObservedAtMs,
+      quotaProgressObservedAtMs,
+    };
+  });
 
 const mergeCodexQuotaWindow = (
   activeWindow: CodexQuotaWindow,
@@ -170,6 +181,13 @@ const mergeCodexQuotaWindow = (
 ): CodexQuotaWindow => {
   const hasObservedResetLabel = hasKnownResetLabel(observedWindow.resetLabel);
   const hasObservedResetAt = isValidQuotaResetAtMs(observedWindow.resetAtMs);
+  const hasObservedUsedPercent =
+    typeof observedWindow.usedPercent === 'number' && Number.isFinite(observedWindow.usedPercent);
+  const observedQuotaProgressObservedAtMs = hasObservedUsedPercent
+    ? observedWindow.quotaProgressObservedAtMs !== undefined
+      ? readFiniteTimestamp(observedWindow.quotaProgressObservedAtMs)
+      : readFiniteTimestamp(observedWindow.observedAtMs)
+    : null;
   const resetMetadata = hasObservedResetAt
     ? {
         resetLabel: hasObservedResetLabel ? observedWindow.resetLabel : '-',
@@ -191,10 +209,11 @@ const mergeCodexQuotaWindow = (
     ...(observedWindow.labelParams && Object.keys(observedWindow.labelParams).length > 0
       ? { labelParams: observedWindow.labelParams }
       : {}),
-    ...(observedWindow.usedPercent !== null &&
-    observedWindow.usedPercent !== undefined &&
-    Number.isFinite(observedWindow.usedPercent)
+    ...(hasObservedUsedPercent
       ? { usedPercent: observedWindow.usedPercent }
+      : {}),
+    ...(hasObservedUsedPercent
+      ? { quotaProgressObservedAtMs: observedQuotaProgressObservedAtMs }
       : {}),
     ...resetMetadata,
     ...(observedWindow.limitWindowSeconds !== null &&
@@ -495,6 +514,10 @@ export const buildObservedCodexQuotaState = (
               resetAccuracy: fallbackRecoverAtMS ? 'estimated' : 'unknown',
               observationSource: 'response_header',
               observedAtMs: snapshot?.timestamp_ms ?? null,
+              quotaProgressObservedAtMs:
+                fallbackUsedPercent !== null
+                  ? readFiniteTimestamp(snapshot?.timestamp_ms)
+                  : null,
               modelScope: observedScope.modelScope,
             },
           ]

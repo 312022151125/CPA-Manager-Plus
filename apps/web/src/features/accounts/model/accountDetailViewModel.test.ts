@@ -122,6 +122,7 @@ const makeForecastWindow = (
   resetAtMs: 10_000,
   resetAccuracy: 'exact',
   observedAtMs: 2_000,
+  quotaProgressObservedAtMs: 2_000,
   limitWindowSeconds: 7 * 24 * 60 * 60,
   windowMode: 'fixed',
   cycleStartMs: 1_000,
@@ -417,6 +418,7 @@ describe('accountDetailViewModel', () => {
           resetAtMs: nowMs + 60 * 60 * 1000,
           resetAccuracy: 'exact',
           observedAtMs: nowMs,
+          quotaProgressObservedAtMs: nowMs,
           limitWindowSeconds: 7 * 24 * 60 * 60,
           windowMode: 'calendar',
           cycleStartMs: nowMs - 60 * 60 * 1000,
@@ -489,6 +491,7 @@ describe('accountDetailViewModel', () => {
           resetAtMs: nowMs + 24 * 60 * 60 * 1000,
           resetAccuracy: 'exact',
           observedAtMs: nowMs,
+          quotaProgressObservedAtMs: nowMs,
           limitWindowSeconds: 24 * 60 * 60,
           windowMode: 'fixed',
           cycleStartMs: nowMs - 60 * 60 * 1000,
@@ -704,6 +707,7 @@ describe('accountDetailViewModel', () => {
           resetAtMs: nowMs + 24 * 60 * 60 * 1000,
           resetAccuracy: 'exact',
           observedAtMs: nowMs - 1_000,
+          quotaProgressObservedAtMs: nowMs - 1_000,
           limitWindowSeconds: 24 * 60 * 60,
           windowMode: 'fixed',
           cycleStartMs: nowMs - 60 * 60 * 1000,
@@ -752,12 +756,12 @@ describe('accountDetailViewModel', () => {
     expect(viewModel.quota.windows[0].forecast).toBeNull();
   });
 
-  it('resumes quota projection once the provider observation catches up with current usage', () => {
+  it('resumes quota projection once the quota progress observation catches up with current usage', () => {
     const current = {
       total_requests: 1_300,
       total_tokens: 181_600_000,
       total_cost: 6.95,
-      last_seen_ms: 2_000,
+      last_seen_ms: 1_500,
     };
     const previous = {
       total_requests: 149,
@@ -768,14 +772,14 @@ describe('accountDetailViewModel', () => {
     const delayed = buildForecastWindow({
       current,
       previous,
-      quota: { usedPercent: 66, observedAtMs: 1_999 },
+      quota: { usedPercent: 66, observedAtMs: 2_000, quotaProgressObservedAtMs: 1_499 },
     });
     expect(delayed.forecast).toBeNull();
 
     const recovered = buildForecastWindow({
       current,
       previous,
-      quota: { usedPercent: 66, observedAtMs: 2_000 },
+      quota: { usedPercent: 66, observedAtMs: 2_000, quotaProgressObservedAtMs: 1_500 },
     });
     expect(recovered.forecast).toEqual({
       requests: 1_970,
@@ -786,6 +790,29 @@ describe('accountDetailViewModel', () => {
     expect(recovered.forecast?.requests).toBeGreaterThan(current.total_requests);
     expect(recovered.forecast?.tokens).toBeGreaterThan(current.total_tokens);
     expect(recovered.forecast?.cost).toBeGreaterThanOrEqual(current.total_cost);
+  });
+
+  it('rejects previous fallback when current usage is ahead of quota progress provenance', () => {
+    const window = buildForecastWindow({
+      current: {
+        total_requests: 100,
+        total_tokens: 1_000_000,
+        total_cost: 5,
+        last_seen_ms: 1_500,
+      },
+      previous: {
+        total_requests: 200,
+        total_tokens: 2_000_000,
+        total_cost: 10,
+      },
+      quota: {
+        usedPercent: 50,
+        observedAtMs: 2_000,
+        quotaProgressObservedAtMs: 1_000,
+      },
+    });
+
+    expect(window.forecast).toBeNull();
   });
 
   it('preserves previous fallback when current usage is unavailable', () => {

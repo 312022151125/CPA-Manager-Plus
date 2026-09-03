@@ -21,6 +21,7 @@ const makeDefinition = (
   modelScope: { kind: 'all', complete: true },
   observationSource: 'api_query',
   observedAtMs: 10_000,
+  quotaProgressObservedAtMs: 10_000,
   boundaryAccuracy: 'exact',
   cycleStartMs: 1_000,
   cycleEndMs: 19_001_000,
@@ -41,6 +42,8 @@ const makeDefinition = (
     fromMs: 1_000,
     toMs: 10_000,
     source: 'codex',
+    observedAtMs: 10_000,
+    quotaProgressObservedAtMs: 10_000,
   },
   ...overrides,
 });
@@ -64,6 +67,22 @@ const makeSnapshot = (
   ...overrides,
 });
 
+const makeSnapshotRow = (): AccountRow =>
+  ({
+    selectionKey: 'codex.json\u0000auth-1',
+    fileName: 'codex.json',
+    provider: 'codex',
+    authIndex: 'auth-1',
+    accountLabel: 'user@example.com',
+    raw: {
+      name: 'codex.json',
+      provider: 'codex',
+      type: 'codex',
+      auth_index: 'auth-1',
+      account: 'user@example.com',
+    },
+  }) as unknown as AccountRow;
+
 describe('account quota snapshots', () => {
   it('overlays server provenance, boundaries, scope, and stale state', () => {
     const merged = mergeAccountQuotaSnapshotWindows(
@@ -81,6 +100,147 @@ describe('account quota snapshots', () => {
       boundaryAccuracy: 'derived',
       stale: true,
       modelScope: { kind: 'all', complete: true },
+    });
+  });
+
+  it('preserves quota progress provenance when a newer snapshot only provides metadata', () => {
+    const definition = makeDefinition({
+      observedAtMs: 1_000,
+      quotaProgressObservedAtMs: 1_000,
+      remainingPercent: 50,
+      usedPercent: 50,
+      display: {
+        ...makeDefinition().display,
+        observedAtMs: 1_000,
+        quotaProgressObservedAtMs: 1_000,
+        remainingPercent: 50,
+        usedPercent: 50,
+      },
+    });
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [definition],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_000,
+          used_percent: undefined,
+          remaining_percent: undefined,
+          availability: 'active',
+          field_sources: {
+            quota: { source: 'response_header', observed_at_ms: 2_000 },
+          },
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      observedAtMs: 2_000,
+      usedPercent: 50,
+      remainingPercent: 50,
+      quotaProgressObservedAtMs: 1_000,
+      display: {
+        observedAtMs: 2_000,
+        usedPercent: 50,
+        remainingPercent: 50,
+        quotaProgressObservedAtMs: 1_000,
+      },
+    });
+  });
+
+  it('uses field-level quota provenance for new snapshot progress', () => {
+    const snapshot = makeSnapshot({
+      observed_at_ms: 3_000,
+      used_percent: 60,
+      remaining_percent: 40,
+      field_sources: {
+        quota: { source: 'api_query', observed_at_ms: 2_000 },
+      },
+    });
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [makeDefinition({ observedAtMs: 1_000, quotaProgressObservedAtMs: 1_000 })],
+      [snapshot]
+    );
+
+    expect(merged).toMatchObject({
+      observedAtMs: 3_000,
+      usedPercent: 60,
+      remainingPercent: 40,
+      quotaProgressObservedAtMs: 2_000,
+    });
+
+    const [snapshotOnly] = mergeAccountQuotaSnapshotWindows([], [snapshot]);
+    expect(snapshotOnly).toMatchObject({
+      usedPercent: 60,
+      remainingPercent: 40,
+      quotaProgressObservedAtMs: 2_000,
+      display: { quotaProgressObservedAtMs: 2_000 },
+    });
+  });
+
+  it('does not persist old quota progress under a newer snapshot observation', () => {
+    const row = makeSnapshotRow();
+    const [entry] = buildAccountQuotaSnapshotWriteEntries(
+      [row],
+      new Map([
+        [
+          row.selectionKey,
+          [
+            makeDefinition({
+              observedAtMs: 2_000,
+              quotaProgressObservedAtMs: 1_000,
+              usedPercent: 50,
+              remainingPercent: 50,
+            }),
+          ],
+        ],
+      ]),
+      {
+        getObservation: () => ({
+          source: 'response_header',
+          source_observation_id: 'header-1',
+          observed_at_ms: 2_000,
+          inventory_scope_key: 'codex:rate-limits',
+          inventory_mode: 'complete',
+        }),
+      }
+    );
+
+    expect(entry.windows[0]).not.toHaveProperty('used_percent');
+    expect(entry.windows[0]).not.toHaveProperty('remaining_percent');
+    expect(entry.windows[0].observed_at_ms).toBe(2_000);
+  });
+
+  it('persists quota progress when its provenance matches the snapshot observation', () => {
+    const row = makeSnapshotRow();
+    const [entry] = buildAccountQuotaSnapshotWriteEntries(
+      [row],
+      new Map([
+        [
+          row.selectionKey,
+          [
+            makeDefinition({
+              observedAtMs: 2_000,
+              quotaProgressObservedAtMs: 2_000,
+              usedPercent: 60,
+              remainingPercent: 40,
+            }),
+          ],
+        ],
+      ]),
+      {
+        getObservation: () => ({
+          source: 'api_query',
+          source_observation_id: 'api-1',
+          observed_at_ms: 2_000,
+          inventory_scope_key: 'codex:rate-limits',
+          inventory_mode: 'complete',
+        }),
+      }
+    );
+
+    expect(entry.windows[0]).toMatchObject({
+      observed_at_ms: 2_000,
+      used_percent: 60,
+      remaining_percent: 40,
     });
   });
 

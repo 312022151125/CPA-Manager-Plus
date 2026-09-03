@@ -495,6 +495,86 @@ describe('resolveQuotaDisplayState', () => {
     });
   });
 
+  it('preserves quota progress provenance when a newer Header only provides metadata', () => {
+    const result = resolveQuotaDisplayState(
+      {
+        status: 'success',
+        fetchedAtMs: 1_000,
+        quotaInventoryObserved: true,
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly limit',
+            usedPercent: 50,
+            resetLabel: '07/07 12:00',
+            observedAtMs: 1_000,
+            quotaProgressObservedAtMs: 1_000,
+          },
+        ],
+      },
+      {
+        status: 'success',
+        observedAtMs: 2_000,
+        observedFromUsageHeaders: true,
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly limit',
+            usedPercent: null,
+            resetLabel: '07/08 12:00',
+            quotaProgressObservedAtMs: null,
+          },
+        ],
+      }
+    ) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      usedPercent: 50,
+      observedAtMs: 2_000,
+      quotaProgressObservedAtMs: 1_000,
+      resetLabel: '07/08 12:00',
+    });
+  });
+
+  it('advances quota progress provenance when a Header provides new progress', () => {
+    const result = resolveQuotaDisplayState(
+      {
+        status: 'success',
+        fetchedAtMs: 1_000,
+        quotaInventoryObserved: true,
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly limit',
+            usedPercent: 50,
+            resetLabel: '07/07 12:00',
+            observedAtMs: 1_000,
+            quotaProgressObservedAtMs: 1_000,
+          },
+        ],
+      },
+      {
+        status: 'success',
+        observedAtMs: 2_000,
+        observedFromUsageHeaders: true,
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly limit',
+            usedPercent: 60,
+            resetLabel: '07/08 12:00',
+          },
+        ],
+      }
+    ) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      usedPercent: 60,
+      observedAtMs: 2_000,
+      quotaProgressObservedAtMs: 2_000,
+    });
+  });
+
   it('does not retain an older reset timestamp behind a newer reset label', () => {
     const activeQuota: CodexQuotaState = {
       status: 'success',

@@ -677,26 +677,26 @@ const buildQuotaWindows = (
       : !hasLifecycleEvidence;
     const canForecastCurrentWindow =
       !hasLifecycleEvidence || (currentForecastEligible && window.stale !== true);
-    const quotaObservedAtMs =
-      typeof window.observedAtMs === 'number' &&
-      Number.isFinite(window.observedAtMs) &&
-      window.observedAtMs > 0
-        ? window.observedAtMs
+    const quotaProgressObservedAtMs =
+      typeof window.quotaProgressObservedAtMs === 'number' &&
+      Number.isFinite(window.quotaProgressObservedAtMs) &&
+      window.quotaProgressObservedAtMs > 0
+        ? window.quotaProgressObservedAtMs
         : null;
     const hasReliableCurrentUsage =
       currentUsage?.matched === true &&
       currentUsage.scopeMatchStatus === 'complete' &&
       currentForecastEligible;
-    const currentUsageAheadOfQuotaObservation =
+    const currentUsageAheadOfQuotaProgressObservation =
       hasReliableCurrentUsage &&
-      quotaObservedAtMs !== null &&
+      quotaProgressObservedAtMs !== null &&
       currentUsage.lastSeenMs !== null &&
-      currentUsage.lastSeenMs > quotaObservedAtMs;
+      currentUsage.lastSeenMs > quotaProgressObservedAtMs;
     const currentForecastUsage =
       hasReliableCurrentUsage &&
-      quotaObservedAtMs !== null &&
+      quotaProgressObservedAtMs !== null &&
       currentUsage.lastSeenMs !== null &&
-      currentUsage.lastSeenMs <= quotaObservedAtMs
+      currentUsage.lastSeenMs <= quotaProgressObservedAtMs
         ? {
             requests: currentUsage.totalRequests,
             tokens: currentUsage.totalTokens,
@@ -714,7 +714,7 @@ const buildQuotaWindows = (
             usedPercent: window.usedPercent,
             current: currentForecastUsage,
             previous:
-              !currentUsageAheadOfQuotaObservation &&
+              !currentUsageAheadOfQuotaProgressObservation &&
               previousForecastEligible &&
               previousUsage?.matched === true &&
               previousUsage.scopeMatchStatus === 'complete'
