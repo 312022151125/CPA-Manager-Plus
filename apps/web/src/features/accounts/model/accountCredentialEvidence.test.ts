@@ -73,6 +73,116 @@ describe('confirmed reauth Codex quota state merge', () => {
     expect(result?.errorStatus).toBeUndefined();
   });
 
+  it('keeps newer quota facts from a replacement state whose 401 is stale', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota({ planType: 'team' }),
+      {
+        status: 'error',
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly replacement',
+            usedPercent: 20,
+            resetLabel: 'replacement reset',
+            observedAtMs: 1_500,
+          },
+        ],
+        quotaInventoryObserved: true,
+        fetchedAtMs: 1_500,
+        observedAtMs: 1_500,
+        planType: 'plus',
+        error: 'HTTP 401 token expired',
+        errorStatus: 401,
+        failedAtMs: 1_600,
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      error: undefined,
+      errorStatus: undefined,
+      planType: 'plus',
+      fetchedAtMs: 1_500,
+      windows: [expect.objectContaining({ usedPercent: 20, observedAtMs: 1_500 })],
+    });
+  });
+
+  it.each([429, 503])(
+    'does not turn a retained HTTP %s lifecycle into synthetic success after stale 401 cleanup',
+    (status) => {
+      const result = mergeConfirmedReauthCodexQuotaStates(
+        {
+          status: 'error',
+          windows: [],
+          error: 'HTTP 401 token expired',
+          errorStatus: 401,
+          failedAtMs: 1_500,
+        },
+        {
+          status: 'error',
+          windows: [],
+          error: `HTTP ${status}`,
+          errorStatus: status,
+          failedAtMs: 1_200,
+        },
+        2_000
+      );
+
+      expect(result).toMatchObject({
+        status: 'error',
+        errorStatus: status,
+        failedAtMs: 1_200,
+      });
+      expect(result?.errorStatus).not.toBe(401);
+    }
+  );
+
+  it('keeps non-auth lifecycle and independently fresher source quota facts', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      {
+        status: 'error',
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly source',
+            usedPercent: 30,
+            resetLabel: 'source reset',
+            observedAtMs: 1_400,
+          },
+        ],
+        fetchedAtMs: 1_400,
+        error: 'HTTP 401 token expired',
+        errorStatus: 401,
+        failedAtMs: 1_600,
+      },
+      {
+        status: 'error',
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly replacement cache',
+            usedPercent: 20,
+            resetLabel: 'stale replacement reset',
+            observedAtMs: 1_200,
+          },
+        ],
+        fetchedAtMs: 1_200,
+        error: 'HTTP 503',
+        errorStatus: 503,
+        failedAtMs: 1_500,
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'error',
+      errorStatus: 503,
+      failedAtMs: 1_500,
+      windows: [expect.objectContaining({ usedPercent: 30, observedAtMs: 1_400 })],
+    });
+  });
+
   it('does not treat a stale 401 with inherited inventory metadata as a new inventory', () => {
     const result = mergeConfirmedReauthCodexQuotaStates(
       providerQuota(),
