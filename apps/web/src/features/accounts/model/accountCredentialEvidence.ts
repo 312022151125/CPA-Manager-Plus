@@ -621,7 +621,15 @@ export const mergeConfirmedReauthCodexQuotaStates = (
     if (event.authoritativeInventory) {
       current = replaceWithConfirmedReauthAuthoritativeInventory(event);
     } else {
-      current = mergeConfirmedReauthObservedQuotaFacts(current, event.factState, event.factAtMs);
+      const factMergeBase =
+        event.lifecycleKind === 'success'
+          ? clearSupersededQuotaFailureMetadata(current)
+          : current;
+      current = mergeConfirmedReauthObservedQuotaFacts(
+        factMergeBase,
+        event.factState,
+        event.factAtMs
+      );
     }
     currentFactAtMs = event.factAtMs;
   }
@@ -648,11 +656,7 @@ export const mergeConfirmedReauthCodexQuotaStates = (
     };
   }
   if (latestLifecycle.lifecycleKind === 'success') {
-    const next =
-      (!latestLifecycle.authoritativeInventory &&
-        (latestLifecycle !== baseEvent || current.status === 'error'))
-        ? clearSupersededQuotaFailureMetadata(current)
-        : { ...current };
+    const next = { ...current };
     next.status = 'success';
     next.error = undefined;
     next.errorStatus = undefined;

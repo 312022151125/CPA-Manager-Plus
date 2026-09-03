@@ -108,6 +108,79 @@ describe('confirmed reauth Codex quota state merge', () => {
     });
   });
 
+  it('preserves quota-limit facts from a partial Provider success', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      providerQuota({
+        fetchedAtMs: 1_000,
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly source',
+            usedPercent: 30,
+            resetLabel: 'source reset',
+            observedAtMs: 1_000,
+          },
+        ],
+      }),
+      {
+        status: 'success',
+        quotaInventoryObserved: false,
+        fetchedAtMs: 1_500,
+        observedAtMs: 1_500,
+        windows: [],
+        spendControlReached: true,
+        creditsOverageLimitReached: true,
+        rateLimitResetCreditsError: 'reset credits failed',
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      error: undefined,
+      errorStatus: undefined,
+      failedAtMs: undefined,
+      spendControlReached: true,
+      creditsOverageLimitReached: true,
+      rateLimitResetCreditsError: 'reset credits failed',
+      windows: [expect.objectContaining({ usedPercent: 30, observedAtMs: 1_000 })],
+    });
+  });
+
+  it('does not let an older success lifecycle erase fresher source quota facts', () => {
+    const result = mergeConfirmedReauthCodexQuotaStates(
+      {
+        status: 'error',
+        quotaInventoryObserved: false,
+        fetchedAtMs: 1_500,
+        observedAtMs: 1_500,
+        windows: [],
+        spendControlReached: true,
+        creditsOverageLimitReached: true,
+        error: 'HTTP 401 token expired',
+        errorStatus: 401,
+        failedAtMs: 1_600,
+      },
+      {
+        status: 'success',
+        quotaInventoryObserved: false,
+        fetchedAtMs: 1_000,
+        observedAtMs: 1_000,
+        windows: [],
+      },
+      2_000
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      error: undefined,
+      errorStatus: undefined,
+      failedAtMs: undefined,
+      spendControlReached: true,
+      creditsOverageLimitReached: true,
+    });
+  });
+
   it.each([429, 503])(
     'does not turn a retained HTTP %s lifecycle into synthetic success after stale 401 cleanup',
     (status) => {
