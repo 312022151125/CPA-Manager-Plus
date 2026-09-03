@@ -13,9 +13,31 @@ import {
   getAccountHistoryTitle,
   parsePriorityValue,
   quotaStatusLabelKey,
+  selectAccountQuotaListWindows,
 } from './accountsPagePresentation';
 import type { AccountRow } from './accountRows';
 import type { AccountQuotaDisplayWindow } from './accountQuotaDisplayWindows';
+
+const makeQuotaWindow = (
+  overrides: Partial<AccountQuotaDisplayWindow> = {}
+): AccountQuotaDisplayWindow =>
+  ({
+    key: 'quota-window',
+    label: 'Quota window',
+    kind: 'unknown',
+    remainingPercent: 50,
+    usedPercent: 50,
+    resetLabel: '-',
+    resetAccuracy: 'unknown',
+    limitWindowSeconds: null,
+    resetAtMs: null,
+    fromMs: null,
+    toMs: null,
+    source: 'summary',
+    ...overrides,
+  }) as AccountQuotaDisplayWindow;
+
+const makeAccountRow = (provider: string): AccountRow => ({ provider }) as AccountRow;
 
 describe('accountsPagePresentation', () => {
   it('keeps account sort and metric formatting semantics stable', () => {
@@ -73,6 +95,113 @@ describe('accountsPagePresentation', () => {
         recoverAtMs
       )
     ).toEqual({ resetAt: '07/30 10:05', recoverAt: '07/31 11:15' });
+  });
+
+  it('keeps standard quota windows as the only list selection when available', () => {
+    const standardQuotaWindows = [
+      makeQuotaWindow({ key: 'five-hour', kind: 'five_hour' }),
+      makeQuotaWindow({ key: 'weekly', kind: 'weekly' }),
+    ];
+    const quotaWindows = [
+      ...standardQuotaWindows,
+      makeQuotaWindow({ key: 'model', kind: 'product' }),
+      makeQuotaWindow({ key: 'billing', kind: 'billing' }),
+      makeQuotaWindow({ key: 'pay-as-you-go', kind: 'payg' }),
+      makeQuotaWindow({ key: 'summary', kind: 'summary' }),
+    ];
+
+    expect(
+      selectAccountQuotaListWindows(makeAccountRow('xai'), quotaWindows, standardQuotaWindows)
+    ).toBe(standardQuotaWindows);
+  });
+
+  it('does not add a fallback for Codex model-only quota', () => {
+    const quotaWindows = [makeQuotaWindow({ key: 'codex-spark', kind: 'product' })];
+
+    expect(selectAccountQuotaListWindows(makeAccountRow('codex'), quotaWindows, [])).toEqual([]);
+  });
+
+  it('preserves Claude standard ordering and falls back to two non-standard windows otherwise', () => {
+    const standardQuotaWindows = [
+      makeQuotaWindow({ key: 'five-hour', kind: 'five_hour' }),
+      makeQuotaWindow({ key: 'weekly', kind: 'weekly' }),
+    ];
+    const quotaWindows = [
+      ...standardQuotaWindows,
+      makeQuotaWindow({ key: 'extra', kind: 'monthly' }),
+    ];
+    expect(
+      selectAccountQuotaListWindows(makeAccountRow('claude'), quotaWindows, standardQuotaWindows)
+    ).toBe(standardQuotaWindows);
+
+    const nonStandardQuotaWindows = [
+      makeQuotaWindow({ key: 'extra-1', kind: 'monthly' }),
+      makeQuotaWindow({ key: 'extra-2', kind: 'summary' }),
+      makeQuotaWindow({ key: 'extra-3', kind: 'product' }),
+    ];
+    expect(
+      selectAccountQuotaListWindows(makeAccountRow('claude'), nonStandardQuotaWindows, [])
+    ).toEqual(nonStandardQuotaWindows.slice(0, 2));
+  });
+
+  it('keeps Kimi standard windows ahead of summary data and exposes summary-only data', () => {
+    const standardQuotaWindows = [makeQuotaWindow({ key: 'five-hour', kind: 'five_hour' })];
+    const quotaWindows = [
+      makeQuotaWindow({ key: 'summary', kind: 'summary' }),
+      ...standardQuotaWindows,
+    ];
+    expect(
+      selectAccountQuotaListWindows(makeAccountRow('kimi'), quotaWindows, standardQuotaWindows)
+    ).toBe(standardQuotaWindows);
+
+    const summaryOnly = [makeQuotaWindow({ key: 'summary', kind: 'summary' })];
+    expect(selectAccountQuotaListWindows(makeAccountRow('kimi'), summaryOnly, [])).toEqual(
+      summaryOnly
+    );
+  });
+
+  it('selects xAI billing and PAYG while excluding product windows', () => {
+    const billing = makeQuotaWindow({ key: 'billing', kind: 'billing', source: 'xai' });
+    const payg = makeQuotaWindow({ key: 'pay-as-you-go', kind: 'payg', source: 'xai' });
+    const quotaWindows = [
+      makeQuotaWindow({ key: 'credits-period', kind: 'billing', source: 'xai' }),
+      makeQuotaWindow({ key: 'product-grok-code-fast', kind: 'product', source: 'xai' }),
+      billing,
+      payg,
+    ];
+
+    expect(selectAccountQuotaListWindows(makeAccountRow('xai'), quotaWindows, [])).toEqual([
+      billing,
+      payg,
+    ]);
+  });
+
+  it('uses xAI credits-period billing only when the dedicated billing window is absent', () => {
+    const creditsPeriod = makeQuotaWindow({
+      key: 'credits-period',
+      kind: 'billing',
+      source: 'xai',
+    });
+    const payg = makeQuotaWindow({ key: 'pay-as-you-go', kind: 'payg', source: 'xai' });
+
+    expect(selectAccountQuotaListWindows(makeAccountRow('xai'), [creditsPeriod, payg], [])).toEqual(
+      [creditsPeriod, payg]
+    );
+  });
+
+  it('keeps xAI weekly credits standard-first without adding monthly or PAYG windows', () => {
+    const weekly = makeQuotaWindow({ key: 'credits-period', kind: 'weekly', source: 'xai' });
+    const billing = makeQuotaWindow({ key: 'billing', kind: 'billing', source: 'xai' });
+    const payg = makeQuotaWindow({ key: 'pay-as-you-go', kind: 'payg', source: 'xai' });
+    const standardQuotaWindows = [weekly];
+
+    expect(
+      selectAccountQuotaListWindows(
+        makeAccountRow('xai'),
+        [weekly, billing, payg],
+        standardQuotaWindows
+      )
+    ).toBe(standardQuotaWindows);
   });
 
   it('rejects timestamps outside the JavaScript date range', () => {

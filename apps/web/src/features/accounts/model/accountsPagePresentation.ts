@@ -281,6 +281,41 @@ export const quotaStatusLabelKey = (status: AccountRow['quota']['status']) => {
   }
 };
 
+const selectXaiQuotaListFallbackWindows = (
+  windows: AccountQuotaDisplayWindow[]
+): AccountQuotaDisplayWindow[] => {
+  const billing =
+    windows.find((window) => window.source === 'xai' && window.key === 'billing') ??
+    windows.find(
+      (window) =>
+        window.source === 'xai' && window.key === 'credits-period' && window.kind === 'billing'
+    );
+  const payg = windows.find((window) => window.source === 'xai' && window.key === 'pay-as-you-go');
+
+  return [billing, payg].filter((window): window is AccountQuotaDisplayWindow => Boolean(window));
+};
+
+export const selectAccountQuotaListWindows = (
+  row: AccountRow,
+  quotaWindows: AccountQuotaDisplayWindow[],
+  standardQuotaWindows: AccountQuotaDisplayWindow[]
+): AccountQuotaDisplayWindow[] => {
+  if (standardQuotaWindows.length > 0) return standardQuotaWindows;
+
+  switch (row.provider) {
+    case 'codex':
+      return [];
+    case 'xai':
+      return selectXaiQuotaListFallbackWindows(quotaWindows);
+    case 'antigravity':
+    case 'kimi':
+    case 'claude':
+      return quotaWindows.slice(0, 2);
+    default:
+      return [];
+  }
+};
+
 const getAntigravityGroupRank = (label: string) => {
   const normalized = label.toLowerCase();
   if (normalized.includes('claude') || normalized.includes('gpt')) return 0;

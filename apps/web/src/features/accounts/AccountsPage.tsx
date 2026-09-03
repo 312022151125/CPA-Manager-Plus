@@ -189,6 +189,7 @@ import {
   DETAIL_EVENTS_LIMIT,
   DETAIL_EVENTS_RANGE_MS,
   PAGE_SIZE_OPTIONS,
+  buildAntigravityQuotaMatrix,
   formatHistoryNumber,
   formatHistorySuccessRate,
   formatPercent,
@@ -198,6 +199,7 @@ import {
   getAccountSortFieldOption,
   getProviderLabel,
   parsePriorityValue,
+  selectAccountQuotaListWindows,
   toAuthFileCodexInspectionSnapshot,
   type AccountSortFieldValue,
   type AccountsView,
@@ -266,6 +268,7 @@ import {
   AccountModelsTab,
   AccountOverviewTab,
   AccountProviderTabs,
+  AccountQuotaMatrix,
   AccountQuotaTab,
   AccountsBatchDeletePreview,
 } from '@/features/accounts/components';
@@ -6897,6 +6900,10 @@ export function AccountsPage() {
             const quotaWindows =
               quotaDisplayWindowsByRowKey.get(row.selectionKey) ?? buildQuotaDisplayWindows(row);
             const standardQuotaWindows = quotaWindows.filter(isStandardAccountQuotaListWindow);
+            const antigravityQuotaMatrix = buildAntigravityQuotaMatrix(row, quotaWindows);
+            const displayQuotaWindows = antigravityQuotaMatrix
+              ? []
+              : selectAccountQuotaListWindows(row, quotaWindows, standardQuotaWindows);
             const quotaCooldown = quotaCooldownsByRowKey.get(row.selectionKey)?.[0] ?? null;
             const codexStatus = codexStatusBySelectionKey.get(row.selectionKey) ?? null;
             const item = buildAccountListItem(row, {
@@ -6912,14 +6919,23 @@ export function AccountsPage() {
                 ? t('accounts.quota_details_only')
                 : t('accounts.quota_source_none');
             const quotaWindowTitle =
-              standardQuotaWindows
+              antigravityQuotaMatrix?.rows
+                .flatMap((matrixRow) =>
+                  matrixRow.cells.map(
+                    (cell) =>
+                      `${cell.displayLabel} ${matrixRow.label} ${formatPercent(cell.window.remainingPercent)}`
+                  )
+                )
+                .join(' · ') ||
+              displayQuotaWindows
                 .map((window) => {
                   const label = window.groupLabel
                     ? `${window.groupLabel} ${window.label}`
                     : window.label;
                   return `${label}: ${formatPercent(window.remainingPercent)}`;
                 })
-                .join('\n') || quotaEmptyLabel;
+                .join('\n') ||
+              quotaEmptyLabel;
             const healthTitle = t(
               item.health.tooltipKey,
               formatQuotaResetTooltipParams(
@@ -7160,8 +7176,13 @@ export function AccountsPage() {
                   onOpen: () => void openAccountDetail(row, 'quota'),
                   children: (
                     <span className={styles.quotaWindowGrid} title={quotaWindowTitle}>
-                      {standardQuotaWindows.length > 0 ? (
-                        standardQuotaWindows.map((window) => {
+                      {antigravityQuotaMatrix ? (
+                        <AccountQuotaMatrix
+                          accountKey={row.selectionKey}
+                          matrix={antigravityQuotaMatrix}
+                        />
+                      ) : displayQuotaWindows.length > 0 ? (
+                        displayQuotaWindows.map((window) => {
                           const windowRemaining = window.remainingPercent;
                           const windowWidth = Math.max(0, Math.min(100, windowRemaining ?? 0));
                           const resetLabel =
