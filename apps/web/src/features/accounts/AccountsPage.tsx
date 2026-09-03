@@ -196,6 +196,7 @@ import {
   formatPercent,
   formatQuotaResetDisplay,
   formatQuotaResetTooltipParams,
+  getAccountQuotaLifecycleBarOverride,
   getAccountQuotaFallbackVisibleScopeLabel,
   getAccountHistoryTitle,
   getAccountSortFieldOption,
@@ -204,6 +205,7 @@ import {
   selectAccountQuotaListWindows,
   toAuthFileCodexInspectionSnapshot,
   type AccountSortFieldValue,
+  type AccountQuotaLifecycleBarOverride,
   type AccountsView,
   type DetailTab,
 } from '@/features/accounts/model/accountsPagePresentation';
@@ -1110,6 +1112,15 @@ const getWindowRemainingBarClass = (remainingPercent: number | null) => {
   if (remainingPercent <= 0) return styles.quotaBarBad;
   if (remainingPercent < 20) return styles.quotaBarWarn;
   return styles.quotaBarGood;
+};
+
+const getFallbackWindowBarClass = (
+  lifecycleBarOverride: AccountQuotaLifecycleBarOverride,
+  remainingPercent: number | null
+) => {
+  if (lifecycleBarOverride === 'bad') return styles.quotaBarBad;
+  if (lifecycleBarOverride === 'neutral') return styles.quotaBarNeutral;
+  return getWindowRemainingBarClass(remainingPercent);
 };
 
 export function AccountsPage() {
@@ -7177,6 +7188,7 @@ export function AccountsPage() {
               quotaDisplayWindowsByRowKey.get(row.selectionKey) ?? buildQuotaDisplayWindows(row);
             const standardQuotaWindows = quotaWindows.filter(isStandardAccountQuotaListWindow);
             const antigravityQuotaMatrix = buildAntigravityQuotaMatrix(row, quotaWindows);
+            const quotaLifecycleBarOverride = getAccountQuotaLifecycleBarOverride(row.quota.status);
             const displayQuotaWindows = antigravityQuotaMatrix
               ? []
               : selectAccountQuotaListWindows(row, quotaWindows, standardQuotaWindows);
@@ -7465,6 +7477,7 @@ export function AccountsPage() {
                         <AccountQuotaMatrix
                           accountKey={row.selectionKey}
                           matrix={antigravityQuotaMatrix}
+                          lifecycleBarOverride={quotaLifecycleBarOverride}
                         />
                       ) : displayQuotaWindows.length > 0 ? (
                         displayQuotaWindows.map((window) => {
@@ -7485,7 +7498,7 @@ export function AccountsPage() {
                             ? `${visibleScopeLabel} · ${window.label}`
                             : window.label;
                           const barClass = usesFallbackQuotaPresentation
-                            ? getWindowRemainingBarClass(windowRemaining)
+                            ? getFallbackWindowBarClass(quotaLifecycleBarOverride, windowRemaining)
                             : getRemainingBarClass(row);
                           return (
                             <span

@@ -1168,7 +1168,17 @@
   text-align: right;
 }
 
-@media (min-width: #{$breakpoint-tablet + 1}) and (max-width: 1359px) {
+@media (min-width: #{$breakpoint-tablet + 1}) and (max-width: 1535px) {
+  .quotaWindowPrimaryLineScoped {
+    --quota-window-label-width: 64px;
+    gap: 6px;
+  }
+
+  .quotaWindowSummaryScoped {
+    gap: 2px;
+    padding-inline: 4px;
+  }
+
   .quotaMatrixRow {
     grid-template-columns: 28px minmax(0, 1fr);
     gap: 4px;

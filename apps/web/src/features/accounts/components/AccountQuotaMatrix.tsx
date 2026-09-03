@@ -1,6 +1,7 @@
 import {
   formatPercent,
   formatQuotaResetDisplay,
+  type AccountQuotaLifecycleBarOverride,
   type AntigravityQuotaMatrix,
 } from '@/features/accounts/model/accountsPagePresentation';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +10,7 @@ import styles from '../AccountsPage.module.scss';
 interface AccountQuotaMatrixProps {
   accountKey: string;
   matrix: AntigravityQuotaMatrix;
+  lifecycleBarOverride?: AccountQuotaLifecycleBarOverride;
 }
 
 const getRemainingPercentBarClass = (remainingPercent: number | null) => {
@@ -18,7 +20,20 @@ const getRemainingPercentBarClass = (remainingPercent: number | null) => {
   return styles.quotaBarGood;
 };
 
-export function AccountQuotaMatrix({ accountKey, matrix }: AccountQuotaMatrixProps) {
+const getMatrixBarClass = (
+  remainingPercent: number | null,
+  lifecycleBarOverride: AccountQuotaLifecycleBarOverride
+) => {
+  if (lifecycleBarOverride === 'bad') return styles.quotaBarBad;
+  if (lifecycleBarOverride === 'neutral') return styles.quotaBarNeutral;
+  return getRemainingPercentBarClass(remainingPercent);
+};
+
+export function AccountQuotaMatrix({
+  accountKey,
+  matrix,
+  lifecycleBarOverride = null,
+}: AccountQuotaMatrixProps) {
   const { t, i18n } = useTranslation();
   return (
     <span className={styles.quotaMatrix} data-account-quota-matrix={accountKey}>
@@ -59,8 +74,9 @@ export function AccountQuotaMatrix({ accountKey, matrix }: AccountQuotaMatrixPro
                     aria-hidden="true"
                   >
                     <span
-                      className={`${styles.quotaBar} ${getRemainingPercentBarClass(
-                        windowRemaining
+                      className={`${styles.quotaBar} ${getMatrixBarClass(
+                        windowRemaining,
+                        lifecycleBarOverride
                       )}`}
                       style={{ width: `${windowWidth}%` }}
                     />

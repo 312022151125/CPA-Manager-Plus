@@ -281,6 +281,26 @@ export const quotaStatusLabelKey = (status: AccountRow['quota']['status']) => {
   }
 };
 
+export type AccountQuotaLifecycleBarOverride = 'bad' | 'neutral' | null;
+
+export const getAccountQuotaLifecycleBarOverride = (
+  status: AccountRow['quota']['status']
+): AccountQuotaLifecycleBarOverride => {
+  switch (status) {
+    case 'error':
+      return 'bad';
+    case 'loading':
+    case 'disabled':
+    case 'unknown':
+      return 'neutral';
+    case 'ok':
+    case 'low':
+    case 'exhausted':
+    default:
+      return null;
+  }
+};
+
 const selectXaiQuotaListFallbackWindows = (
   windows: AccountQuotaDisplayWindow[]
 ): AccountQuotaDisplayWindow[] => {

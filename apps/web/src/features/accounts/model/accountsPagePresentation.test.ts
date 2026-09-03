@@ -10,6 +10,7 @@ import {
   formatQuotaResetTooltipParams,
   formatTimestamp,
   formatTimestampTitle,
+  getAccountQuotaLifecycleBarOverride,
   getAccountQuotaFallbackVisibleScopeLabel,
   getAccountHistoryTitle,
   parsePriorityValue,
@@ -48,6 +49,21 @@ describe('accountsPagePresentation', () => {
     expect(formatMoney(12.34)).toBe('$12.34');
     expect(quotaStatusLabelKey('exhausted')).toBe('accounts.quota_status_exhausted');
   });
+
+  it.each([
+    ['error', 'bad'],
+    ['loading', 'neutral'],
+    ['disabled', 'neutral'],
+    ['unknown', 'neutral'],
+    ['ok', null],
+    ['low', null],
+    ['exhausted', null],
+  ] as const)(
+    'maps %s lifecycle status to the expected fallback bar override',
+    (status, expected) => {
+      expect(getAccountQuotaLifecycleBarOverride(status)).toBe(expected);
+    }
+  );
 
   it('uses exact values in the account history summary title', () => {
     const item = {

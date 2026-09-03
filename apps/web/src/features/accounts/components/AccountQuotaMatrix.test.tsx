@@ -1,7 +1,10 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import type { AccountQuotaDisplayWindow } from '@/features/accounts/model/accountQuotaDisplayWindows';
-import type { AntigravityQuotaMatrix } from '@/features/accounts/model/accountsPagePresentation';
+import type {
+  AccountQuotaLifecycleBarOverride,
+  AntigravityQuotaMatrix,
+} from '@/features/accounts/model/accountsPagePresentation';
 import { AccountQuotaMatrix } from './AccountQuotaMatrix';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -37,10 +40,20 @@ const makeQuotaWindow = (
     ...overrides,
   }) as AccountQuotaDisplayWindow;
 
-const renderMatrix = (accountKey: string, matrix: AntigravityQuotaMatrix): ReactTestRenderer => {
+const renderMatrix = (
+  accountKey: string,
+  matrix: AntigravityQuotaMatrix,
+  lifecycleBarOverride?: AccountQuotaLifecycleBarOverride
+): ReactTestRenderer => {
   let renderer!: ReactTestRenderer;
   act(() => {
-    renderer = create(<AccountQuotaMatrix accountKey={accountKey} matrix={matrix} />);
+    renderer = create(
+      <AccountQuotaMatrix
+        accountKey={accountKey}
+        matrix={matrix}
+        lifecycleBarOverride={lifecycleBarOverride}
+      />
+    );
   });
   return renderer;
 };
@@ -185,4 +198,54 @@ describe('AccountQuotaMatrix', () => {
     expect(findBarClass('weekly:Warn')).toContain('quotaBarWarn');
     expect(findBarClass('weekly:Good')).toContain('quotaBarGood');
   });
+
+  it.each([
+    [undefined, 'quotaBarWarn', 'quotaBarGood'],
+    ['bad', 'quotaBarBad', 'quotaBarBad'],
+    ['neutral', 'quotaBarNeutral', 'quotaBarNeutral'],
+  ] as const)(
+    'applies %s lifecycle override before window color thresholds',
+    (override, lowClass, highClass) => {
+      const renderer = renderMatrix(
+        `lifecycle-${override ?? 'none'}`,
+        {
+          windowKeys: new Set(['low', 'high']),
+          rows: [
+            {
+              key: 'five_hour',
+              label: '5H',
+              cells: [
+                {
+                  groupLabel: 'Low',
+                  displayLabel: 'Low',
+                  window: makeQuotaWindow({ key: 'low', remainingPercent: 10 }),
+                },
+                {
+                  groupLabel: 'High',
+                  displayLabel: 'High',
+                  window: makeQuotaWindow({ key: 'high', remainingPercent: 80 }),
+                },
+              ],
+            },
+          ],
+        },
+        override
+      );
+      const findBarClass = (groupLabel: string) => {
+        const cell = renderer.root.findByProps({
+          'data-account-quota-matrix-cell': `five_hour:${groupLabel}`,
+        });
+        const bar = cell.find(
+          (node) =>
+            typeof node.props.className === 'string' &&
+            node.props.className.includes('quotaBar') &&
+            !node.props.className.includes('quotaTrack')
+        );
+        return bar.props.className as string;
+      };
+
+      expect(findBarClass('Low')).toContain(lowClass);
+      expect(findBarClass('High')).toContain(highClass);
+    }
+  );
 });
