@@ -92,6 +92,23 @@ export const removeThinkingFlagAliases = (
   return next;
 };
 
+type ModelThinkingCarrier = {
+  thinking?: Record<string, unknown>;
+};
+
+/** Materialize one-shot Thinking commands before a model becomes committed state. */
+export const toCommittedModelThinkingSnapshot = <T extends object>(value: T): T => {
+  const editThinkingLevels = hasModelThinkingLevelsEditMarker(value);
+  const next = stripModelThinkingLevelsMarkers(value) as T & ModelThinkingCarrier;
+  if (editThinkingLevels && isRecord(next.thinking)) {
+    next.thinking = removeThinkingFlagAliases(next.thinking, [
+      ...THINKING_ZERO_ALLOWED_FIELDS,
+      ...THINKING_DYNAMIC_ALLOWED_FIELDS,
+    ]);
+  }
+  return next;
+};
+
 export interface ModelAlias {
   name: string;
   alias?: string;

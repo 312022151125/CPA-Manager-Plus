@@ -19,7 +19,7 @@ import {
 import {
   coolingPolicyFromOverride,
   coolingPolicyToOverride,
-  stripModelThinkingLevelsMarkers,
+  toCommittedModelThinkingSnapshot,
   type ApiKeyEntry,
   type OpenAIProviderConfig,
 } from '@/types';
@@ -146,7 +146,7 @@ const buildOpenAIBaseline = (form: OpenAIFormState, testModel: string): OpenAIEd
   disableCooling: form.disableCooling,
   headers: normalizeHeaderEntries(form.headers),
   apiKeyEntries: normalizeApiKeyEntries(form.apiKeyEntries),
-  models: normalizeModelEntries(form.modelEntries).map(stripModelThinkingLevelsMarkers),
+  models: normalizeModelEntries(form.modelEntries).map(toCommittedModelThinkingSnapshot),
   testModel: String(testModel ?? '').trim(),
 });
 
@@ -577,7 +577,7 @@ export function AiProvidersOpenAIEditLayout() {
       updateConfigValue('openai-compatibility', syncedProviders);
       const committedForm = {
         ...form,
-        modelEntries: form.modelEntries.map(stripModelThinkingLevelsMarkers),
+        modelEntries: form.modelEntries.map(toCommittedModelThinkingSnapshot),
       };
       setForm(committedForm);
       showNotification(

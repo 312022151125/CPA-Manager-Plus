@@ -1,5 +1,5 @@
 import {
-  stripModelThinkingLevelsMarkers,
+  toCommittedModelThinkingSnapshot,
   type ApiKeyEntry,
   type ClaudeFingerprintProfile,
   type OpenAIProviderConfig,
@@ -21,7 +21,7 @@ export const toCommittedOpenAIProviderSnapshot = (
 ): OpenAIProviderConfig => {
   const next = { ...provider };
   if (Array.isArray(provider.models)) {
-    next.models = provider.models.map((model) => stripModelThinkingLevelsMarkers(model));
+    next.models = provider.models.map(toCommittedModelThinkingSnapshot);
   }
   return next;
 };
