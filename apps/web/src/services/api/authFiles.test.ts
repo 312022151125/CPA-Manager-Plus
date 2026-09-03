@@ -1507,6 +1507,37 @@ describe('authFilesApi patchFieldsForAuthIndexes', () => {
     expect(mocks.postForm).not.toHaveBeenCalled();
   });
 
+  it('allows missing Codex Workspace and member evidence for a uniquely located source record', async () => {
+    const rawText = JSON.stringify({
+      type: 'codex',
+      auth_index: 'auth-1',
+      priority: 1,
+    });
+    mocks.getRaw.mockResolvedValue({ data: new Blob([rawText]) });
+    mocks.postForm.mockResolvedValue({
+      status: 'ok',
+      uploaded: 1,
+      files: ['codex.json'],
+      failed: [],
+    });
+    const target = {
+      name: 'codex.json',
+      runtimeId: 'runtime-auth-1',
+      authIndex: 'auth-1',
+      provider: 'codex',
+      accountId: 'workspace-a',
+      accountSnapshot: 'alice@example.com',
+    };
+
+    await expect(
+      authFilesApi.patchFieldsForAuthIndexes('codex.json', [target], [target], { priority: 10 })
+    ).resolves.toBeUndefined();
+
+    await expect(getUploadedFile().text()).resolves.toBe(
+      JSON.stringify({ type: 'codex', auth_index: 'auth-1', priority: 10 })
+    );
+  });
+
   it('uses a runtime locator when the Codex member snapshot is only a display value', async () => {
     const rawText = JSON.stringify({
       type: 'codex',

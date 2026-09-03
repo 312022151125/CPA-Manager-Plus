@@ -124,17 +124,19 @@ const authFileMatchesRequestedIdentity = (
   if (provider === 'codex' && readAuthFileStatusCodexMemberInvalid(file)) return false;
 
   if (target.accountId) {
-    if (readAuthFileStatusAccountId(file) !== target.accountId) return false;
     if (target.provider === 'codex') {
+      const currentWorkspace = readAuthFileStatusAccountId(file);
+      if (currentWorkspace && currentWorkspace !== target.accountId) return false;
       const expectedMember = target.accountSnapshotProvided
         ? normalizeCodexMemberSnapshot(target.accountSnapshot)
         : '';
       // Workspace/member is verification evidence, not a credential locator.
       // Require runtime ID or auth index before any Codex mutation can use it.
       if (!credentialLocatorPresent) return false;
-      if (!expectedMember) return true;
-      return readAuthFileStatusCodexMember(file) === expectedMember;
+      const currentMember = readAuthFileStatusCodexMember(file);
+      return !expectedMember || !currentMember || currentMember === expectedMember;
     }
+    if (readAuthFileStatusAccountId(file) !== target.accountId) return false;
     return true;
   }
 
@@ -143,11 +145,9 @@ const authFileMatchesRequestedIdentity = (
       const expectedMember = normalizeCodexMemberSnapshot(target.accountSnapshot);
       // Member email without its Workspace is not a complete Codex identity;
       // use it only as an additional check on an exact credential locator.
-      return (
-        credentialLocatorPresent &&
-        Boolean(expectedMember) &&
-        readAuthFileStatusCodexMember(file) === expectedMember
-      );
+      if (!credentialLocatorPresent || !expectedMember) return false;
+      const currentMember = readAuthFileStatusCodexMember(file);
+      return !currentMember || currentMember === expectedMember;
     }
     return readAuthFileStatusAccountSnapshot(file) === target.accountSnapshot;
   }

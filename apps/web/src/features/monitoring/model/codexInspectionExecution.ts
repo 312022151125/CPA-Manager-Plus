@@ -290,7 +290,8 @@ const buildExecutionActionGroups = (items: CodexInspectionResultItem[]) => {
 
 const planExecutionItems = (
   items: CodexInspectionResultItem[],
-  referenceItems: CodexInspectionResultItem[]
+  referenceItems: CodexInspectionResultItem[],
+  requireAuthIndex: boolean
 ) => {
   const preflightOutcomes: CodexInspectionExecutionOutcome[] = [];
   const { groupByItemKey } = buildExecutionActionGroups(
@@ -308,16 +309,17 @@ const planExecutionItems = (
       );
       return;
     }
-    if (
-      !hasCodexInspectionStableIdentity({
-        fileName: item.fileName,
-        runtimeId: item.runtimeId,
-        provider: item.provider,
-        authIndex: item.authIndex,
-        accountId: item.accountId,
-        accountSnapshot: item.accountSnapshot,
-      })
-    ) {
+    const hasStableIdentity = requireAuthIndex
+      ? hasCodexInspectionStableIdentity({
+          fileName: item.fileName,
+          runtimeId: item.runtimeId,
+          provider: item.provider,
+          authIndex: item.authIndex,
+          accountId: item.accountId,
+          accountSnapshot: item.accountSnapshot,
+        })
+      : hasManualInspectionIdentity(item);
+    if (!hasStableIdentity) {
       preflightOutcomes.push(
         buildPreflightOutcome(
           item,
@@ -389,6 +391,22 @@ const normalizeProvider = (value: unknown): string => {
     .replace(/_/g, '-');
   if (normalized === 'x-ai' || normalized === 'grok') return 'xai';
   return normalized;
+};
+
+const hasManualInspectionIdentity = (item: CodexInspectionResultItem): boolean => {
+  if (normalizeProvider(item.provider) !== 'codex') {
+    return hasCodexInspectionStableIdentity({
+      fileName: item.fileName,
+      runtimeId: item.runtimeId,
+      provider: item.provider,
+      authIndex: item.authIndex,
+      accountId: item.accountId,
+      accountSnapshot: item.accountSnapshot,
+    });
+  }
+  return Boolean(
+    item.fileName.trim() && (item.runtimeId?.trim() || normalizeAuthIndex(item.authIndex))
+  );
 };
 
 const readCurrentFileName = (file: AuthFileItem): string => String(file.name ?? '').trim();
@@ -1144,7 +1162,8 @@ export const executeCodexInspectionActions = async ({
   const actionReferenceItems = mergeExecutionReferenceItems(items, referenceItems ?? items);
   const plan = planExecutionItems(
     items,
-    (referenceItems ?? items).filter((item) => !suppliedPreflightAccountKeys.has(item.key))
+    (referenceItems ?? items).filter((item) => !suppliedPreflightAccountKeys.has(item.key)),
+    source === 'auto'
   );
   const dedupedItems = plan.items;
   const outcomes: CodexInspectionExecutionOutcome[] = [

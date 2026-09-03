@@ -7,7 +7,6 @@ import {
 import {
   readAuthFileStatusAccountId,
   readAuthFileStatusAuthIndex,
-  readAuthFileStatusCodexMember,
   readAuthFileStatusPhysicalName,
   readAuthFileStatusProvider,
   readAuthFileStatusRuntimeId,
@@ -61,7 +60,6 @@ const buildCredentialIdentityKey = (file: AuthFileItem): string =>
   JSON.stringify([
     readAuthFileStatusProvider(file),
     readAuthFileStatusAccountId(file),
-    readAuthFileStatusCodexMember(file),
     readAuthFileStatusPhysicalName(file),
     readAuthFileStatusRuntimeId(file),
     readAuthFileStatusAuthIndex(file) ?? '',

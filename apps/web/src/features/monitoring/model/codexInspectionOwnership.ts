@@ -2,9 +2,11 @@ import type { AuthFileItem } from '@/types';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import {
   readAuthFileStatusAccountId,
+  readAuthFileStatusAccountIdInvalid,
   readAuthFileStatusAccountSnapshot,
   readAuthFileStatusProvider,
   readAuthFileStatusCodexMember,
+  readAuthFileStatusCodexMemberInvalid,
   normalizeCodexMemberSnapshot,
 } from '@/utils/authFileStatusMutation';
 
@@ -34,6 +36,8 @@ export type CodexInspectionOwnershipIdentity = {
   authIndex?: string | number | null;
   accountId?: string | null;
   accountSnapshot?: string | null;
+  accountIdInvalid?: boolean;
+  accountSnapshotInvalid?: boolean;
 };
 
 const normalizeAccountId = (value: unknown): string | null => {
@@ -64,11 +68,13 @@ type NormalizedOwnershipIdentity = {
   authIndex: string | null;
   accountId: string | null;
   accountSnapshot: string | null;
+  accountIdInvalid: boolean;
+  accountSnapshotInvalid: boolean;
 };
 
 const hasStableLocator = (identity: NormalizedOwnershipIdentity): boolean => {
   if (identity.provider === 'codex') {
-    return Boolean(identity.runtimeId || identity.authIndex);
+    return Boolean(identity.authIndex);
   }
   return Boolean(identity.authIndex || identity.accountId || identity.accountSnapshot);
 };
@@ -89,6 +95,8 @@ const normalizeIdentity = (identity: unknown): NormalizedOwnershipIdentity => {
     authIndex: normalizeAuthIndex(source.authIndex),
     accountId,
     accountSnapshot: normalizeAccountSnapshot(source.accountSnapshot, fileName, provider),
+    accountIdInvalid: source.accountIdInvalid === true,
+    accountSnapshotInvalid: source.accountSnapshotInvalid === true,
   };
 };
 
@@ -277,6 +285,8 @@ export const getCodexInspectionOwnershipIdentityForFile = (
       provider === 'codex'
         ? readAuthFileStatusCodexMember(file)
         : readAuthFileStatusAccountSnapshot(file),
+    accountIdInvalid: readAuthFileStatusAccountIdInvalid(file),
+    accountSnapshotInvalid: readAuthFileStatusCodexMemberInvalid(file),
   };
 };
 
@@ -293,18 +303,28 @@ const matchesIdentityForRecovery = (
     normalizedRecord.provider !== normalizedIdentity.provider
   )
     return false;
+  if (
+    normalizedRecord.provider === 'codex' &&
+    (normalizedIdentity.accountIdInvalid || normalizedIdentity.accountSnapshotInvalid)
+  ) {
+    return false;
+  }
   if (normalizedRecord.authIndex && normalizedRecord.authIndex !== normalizedIdentity.authIndex)
     return false;
   if (normalizedRecord.provider === 'codex') {
-    if (normalizedRecord.accountId) {
-      if (normalizedRecord.accountId !== normalizedIdentity.accountId) return false;
-      if (normalizedRecord.accountSnapshot) {
-        return normalizedRecord.accountSnapshot === normalizedIdentity.accountSnapshot;
-      }
-      return normalizedRecord.authIndex !== null;
+    if (
+      normalizedRecord.accountId &&
+      normalizedIdentity.accountId &&
+      normalizedRecord.accountId !== normalizedIdentity.accountId
+    ) {
+      return false;
     }
-    if (normalizedRecord.accountSnapshot) {
-      return normalizedRecord.accountSnapshot === normalizedIdentity.accountSnapshot;
+    if (
+      normalizedRecord.accountSnapshot &&
+      normalizedIdentity.accountSnapshot &&
+      normalizedRecord.accountSnapshot !== normalizedIdentity.accountSnapshot
+    ) {
+      return false;
     }
     return normalizedRecord.authIndex !== null;
   }
@@ -326,14 +346,25 @@ const matchesIdentityForCleanup = (
   if (normalizedRecord.fileName !== normalizedIdentity.fileName) return false;
   if (normalizedRecord.provider && normalizedRecord.provider !== normalizedIdentity.provider)
     return false;
+  if (
+    normalizedRecord.provider === 'codex' &&
+    (normalizedIdentity.accountIdInvalid || normalizedIdentity.accountSnapshotInvalid)
+  ) {
+    return false;
+  }
   if (normalizedRecord.authIndex && normalizedRecord.authIndex !== normalizedIdentity.authIndex)
     return false;
   if (normalizedRecord.provider === 'codex') {
-    if (normalizedRecord.accountId && normalizedRecord.accountId !== normalizedIdentity.accountId) {
+    if (
+      normalizedRecord.accountId &&
+      normalizedIdentity.accountId &&
+      normalizedRecord.accountId !== normalizedIdentity.accountId
+    ) {
       return false;
     }
     if (
       normalizedRecord.accountSnapshot &&
+      normalizedIdentity.accountSnapshot &&
       normalizedRecord.accountSnapshot !== normalizedIdentity.accountSnapshot
     ) {
       return false;

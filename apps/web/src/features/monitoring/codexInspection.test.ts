@@ -64,6 +64,7 @@ import {
 import {
   getCodexInspectionOwnedDisableIdentityKeys,
   getCodexInspectionOwnershipIdentityKey,
+  hasCodexInspectionStableIdentity,
   recordCodexInspectionDisableOwnership,
 } from './model/codexInspectionOwnership';
 import { toInspectionAccount } from './model/codexInspectionProbe';
@@ -1482,6 +1483,38 @@ describe('resolveCodexInspectionAutoActionItems', () => {
       ['delete.json', 'delete'],
       ['disable.json', 'disable'],
       ['enable.json', 'enable'],
+    ]);
+  });
+
+  it('blocks runtime-only Codex automatic status mutation before calling the API', async () => {
+    const statusSpy = vi.spyOn(authFilesApi, 'setStatusWithFallback').mockResolvedValue({
+      status: 'ok',
+      disabled: true,
+      mutationScope: 'credential',
+    });
+    const item = {
+      ...createResultItem('disable', {
+        fileName: 'runtime-only.json',
+        runtimeId: 'runtime-only',
+      }),
+      authIndex: null,
+    } as CodexInspectionResultItem;
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-runtime-only-auto',
+      source: 'auto',
+    });
+
+    expect(statusSpy).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        accountKey: item.key,
+        status: 'needs_review',
+        success: true,
+      }),
     ]);
   });
 });
@@ -4403,6 +4436,132 @@ describe('Codex inspection disable ownership', () => {
         accountSnapshot: null,
       }),
     ]);
+  });
+
+  it('keeps ownership when a uniquely located credential temporarily loses optional evidence', () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    recordCodexInspectionDisableOwnership('scope-missing-evidence', {
+      fileName: 'alice.json',
+      provider: 'codex',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+
+    const current = {
+      id: 'runtime-alice',
+      name: 'alice.json',
+      type: 'codex',
+      auth_index: 'auth-1',
+      disabled: true,
+    } as AuthFileItem;
+
+    expect(
+      Array.from(getCodexInspectionOwnedDisableIdentityKeys('scope-missing-evidence', [current]))
+    ).toEqual([
+      getCodexInspectionOwnershipIdentityKey({
+        fileName: 'alice.json',
+        provider: 'codex',
+        authIndex: 'auth-1',
+      }),
+    ]);
+    expect(storage.getItem('cli-proxy-codex-inspection-disable-ownership-v2')).toContain(
+      'scope-missing-evidence'
+    );
+  });
+
+  it.each([
+    {
+      label: 'Workspace evidence conflicts',
+      file: {
+        id: 'runtime-alice',
+        name: 'alice.json',
+        type: 'codex',
+        auth_index: 'auth-1',
+        account_id: 'workspace-2',
+        account: 'alice@example.com',
+        disabled: true,
+      },
+    },
+    {
+      label: 'member evidence conflicts',
+      file: {
+        id: 'runtime-alice',
+        name: 'alice.json',
+        type: 'codex',
+        auth_index: 'auth-1',
+        account_id: 'workspace-1',
+        account: 'bob@example.com',
+        disabled: true,
+      },
+    },
+  ])('does not recover ownership when $label', ({ file }) => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    recordCodexInspectionDisableOwnership('scope-evidence-conflict', {
+      fileName: 'alice.json',
+      provider: 'codex',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+
+    expect(
+      getCodexInspectionOwnedDisableIdentityKeys('scope-evidence-conflict', [
+        file as AuthFileItem,
+      ])
+    ).toEqual(new Set());
+  });
+
+  it('keeps duplicate Codex locators ambiguous without narrowing by member evidence', () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    recordCodexInspectionDisableOwnership('scope-duplicate-locator', {
+      fileName: 'team.json',
+      provider: 'codex',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+    const files = [
+      {
+        id: 'runtime-alice',
+        name: 'team.json',
+        type: 'codex',
+        auth_index: 'auth-1',
+        account_id: 'workspace-1',
+        account: 'alice@example.com',
+        disabled: true,
+      },
+      {
+        id: 'runtime-bob',
+        name: 'team.json',
+        type: 'codex',
+        auth_index: 'auth-1',
+        account_id: 'workspace-1',
+        account: 'bob@example.com',
+        disabled: true,
+      },
+    ] as AuthFileItem[];
+
+    expect(getCodexInspectionOwnedDisableIdentityKeys('scope-duplicate-locator', files)).toEqual(
+      new Set()
+    );
+    expect(storage.getItem('cli-proxy-codex-inspection-disable-ownership-v2')).toContain(
+      'scope-duplicate-locator'
+    );
+  });
+
+  it('does not treat a runtime-only Codex identity as automatic ownership', () => {
+    expect(
+      hasCodexInspectionStableIdentity({
+        fileName: 'runtime-only.json',
+        provider: 'codex',
+        runtimeId: 'runtime-only',
+        authIndex: null,
+      })
+    ).toBe(false);
   });
 
   it('permanently removes an ambiguous legacy wildcard ownership record', () => {

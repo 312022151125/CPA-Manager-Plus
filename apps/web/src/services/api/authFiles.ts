@@ -865,8 +865,9 @@ const authFileRecordMatchesPatchTarget = (
 
   const expectedAccountId = String(target.accountId ?? '').trim();
   if (expectedAccountId) {
-    if (readAuthFileStatusAccountId(authFileRecord) !== expectedAccountId) return false;
     if (actualProvider === 'codex') {
+      const currentWorkspace = readAuthFileStatusAccountId(authFileRecord);
+      if (currentWorkspace && currentWorkspace !== expectedAccountId) return false;
       const expectedSnapshot = String(target.accountSnapshot ?? '').trim();
       const expectedMember = normalizeCodexMemberSnapshot(expectedSnapshot);
       if (!expectedMember) {
@@ -874,11 +875,11 @@ const authFileRecordMatchesPatchTarget = (
         // raw source record may be one of several Team members in one file.
         return credentialLocatorPresent && !readAuthFileStatusCodexMemberInvalid(authFileRecord);
       }
-      return (
-        !readAuthFileStatusCodexMemberInvalid(authFileRecord) &&
-        readAuthFileStatusCodexMember(authFileRecord) === expectedMember
-      );
+      if (readAuthFileStatusCodexMemberInvalid(authFileRecord)) return false;
+      const currentMember = readAuthFileStatusCodexMember(authFileRecord);
+      return !currentMember || currentMember === expectedMember;
     }
+    if (readAuthFileStatusAccountId(authFileRecord) !== expectedAccountId) return false;
     return true;
   }
 
@@ -886,11 +887,11 @@ const authFileRecordMatchesPatchTarget = (
   if (expectedAccountSnapshot) {
     if (actualProvider === 'codex') {
       const expectedMember = normalizeCodexMemberSnapshot(expectedAccountSnapshot);
+      if (!credentialLocatorPresent || !expectedMember) return false;
+      if (readAuthFileStatusCodexMemberInvalid(authFileRecord)) return false;
+      const currentMember = readAuthFileStatusCodexMember(authFileRecord);
       return (
-        credentialLocatorPresent &&
-        Boolean(expectedMember) &&
-        !readAuthFileStatusCodexMemberInvalid(authFileRecord) &&
-        readAuthFileStatusCodexMember(authFileRecord) === expectedMember
+        !currentMember || currentMember === expectedMember
       );
     }
     return readAuthFileStatusAccountSnapshot(authFileRecord) === expectedAccountSnapshot;

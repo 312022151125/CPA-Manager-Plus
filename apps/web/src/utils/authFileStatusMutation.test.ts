@@ -244,6 +244,27 @@ describe('resolveAuthFileStatusMutationTarget', () => {
     ).toMatchObject({ target: current, scope: 'ambiguous', failure: 'identity-changed' });
   });
 
+  it('allows missing Codex Workspace and member evidence for a uniquely located credential', () => {
+    const current = {
+      id: 'runtime-auth-1',
+      name: 'same.json',
+      auth_index: 'auth-1',
+      type: 'codex',
+      disabled: true,
+    } as AuthFileItem;
+
+    expect(
+      resolveAuthFileStatusMutationTarget([current], {
+        name: 'same.json',
+        runtimeId: 'runtime-auth-1',
+        authIndex: 'auth-1',
+        provider: 'codex',
+        accountId: 'workspace-1',
+        accountSnapshot: 'alice@example.com',
+      })
+    ).toMatchObject({ target: current, scope: 'credential', failure: null });
+  });
+
   it('checks a strong account/email member on an AuthFileItem target', () => {
     const requested = {
       id: 'runtime-auth-1',

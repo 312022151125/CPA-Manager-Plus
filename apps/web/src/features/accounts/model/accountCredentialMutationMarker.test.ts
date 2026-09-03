@@ -195,27 +195,28 @@ describe('account credential mutation markers', () => {
     ).toBeNull();
   });
 
-  it('keeps same-Workspace Codex members as distinct credential evidence', () => {
-    const baseline = createAccountCredentialMutationBaseline(
-      [
-        {
-          name: 'alice.json',
-          provider: 'codex',
-          account_id: 'workspace-1',
-          account: 'alice@example.com',
-          authIndex: 'auth-a',
-        },
-        {
-          name: 'bob.json',
-          provider: 'codex',
-          account_id: 'workspace-1',
-          account: 'bob@example.com',
-          authIndex: 'auth-b',
-        },
-      ] as AuthFileItem[],
-      'codex'
-    );
+  it('does not treat a missing Codex member snapshot as a new credential', () => {
+    const baselineFile = {
+      name: 'alice.json',
+      id: 'runtime-alice',
+      provider: 'codex',
+      account_id: 'workspace-1',
+      account: 'alice@example.com',
+      authIndex: 'auth-a',
+    } as AuthFileItem;
+    const baseline = createAccountCredentialMutationBaseline([baselineFile], 'codex');
+    const marker = recordAccountCredentialMutationMarker({
+      connectionFingerprint: 'connection-a',
+      provider: 'codex',
+      baseline,
+      requireObservedMutation: true,
+      createdAtMs: Date.now(),
+    });
 
-    expect(baseline?.credentials[0]?.identityKey).not.toBe(baseline?.credentials[1]?.identityKey);
+    expect(
+      hasAccountCredentialMutationEvidence(marker!, [
+        { ...baselineFile, account: undefined } as AuthFileItem,
+      ])
+    ).toBe(false);
   });
 });
