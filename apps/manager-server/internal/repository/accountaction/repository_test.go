@@ -289,6 +289,9 @@ func TestUpsertEnrichesWorkspaceOnlyCodexCandidateWithMember(t *testing.T) {
 	ctx := context.Background()
 	st := testutil.NewStore(t, testutil.NewConfig(t))
 	repo := st.AccountActions
+	if err := st.RunDerivedStartupMaintenance(ctx); err != nil {
+		t.Fatalf("prepare production account action identity index: %v", err)
+	}
 
 	workspaceOnly, err := repo.Upsert(ctx, model.AccountActionCandidateUpsert{
 		ActionType:        model.AccountActionTypeReauth,

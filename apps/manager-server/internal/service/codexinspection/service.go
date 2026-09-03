@@ -2260,6 +2260,16 @@ func (s *Service) executeAction(
 	sourceMembers []model.CodexInspectionResult,
 	automatic bool,
 ) error {
+	if automatic && normalizeInspectionProvider(item.Provider) == "codex" {
+		if strings.TrimSpace(item.AuthIndex) == "" {
+			return errors.New(inspectionIdentityMissingReason)
+		}
+		for _, member := range sourceMembers {
+			if normalizeInspectionProvider(member.Provider) == "codex" && strings.TrimSpace(member.AuthIndex) == "" {
+				return errors.New(inspectionIdentityMissingReason)
+			}
+		}
+	}
 	fileNames := make([]string, 0, len(sourceMembers)+1)
 	fileNames = append(fileNames, item.FileName)
 	for _, member := range sourceMembers {
@@ -3196,12 +3206,11 @@ func hasInspectionActionIdentity(result model.CodexInspectionResult) bool {
 	if fileName == "" || provider == "" {
 		return false
 	}
+	if provider == "codex" {
+		return strings.TrimSpace(result.AuthIndex) != ""
+	}
 	if strings.TrimSpace(result.AuthIndex) != "" {
 		return true
-	}
-	if provider == "codex" {
-		return strings.TrimSpace(result.AccountID) != "" &&
-			inspectionAccountSnapshot(provider, fileName, result.AccountSnapshot) != ""
 	}
 	return strings.TrimSpace(result.AccountID) != "" ||
 		inspectionAccountSnapshot(provider, fileName, result.AccountSnapshot) != ""
@@ -3840,16 +3849,19 @@ func inspectionIdentityMatchesAccount(
 		candidateAccountID := strings.TrimSpace(candidate.AccountID)
 		candidateMember := inspectionAccountSnapshot(candidate.Provider, candidate.FileName, candidate.AccountSnapshot)
 		if accountID != "" {
-			if candidateAccountID != accountID {
+			if candidateAccountID != "" && candidateAccountID != accountID {
 				return false
 			}
-			if member != "" {
-				return candidateMember != "" && candidateMember == member
+			if member != "" && candidateMember != "" && candidateMember != member {
+				return false
 			}
 			return authIndex != ""
 		}
 		if member != "" {
-			return authIndex != "" && candidateMember != "" && candidateMember == member
+			if candidateMember != "" && candidateMember != member {
+				return false
+			}
+			return authIndex != ""
 		}
 		// A Workspace-only ownership record is not a recovery identity. An
 		// auth-index match is still a credential-level fallback, but a wildcard
