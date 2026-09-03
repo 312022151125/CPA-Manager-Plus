@@ -3198,8 +3198,7 @@ describe('executeCodexInspectionActions', () => {
         accountId: null,
         accountSnapshot: 'disable@example.com',
       },
-      true,
-      expect.any(Function)
+      true
     );
     expect(execution.outcomes).toEqual([
       expect.objectContaining({
@@ -3479,8 +3478,160 @@ describe('executeCodexInspectionActions', () => {
     expect(statusSpy).toHaveBeenCalledTimes(1);
     expect(statusSpy).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeId: 'runtime-charlie', authIndex: 'auth-2' }),
-      true,
-      expect.any(Function)
+      true
+    );
+    expect(execution.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountKey: duplicate.key,
+          status: 'needs_review',
+          success: true,
+        }),
+        expect.objectContaining({
+          accountKey: unique.key,
+          status: 'success',
+          success: true,
+        }),
+      ])
+    );
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps unique automatic credentials independent when all same-file results are selected', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const first = createResultItem('disable', {
+      key: 'granularity-all-selected.json::auth-1::alice',
+      fileName: 'granularity-all-selected.json',
+      runtimeId: 'runtime-alice',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+      displayAccount: 'alice@example.com',
+    });
+    const second = createResultItem('disable', {
+      key: 'granularity-all-selected.json::auth-1::bob',
+      fileName: 'granularity-all-selected.json',
+      runtimeId: 'runtime-bob',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'bob@example.com',
+      displayAccount: 'bob@example.com',
+    });
+    const third = createResultItem('disable', {
+      key: 'granularity-all-selected.json::auth-2::charlie',
+      fileName: 'granularity-all-selected.json',
+      runtimeId: 'runtime-charlie',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'charlie@example.com',
+      displayAccount: 'charlie@example.com',
+    });
+    const currentFiles = [first, second, third].map((item) =>
+      createCurrentAuthFile(item, { disabled: false })
+    );
+    const statusSpy = vi.spyOn(authFilesApi, 'setStatusWithFallback').mockResolvedValue({
+      status: 'ok',
+      disabled: true,
+      mutationScope: 'credential',
+    });
+    vi.spyOn(authFilesApi, 'list').mockResolvedValue({ files: currentFiles });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [first, second, third],
+      referenceItems: [first, second, third],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-all-selected-granularity',
+      source: 'auto',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeId: 'runtime-charlie', authIndex: 'auth-2' }),
+      true
+    );
+    expect(execution.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountKey: first.key,
+          status: 'needs_review',
+          success: true,
+        }),
+        expect.objectContaining({
+          accountKey: second.key,
+          status: 'needs_review',
+          success: true,
+        }),
+        expect.objectContaining({
+          accountKey: third.key,
+          status: 'success',
+          success: true,
+        }),
+      ])
+    );
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a unique automatic credential executable when another locator duplicates during refresh', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const duplicate = createResultItem('disable', {
+      key: 'granularity-toctou.json::auth-1::alice',
+      fileName: 'granularity-toctou.json',
+      runtimeId: 'runtime-alice',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+      displayAccount: 'alice@example.com',
+    });
+    const unique = createResultItem('disable', {
+      key: 'granularity-toctou.json::auth-2::charlie',
+      fileName: 'granularity-toctou.json',
+      runtimeId: 'runtime-charlie',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'charlie@example.com',
+      displayAccount: 'charlie@example.com',
+    });
+    const lateDuplicate = createCurrentAuthFile(
+      {
+        ...duplicate,
+        key: 'granularity-toctou.json::auth-1::bob',
+        runtimeId: 'runtime-bob',
+        accountSnapshot: 'bob@example.com',
+        displayAccount: 'bob@example.com',
+      },
+      { disabled: false }
+    );
+    const initialFiles = [
+      createCurrentAuthFile(duplicate, { disabled: false }),
+      createCurrentAuthFile(unique, { disabled: false }),
+    ];
+    const freshFiles = [...initialFiles.slice(0, 1), lateDuplicate, initialFiles[1]];
+    const statusSpy = vi.spyOn(authFilesApi, 'setStatusWithFallback').mockResolvedValue({
+      status: 'ok',
+      disabled: true,
+      mutationScope: 'credential',
+    });
+    vi.spyOn(authFilesApi, 'list')
+      .mockResolvedValueOnce({ files: initialFiles })
+      .mockResolvedValueOnce({ files: freshFiles })
+      .mockResolvedValue({ files: freshFiles });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [duplicate, unique],
+      referenceItems: [duplicate, unique],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-toctou-granularity',
+      source: 'auto',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeId: 'runtime-charlie', authIndex: 'auth-2' }),
+      true
     );
     expect(execution.outcomes).toEqual(
       expect.arrayContaining([
@@ -3919,9 +4070,13 @@ describe('executeCodexInspectionActions', () => {
       const statusSpy = vi
         .spyOn(authFilesApi, 'setStatusWithFallback')
         .mockImplementation(async (_target, disabled, verifyFallback) => {
-          if (!verifyFallback) throw new Error('missing plugin source fallback verifier');
-          verifiedSourceIdentities = await verifyFallback();
-          return { status: 'ok', disabled, mutationScope: 'source-file' };
+          if (source === 'manual') {
+            if (!verifyFallback) throw new Error('missing plugin source fallback verifier');
+            verifiedSourceIdentities = await verifyFallback();
+            return { status: 'ok', disabled, mutationScope: 'source-file' };
+          }
+          if (verifyFallback) throw new Error('unexpected plugin source fallback verifier');
+          return { status: 'ok', disabled, mutationScope: 'credential' };
         });
       vi.spyOn(authFilesApi, 'list')
         .mockResolvedValueOnce({ files: currentFiles })
@@ -3940,51 +4095,88 @@ describe('executeCodexInspectionActions', () => {
         source,
       });
 
-      expect(statusSpy).toHaveBeenCalledTimes(1);
-      expect(statusSpy).toHaveBeenCalledWith(
-        {
-          name: 'plugin-source.json',
-          runtimeId: 'runtime-plugin-1',
-          authIndex: 'auth-1',
-          provider: 'codex',
-          accountId: 'account-1',
-          accountSnapshot: 'first-plugin@example.com',
-        },
-        nextDisabled,
-        expect.any(Function)
-      );
-      expect(verifiedSourceIdentities).toEqual([
-        {
-          name: 'plugin-source.json',
-          runtimeId: 'runtime-plugin-1',
-          authIndex: 'auth-1',
-          provider: 'codex',
-          accountId: 'account-1',
-          accountSnapshot: 'first-plugin@example.com',
-        },
-        {
-          name: 'plugin-source.json',
-          runtimeId: 'runtime-plugin-2',
-          authIndex: 'auth-2',
-          provider: 'codex',
-          accountId: 'account-2',
-          accountSnapshot: 'second-plugin@example.com',
-        },
-      ]);
-      expect(execution.outcomes).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            accountKey: first.key,
-            status: 'success',
-            success: true,
-          }),
-          expect.objectContaining({
-            accountKey: second.key,
-            status: 'skipped',
-            success: true,
-          }),
-        ])
-      );
+      if (source === 'manual') {
+        expect(statusSpy).toHaveBeenCalledTimes(1);
+        expect(statusSpy).toHaveBeenCalledWith(
+          {
+            name: 'plugin-source.json',
+            runtimeId: 'runtime-plugin-1',
+            authIndex: 'auth-1',
+            provider: 'codex',
+            accountId: 'account-1',
+            accountSnapshot: 'first-plugin@example.com',
+          },
+          nextDisabled,
+          expect.any(Function)
+        );
+        expect(verifiedSourceIdentities).toEqual([
+          {
+            name: 'plugin-source.json',
+            runtimeId: 'runtime-plugin-1',
+            authIndex: 'auth-1',
+            provider: 'codex',
+            accountId: 'account-1',
+            accountSnapshot: 'first-plugin@example.com',
+          },
+          {
+            name: 'plugin-source.json',
+            runtimeId: 'runtime-plugin-2',
+            authIndex: 'auth-2',
+            provider: 'codex',
+            accountId: 'account-2',
+            accountSnapshot: 'second-plugin@example.com',
+          },
+        ]);
+        expect(execution.outcomes).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              accountKey: first.key,
+              status: 'success',
+              success: true,
+            }),
+            expect.objectContaining({
+              accountKey: second.key,
+              status: 'skipped',
+              success: true,
+            }),
+          ])
+        );
+      } else {
+        expect(statusSpy).toHaveBeenCalledTimes(2);
+        expect(statusSpy.mock.calls).toEqual(
+          expect.arrayContaining([
+            [
+              expect.objectContaining({
+                runtimeId: 'runtime-plugin-1',
+                authIndex: 'auth-1',
+              }),
+              nextDisabled,
+            ],
+            [
+              expect.objectContaining({
+                runtimeId: 'runtime-plugin-2',
+                authIndex: 'auth-2',
+              }),
+              nextDisabled,
+            ],
+          ])
+        );
+        expect(verifiedSourceIdentities).toBeUndefined();
+        expect(execution.outcomes).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              accountKey: first.key,
+              status: 'success',
+              success: true,
+            }),
+            expect.objectContaining({
+              accountKey: second.key,
+              status: 'success',
+              success: true,
+            }),
+          ])
+        );
+      }
       if (source === 'auto' && action === 'disable') {
         expect(
           getCodexInspectionOwnedDisableIdentityKeys(

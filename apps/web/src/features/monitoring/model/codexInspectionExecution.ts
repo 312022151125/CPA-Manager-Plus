@@ -590,7 +590,8 @@ const isStatusExecutionAction = (
 
 const buildStatusActionGroupPlans = (
   resolvedItems: Map<string, ResolvedStatusActionItem>,
-  currentFilesByName: Map<string, AuthFileItem[]>
+  currentFilesByName: Map<string, AuthFileItem[]>,
+  automatic: boolean
 ): Map<string, StatusActionGroupPlan> => {
   const plans = new Map<string, StatusActionGroupPlan>();
   const entriesByFile = new Map<string, ResolvedStatusActionItem[]>();
@@ -619,6 +620,7 @@ const buildStatusActionGroupPlans = (
     const sourceEntries = matchedEntries.filter(
       (entry) => entry.resolution.scope === 'source-file'
     );
+    if (automatic && sourceEntries.length === 0) return;
     if (!action || sourceEntries.length > 1) return;
     const canonicalEntry = sourceEntries[0] ?? matchedEntries[0];
     if (!canonicalEntry) return;
@@ -1185,17 +1187,23 @@ const executeStatusChange = async (
       }
     } else if (singleMember) {
       const target = buildStatusActionTarget(singleMember.item, singleMember.currentFile);
+      const verifyPluginSourceFallback =
+        automatic &&
+        normalizeProvider(singleMember.item.provider) === 'codex' &&
+        snapshotMembers.length > 1
+          ? undefined
+          : () =>
+              verifyPluginSourceStatusFallback(
+                snapshotMembers,
+                [singleMember.item],
+                singleMember.item,
+                readAuthFileStatusRuntimeId(singleMember.currentFile),
+                requestScope
+              );
       await setAuthFileStatusWithFallback(
         target,
         disabled,
-        () =>
-          verifyPluginSourceStatusFallback(
-            snapshotMembers,
-            [singleMember.item],
-            singleMember.item,
-            readAuthFileStatusRuntimeId(singleMember.currentFile),
-            requestScope
-          ),
+        verifyPluginSourceFallback,
         requestScope
       );
     } else {
@@ -1331,7 +1339,8 @@ export const executeCodexInspectionActions = async ({
       });
       const statusActionGroupPlans = buildStatusActionGroupPlans(
         resolvedStatusItems,
-        currentFilesByName
+        currentFilesByName,
+        source === 'auto'
       );
       const validatedItems: CodexInspectionResultItem[] = [];
       dedupedItems.forEach((item) => {
