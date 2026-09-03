@@ -4070,13 +4070,12 @@ describe('executeCodexInspectionActions', () => {
       const statusSpy = vi
         .spyOn(authFilesApi, 'setStatusWithFallback')
         .mockImplementation(async (_target, disabled, verifyFallback) => {
-          if (source === 'manual') {
-            if (!verifyFallback) throw new Error('missing plugin source fallback verifier');
-            verifiedSourceIdentities = await verifyFallback();
-            return { status: 'ok', disabled, mutationScope: 'source-file' };
+          if (!verifyFallback) {
+            if (source === 'manual') throw new Error('missing plugin source fallback verifier');
+            return { status: 'ok', disabled, mutationScope: 'credential' };
           }
-          if (verifyFallback) throw new Error('unexpected plugin source fallback verifier');
-          return { status: 'ok', disabled, mutationScope: 'credential' };
+          verifiedSourceIdentities = await verifyFallback();
+          return { status: 'ok', disabled, mutationScope: 'source-file' };
         });
       vi.spyOn(authFilesApi, 'list')
         .mockResolvedValueOnce({ files: currentFiles })
@@ -4142,26 +4141,37 @@ describe('executeCodexInspectionActions', () => {
           ])
         );
       } else {
-        expect(statusSpy).toHaveBeenCalledTimes(2);
-        expect(statusSpy.mock.calls).toEqual(
-          expect.arrayContaining([
-            [
-              expect.objectContaining({
-                runtimeId: 'runtime-plugin-1',
-                authIndex: 'auth-1',
-              }),
-              nextDisabled,
-            ],
-            [
-              expect.objectContaining({
-                runtimeId: 'runtime-plugin-2',
-                authIndex: 'auth-2',
-              }),
-              nextDisabled,
-            ],
-          ])
+        expect(statusSpy).toHaveBeenCalledTimes(1);
+        expect(statusSpy).toHaveBeenCalledWith(
+          {
+            name: 'plugin-source.json',
+            runtimeId: 'runtime-plugin-1',
+            authIndex: 'auth-1',
+            provider: 'codex',
+            accountId: 'account-1',
+            accountSnapshot: 'first-plugin@example.com',
+          },
+          nextDisabled,
+          expect.any(Function)
         );
-        expect(verifiedSourceIdentities).toBeUndefined();
+        expect(verifiedSourceIdentities).toEqual([
+          {
+            name: 'plugin-source.json',
+            runtimeId: 'runtime-plugin-1',
+            authIndex: 'auth-1',
+            provider: 'codex',
+            accountId: 'account-1',
+            accountSnapshot: 'first-plugin@example.com',
+          },
+          {
+            name: 'plugin-source.json',
+            runtimeId: 'runtime-plugin-2',
+            authIndex: 'auth-2',
+            provider: 'codex',
+            accountId: 'account-2',
+            accountSnapshot: 'second-plugin@example.com',
+          },
+        ]);
         expect(execution.outcomes).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -4171,7 +4181,7 @@ describe('executeCodexInspectionActions', () => {
             }),
             expect.objectContaining({
               accountKey: second.key,
-              status: 'success',
+              status: 'skipped',
               success: true,
             }),
           ])
@@ -4199,6 +4209,260 @@ describe('executeCodexInspectionActions', () => {
       }
     }
   );
+
+  it('keeps all-unique automatic credentials independent within one physical file', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const first = createResultItem('disable', {
+      key: 'ordinary-all-unique.json::auth-1',
+      fileName: 'ordinary-all-unique.json',
+      runtimeId: 'runtime-ordinary-1',
+      authIndex: 'auth-1',
+      accountId: 'account-1',
+      accountSnapshot: 'first@example.com',
+    });
+    const second = createResultItem('disable', {
+      key: 'ordinary-all-unique.json::auth-2',
+      fileName: 'ordinary-all-unique.json',
+      runtimeId: 'runtime-ordinary-2',
+      authIndex: 'auth-2',
+      accountId: 'account-2',
+      accountSnapshot: 'second@example.com',
+    });
+    const currentFiles = [first, second].map((item) =>
+      createCurrentAuthFile(item, { disabled: false })
+    );
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockImplementation(async (_target, disabled) => ({
+        status: 'ok',
+        disabled,
+        mutationScope: 'credential',
+      }));
+    vi.spyOn(authFilesApi, 'list').mockResolvedValue({ files: currentFiles });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [first, second],
+      referenceItems: [first, second],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-all-unique-ordinary',
+      source: 'auto',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(2);
+    expect(statusSpy.mock.calls.map(([target]) => target.runtimeId).sort()).toEqual([
+      'runtime-ordinary-1',
+      'runtime-ordinary-2',
+    ]);
+    expect(execution.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ accountKey: first.key, status: 'success', success: true }),
+        expect.objectContaining({ accountKey: second.key, status: 'success', success: true }),
+      ])
+    );
+    expect(storage.setItem).toHaveBeenCalledTimes(2);
+  });
+
+  it('blocks a duplicate plugin locator without falling back for a unique sibling', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const first = createResultItem('disable', {
+      key: 'plugin-duplicate.json::auth-1::alice',
+      fileName: 'plugin-duplicate.json',
+      runtimeId: 'runtime-plugin-alice',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+    const second = createResultItem('disable', {
+      key: 'plugin-duplicate.json::auth-1::bob',
+      fileName: 'plugin-duplicate.json',
+      runtimeId: 'runtime-plugin-bob',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'bob@example.com',
+    });
+    const unique = createResultItem('disable', {
+      key: 'plugin-duplicate.json::auth-2::charlie',
+      fileName: 'plugin-duplicate.json',
+      runtimeId: 'runtime-plugin-charlie',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'charlie@example.com',
+    });
+    const currentFiles = [first, second, unique].map((item) =>
+      createCurrentAuthFile(item, { disabled: false })
+    );
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockImplementation(async (_target, disabled, verifyFallback) => {
+        expect(verifyFallback).toBeUndefined();
+        return { status: 'ok', disabled, mutationScope: 'credential' };
+      });
+    const sourceStatusSpy = vi.spyOn(authFilesApi, 'setVerifiedSourceFileStatus');
+    vi.spyOn(authFilesApi, 'list').mockResolvedValue({ files: currentFiles });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [first, second, unique],
+      referenceItems: [first, second, unique],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-plugin-duplicate-locator',
+      source: 'auto',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeId: 'runtime-plugin-charlie', authIndex: 'auth-2' }),
+      true
+    );
+    expect(sourceStatusSpy).not.toHaveBeenCalled();
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+    expect(execution.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ accountKey: first.key, status: 'needs_review', success: true }),
+        expect.objectContaining({ accountKey: second.key, status: 'needs_review', success: true }),
+        expect.objectContaining({ accountKey: unique.key, status: 'success', success: true }),
+      ])
+    );
+  });
+
+  it('rejects automatic plugin fallback when source membership grows before fallback', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const first = createResultItem('disable', {
+      key: 'plugin-membership-growth.json::auth-1',
+      fileName: 'plugin-membership-growth.json',
+      runtimeId: 'runtime-plugin-1',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'first@example.com',
+    });
+    const second = createResultItem('disable', {
+      key: 'plugin-membership-growth.json::auth-2',
+      fileName: 'plugin-membership-growth.json',
+      runtimeId: 'runtime-plugin-2',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'second@example.com',
+    });
+    const initialFiles = [first, second].map((item) =>
+      createCurrentAuthFile(item, { disabled: false })
+    );
+    const added = createCurrentAuthFile(
+      createResultItem('disable', {
+        key: 'plugin-membership-growth.json::auth-3',
+        fileName: 'plugin-membership-growth.json',
+        runtimeId: 'runtime-plugin-3',
+        authIndex: 'auth-3',
+        accountId: 'workspace-1',
+        accountSnapshot: 'third@example.com',
+      }),
+      { disabled: false }
+    );
+    const grownFiles = [...initialFiles, added];
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockImplementation(async (_target, _disabled, verifyFallback) => {
+        if (!verifyFallback) throw new Error('missing plugin source fallback verifier');
+        await verifyFallback();
+        return { status: 'ok', disabled: true, mutationScope: 'source-file' };
+      });
+    const sourceStatusSpy = vi.spyOn(authFilesApi, 'setVerifiedSourceFileStatus');
+    vi.spyOn(authFilesApi, 'list')
+      .mockResolvedValueOnce({ files: initialFiles })
+      .mockResolvedValueOnce({ files: initialFiles })
+      .mockResolvedValueOnce({ files: grownFiles })
+      .mockResolvedValue({ files: grownFiles });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [first, second],
+      referenceItems: [first, second],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-plugin-membership-growth',
+      source: 'auto',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(sourceStatusSpy).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ accountKey: first.key, status: 'failed', success: false }),
+        expect.objectContaining({ accountKey: second.key, status: 'skipped', success: true }),
+      ])
+    );
+  });
+
+  it('rejects automatic plugin fallback when a locator duplicates before fallback', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const first = createResultItem('disable', {
+      key: 'plugin-locator-toctou.json::auth-1',
+      fileName: 'plugin-locator-toctou.json',
+      runtimeId: 'runtime-plugin-1',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'first@example.com',
+    });
+    const second = createResultItem('disable', {
+      key: 'plugin-locator-toctou.json::auth-2',
+      fileName: 'plugin-locator-toctou.json',
+      runtimeId: 'runtime-plugin-2',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'second@example.com',
+    });
+    const initialFiles = [first, second].map((item) =>
+      createCurrentAuthFile(item, { disabled: false })
+    );
+    const duplicate = createCurrentAuthFile(
+      createResultItem('disable', {
+        key: 'plugin-locator-toctou.json::auth-1::duplicate',
+        fileName: 'plugin-locator-toctou.json',
+        runtimeId: 'runtime-plugin-duplicate',
+        authIndex: 'auth-1',
+        accountId: 'workspace-1',
+        accountSnapshot: 'duplicate@example.com',
+      }),
+      { disabled: false }
+    );
+    const freshFiles = [initialFiles[0], duplicate, initialFiles[1]];
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockImplementation(async (_target, _disabled, verifyFallback) => {
+        if (!verifyFallback) throw new Error('missing plugin source fallback verifier');
+        await verifyFallback();
+        return { status: 'ok', disabled: true, mutationScope: 'source-file' };
+      });
+    const sourceStatusSpy = vi.spyOn(authFilesApi, 'setVerifiedSourceFileStatus');
+    vi.spyOn(authFilesApi, 'list')
+      .mockResolvedValueOnce({ files: initialFiles })
+      .mockResolvedValueOnce({ files: initialFiles })
+      .mockResolvedValueOnce({ files: freshFiles })
+      .mockResolvedValue({ files: freshFiles });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [first, second],
+      referenceItems: [first, second],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-plugin-locator-toctou',
+      source: 'auto',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(sourceStatusSpy).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ accountKey: first.key, status: 'failed', success: false }),
+        expect.objectContaining({ accountKey: second.key, status: 'skipped', success: true }),
+      ])
+    );
+  });
 
   it('updates every ordinary same-name credential instead of treating the group as one file', async () => {
     const first = createResultItem('disable', {

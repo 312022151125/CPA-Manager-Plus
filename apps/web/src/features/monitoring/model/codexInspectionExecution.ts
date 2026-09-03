@@ -544,6 +544,24 @@ const hasDuplicateCodexPersistedLocator = (
   );
 };
 
+const hasUniqueCodexPersistedLocator = (
+  currentFiles: AuthFileItem[],
+  item: CodexInspectionResultItem
+): boolean => {
+  const locatorKey = getCodexPersistedLocatorKey(item.fileName, item.provider, item.authIndex);
+  if (!locatorKey) return false;
+  return (
+    currentFiles.filter(
+      (file) =>
+        getCodexPersistedLocatorKey(
+          readCurrentFileName(file),
+          resolveAuthProvider(file),
+          file['auth_index'] ?? file.authIndex ?? file['auth-index']
+        ) === locatorKey
+    ).length === 1
+  );
+};
+
 const readInspectionAccountSnapshot = (item: CodexInspectionResultItem): string => {
   const snapshot = item.accountSnapshot?.trim() ?? '';
   if (!snapshot || snapshot === item.fileName.trim()) return '';
@@ -577,6 +595,13 @@ type ResolvedStatusActionItem = {
 };
 
 type StatusActionGroupPlan = {
+  canonicalKey: string;
+  action: 'disable' | 'enable';
+  members: CodexInspectionResultItem[];
+  affectedFiles: AuthFileItem[];
+};
+
+type AutomaticSourceFallbackPlan = {
   canonicalKey: string;
   action: 'disable' | 'enable';
   members: CodexInspectionResultItem[];
@@ -632,6 +657,56 @@ const buildStatusActionGroupPlans = (
       affectedFiles: currentFiles,
     });
   });
+  return plans;
+};
+
+const buildAutomaticSourceFallbackPlans = (
+  resolvedItems: Map<string, ResolvedStatusActionItem>,
+  currentFilesByName: Map<string, AuthFileItem[]>,
+  currentFiles: AuthFileItem[]
+): Map<string, AutomaticSourceFallbackPlan> => {
+  const plans = new Map<string, AutomaticSourceFallbackPlan>();
+  const entriesByFile = new Map<string, ResolvedStatusActionItem[]>();
+  resolvedItems.forEach((entry) => {
+    const fileName = readCurrentFileName(entry.currentFile);
+    const entries = entriesByFile.get(fileName) ?? [];
+    entries.push(entry);
+    entriesByFile.set(fileName, entries);
+  });
+
+  currentFilesByName.forEach((affectedFiles, fileName) => {
+    const entries = entriesByFile.get(fileName) ?? [];
+    if (entries.length !== affectedFiles.length || affectedFiles.length === 0) return;
+
+    const members: CodexInspectionResultItem[] = [];
+    let action: 'disable' | 'enable' | null = null;
+    for (const affectedFile of affectedFiles) {
+      const matches = entries.filter((entry) => entry.currentFile === affectedFile);
+      const entry = matches[0];
+      if (!entry || matches.length !== 1 || !isStatusExecutionAction(entry.item)) return;
+      if (
+        entry.resolution.scope !== 'credential' ||
+        normalizeProvider(entry.item.provider) !== 'codex' ||
+        !hasUniqueCodexPersistedLocator(currentFiles, entry.item)
+      ) {
+        return;
+      }
+      if (action === null) action = entry.item.action;
+      if (entry.item.action !== action) return;
+      members.push(entry.item);
+    }
+
+    if (!action || !statusActionCoversCurrentFile(affectedFiles, members, fileName)) return;
+    const canonical = members[0];
+    if (!canonical) return;
+    plans.set(fileName, {
+      canonicalKey: canonical.key,
+      action,
+      members,
+      affectedFiles,
+    });
+  });
+
   return plans;
 };
 
@@ -764,6 +839,11 @@ const verifyPluginSourceStatusFallback = async (
   if (
     !authFileSourceMembershipMatches(snapshotMembers, freshMembers) ||
     !statusActionCoversCurrentFile(freshMembers, actionMembers, physicalName) ||
+    actionMembers.some(
+      (member) =>
+        normalizeProvider(member.provider) === 'codex' &&
+        !hasUniqueCodexPersistedLocator(freshFiles, member)
+    ) ||
     !resolution.target ||
     resolution.failure !== null ||
     resolution.scope !== 'credential' ||
@@ -868,6 +948,21 @@ type PatchedStatusActionMember = {
   item: CodexInspectionResultItem;
   originalDisabled: boolean;
 };
+
+type StatusChangeMutationScope = 'credential' | 'source-file' | null;
+
+type StatusChangeExecutionResult = {
+  outcome: CodexInspectionExecutionOutcome;
+  mutationScope: StatusChangeMutationScope;
+};
+
+const buildStatusChangeExecutionResult = (
+  outcome: CodexInspectionExecutionOutcome,
+  mutationScope: StatusChangeMutationScope = null
+): StatusChangeExecutionResult => ({
+  outcome,
+  mutationScope,
+});
 
 const rollbackPatchedStatusActionMembers = async (
   patchedMembers: PatchedStatusActionMember[],
@@ -1052,8 +1147,9 @@ const executeStatusChange = async (
   disabled: boolean,
   actionMembers: CodexInspectionResultItem[] = [],
   requestScope?: AuthFilesApiRequestScope,
-  automatic = false
-): Promise<CodexInspectionExecutionOutcome> => {
+  automatic = false,
+  sourceFallbackMembers?: CodexInspectionResultItem[]
+): Promise<StatusChangeExecutionResult> => {
   let snapshotMembers: AuthFileItem[] = [];
   let singleMember: VerifiedStatusActionMember | null = null;
   let actionGroup: VerifiedStatusActionGroup | null = null;
@@ -1064,27 +1160,33 @@ const executeStatusChange = async (
       automatic &&
       disabled &&
       normalizeProvider(item.provider) === 'codex' &&
-      (actionMembers.length > 0 ? actionMembers : [item]).some((member) =>
-        hasDuplicateCodexPersistedLocator(currentFiles, member)
+      (sourceFallbackMembers ?? (actionMembers.length > 0 ? actionMembers : [item])).some(
+        (member) => hasDuplicateCodexPersistedLocator(currentFiles, member)
       )
     ) {
-      return buildActionValidationOutcome(item, 'needs_review', AUTOMATIC_PERSISTED_LOCATOR_REASON);
+      return buildStatusChangeExecutionResult(
+        buildActionValidationOutcome(item, 'needs_review', AUTOMATIC_PERSISTED_LOCATOR_REASON)
+      );
     }
     if (actionMembers.length > 0) {
       actionGroup = resolveVerifiedStatusActionGroup(currentFiles, actionMembers, item.fileName);
       if (!actionGroup) {
-        return buildActionValidationOutcome(
-          item,
-          'failed',
-          '认证文件成员、Provider 或账号标识已变化，已拒绝状态修改'
+        return buildStatusChangeExecutionResult(
+          buildActionValidationOutcome(
+            item,
+            'failed',
+            '认证文件成员、Provider 或账号标识已变化，已拒绝状态修改'
+          )
         );
       }
       snapshotMembers = actionGroup.affectedFiles;
       if (actionGroup.affectedFiles.every((file) => (file.disabled === true) === disabled)) {
-        return buildActionValidationOutcome(
-          item,
-          'skipped',
-          disabled ? '账号已是禁用状态，未重复执行' : '账号已是启用状态，未重复执行'
+        return buildStatusChangeExecutionResult(
+          buildActionValidationOutcome(
+            item,
+            'skipped',
+            disabled ? '账号已是禁用状态，未重复执行' : '账号已是启用状态，未重复执行'
+          )
         );
       }
     } else {
@@ -1098,45 +1200,56 @@ const executeStatusChange = async (
       });
       const currentFile = resolution.target;
       if (!currentFile || !matchesCurrentActionIdentity(currentFile, item)) {
-        return buildActionValidationOutcome(
-          item,
-          'failed',
-          '认证文件不存在、Provider 不匹配或账号标识已变化，已拒绝执行'
+        return buildStatusChangeExecutionResult(
+          buildActionValidationOutcome(
+            item,
+            'failed',
+            '认证文件不存在、Provider 不匹配或账号标识已变化，已拒绝执行'
+          )
         );
       }
       if (resolution.failure !== null || resolution.scope === 'ambiguous') {
-        return buildActionValidationOutcome(item, 'failed', STATUS_MUTATION_SCOPE_REASON);
+        return buildStatusChangeExecutionResult(
+          buildActionValidationOutcome(item, 'failed', STATUS_MUTATION_SCOPE_REASON)
+        );
       }
       if (resolution.scope !== 'credential') {
-        return buildActionValidationOutcome(item, 'failed', STATUS_MUTATION_SCOPE_REASON);
+        return buildStatusChangeExecutionResult(
+          buildActionValidationOutcome(item, 'failed', STATUS_MUTATION_SCOPE_REASON)
+        );
       }
 
       snapshotMembers = currentFiles.filter(
         (file) => readCurrentFileName(file) === readCurrentFileName(currentFile)
       );
 
-      if ((currentFile.disabled === true) === disabled) {
-        return buildActionValidationOutcome(
-          item,
-          'skipped',
-          disabled ? '账号已是禁用状态，未重复执行' : '账号已是启用状态，未重复执行'
+      if ((currentFile.disabled === true) === disabled && sourceFallbackMembers === undefined) {
+        return buildStatusChangeExecutionResult(
+          buildActionValidationOutcome(
+            item,
+            'skipped',
+            disabled ? '账号已是禁用状态，未重复执行' : '账号已是启用状态，未重复执行'
+          )
         );
       }
       singleMember = { item, currentFile, resolution };
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error || '未知错误');
-    return buildActionValidationOutcome(
-      item,
-      'failed',
-      `执行状态修改前刷新认证文件失败，已拒绝执行：${message}`
+    return buildStatusChangeExecutionResult(
+      buildActionValidationOutcome(
+        item,
+        'failed',
+        `执行状态修改前刷新认证文件失败，已拒绝执行：${message}`
+      )
     );
   }
 
   try {
+    let mutationScope: StatusChangeMutationScope = null;
     if (actionGroup) {
       if (actionGroup.sourceMember) {
-        await setVerifiedSourceFileStatus(
+        const result = await setVerifiedSourceFileStatus(
           buildStatusActionTarget(
             actionGroup.sourceMember.item,
             actionGroup.sourceMember.currentFile
@@ -1145,6 +1258,7 @@ const executeStatusChange = async (
           actionGroup.affectedFiles.map(buildDeleteIdentityTarget),
           requestScope
         );
+        mutationScope = result.mutationScope;
       } else {
         const patchedMembers: PatchedStatusActionMember[] = [];
         for (let index = 0; index < actionGroup.members.length; index++) {
@@ -1167,6 +1281,7 @@ const executeStatusChange = async (
                     requestScope
                   )
                 : await setAuthFileStatusWithFallback(target, disabled, undefined, requestScope);
+            mutationScope = result.mutationScope ?? null;
             if (result.mutationScope === 'source-file') break;
             patchedMembers.push({
               item: member.item,
@@ -1187,39 +1302,43 @@ const executeStatusChange = async (
       }
     } else if (singleMember) {
       const target = buildStatusActionTarget(singleMember.item, singleMember.currentFile);
+      const isAutomaticCodex =
+        automatic && normalizeProvider(singleMember.item.provider) === 'codex';
       const verifyPluginSourceFallback =
-        automatic &&
-        normalizeProvider(singleMember.item.provider) === 'codex' &&
-        snapshotMembers.length > 1
+        isAutomaticCodex && sourceFallbackMembers === undefined && snapshotMembers.length > 1
           ? undefined
           : () =>
               verifyPluginSourceStatusFallback(
                 snapshotMembers,
-                [singleMember.item],
+                sourceFallbackMembers ?? [singleMember.item],
                 singleMember.item,
                 readAuthFileStatusRuntimeId(singleMember.currentFile),
                 requestScope
               );
-      await setAuthFileStatusWithFallback(
+      const result = await setAuthFileStatusWithFallback(
         target,
         disabled,
         verifyPluginSourceFallback,
         requestScope
       );
+      mutationScope = result.mutationScope ?? null;
     } else {
       throw new Error('认证凭证状态修改目标未通过校验');
     }
-    return {
-      accountKey: item.key,
-      action: disabled ? 'disable' : 'enable',
-      fileName: item.fileName,
-      displayAccount: item.displayAccount,
-      status: 'success',
-      success: true,
-      error: '',
-    };
+    return buildStatusChangeExecutionResult(
+      {
+        accountKey: item.key,
+        action: disabled ? 'disable' : 'enable',
+        fileName: item.fileName,
+        displayAccount: item.displayAccount,
+        status: 'success',
+        success: true,
+        error: '',
+      },
+      mutationScope
+    );
   } catch (error) {
-    return {
+    return buildStatusChangeExecutionResult({
       accountKey: item.key,
       action: disabled ? 'disable' : 'enable',
       fileName: item.fileName,
@@ -1227,7 +1346,7 @@ const executeStatusChange = async (
       status: 'failed',
       success: false,
       error: error instanceof Error ? error.message : String(error || '状态更新失败'),
-    };
+    });
   }
 };
 
@@ -1260,6 +1379,8 @@ export const executeCodexInspectionActions = async ({
   let executableItems = dedupedItems;
   let preflightFiles: AuthFileItem[] | null = null;
   const statusGroupMembersByAccountKey = new Map<string, CodexInspectionResultItem[]>();
+  const automaticSourceFileMembersByAccountKey = new Map<string, CodexInspectionResultItem[]>();
+  let automaticSourceFallbackPlans = new Map<string, AutomaticSourceFallbackPlan>();
 
   if (source === 'manual' || source === 'auto') {
     onLog?.(
@@ -1342,6 +1463,10 @@ export const executeCodexInspectionActions = async ({
         currentFilesByName,
         source === 'auto'
       );
+      automaticSourceFallbackPlans =
+        source === 'auto'
+          ? buildAutomaticSourceFallbackPlans(resolvedStatusItems, currentFilesByName, currentFiles)
+          : new Map<string, AutomaticSourceFallbackPlan>();
       const validatedItems: CodexInspectionResultItem[] = [];
       dedupedItems.forEach((item) => {
         const currentCandidates = currentFilesByName.get(item.fileName.trim()) ?? [];
@@ -1359,6 +1484,17 @@ export const executeCodexInspectionActions = async ({
               currentFile ? readCurrentFileName(currentFile) : item.fileName.trim()
             )
           : undefined;
+        const automaticSourceFallbackPlan = isStatusExecutionAction(item)
+          ? automaticSourceFallbackPlans.get(
+              currentFile ? readCurrentFileName(currentFile) : item.fileName.trim()
+            )
+          : undefined;
+        const automaticSourceFallbackNeedsMutation = Boolean(
+          automaticSourceFallbackPlan &&
+          !automaticSourceFallbackPlan.affectedFiles.every(
+            (file) => (file.disabled === true) === (item.action === 'disable')
+          )
+        );
         const automaticPersistedLocatorAmbiguous =
           source === 'auto' &&
           item.action === 'disable' &&
@@ -1425,6 +1561,7 @@ export const executeCodexInspectionActions = async ({
           outcome = buildActionValidationOutcome(item, 'needs_review', FILE_DELETE_COVERAGE_REASON);
         } else if (
           item.action === 'disable' &&
+          !automaticSourceFallbackNeedsMutation &&
           (statusActionGroupPlan
             ? statusActionGroupPlan.affectedFiles.every((file) => file.disabled === true)
             : currentFile.disabled === true)
@@ -1432,6 +1569,7 @@ export const executeCodexInspectionActions = async ({
           outcome = buildActionValidationOutcome(item, 'skipped', '账号已是禁用状态，未重复执行');
         } else if (
           item.action === 'enable' &&
+          !automaticSourceFallbackNeedsMutation &&
           (statusActionGroupPlan
             ? statusActionGroupPlan.affectedFiles.every((file) => file.disabled !== true)
             : currentFile.disabled !== true)
@@ -1503,6 +1641,100 @@ export const executeCodexInspectionActions = async ({
   const disableItems = executableItems.filter((item) => item.action === 'disable');
   const enableItems = executableItems.filter((item) => item.action === 'enable');
 
+  const executeStatusItems = async (
+    items: CodexInspectionResultItem[],
+    disabled: boolean
+  ): Promise<CodexInspectionExecutionOutcome[]> => {
+    type StatusExecutionUnit = {
+      item: CodexInspectionResultItem;
+      sourceFallbackMembers?: CodexInspectionResultItem[];
+    };
+
+    const units: StatusExecutionUnit[] = [];
+    const plannedKeys = new Set<string>();
+    const itemsByKey = new Map(items.map((item) => [item.key, item] as const));
+    automaticSourceFallbackPlans.forEach((plan) => {
+      if (plan.action !== (disabled ? 'disable' : 'enable')) return;
+      const members = plan.members.map((member) => itemsByKey.get(member.key));
+      if (members.some((member) => !member)) return;
+      const resolvedMembers = members as CodexInspectionResultItem[];
+      const canonical = resolvedMembers[0];
+      if (!canonical) return;
+      units.push({ item: canonical, sourceFallbackMembers: resolvedMembers });
+      resolvedMembers.forEach((member) => plannedKeys.add(member.key));
+    });
+    items.forEach((item) => {
+      if (!plannedKeys.has(item.key)) units.push({ item });
+    });
+
+    const unitOutcomes = await runConcurrently(
+      units,
+      settings.deleteWorkers,
+      async (unit): Promise<CodexInspectionExecutionOutcome[]> => {
+        const result = await executeStatusChange(
+          unit.item,
+          disabled,
+          statusGroupMembersByAccountKey.get(unit.item.key),
+          requestScope,
+          source === 'auto',
+          unit.sourceFallbackMembers
+        );
+        const resultOutcomes = [result.outcome];
+        const fallbackMembers = unit.sourceFallbackMembers;
+        if (!fallbackMembers) return resultOutcomes;
+
+        if (result.outcome.success && result.mutationScope === 'source-file') {
+          automaticSourceFileMembersByAccountKey.set(result.outcome.accountKey, fallbackMembers);
+          if (fallbackMembers.length <= 1) return resultOutcomes;
+          resultOutcomes.push(
+            ...fallbackMembers
+              .slice(1)
+              .map((member) =>
+                buildActionValidationOutcome(
+                  member,
+                  'skipped',
+                  '该认证目标已由另一条结果处理',
+                  result.outcome.accountKey
+                )
+              )
+          );
+          return resultOutcomes;
+        }
+
+        if (fallbackMembers.length <= 1) return resultOutcomes;
+
+        if (!result.outcome.success) {
+          resultOutcomes.push(
+            ...fallbackMembers
+              .slice(1)
+              .map((member) =>
+                buildActionValidationOutcome(
+                  member,
+                  'skipped',
+                  '该认证目标已由另一条结果处理',
+                  result.outcome.accountKey
+                )
+              )
+          );
+          return resultOutcomes;
+        }
+
+        for (const member of fallbackMembers.slice(1)) {
+          const siblingResult = await executeStatusChange(
+            member,
+            disabled,
+            statusGroupMembersByAccountKey.get(member.key),
+            requestScope,
+            source === 'auto'
+          );
+          resultOutcomes.push(siblingResult.outcome);
+        }
+        return resultOutcomes;
+      }
+    );
+    return unitOutcomes.flat();
+  };
+
   if (deleteItems.length > 0) {
     const deleteOutcomes = await runConcurrently(deleteItems, settings.deleteWorkers, (item) =>
       executeDelete(item, actionReferenceItems, requestScope)
@@ -1512,15 +1744,7 @@ export const executeCodexInspectionActions = async ({
   }
 
   if (disableItems.length > 0) {
-    const disableOutcomes = await runConcurrently(disableItems, settings.deleteWorkers, (item) =>
-      executeStatusChange(
-        item,
-        true,
-        statusGroupMembersByAccountKey.get(item.key),
-        requestScope,
-        source === 'auto'
-      )
-    );
+    const disableOutcomes = await executeStatusItems(disableItems, true);
     if (source === 'auto') {
       const itemByAccountKey = new Map(disableItems.map((item) => [item.key, item] as const));
       for (const outcome of disableOutcomes) {
@@ -1528,11 +1752,15 @@ export const executeCodexInspectionActions = async ({
         const item = itemByAccountKey.get(outcome.accountKey);
         if (!item) continue;
         const statusGroupMembers = statusGroupMembersByAccountKey.get(outcome.accountKey);
-        const persisted = statusGroupMembers
+        const automaticSourceFileMembers = automaticSourceFileMembersByAccountKey.get(
+          outcome.accountKey
+        );
+        const ownershipMembers = automaticSourceFileMembers ?? statusGroupMembers;
+        const persisted = ownershipMembers
           ? replaceCodexInspectionDisableOwnershipForFile(
               connectionFingerprint,
               item.fileName,
-              statusGroupMembers.map((member) => ({
+              ownershipMembers.map((member) => ({
                 fileName: member.fileName,
                 provider: member.provider,
                 authIndex: member.authIndex,
@@ -1554,17 +1782,19 @@ export const executeCodexInspectionActions = async ({
           false,
           statusGroupMembers,
           requestScope,
-          source === 'auto'
+          source === 'auto',
+          automaticSourceFileMembersByAccountKey.get(outcome.accountKey)
         );
         const rolledBack =
-          rollbackOutcome.success &&
-          (rollbackOutcome.status === 'success' || rollbackOutcome.status === 'skipped');
+          rollbackOutcome.outcome.success &&
+          (rollbackOutcome.outcome.status === 'success' ||
+            rollbackOutcome.outcome.status === 'skipped');
         outcome.status = 'failed';
         outcome.success = false;
         outcome.error = rolledBack
           ? '自动禁用所有权保存失败，禁用操作已回滚'
           : `自动禁用所有权保存失败，且禁用回滚失败：${
-              rollbackOutcome.error || '未知错误'
+              rollbackOutcome.outcome.error || '未知错误'
             }；请到凭证管理中手动恢复`;
       }
     }
@@ -1573,15 +1803,7 @@ export const executeCodexInspectionActions = async ({
   }
 
   if (enableItems.length > 0) {
-    const enableOutcomes = await runConcurrently(enableItems, settings.deleteWorkers, (item) =>
-      executeStatusChange(
-        item,
-        false,
-        statusGroupMembersByAccountKey.get(item.key),
-        requestScope,
-        source === 'auto'
-      )
-    );
+    const enableOutcomes = await executeStatusItems(enableItems, false);
     enableOutcomes.forEach((outcome) => logExecutionOutcome(outcome, onLog, t));
     outcomes.push(...enableOutcomes);
   }
@@ -1592,10 +1814,13 @@ export const executeCodexInspectionActions = async ({
     const item = itemByAccountKey.get(outcome.accountKey);
     if (!item) return;
     const statusGroupMembers = statusGroupMembersByAccountKey.get(outcome.accountKey);
+    const automaticSourceFileMembers = automaticSourceFileMembersByAccountKey.get(
+      outcome.accountKey
+    );
     if (outcome.action === 'disable' && source === 'auto') {
       return;
     }
-    if (outcome.action === 'delete' || statusGroupMembers) {
+    if (outcome.action === 'delete' || statusGroupMembers || automaticSourceFileMembers) {
       clearCodexInspectionDisableOwnershipForFile(connectionFingerprint, item.fileName);
       return;
     }
