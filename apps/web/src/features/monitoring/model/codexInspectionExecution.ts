@@ -512,20 +512,34 @@ const hasAmbiguousCredentialLocator = (
   });
 };
 
+const getCodexPersistedLocatorKey = (
+  fileName: unknown,
+  provider: unknown,
+  authIndex: unknown
+): string | null => {
+  const normalizedFileName = String(fileName ?? '').trim();
+  const normalizedProvider = normalizeProvider(provider);
+  const normalizedAuthIndex = normalizeAuthIndex(authIndex);
+  if (!normalizedFileName || normalizedProvider !== 'codex' || normalizedAuthIndex === null) {
+    return null;
+  }
+  return JSON.stringify([normalizedFileName, normalizedProvider, normalizedAuthIndex]);
+};
+
 const hasDuplicateCodexPersistedLocator = (
   currentFiles: AuthFileItem[],
   item: CodexInspectionResultItem
 ): boolean => {
-  if (normalizeProvider(item.provider) !== 'codex') return false;
-  const fileName = item.fileName.trim();
-  const authIndex = normalizeAuthIndex(item.authIndex);
-  if (!fileName || !authIndex) return false;
+  const locatorKey = getCodexPersistedLocatorKey(item.fileName, item.provider, item.authIndex);
+  if (!locatorKey) return false;
   return (
     currentFiles.filter(
       (file) =>
-        readCurrentFileName(file) === fileName &&
-        normalizeProvider(resolveAuthProvider(file)) === 'codex' &&
-        normalizeAuthIndex(file['auth_index'] ?? file.authIndex ?? file['auth-index']) === authIndex
+        getCodexPersistedLocatorKey(
+          readCurrentFileName(file),
+          resolveAuthProvider(file),
+          file['auth_index'] ?? file.authIndex ?? file['auth-index']
+        ) === locatorKey
     ).length > 1
   );
 };
@@ -1035,7 +1049,8 @@ const executeStatusChange = async (
   item: CodexInspectionResultItem,
   disabled: boolean,
   actionMembers: CodexInspectionResultItem[] = [],
-  requestScope?: AuthFilesApiRequestScope
+  requestScope?: AuthFilesApiRequestScope,
+  automatic = false
 ): Promise<CodexInspectionExecutionOutcome> => {
   let snapshotMembers: AuthFileItem[] = [];
   let singleMember: VerifiedStatusActionMember | null = null;
@@ -1043,6 +1058,16 @@ const executeStatusChange = async (
   try {
     const response = await listAuthFiles(requestScope);
     const currentFiles = Array.isArray(response.files) ? response.files : [];
+    if (
+      automatic &&
+      disabled &&
+      normalizeProvider(item.provider) === 'codex' &&
+      (actionMembers.length > 0 ? actionMembers : [item]).some((member) =>
+        hasDuplicateCodexPersistedLocator(currentFiles, member)
+      )
+    ) {
+      return buildActionValidationOutcome(item, 'needs_review', AUTOMATIC_PERSISTED_LOCATOR_REASON);
+    }
     if (actionMembers.length > 0) {
       actionGroup = resolveVerifiedStatusActionGroup(currentFiles, actionMembers, item.fileName);
       if (!actionGroup) {
@@ -1264,7 +1289,7 @@ export const executeCodexInspectionActions = async ({
         filesByName.set(fileName, siblings);
         return filesByName;
       }, new Map<string, AuthFileItem[]>());
-      const automaticDuplicatePersistedLocatorFiles =
+      const automaticDuplicatePersistedLocatorKeys =
         source === 'auto'
           ? new Set(
               dedupedItems
@@ -1274,7 +1299,10 @@ export const executeCodexInspectionActions = async ({
                     normalizeProvider(item.provider) === 'codex' &&
                     hasDuplicateCodexPersistedLocator(currentFiles, item)
                 )
-                .map((item) => item.fileName.trim())
+                .map((item) =>
+                  getCodexPersistedLocatorKey(item.fileName, item.provider, item.authIndex)
+                )
+                .filter((key): key is string => key !== null)
             )
           : new Set<string>();
       const statusResolutionByKey = new Map<string, AuthFileStatusMutationResolution>();
@@ -1326,7 +1354,9 @@ export const executeCodexInspectionActions = async ({
           source === 'auto' &&
           item.action === 'disable' &&
           normalizeProvider(item.provider) === 'codex' &&
-          automaticDuplicatePersistedLocatorFiles.has(item.fileName.trim());
+          automaticDuplicatePersistedLocatorKeys.has(
+            getCodexPersistedLocatorKey(item.fileName, item.provider, item.authIndex) ?? ''
+          );
         let outcome: CodexInspectionExecutionOutcome | null = null;
         if (automaticPersistedLocatorAmbiguous) {
           outcome = buildActionValidationOutcome(
@@ -1474,7 +1504,13 @@ export const executeCodexInspectionActions = async ({
 
   if (disableItems.length > 0) {
     const disableOutcomes = await runConcurrently(disableItems, settings.deleteWorkers, (item) =>
-      executeStatusChange(item, true, statusGroupMembersByAccountKey.get(item.key), requestScope)
+      executeStatusChange(
+        item,
+        true,
+        statusGroupMembersByAccountKey.get(item.key),
+        requestScope,
+        source === 'auto'
+      )
     );
     if (source === 'auto') {
       const itemByAccountKey = new Map(disableItems.map((item) => [item.key, item] as const));
@@ -1508,7 +1544,8 @@ export const executeCodexInspectionActions = async ({
           item,
           false,
           statusGroupMembers,
-          requestScope
+          requestScope,
+          source === 'auto'
         );
         const rolledBack =
           rollbackOutcome.success &&
@@ -1528,7 +1565,13 @@ export const executeCodexInspectionActions = async ({
 
   if (enableItems.length > 0) {
     const enableOutcomes = await runConcurrently(enableItems, settings.deleteWorkers, (item) =>
-      executeStatusChange(item, false, statusGroupMembersByAccountKey.get(item.key), requestScope)
+      executeStatusChange(
+        item,
+        false,
+        statusGroupMembersByAccountKey.get(item.key),
+        requestScope,
+        source === 'auto'
+      )
     );
     enableOutcomes.forEach((outcome) => logExecutionOutcome(outcome, onLog, t));
     outcomes.push(...enableOutcomes);

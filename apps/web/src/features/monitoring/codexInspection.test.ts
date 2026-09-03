@@ -3268,6 +3268,237 @@ describe('executeCodexInspectionActions', () => {
     ]);
   });
 
+  it('blocks automatic disable when a persisted locator becomes duplicated before mutation', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const item = createResultItem('disable', {
+      key: 'toctou.json::auth-1',
+      fileName: 'toctou.json',
+      runtimeId: 'runtime-original',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+    const initialFile = createCurrentAuthFile(item, { disabled: false });
+    const duplicateFile = createCurrentAuthFile(
+      { ...item, runtimeId: 'runtime-duplicate' },
+      { disabled: false }
+    );
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockResolvedValue({} as Awaited<ReturnType<typeof authFilesApi.setStatusWithFallback>>);
+    vi.spyOn(authFilesApi, 'list')
+      .mockResolvedValueOnce({ files: [initialFile] })
+      .mockResolvedValue({ files: [initialFile, duplicateFile] });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-toctou-single',
+      source: 'auto',
+    });
+
+    expect(statusSpy).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        accountKey: item.key,
+        status: 'needs_review',
+        success: true,
+        error: expect.stringContaining('authIndex'),
+      }),
+    ]);
+  });
+
+  it('does not narrow an automatic TOCTOU duplicate by Codex member evidence', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const item = createResultItem('disable', {
+      key: 'team-toctou.json::auth-1::alice',
+      fileName: 'team-toctou.json',
+      runtimeId: 'runtime-alice',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+      displayAccount: 'alice@example.com',
+    });
+    const initialFile = createCurrentAuthFile(item, { disabled: false });
+    const bob = createCurrentAuthFile(
+      {
+        ...item,
+        key: 'team-toctou.json::auth-1::bob',
+        runtimeId: 'runtime-bob',
+        accountSnapshot: 'bob@example.com',
+        displayAccount: 'bob@example.com',
+      },
+      { disabled: false }
+    );
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockResolvedValue({} as Awaited<ReturnType<typeof authFilesApi.setStatusWithFallback>>);
+    vi.spyOn(authFilesApi, 'list')
+      .mockResolvedValueOnce({ files: [initialFile] })
+      .mockResolvedValue({ files: [initialFile, bob] });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [item],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-toctou-member-duplicate',
+      source: 'auto',
+    });
+
+    expect(statusSpy).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual([
+      expect.objectContaining({
+        accountKey: item.key,
+        status: 'needs_review',
+        success: true,
+      }),
+    ]);
+  });
+
+  it('blocks an automatic source-file group when its persisted locator becomes duplicated', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const sourceItem = createResultItem('disable', {
+      key: 'toctou-plugin.json::auth-1',
+      fileName: 'toctou-plugin.json',
+      runtimeId: 'toctou-plugin.json',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+    const childItem = createResultItem('disable', {
+      key: 'toctou-plugin.json::auth-2',
+      fileName: 'toctou-plugin.json',
+      runtimeId: 'runtime-child',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'bob@example.com',
+    });
+    const source = createCurrentAuthFile(sourceItem, { disabled: false });
+    const child = createCurrentAuthFile(childItem, { disabled: false });
+    const duplicateChild = createCurrentAuthFile(
+      { ...childItem, runtimeId: 'runtime-duplicate-child' },
+      { disabled: false }
+    );
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockResolvedValue({} as Awaited<ReturnType<typeof authFilesApi.setStatusWithFallback>>);
+    const sourceStatusSpy = vi
+      .spyOn(authFilesApi, 'setVerifiedSourceFileStatus')
+      .mockResolvedValue({ status: 'ok', disabled: true, mutationScope: 'source-file' });
+    vi.spyOn(authFilesApi, 'list')
+      .mockResolvedValueOnce({ files: [source, child] })
+      .mockResolvedValue({ files: [source, child, duplicateChild] });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [sourceItem, childItem],
+      referenceItems: [sourceItem, childItem],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-toctou-source-group',
+      source: 'auto',
+    });
+
+    expect(statusSpy).not.toHaveBeenCalled();
+    expect(sourceStatusSpy).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountKey: sourceItem.key,
+          status: 'needs_review',
+          success: true,
+        }),
+        expect.objectContaining({
+          accountKey: childItem.key,
+          status: 'skipped',
+          success: true,
+        }),
+      ])
+    );
+  });
+
+  it('only blocks the exact duplicate persisted locator for automatic credentials', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const duplicate = createResultItem('disable', {
+      key: 'granularity.json::auth-1::alice',
+      fileName: 'granularity.json',
+      runtimeId: 'runtime-alice',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'alice@example.com',
+    });
+    const duplicateSibling = createCurrentAuthFile(
+      {
+        ...duplicate,
+        key: 'granularity.json::auth-1::bob',
+        runtimeId: 'runtime-bob',
+        accountSnapshot: 'bob@example.com',
+        displayAccount: 'bob@example.com',
+      },
+      { disabled: false }
+    );
+    const unique = createResultItem('disable', {
+      key: 'granularity.json::auth-2::charlie',
+      fileName: 'granularity.json',
+      runtimeId: 'runtime-charlie',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'charlie@example.com',
+      displayAccount: 'charlie@example.com',
+    });
+    const currentFiles = [
+      createCurrentAuthFile(duplicate, { disabled: false }),
+      duplicateSibling,
+      createCurrentAuthFile(unique, { disabled: false }),
+    ];
+    const statusSpy = vi.spyOn(authFilesApi, 'setStatusWithFallback').mockResolvedValue({
+      status: 'ok',
+      disabled: true,
+      mutationScope: 'credential',
+    });
+    vi.spyOn(authFilesApi, 'list')
+      .mockResolvedValueOnce({ files: currentFiles })
+      .mockResolvedValue({ files: currentFiles });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [duplicate, unique],
+      referenceItems: [duplicate, unique],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-locator-granularity',
+      source: 'auto',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeId: 'runtime-charlie', authIndex: 'auth-2' }),
+      true,
+      expect.any(Function)
+    );
+    expect(execution.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountKey: duplicate.key,
+          status: 'needs_review',
+          success: true,
+        }),
+        expect.objectContaining({
+          accountKey: unique.key,
+          status: 'success',
+          success: true,
+        }),
+      ])
+    );
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+  });
+
   it('blocks an automatic source-file group when any Codex persisted locator is duplicated', async () => {
     const storage = createStorage();
     vi.stubGlobal('localStorage', storage);
