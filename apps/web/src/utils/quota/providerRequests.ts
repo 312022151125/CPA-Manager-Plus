@@ -120,6 +120,7 @@ export const hasCodexQuotaInventory = (payload: CodexUsagePayload): boolean =>
 
 export type ClaudeQuotaData = {
   windows: ClaudeQuotaWindow[];
+  quotaProgressObservedAtMs?: number | null;
   quotaInventoryObserved: boolean;
   extraUsage?: ClaudeExtraUsage | null;
   planType?: string | null;
@@ -127,6 +128,7 @@ export type ClaudeQuotaData = {
 
 export type AntigravityQuotaData = {
   groups: AntigravityQuotaGroup[];
+  quotaProgressObservedAtMs?: number | null;
   quotaInventoryObserved: boolean;
   subscription?: AntigravityQuotaSubscription | null;
   serverTimeOffsetMs: number | null;
@@ -134,6 +136,7 @@ export type AntigravityQuotaData = {
 
 export type KimiQuotaData = {
   rows: KimiQuotaRow[];
+  quotaProgressObservedAtMs?: number | null;
   quotaInventoryObserved: boolean;
 };
 
@@ -296,6 +299,7 @@ export const fetchAntigravityQuota = async (
         continue;
       }
 
+      const quotaProgressObservedAtMs = Date.now();
       hadSuccess = true;
       const payload = parseAntigravityPayload(
         result.body ?? result.bodyText
@@ -314,6 +318,7 @@ export const fetchAntigravityQuota = async (
 
       return {
         groups,
+        quotaProgressObservedAtMs,
         quotaInventoryObserved: true,
         subscription: await subscriptionPromise,
         serverTimeOffsetMs: resolveResponseServerTimeOffsetMs(result.header),
@@ -333,6 +338,7 @@ export const fetchAntigravityQuota = async (
   if (hadSuccess) {
     return {
       groups: [],
+      quotaProgressObservedAtMs: null,
       quotaInventoryObserved,
       subscription: await subscriptionPromise,
       serverTimeOffsetMs: null,
@@ -997,8 +1003,8 @@ export const fetchClaudeQuota = async (
   }
 
   const requestConfig = requestScope ? createScopedApiRequestConfig(requestScope) : undefined;
-  const [usageResult, profileResult] = await Promise.allSettled([
-    apiCallApi.request(
+  const usagePromise = apiCallApi
+    .request(
       {
         authIndex,
         method: 'GET',
@@ -1006,7 +1012,13 @@ export const fetchClaudeQuota = async (
         header: { ...CLAUDE_REQUEST_HEADERS },
       },
       requestConfig
-    ),
+    )
+    .then((result) => ({
+      result,
+      quotaProgressObservedAtMs: Date.now(),
+    }));
+  const [usageResult, profileResult] = await Promise.allSettled([
+    usagePromise,
     apiCallApi.request(
       {
         authIndex,
@@ -1022,7 +1034,7 @@ export const fetchClaudeQuota = async (
     throw usageResult.reason;
   }
 
-  const result = usageResult.value;
+  const { result, quotaProgressObservedAtMs } = usageResult.value;
 
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw createStatusError(getApiCallErrorMessage(result), result.statusCode);
@@ -1045,6 +1057,7 @@ export const fetchClaudeQuota = async (
 
   return {
     windows,
+    quotaProgressObservedAtMs,
     quotaInventoryObserved: hasClaudeQuotaInventory(payload, windows),
     extraUsage: payload.extra_usage,
     planType,
@@ -1083,14 +1096,16 @@ export const fetchKimiQuota = async (
     throw createStatusError(getApiCallErrorMessage(result), result.statusCode);
   }
 
+  const quotaProgressObservedAtMs = Date.now();
   const payload = parseKimiUsagePayload(result.body ?? result.bodyText);
   if (!payload) {
     throw new Error(t('kimi_quota.empty_data'));
   }
 
-  const rows = buildKimiQuotaRows(payload, { observedAtMs: Date.now() });
+  const rows = buildKimiQuotaRows(payload, { observedAtMs: quotaProgressObservedAtMs });
   return {
     rows,
+    quotaProgressObservedAtMs,
     quotaInventoryObserved: hasKimiQuotaInventory(payload, rows),
   };
 };
@@ -1399,6 +1414,7 @@ export const mergeXaiBillingSummaries = (
     billingPeriodStart: primary.billingPeriodStart ?? fallback.billingPeriodStart,
     billingPeriodEnd: primary.billingPeriodEnd ?? fallback.billingPeriodEnd,
     usedPercent,
+    quotaProgressObservedAtMs: weeklySource.quotaProgressObservedAtMs ?? null,
   };
   xaiBillingFieldEvidence.set(merged, {
     monthlyLimit: primaryEvidence.monthlyLimit || fallbackEvidence.monthlyLimit,
@@ -1568,6 +1584,7 @@ const requestXaiBilling = async (
     throw new XaiProbeError(getApiCallErrorMessage(result), envelope, decision);
   }
 
+  const quotaProgressObservedAtMs = Date.now();
   const payload = parseXaiBillingPayload(result.body ?? result.bodyText);
   const summary = buildXaiBillingSummary(resolveXaiBillingConfig(payload));
   if (!summary) {
@@ -1581,7 +1598,7 @@ const requestXaiBilling = async (
     throw new XaiProbeError('xAI billing response schema changed', envelope, decision);
   }
   return {
-    summary,
+    summary: { ...summary, quotaProgressObservedAtMs },
     statusCode: result.hasStatusCode ? result.statusCode : null,
   };
 };

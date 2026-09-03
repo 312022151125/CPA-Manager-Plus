@@ -20,6 +20,7 @@ import type {
   AccountQuotaWindowKind,
   AccountQuotaWindowSource,
 } from './accountQuotaDisplayWindows';
+import { remainingPercentFromUsed } from './accountQuotaDisplayWindows';
 import {
   CODEX_MAIN_QUOTA_SCOPE_KEY,
   canonicalizeCodexProviderWindowIdForScope,
@@ -86,29 +87,22 @@ const snapshotFieldTieBreakKey = (snapshot: AccountQuotaSnapshotWindow, field: s
     snapshot.window_kind,
   ].join('\u0000');
 
-const isFiniteQuotaProgress = (value: number | undefined): value is number =>
+const isFiniteQuotaProgress = (value: number | null | undefined): value is number =>
   typeof value === 'number' && Number.isFinite(value);
+
+const isValidQuotaProgressObservedAtMs = (
+  value: number | null | undefined
+): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0;
 
 const resolveSnapshotQuotaProgressObservedAtMs = (
   snapshot: AccountQuotaSnapshotWindow
 ): number | null => {
-  if (
-    !isFiniteQuotaProgress(snapshot.used_percent) &&
-    !isFiniteQuotaProgress(snapshot.remaining_percent)
-  ) {
-    return null;
-  }
+  if (!isFiniteQuotaProgress(snapshot.used_percent)) return null;
   const quotaObservedAtMs = snapshot.field_sources?.quota?.observed_at_ms;
-  if (
-    typeof quotaObservedAtMs === 'number' &&
-    Number.isFinite(quotaObservedAtMs) &&
-    quotaObservedAtMs > 0
-  ) {
+  if (isValidQuotaProgressObservedAtMs(quotaObservedAtMs)) {
     return quotaObservedAtMs;
   }
-  return typeof snapshot.observed_at_ms === 'number' &&
-    Number.isFinite(snapshot.observed_at_ms) &&
-    snapshot.observed_at_ms > 0
+  return isValidQuotaProgressObservedAtMs(snapshot.observed_at_ms)
     ? snapshot.observed_at_ms
     : null;
 };
@@ -218,9 +212,8 @@ const toSnapshotWindow = (
   const snapshotObservedAtMs =
     observation?.observed_at_ms ?? definition.observedAtMs ?? nowMs;
   const quotaProgressBelongsToObservation =
-    typeof definition.quotaProgressObservedAtMs === 'number' &&
-    Number.isFinite(definition.quotaProgressObservedAtMs) &&
-    definition.quotaProgressObservedAtMs > 0 &&
+    isFiniteQuotaProgress(definition.usedPercent) &&
+    isValidQuotaProgressObservedAtMs(definition.quotaProgressObservedAtMs) &&
     definition.quotaProgressObservedAtMs === snapshotObservedAtMs;
   return {
     provider_window_id: definition.providerWindowId,
@@ -607,45 +600,80 @@ export const mergeAccountQuotaSnapshotWindows = (
     const snapshot = snapshotsByKey.get(key);
     if (!snapshot) return definition;
     matchedSnapshotKeys.add(key);
-    if (
-      definition.observedAtMs !== null &&
-      Number.isFinite(definition.observedAtMs) &&
-      snapshot.observed_at_ms < definition.observedAtMs
-    ) {
-      return definition;
-    }
+    const snapshotMetadataIsNewer =
+      definition.observedAtMs === null ||
+      !Number.isFinite(definition.observedAtMs) ||
+      snapshot.observed_at_ms >= definition.observedAtMs;
     const currentCycle = snapshotCycleDefinition(snapshot.current_cycle);
-    const mergedRemainingPercent = isFiniteQuotaProgress(snapshot.remaining_percent)
-      ? snapshot.remaining_percent
-      : definition.remainingPercent;
-    const mergedUsedPercent = isFiniteQuotaProgress(snapshot.used_percent)
+    const definitionUsedPercent = isFiniteQuotaProgress(definition.usedPercent)
+      ? definition.usedPercent
+      : null;
+    const snapshotUsedPercent = isFiniteQuotaProgress(snapshot.used_percent)
       ? snapshot.used_percent
+      : null;
+    const definitionQuotaProgressObservedAtMs =
+      definitionUsedPercent !== null &&
+      isValidQuotaProgressObservedAtMs(definition.quotaProgressObservedAtMs)
+        ? definition.quotaProgressObservedAtMs
+        : null;
+    const snapshotQuotaProgressObservedAtMs = resolveSnapshotQuotaProgressObservedAtMs(snapshot);
+    const useSnapshotQuotaProgress =
+      snapshotUsedPercent !== null &&
+      (definitionUsedPercent === null ||
+        definitionQuotaProgressObservedAtMs === null ||
+        (snapshotQuotaProgressObservedAtMs !== null &&
+          snapshotQuotaProgressObservedAtMs >= definitionQuotaProgressObservedAtMs));
+    const mergedUsedPercent = useSnapshotQuotaProgress
+      ? snapshotUsedPercent
       : definition.usedPercent;
-    const quotaProgressObservedAtMs =
-      resolveSnapshotQuotaProgressObservedAtMs(snapshot) ?? definition.quotaProgressObservedAtMs;
+    const mergedRemainingPercent = useSnapshotQuotaProgress
+      ? (isFiniteQuotaProgress(snapshot.remaining_percent)
+          ? snapshot.remaining_percent
+          : remainingPercentFromUsed(snapshotUsedPercent))
+      : definitionUsedPercent !== null
+        ? definition.remainingPercent
+        : null;
+    const quotaProgressObservedAtMs = useSnapshotQuotaProgress
+      ? snapshotQuotaProgressObservedAtMs
+      : definitionUsedPercent !== null
+        ? definitionQuotaProgressObservedAtMs
+        : null;
+    if (!snapshotMetadataIsNewer && !useSnapshotQuotaProgress) return definition;
+    const mergedModelScope = snapshotMetadataIsNewer
+      ? snapshotModelScope(snapshot)
+      : definition.modelScope;
     return {
       ...definition,
-      windowMode: snapshot.window_mode,
-      observationSource: snapshot.source,
-      observedAtMs: snapshot.observed_at_ms,
-      boundaryAccuracy: snapshot.boundary_accuracy,
-      cycleStartMs: currentCycle?.actualStartMs ?? snapshot.cycle_start_ms ?? null,
-      cycleEndMs: currentCycle?.scheduledEndMs ?? snapshot.cycle_end_ms ?? null,
-      durationSeconds: currentCycle?.durationSeconds ?? snapshot.duration_seconds ?? null,
+      ...(snapshotMetadataIsNewer
+        ? {
+            windowMode: snapshot.window_mode,
+            observationSource: snapshot.source,
+            observedAtMs: snapshot.observed_at_ms,
+            boundaryAccuracy: snapshot.boundary_accuracy,
+            cycleStartMs: currentCycle?.actualStartMs ?? snapshot.cycle_start_ms ?? null,
+            cycleEndMs: currentCycle?.scheduledEndMs ?? snapshot.cycle_end_ms ?? null,
+            durationSeconds: currentCycle?.durationSeconds ?? snapshot.duration_seconds ?? null,
+            modelScope: mergedModelScope,
+            stale: snapshot.stale,
+            ...snapshotLifecycleDefinition(snapshot),
+          }
+        : {}),
       remainingPercent: mergedRemainingPercent,
       usedPercent: mergedUsedPercent,
       quotaProgressObservedAtMs,
-      modelScope: snapshotModelScope(snapshot),
-      stale: snapshot.stale,
       display: {
         ...definition.display,
-        observationSource: snapshot.source,
-        observedAtMs: snapshot.observed_at_ms,
+        ...(snapshotMetadataIsNewer
+          ? {
+              observationSource: snapshot.source,
+              observedAtMs: snapshot.observed_at_ms,
+              modelScope: mergedModelScope,
+            }
+          : {}),
         quotaProgressObservedAtMs,
         remainingPercent: mergedRemainingPercent,
         usedPercent: mergedUsedPercent,
       },
-      ...snapshotLifecycleDefinition(snapshot),
     };
   });
   const unmatchedSnapshots = Array.from(snapshotsByKey.entries())
@@ -794,13 +822,20 @@ const snapshotDefinition = (
   const durationSeconds =
     lifecycle.currentCycle?.durationSeconds ?? snapshot.duration_seconds ?? null;
   const modelScope = snapshotModelScope(snapshot);
+  const usedPercent = isFiniteQuotaProgress(snapshot.used_percent) ? snapshot.used_percent : null;
+  const remainingPercent =
+    usedPercent === null
+      ? null
+      : isFiniteQuotaProgress(snapshot.remaining_percent)
+        ? snapshot.remaining_percent
+        : remainingPercentFromUsed(usedPercent);
   const quotaProgressObservedAtMs = resolveSnapshotQuotaProgressObservedAtMs(snapshot);
   const display: AccountQuotaDisplayWindow = {
     key,
     label: options.getLabel?.(snapshot) ?? snapshot.provider_window_id,
     kind: snapshotWindowKind(snapshot.window_kind),
-    remainingPercent: snapshot.remaining_percent ?? null,
-    usedPercent: snapshot.used_percent ?? null,
+    remainingPercent,
+    usedPercent,
     resetLabel: '-',
     resetAtMs: currentEndMs,
     resetAccuracy: snapshotResetAccuracy(snapshot.boundary_accuracy),
@@ -837,8 +872,8 @@ const snapshotDefinition = (
     cycleStartMs: currentStartMs,
     cycleEndMs: currentEndMs,
     durationSeconds,
-    remainingPercent: snapshot.remaining_percent ?? null,
-    usedPercent: snapshot.used_percent ?? null,
+    remainingPercent,
+    usedPercent,
     stale: snapshot.stale,
     ...lifecycle,
     display,

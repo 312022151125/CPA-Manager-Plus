@@ -683,17 +683,23 @@ const buildQuotaWindows = (
       window.quotaProgressObservedAtMs > 0
         ? window.quotaProgressObservedAtMs
         : null;
+    const hasReliableQuotaProgress =
+      typeof window.usedPercent === 'number' &&
+      Number.isFinite(window.usedPercent) &&
+      quotaProgressObservedAtMs !== null;
     const hasReliableCurrentUsage =
       currentUsage?.matched === true &&
       currentUsage.scopeMatchStatus === 'complete' &&
       currentForecastEligible;
     const currentUsageAheadOfQuotaProgressObservation =
       hasReliableCurrentUsage &&
+      hasReliableQuotaProgress &&
       quotaProgressObservedAtMs !== null &&
       currentUsage.lastSeenMs !== null &&
       currentUsage.lastSeenMs > quotaProgressObservedAtMs;
     const currentForecastUsage =
       hasReliableCurrentUsage &&
+      hasReliableQuotaProgress &&
       quotaProgressObservedAtMs !== null &&
       currentUsage.lastSeenMs !== null &&
       currentUsage.lastSeenMs <= quotaProgressObservedAtMs

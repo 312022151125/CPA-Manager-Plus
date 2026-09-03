@@ -176,6 +176,172 @@ describe('account quota snapshots', () => {
     });
   });
 
+  it('keeps newer live quota progress when persisted metadata is newer', () => {
+    const definition = makeDefinition({
+      observedAtMs: 2_500,
+      quotaProgressObservedAtMs: 2_500,
+      usedPercent: 60,
+      remainingPercent: 40,
+      display: {
+        ...makeDefinition().display,
+        observedAtMs: 2_500,
+        quotaProgressObservedAtMs: 2_500,
+        usedPercent: 60,
+        remainingPercent: 40,
+      },
+    });
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [definition],
+      [
+        makeSnapshot({
+          observed_at_ms: 3_000,
+          used_percent: 50,
+          remaining_percent: 50,
+          field_sources: {
+            quota: { source: 'api_query', observed_at_ms: 2_000 },
+          },
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      observedAtMs: 3_000,
+      usedPercent: 60,
+      remainingPercent: 40,
+      quotaProgressObservedAtMs: 2_500,
+      display: {
+        observedAtMs: 3_000,
+        usedPercent: 60,
+        remainingPercent: 40,
+        quotaProgressObservedAtMs: 2_500,
+      },
+    });
+  });
+
+  it('keeps newer live metadata while accepting a newer persisted quota field', () => {
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [
+        makeDefinition({
+          observedAtMs: 3_000,
+          quotaProgressObservedAtMs: 2_000,
+          usedPercent: 50,
+          remainingPercent: 50,
+          display: {
+            ...makeDefinition().display,
+            observedAtMs: 3_000,
+            quotaProgressObservedAtMs: 2_000,
+            usedPercent: 50,
+            remainingPercent: 50,
+          },
+        }),
+      ],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_500,
+          used_percent: 60,
+          remaining_percent: 40,
+          field_sources: {
+            quota: { source: 'api_query', observed_at_ms: 2_500 },
+          },
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      observedAtMs: 3_000,
+      usedPercent: 60,
+      remainingPercent: 40,
+      quotaProgressObservedAtMs: 2_500,
+      display: {
+        observedAtMs: 3_000,
+        usedPercent: 60,
+        remainingPercent: 40,
+        quotaProgressObservedAtMs: 2_500,
+      },
+    });
+  });
+
+  it('uses newer persisted quota progress when live progress is older', () => {
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [
+        makeDefinition({
+          observedAtMs: 2_500,
+          quotaProgressObservedAtMs: 1_000,
+          usedPercent: 50,
+          remainingPercent: 50,
+        }),
+      ],
+      [
+        makeSnapshot({
+          observed_at_ms: 3_000,
+          used_percent: 60,
+          remaining_percent: 40,
+          field_sources: {
+            quota: { source: 'api_query', observed_at_ms: 2_000 },
+          },
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      observedAtMs: 3_000,
+      usedPercent: 60,
+      remainingPercent: 40,
+      quotaProgressObservedAtMs: 2_000,
+    });
+  });
+
+  it('does not advance quota progress from a remaining-only snapshot', () => {
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [makeDefinition({ observedAtMs: 1_000, quotaProgressObservedAtMs: 1_000 })],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_000,
+          used_percent: undefined,
+          remaining_percent: 40,
+          field_sources: {
+            quota: { source: 'api_query', observed_at_ms: 2_000 },
+          },
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      observedAtMs: 2_000,
+      usedPercent: 20,
+      remainingPercent: 80,
+      quotaProgressObservedAtMs: 1_000,
+      display: {
+        observedAtMs: 2_000,
+        usedPercent: 20,
+        remainingPercent: 80,
+        quotaProgressObservedAtMs: 1_000,
+      },
+    });
+  });
+
+  it('derives the remaining percentage when a newer snapshot only has used percentage', () => {
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [makeDefinition({ quotaProgressObservedAtMs: 1_000 })],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_000,
+          used_percent: 60,
+          remaining_percent: undefined,
+          field_sources: {
+            quota: { source: 'api_query', observed_at_ms: 2_000 },
+          },
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      usedPercent: 60,
+      remainingPercent: 40,
+      quotaProgressObservedAtMs: 2_000,
+    });
+  });
+
   it('does not persist old quota progress under a newer snapshot observation', () => {
     const row = makeSnapshotRow();
     const [entry] = buildAccountQuotaSnapshotWriteEntries(
@@ -324,7 +490,11 @@ describe('account quota snapshots', () => {
   });
 
   it('keeps newer live quota definitions ahead of an older persisted snapshot', () => {
-    const definition = makeDefinition({ observedAtMs: 30_000, usedPercent: 12 });
+    const definition = makeDefinition({
+      observedAtMs: 30_000,
+      quotaProgressObservedAtMs: 30_000,
+      usedPercent: 12,
+    });
     const merged = mergeAccountQuotaSnapshotWindows(
       [definition],
       [makeSnapshot({ observed_at_ms: 20_000, used_percent: 91 })]

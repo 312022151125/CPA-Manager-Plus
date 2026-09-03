@@ -287,6 +287,41 @@ describe('accountQuotaDisplayWindows', () => {
     });
   });
 
+  it('preserves explicit unknown Claude quota provenance instead of using fetch completion time', () => {
+    const stores = {
+      ...emptyStores(),
+      claudeQuota: {
+        'claude.json': {
+          status: 'success',
+          fetchedAtMs: 2_000,
+          quotaProgressObservedAtMs: null,
+          windows: [
+            {
+              id: 'five_hour',
+              label: '5-hour limit',
+              usedPercent: 40,
+              resetLabel: 'later',
+              modelScope: { kind: 'all', complete: true },
+            },
+          ],
+        },
+      },
+    } satisfies AccountQuotaStores;
+    const row = buildRow({ name: 'claude.json', type: 'claude' }, stores);
+
+    const [window] = buildAccountQuotaDisplayWindows(row, {
+      stores,
+      translateQuotaWindowLabel,
+      t,
+    });
+
+    expect(window).toMatchObject({
+      observedAtMs: 2_000,
+      usedPercent: 40,
+      quotaProgressObservedAtMs: null,
+    });
+  });
+
   it('flattens Antigravity groups while retaining group and bucket metadata', () => {
     const stores = {
       ...emptyStores(),

@@ -312,19 +312,14 @@ export const buildQuotaWindowRange = (
 
 const resolveQuotaProgressObservedAtMs = ({
   usedPercent,
-  remainingPercent,
   quotaProgressObservedAtMs,
   observedAtMs,
 }: {
   usedPercent: number | null;
-  remainingPercent: number | null;
   quotaProgressObservedAtMs: number | null | undefined;
   observedAtMs: number | null | undefined;
 }): number | null => {
-  const hasQuotaProgress =
-    (typeof usedPercent === 'number' && Number.isFinite(usedPercent)) ||
-    (typeof remainingPercent === 'number' && Number.isFinite(remainingPercent));
-  if (!hasQuotaProgress) return null;
+  if (typeof usedPercent !== 'number' || !Number.isFinite(usedPercent)) return null;
   if (quotaProgressObservedAtMs !== undefined) {
     return typeof quotaProgressObservedAtMs === 'number' &&
       Number.isFinite(quotaProgressObservedAtMs) &&
@@ -428,7 +423,6 @@ export const buildAccountQuotaDisplayWindow = ({
     observedAtMs,
     quotaProgressObservedAtMs: resolveQuotaProgressObservedAtMs({
       usedPercent,
-      remainingPercent,
       quotaProgressObservedAtMs,
       observedAtMs,
     }),
@@ -494,6 +488,10 @@ const buildClaudeQuotaDisplayWindows = (
         modelScope: window.modelScope ?? { kind: 'all', complete: true },
         source: 'claude',
         observedAtMs: quota.fetchedAtMs ?? null,
+        quotaProgressObservedAtMs:
+          quota.quotaProgressObservedAtMs !== undefined
+            ? quota.quotaProgressObservedAtMs
+            : (quota.fetchedAtMs ?? null),
         nowMs: options.nowMs,
       })
     ) ?? [];
@@ -567,6 +565,10 @@ const buildAntigravityQuotaDisplayWindows = (
         modelScope: buildAntigravityWindowModelScope(group.id, group.label, group.models),
         source: 'antigravity',
         observedAtMs: quota?.fetchedAtMs ?? null,
+        quotaProgressObservedAtMs:
+          quota?.quotaProgressObservedAtMs !== undefined
+            ? (quota?.quotaProgressObservedAtMs ?? null)
+            : (quota?.fetchedAtMs ?? null),
         nowMs: options.nowMs,
       });
     });
@@ -604,6 +606,10 @@ const buildKimiQuotaDisplayWindows = (
       amountLabel: `${quotaRow.used} / ${quotaRow.limit}`,
       source: 'kimi',
       observedAtMs: quota.fetchedAtMs ?? null,
+      quotaProgressObservedAtMs:
+        quota.quotaProgressObservedAtMs !== undefined
+          ? quota.quotaProgressObservedAtMs
+          : (quota.fetchedAtMs ?? null),
       nowMs: options.nowMs,
     });
   });
@@ -652,6 +658,10 @@ const buildXaiQuotaDisplayWindows = (
         windowMode: periodDurationSeconds ? 'fixed' : 'unknown',
         source: 'xai',
         observedAtMs: quota?.fetchedAtMs ?? null,
+        quotaProgressObservedAtMs:
+          billing.quotaProgressObservedAtMs !== undefined
+            ? billing.quotaProgressObservedAtMs
+            : (quota?.fetchedAtMs ?? null),
         nowMs: options.nowMs,
       })
     );
@@ -676,6 +686,7 @@ const buildXaiQuotaDisplayWindows = (
         amountLabel: formatXaiMonthlyAmount(billing, options.t),
         source: 'xai',
         observedAtMs: quota?.fetchedAtMs ?? null,
+        quotaProgressObservedAtMs: null,
         nowMs: options.nowMs,
       })
     );
@@ -701,6 +712,7 @@ const buildXaiQuotaDisplayWindows = (
         amountLabel: formatXaiPaygAmount(billing, options.t),
         source: 'xai',
         observedAtMs: quota?.fetchedAtMs ?? null,
+        quotaProgressObservedAtMs: null,
         nowMs: options.nowMs,
       })
     );
@@ -726,6 +738,7 @@ const buildXaiQuotaDisplayWindows = (
         resetAccuracy: periodReset.resetAccuracy,
         source: 'xai',
         observedAtMs: quota?.fetchedAtMs ?? null,
+        quotaProgressObservedAtMs: null,
         nowMs: options.nowMs,
       })
     );

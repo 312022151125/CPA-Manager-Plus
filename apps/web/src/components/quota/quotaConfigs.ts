@@ -580,6 +580,7 @@ export const CLAUDE_CONFIG: QuotaConfig<ClaudeQuotaState, ClaudeQuotaData> = {
   buildSuccessState: (data, file) => ({
     status: 'success',
     windows: data.windows,
+    quotaProgressObservedAtMs: data.quotaProgressObservedAtMs ?? null,
     quotaInventoryObserved: data.quotaInventoryObserved,
     extraUsage: data.extraUsage,
     planType: data.planType,
@@ -612,6 +613,7 @@ export const ANTIGRAVITY_CONFIG: QuotaConfig<AntigravityQuotaState, AntigravityQ
   buildSuccessState: (data, file) => ({
     status: 'success',
     groups: data.groups,
+    quotaProgressObservedAtMs: data.quotaProgressObservedAtMs ?? null,
     quotaInventoryObserved: data.quotaInventoryObserved,
     subscription: data.subscription ?? null,
     serverTimeOffsetMs: data.serverTimeOffsetMs,
@@ -690,6 +692,7 @@ export const KIMI_CONFIG: QuotaConfig<KimiQuotaState, KimiQuotaData> = {
   buildSuccessState: (data, file) => ({
     status: 'success',
     rows: data.rows,
+    quotaProgressObservedAtMs: data.quotaProgressObservedAtMs ?? null,
     quotaInventoryObserved: data.quotaInventoryObserved,
     ...buildQuotaCredentialIdentity(file),
     fetchedAtMs: Date.now(),

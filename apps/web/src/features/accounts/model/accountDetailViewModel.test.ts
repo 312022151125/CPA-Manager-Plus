@@ -815,6 +815,34 @@ describe('accountDetailViewModel', () => {
     expect(window.forecast).toBeNull();
   });
 
+  it('does not use quota provenance without a finite used percentage', () => {
+    const window = buildForecastWindow({
+      current: {
+        total_requests: 100,
+        total_tokens: 1_000_000,
+        total_cost: 5,
+        last_seen_ms: 1_900,
+      },
+      previous: {
+        total_requests: 200,
+        total_tokens: 2_000_000,
+        total_cost: 10,
+      },
+      quota: {
+        usedPercent: null,
+        observedAtMs: 2_000,
+        quotaProgressObservedAtMs: 2_000,
+      },
+    });
+
+    expect(window.forecast).toEqual({
+      requests: 200,
+      tokens: 2_000_000,
+      cost: 10,
+      basis: 'previous',
+    });
+  });
+
   it('preserves previous fallback when current usage is unavailable', () => {
     const window = buildForecastWindow({
       previous: {
