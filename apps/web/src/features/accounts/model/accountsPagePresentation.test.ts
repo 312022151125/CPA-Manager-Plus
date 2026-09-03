@@ -10,6 +10,7 @@ import {
   formatQuotaResetTooltipParams,
   formatTimestamp,
   formatTimestampTitle,
+  getAccountQuotaFallbackVisibleScopeLabel,
   getAccountHistoryTitle,
   parsePriorityValue,
   quotaStatusLabelKey,
@@ -121,7 +122,7 @@ describe('accountsPagePresentation', () => {
     expect(selectAccountQuotaListWindows(makeAccountRow('codex'), quotaWindows, [])).toEqual([]);
   });
 
-  it('preserves Claude standard ordering and falls back to two non-standard windows otherwise', () => {
+  it('preserves Claude standard ordering and keeps non-standard-only quota in details', () => {
     const standardQuotaWindows = [
       makeQuotaWindow({ key: 'five-hour', kind: 'five_hour' }),
       makeQuotaWindow({ key: 'weekly', kind: 'weekly' }),
@@ -141,7 +142,7 @@ describe('accountsPagePresentation', () => {
     ];
     expect(
       selectAccountQuotaListWindows(makeAccountRow('claude'), nonStandardQuotaWindows, [])
-    ).toEqual(nonStandardQuotaWindows.slice(0, 2));
+    ).toEqual([]);
   });
 
   it('keeps Kimi standard windows ahead of summary data and exposes summary-only data', () => {
@@ -154,10 +155,49 @@ describe('accountsPagePresentation', () => {
       selectAccountQuotaListWindows(makeAccountRow('kimi'), quotaWindows, standardQuotaWindows)
     ).toBe(standardQuotaWindows);
 
-    const summaryOnly = [makeQuotaWindow({ key: 'summary', kind: 'summary' })];
+    const summaryOnly = [makeQuotaWindow({ key: 'summary', kind: 'summary', source: 'kimi' })];
     expect(selectAccountQuotaListWindows(makeAccountRow('kimi'), summaryOnly, [])).toEqual(
       summaryOnly
     );
+
+    const scopedSummary = [
+      makeQuotaWindow({ key: 'usage-0-summary', kind: 'summary', source: 'kimi' }),
+    ];
+    expect(selectAccountQuotaListWindows(makeAccountRow('kimi'), scopedSummary, [])).toEqual([]);
+  });
+
+  it('normalizes Antigravity fallback scope labels without labeling other providers', () => {
+    const antigravityRow = makeAccountRow('antigravity');
+    expect(
+      getAccountQuotaFallbackVisibleScopeLabel(
+        antigravityRow,
+        makeQuotaWindow({ source: 'antigravity', groupLabel: 'Gemini Models' })
+      )
+    ).toBe('Gemini');
+    expect(
+      getAccountQuotaFallbackVisibleScopeLabel(
+        antigravityRow,
+        makeQuotaWindow({ source: 'antigravity', groupLabel: 'Claude and GPT models' })
+      )
+    ).toBe('Claude');
+    expect(
+      getAccountQuotaFallbackVisibleScopeLabel(
+        antigravityRow,
+        makeQuotaWindow({ source: 'antigravity', groupLabel: 'Custom group' })
+      )
+    ).toBe('Custom group');
+
+    for (const provider of ['xai', 'kimi', 'codex', 'claude']) {
+      expect(
+        getAccountQuotaFallbackVisibleScopeLabel(
+          makeAccountRow(provider),
+          makeQuotaWindow({
+            source: provider as AccountQuotaDisplayWindow['source'],
+            groupLabel: 'Gemini',
+          })
+        )
+      ).toBeNull();
+    }
   });
 
   it('selects xAI billing and PAYG while excluding product windows', () => {

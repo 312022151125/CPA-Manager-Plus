@@ -308,9 +308,15 @@ export const selectAccountQuotaListWindows = (
     case 'xai':
       return selectXaiQuotaListFallbackWindows(quotaWindows);
     case 'antigravity':
-    case 'kimi':
-    case 'claude':
       return quotaWindows.slice(0, 2);
+    case 'kimi': {
+      const summary = quotaWindows.find(
+        (window) => window.source === 'kimi' && window.key === 'summary'
+      );
+      return summary ? [summary] : [];
+    }
+    case 'claude':
+      return [];
     default:
       return [];
   }
@@ -328,6 +334,15 @@ const getAntigravityMatrixGroupDisplayLabel = (label: string) => {
   if (normalized.includes('claude') || normalized.includes('gpt')) return 'Claude';
   if (normalized.includes('gemini')) return 'Gemini';
   return label;
+};
+
+export const getAccountQuotaFallbackVisibleScopeLabel = (
+  row: AccountRow,
+  window: AccountQuotaDisplayWindow
+): string | null => {
+  if (row.provider !== ANTIGRAVITY_CONFIG.type || window.source !== 'antigravity') return null;
+  const groupLabel = window.groupLabel?.trim();
+  return groupLabel ? getAntigravityMatrixGroupDisplayLabel(groupLabel) : null;
 };
 
 export const buildAntigravityQuotaMatrix = (

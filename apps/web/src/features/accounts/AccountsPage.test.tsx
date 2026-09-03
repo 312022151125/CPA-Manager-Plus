@@ -41,6 +41,7 @@ import {
   recordAccountCredentialMutationMarker,
 } from './model/accountCredentialMutationMarker';
 import type { CodexQuotaData } from '@/utils/quota/providerRequests';
+import { buildKimiQuotaRows } from '@/utils/quota/builders';
 import type {
   CredentialInspectionSnapshot,
   CredentialInspectionTarget,
@@ -890,6 +891,18 @@ const readText = (value: unknown): string => {
     return readText((value as { children?: unknown }).children);
   }
   return '';
+};
+
+const findQuotaBarByWindow = (card: ReactTestInstance, windowKey: string) => {
+  const quotaWindow = card.findByProps({ 'data-account-quota-window': windowKey });
+  const bar = quotaWindow.findAll(
+    (node) =>
+      typeof node.props.className === 'string' &&
+      node.props.className.includes('quotaBar') &&
+      !node.props.className.includes('quotaTrack')
+  )[0];
+  if (!bar) throw new Error(`Quota bar not found: ${windowKey}`);
+  return bar;
 };
 
 const findButtonByText = (renderer: ReactTestRenderer, text: string) => {
@@ -7007,6 +7020,38 @@ describe('AccountsPage replacement flows', () => {
     expect(renderer.root.findAllByProps({ 'data-quota-window-group': 'standard' })).toHaveLength(0);
   });
 
+  it('uses each xAI fallback window remaining percent for its quota bar color', async () => {
+    const file = {
+      name: 'xai-divergent-fallback.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-divergent-fallback-1',
+      account: 'xai-divergent@example.com',
+      priority: 0,
+      disabled: false,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.quotaState.xaiQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      billing: {
+        monthlyLimitCents: 10_000,
+        usedCents: 9_000,
+        includedUsedCents: 9_000,
+        onDemandCapCents: 5_000,
+        onDemandUsedCents: 500,
+        onDemandUsedPercent: 10,
+        billingPeriodEnd: '2026-07-31T00:00:00Z',
+        usedPercent: 90,
+      },
+    });
+
+    const renderer = await renderAccountsPage();
+    const card = findAccountCardByKey(renderer, getAuthFileSelectionKey(file));
+
+    expect(findQuotaBarByWindow(card, 'billing').props.className).toContain('quotaBarWarn');
+    expect(findQuotaBarByWindow(card, 'pay-as-you-go').props.className).toContain('quotaBarGood');
+  });
+
   it('keeps a fixed xAI billing period in detail standard mode while hiding it from the list', async () => {
     const file = {
       name: 'xai-fixed-billing.json',
@@ -7118,16 +7163,104 @@ describe('AccountsPage replacement flows', () => {
       disabled: false,
     } as AuthFileItem;
     mocks.files = [file];
-    mocks.quotaState.kimiQuota = buildCredentialScopedQuotaRecord(file, {
-      status: 'success',
-      rows: [
-        {
-          id: 'summary',
-          label: 'Kimi quota summary',
+    const rows = buildKimiQuotaRows(
+      {
+        usage: {
           used: 20,
           limit: 100,
-          resetAtMs: null,
+        },
+      },
+      { observedAtMs: Date.parse('2026-07-29T10:00:00Z') }
+    );
+    mocks.quotaState.kimiQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      rows,
+    });
+
+    const renderer = await renderAccountsPage();
+    const selectionKey = getAuthFileSelectionKey(file);
+    const card = findAccountCardByKey(renderer, selectionKey);
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
+
+    expect(readText(card)).toContain('7D');
+    expect(readText(card)).not.toContain('accounts.quota_details_only');
+    expect(quotaRegion.props['aria-label']).toContain('kimi_quota.weekly_limit');
+
+    await act(async () => {
+      quotaRegion.props.onClick();
+    });
+    await flushPromises();
+
+    expect(renderer.root.findAllByType(QuotaWindowCard)).toHaveLength(1);
+  });
+
+  it('keeps Kimi scoped usage summaries in quota details', async () => {
+    const file = {
+      name: 'kimi-scoped-summary.json',
+      type: 'kimi',
+      provider: 'kimi',
+      authIndex: 'kimi-scoped-summary-1',
+      account: 'kimi-scoped-summary@example.com',
+      priority: 0,
+      disabled: false,
+    } as AuthFileItem;
+    const rows = buildKimiQuotaRows(
+      {
+        usages: [
+          {
+            scope: 'FEATURE_CHAT',
+            detail: { used: 20, limit: 100 },
+          },
+        ],
+      },
+      { observedAtMs: Date.parse('2026-07-29T10:00:00Z') }
+    );
+    expect(rows[0]?.id).toBe('usage-0-summary');
+    mocks.files = [file];
+    mocks.quotaState.kimiQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      rows,
+    });
+
+    const renderer = await renderAccountsPage();
+    const selectionKey = getAuthFileSelectionKey(file);
+    const card = findAccountCardByKey(renderer, selectionKey);
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
+
+    expect(readText(card)).toContain('accounts.quota_details_only');
+    expect(quotaRegion.props['aria-label']).toContain('accounts.quota_details_only');
+
+    await act(async () => {
+      quotaRegion.props.onClick();
+    });
+    await flushPromises();
+
+    expect(renderer.root.findAllByType(QuotaWindowCard)).toHaveLength(1);
+    expect(readText(renderer.root)).toContain('kimi_quota.scoped_weekly_limit');
+  });
+
+  it('keeps Claude model-scoped-only quota in quota details', async () => {
+    const file = {
+      name: 'claude-model-only.json',
+      type: 'claude',
+      provider: 'claude',
+      authIndex: 'claude-model-only-1',
+      account: 'claude-model-only@example.com',
+      priority: 0,
+      disabled: false,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.quotaState.claudeQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      windows: [
+        {
+          id: 'opus-model',
+          label: 'Opus model quota',
+          usedPercent: 70,
+          resetLabel: 'later',
+          resetAtMs: Date.now() + 7 * 24 * 60 * 60 * 1000,
           limitWindowSeconds: null,
+          modelScope: { kind: 'models', models: ['claude-opus-4-1'], complete: true },
         },
       ],
     });
@@ -7137,9 +7270,16 @@ describe('AccountsPage replacement flows', () => {
     const card = findAccountCardByKey(renderer, selectionKey);
     const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
 
-    expect(readText(card)).toContain('SUM');
-    expect(readText(card)).not.toContain('accounts.quota_details_only');
-    expect(quotaRegion.props['aria-label']).toContain('Kimi quota summary');
+    expect(readText(card)).toContain('accounts.quota_details_only');
+    expect(quotaRegion.props['aria-label']).toContain('accounts.quota_details_only');
+
+    await act(async () => {
+      quotaRegion.props.onClick();
+    });
+    await flushPromises();
+
+    expect(renderer.root.findAllByType(QuotaWindowCard)).toHaveLength(1);
+    expect(readText(renderer.root)).toContain('Opus model quota');
   });
 
   it('keeps Kimi standard windows ahead of summary data', async () => {
@@ -7399,6 +7539,7 @@ describe('AccountsPage replacement flows', () => {
     const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
 
     expect(card.findAllByProps({ 'data-account-quota-matrix': selectionKey })).toHaveLength(0);
+    expect(readText(card)).toContain('Gemini');
     expect(readText(card)).toContain('7D');
     expect(readText(card)).not.toContain('accounts.quota_details_only');
     expect(quotaRegion.props['aria-label']).toContain('76%');
@@ -7438,7 +7579,7 @@ describe('AccountsPage replacement flows', () => {
               id: 'gemini-5h',
               label: 'Five Hour Limit',
               window: '5h',
-              remainingFraction: 0.88,
+              remainingFraction: 0.1,
               resetTime: '2026-07-09T12:00:00Z',
             },
           ],
@@ -7451,7 +7592,7 @@ describe('AccountsPage replacement flows', () => {
               id: 'claude-weekly',
               label: 'Weekly Limit',
               window: 'weekly',
-              remainingFraction: 0.32,
+              remainingFraction: 0.8,
               resetTime: '2026-07-13T12:00:00Z',
             },
           ],
@@ -7464,9 +7605,17 @@ describe('AccountsPage replacement flows', () => {
     const card = findAccountCardByKey(renderer, selectionKey);
 
     expect(card.findAllByProps({ 'data-account-quota-matrix': selectionKey })).toHaveLength(0);
+    expect(readText(card)).toContain('Gemini');
+    expect(readText(card)).toContain('Claude');
     expect(readText(card)).toContain('5H');
     expect(readText(card)).toContain('7D');
     expect(readText(card)).not.toContain('accounts.quota_details_only');
+    expect(findQuotaBarByWindow(card, 'gemini-models:gemini-5h').props.className).toContain(
+      'quotaBarWarn'
+    );
+    expect(findQuotaBarByWindow(card, 'claude-gpt-models:claude-weekly').props.className).toContain(
+      'quotaBarGood'
+    );
 
     await act(async () => {
       findAccountDetailRegion(renderer, selectionKey, 'quota').props.onClick();

@@ -195,6 +195,7 @@ import {
   formatPercent,
   formatQuotaResetDisplay,
   formatQuotaResetTooltipParams,
+  getAccountQuotaFallbackVisibleScopeLabel,
   getAccountHistoryTitle,
   getAccountSortFieldOption,
   getProviderLabel,
@@ -918,6 +919,13 @@ const getRemainingBarClass = (row: AccountRow) => {
   if (row.quota.status === 'low') return styles.quotaBarWarn;
   if (row.quota.status === 'ok') return styles.quotaBarGood;
   return styles.quotaBarNeutral;
+};
+
+const getWindowRemainingBarClass = (remainingPercent: number | null) => {
+  if (remainingPercent === null) return styles.quotaBarNeutral;
+  if (remainingPercent <= 0) return styles.quotaBarBad;
+  if (remainingPercent < 20) return styles.quotaBarWarn;
+  return styles.quotaBarGood;
 };
 
 export function AccountsPage() {
@@ -6904,6 +6912,10 @@ export function AccountsPage() {
             const displayQuotaWindows = antigravityQuotaMatrix
               ? []
               : selectAccountQuotaListWindows(row, quotaWindows, standardQuotaWindows);
+            const usesFallbackQuotaPresentation =
+              !antigravityQuotaMatrix &&
+              standardQuotaWindows.length === 0 &&
+              displayQuotaWindows.length > 0;
             const quotaCooldown = quotaCooldownsByRowKey.get(row.selectionKey)?.[0] ?? null;
             const codexStatus = codexStatusBySelectionKey.get(row.selectionKey) ?? null;
             const item = buildAccountListItem(row, {
@@ -6929,9 +6941,14 @@ export function AccountsPage() {
                 .join(' · ') ||
               displayQuotaWindows
                 .map((window) => {
-                  const label = window.groupLabel
-                    ? `${window.groupLabel} ${window.label}`
-                    : window.label;
+                  const visibleScopeLabel = usesFallbackQuotaPresentation
+                    ? getAccountQuotaFallbackVisibleScopeLabel(row, window)
+                    : null;
+                  const label = visibleScopeLabel
+                    ? `${visibleScopeLabel} · ${window.label}`
+                    : window.groupLabel
+                      ? `${window.groupLabel} ${window.label}`
+                      : window.label;
                   return `${label}: ${formatPercent(window.remainingPercent)}`;
                 })
                 .join('\n') ||
@@ -7193,19 +7210,43 @@ export function AccountsPage() {
                             i18n.language
                           );
                           const shortLabel = getQuotaWindowShortLabel(window);
+                          const visibleScopeLabel = usesFallbackQuotaPresentation
+                            ? getAccountQuotaFallbackVisibleScopeLabel(row, window)
+                            : null;
+                          const quotaWindowLabel = visibleScopeLabel
+                            ? `${visibleScopeLabel} · ${window.label}`
+                            : window.label;
+                          const barClass = usesFallbackQuotaPresentation
+                            ? getWindowRemainingBarClass(windowRemaining)
+                            : getRemainingBarClass(row);
                           return (
                             <span
                               key={window.key}
                               className={styles.quotaWindowCard}
-                              title={`${window.label}: ${formatPercent(windowRemaining)}`}
+                              data-account-quota-window={window.key}
+                              title={`${quotaWindowLabel}: ${formatPercent(windowRemaining)}`}
                             >
-                              <span className={styles.quotaWindowPrimaryLine}>
-                                <span className={styles.quotaWindowSummary} title={window.label}>
-                                  {shortLabel}
+                              <span
+                                className={`${styles.quotaWindowPrimaryLine} ${
+                                  visibleScopeLabel ? styles.quotaWindowPrimaryLineScoped : ''
+                                }`}
+                              >
+                                <span
+                                  className={`${styles.quotaWindowSummary} ${
+                                    visibleScopeLabel ? styles.quotaWindowSummaryScoped : ''
+                                  }`}
+                                  title={quotaWindowLabel}
+                                >
+                                  {visibleScopeLabel ? (
+                                    <span className={styles.quotaWindowScopeLabel}>
+                                      {visibleScopeLabel} ·
+                                    </span>
+                                  ) : null}
+                                  <span>{shortLabel}</span>
                                 </span>
                                 <span className={styles.quotaTrack} aria-hidden="true">
                                   <span
-                                    className={`${styles.quotaBar} ${getRemainingBarClass(row)}`}
+                                    className={`${styles.quotaBar} ${barClass}`}
                                     style={{ width: `${windowWidth}%` }}
                                   />
                                 </span>
