@@ -45,6 +45,147 @@ func quotaSnapshotTestAccount() AccountTarget {
 	}
 }
 
+func writeQuotaWindowObservation(
+	t *testing.T,
+	service *Service,
+	source, observationID string,
+	observedAtMS int64,
+	boundaryAccuracy string,
+	cycleStartMS, cycleEndMS, durationSeconds int64,
+	usedPercent, remainingPercent *float64,
+) {
+	t.Helper()
+	_, err := service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{{
+		Provider: "codex", Account: quotaSnapshotTestAccount(),
+		Observation: &ObservationInput{
+			Source: source, SourceObservationID: observationID, ObservedAtMS: observedAtMS,
+			InventoryScopeKey: "codex:rate-limits", InventoryMode: "partial",
+		},
+		Windows: []WindowInput{{
+			ProviderWindowID: "five-hour", WindowKind: "five_hour", WindowMode: "fixed",
+			ModelScopeKind: "all", Source: source, SourceObservationID: observationID,
+			ObservedAtMS: observedAtMS, BoundaryAccuracy: boundaryAccuracy,
+			CycleStartMS: &cycleStartMS, CycleEndMS: &cycleEndMS, DurationSeconds: &durationSeconds,
+			UsedPercent: usedPercent, RemainingPercent: remainingPercent,
+		}},
+	}}})
+	if err != nil {
+		t.Fatalf("write %s quota observation: %v", source, err)
+	}
+}
+
+func queryQuotaWindow(t *testing.T, service *Service) Window {
+	t.Helper()
+	result, err := service.Query(context.Background(), QueryRequest{Accounts: []QueryAccount{{
+		RowKey: "row-1", Provider: "codex", Account: quotaSnapshotTestAccount(),
+	}}})
+	if err != nil {
+		t.Fatalf("query quota observations: %v", err)
+	}
+	if len(result.Items) != 1 || len(result.Items[0].Windows) != 1 {
+		t.Fatalf("query result = %#v", result)
+	}
+	return result.Items[0].Windows[0]
+}
+
+func TestQueryStitchesNewerMetadataWithOlderQuotaProgress(t *testing.T) {
+	service := newQuotaSnapshotTestService(t, 3_000)
+	used := 50.0
+	remaining := 50.0
+	writeQuotaWindowObservation(t, service, "api_query", "api-1", 1_000, "exact", 1_000, 10_000, 9, &used, &remaining)
+	writeQuotaWindowObservation(t, service, "response_header", "header-1", 2_000, "derived", 1_000, 10_000, 9, nil, nil)
+
+	window := queryQuotaWindow(t, service)
+	if window.ObservedAtMS != 2_000 || window.UsedPercent == nil || *window.UsedPercent != used ||
+		window.RemainingPercent == nil || *window.RemainingPercent != remaining {
+		t.Fatalf("metadata-only observation lost quota progress: %#v", window)
+	}
+	quotaSource, ok := window.FieldSources["quota"]
+	if !ok || quotaSource.Source != "api_query" || quotaSource.ObservedAtMS != 1_000 {
+		t.Fatalf("quota source = %#v, want api_query at 1000", window.FieldSources)
+	}
+}
+
+func TestQueryUsesNewerQuotaProgressSource(t *testing.T) {
+	service := newQuotaSnapshotTestService(t, 3_000)
+	firstUsed, firstRemaining := 50.0, 50.0
+	latestUsed, latestRemaining := 60.0, 40.0
+	writeQuotaWindowObservation(t, service, "api_query", "api-1", 1_000, "exact", 1_000, 10_000, 9, &firstUsed, &firstRemaining)
+	writeQuotaWindowObservation(t, service, "response_header", "header-1", 2_000, "derived", 1_000, 10_000, 9, &latestUsed, &latestRemaining)
+
+	window := queryQuotaWindow(t, service)
+	if window.UsedPercent == nil || *window.UsedPercent != latestUsed || window.RemainingPercent == nil ||
+		*window.RemainingPercent != latestRemaining {
+		t.Fatalf("new quota progress did not win: %#v", window)
+	}
+	if source := window.FieldSources["quota"]; source.Source != "response_header" || source.ObservedAtMS != 2_000 {
+		t.Fatalf("quota source = %#v, want response_header at 2000", source)
+	}
+}
+
+func TestQueryDoesNotFabricateQuotaSourceWithoutUsedPercent(t *testing.T) {
+	service := newQuotaSnapshotTestService(t, 3_000)
+	writeQuotaWindowObservation(t, service, "api_query", "api-1", 1_000, "exact", 1_000, 10_000, 9, nil, nil)
+	writeQuotaWindowObservation(t, service, "response_header", "header-1", 2_000, "derived", 1_000, 10_000, 9, nil, nil)
+
+	window := queryQuotaWindow(t, service)
+	if window.UsedPercent != nil || window.RemainingPercent != nil {
+		t.Fatalf("metadata-only observations produced quota progress: %#v", window)
+	}
+	if _, ok := window.FieldSources["quota"]; ok {
+		t.Fatalf("metadata-only observations produced quota source: %#v", window.FieldSources)
+	}
+}
+
+func TestQueryStitchesQuotaAndBoundaryFromIndependentCandidates(t *testing.T) {
+	scopeFingerprint := quotasnapshotrepo.ScopeFingerprint("all", "", nil)
+	used := 50.0
+	remaining := 50.0
+	candidates := []model.AccountQuotaSnapshot{
+		{
+			ID: 1, Provider: "codex", ProviderWindowID: "five-hour", WindowKind: "five_hour",
+			WindowMode: "fixed", ModelScopeKind: "all", ScopeFingerprint: scopeFingerprint,
+			Source: "api_query", SourceObservationID: "api-1", ObservedAtMS: 1_000,
+			BoundaryAccuracy: "exact", CycleStartMS: int64PointerForTest(1_000),
+			CycleEndMS: int64PointerForTest(10_000), DurationSeconds: int64PointerForTest(9),
+			UsedPercent: &used, RemainingPercent: &remaining,
+		},
+		{
+			ID: 2, Provider: "codex", ProviderWindowID: "five-hour", WindowKind: "five_hour",
+			WindowMode: "fixed", ModelScopeKind: "all", ScopeFingerprint: scopeFingerprint,
+			Source: "response_header", SourceObservationID: "header-exact", ObservedAtMS: 1_500,
+			BoundaryAccuracy: "exact", CycleStartMS: int64PointerForTest(1_000),
+			CycleEndMS: int64PointerForTest(10_000), DurationSeconds: int64PointerForTest(9),
+		},
+		{
+			ID: 3, Provider: "codex", ProviderWindowID: "five-hour", WindowKind: "five_hour",
+			WindowMode: "fixed", ModelScopeKind: "all", ScopeFingerprint: scopeFingerprint,
+			Source: "response_header", SourceObservationID: "header-derived", ObservedAtMS: 2_000,
+			BoundaryAccuracy: "derived", CycleStartMS: int64PointerForTest(1_000),
+			CycleEndMS: int64PointerForTest(10_000), DurationSeconds: int64PointerForTest(9),
+		},
+	}
+
+	windows := selectWindows(candidates, nil, 3_000)
+	if len(windows) != 1 {
+		t.Fatalf("selected windows = %#v", windows)
+	}
+	window := windows[0]
+	if window.ObservedAtMS != 2_000 {
+		t.Fatalf("metadata source = %d, want 2000", window.ObservedAtMS)
+	}
+	if quotaSource := window.FieldSources["quota"]; quotaSource.Source != "api_query" || quotaSource.ObservedAtMS != 1_000 {
+		t.Fatalf("quota source = %#v, want api_query at 1000", quotaSource)
+	}
+	if boundarySource := window.FieldSources["boundary"]; boundarySource.Source != "response_header" || boundarySource.ObservedAtMS != 1_500 {
+		t.Fatalf("boundary source = %#v, want exact header at 1500", boundarySource)
+	}
+}
+
+func int64PointerForTest(value int64) *int64 {
+	return &value
+}
+
 func TestWriteQuerySelectsLatestCompleteObservationAndMergesCodexResetCredits(t *testing.T) {
 	service := newQuotaSnapshotTestService(t, 20_000)
 	cycleStart := int64(10_000)

@@ -921,8 +921,17 @@ func selectWindows(
 			boundarySource = boundary
 		}
 		window := snapshotWindow(selected, isStale(selected, nowMS))
-		window.FieldSources = map[string]FieldSource{
-			"quota": {Source: selected.Source, ObservedAtMS: selected.ObservedAtMS},
+		quotaSource, hasQuotaSource := selectQuotaProgressSource(group, selected)
+		window.FieldSources = make(map[string]FieldSource)
+		if hasQuotaSource {
+			window.UsedPercent = copyQuotaPercent(quotaSource.UsedPercent)
+			window.RemainingPercent = copyQuotaPercent(quotaSource.RemainingPercent)
+			window.FieldSources["quota"] = FieldSource{
+				Source: quotaSource.Source, ObservedAtMS: quotaSource.ObservedAtMS,
+			}
+		} else {
+			window.UsedPercent = nil
+			window.RemainingPercent = nil
 		}
 		if boundaryComplete(selected) {
 			window.FieldSources["boundary"] = FieldSource{
@@ -1190,6 +1199,72 @@ func candidateRank(snapshot model.AccountQuotaSnapshot, nowMS int64) int {
 		rank++
 	}
 	return rank
+}
+
+func selectQuotaProgressSource(
+	candidates []model.AccountQuotaSnapshot,
+	preferred model.AccountQuotaSnapshot,
+) (model.AccountQuotaSnapshot, bool) {
+	var selected model.AccountQuotaSnapshot
+	hasSelected := false
+	for _, candidate := range candidates {
+		if validPercent(candidate.UsedPercent) == nil {
+			continue
+		}
+		if !hasSelected {
+			selected = candidate
+			hasSelected = true
+			continue
+		}
+		if selected.ObservedAtMS != candidate.ObservedAtMS {
+			if quotaProgressSourceLess(selected, candidate) {
+				selected = candidate
+			}
+			continue
+		}
+		candidateIsPreferred := sameQuotaSnapshot(candidate, preferred)
+		selectedIsPreferred := sameQuotaSnapshot(selected, preferred)
+		if candidateIsPreferred != selectedIsPreferred {
+			if candidateIsPreferred {
+				selected = candidate
+			}
+			continue
+		}
+		if quotaProgressSourceLess(selected, candidate) {
+			selected = candidate
+		}
+	}
+	return selected, hasSelected
+}
+
+func sameQuotaSnapshot(left, right model.AccountQuotaSnapshot) bool {
+	if left.ID != 0 || right.ID != 0 {
+		return left.ID != 0 && left.ID == right.ID
+	}
+	return left.Source == right.Source &&
+		left.SourceObservationID == right.SourceObservationID &&
+		left.ObservedAtMS == right.ObservedAtMS
+}
+
+func quotaProgressSourceLess(left, right model.AccountQuotaSnapshot) bool {
+	if left.ObservedAtMS != right.ObservedAtMS {
+		return left.ObservedAtMS < right.ObservedAtMS
+	}
+	if left.Source != right.Source {
+		return left.Source < right.Source
+	}
+	if left.SourceObservationID != right.SourceObservationID {
+		return left.SourceObservationID < right.SourceObservationID
+	}
+	return left.ID < right.ID
+}
+
+func copyQuotaPercent(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func boundaryComplete(snapshot model.AccountQuotaSnapshot) bool {
