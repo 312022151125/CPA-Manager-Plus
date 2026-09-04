@@ -670,11 +670,17 @@ describe('resolveQuotaDisplayState', () => {
       observationSource: 'response_header' as const,
       modelScope: { kind: 'family' as const, key: 'codex_main', complete: true },
     };
+    const estimatedPlaceholder = {
+      ...placeholder,
+      resetLabel: 'estimated reset',
+      resetAtMs: 2_500,
+      resetAccuracy: 'estimated' as const,
+    };
     const observedQuota: CodexQuotaState = {
       status: 'success',
       observedAtMs: 2_000,
       observedFromUsageHeaders: true,
-      windows: [placeholder],
+      windows: [estimatedPlaceholder],
     };
     const result = resolveQuotaDisplayState(
       {
@@ -688,6 +694,9 @@ describe('resolveQuotaDisplayState', () => {
             observedAtMs: 1_000,
             quotaProgressObservedAtMs: 1_000,
             observationSource: 'api_query',
+            resetAtMs: 300_000,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: 300,
           },
         ],
       },

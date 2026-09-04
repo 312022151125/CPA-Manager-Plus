@@ -166,6 +166,10 @@ const readCodexWindowDurationMs = (window: CodexQuotaWindow): number | null => {
 const hasReliableCodexResetBoundary = (window: CodexQuotaWindow): boolean =>
   isValidQuotaResetAtMs(window.resetAtMs) && window.resetAccuracy !== 'unknown';
 
+const hasReliableCodexWindowEvidence = (window: CodexQuotaWindow): boolean =>
+  readCodexWindowDurationMs(window) !== null ||
+  (isValidQuotaResetAtMs(window.resetAtMs) && window.resetAccuracy === 'exact');
+
 const isCodexConfirmedCycleRollover = (
   activeWindow: CodexQuotaWindow,
   observedWindow: CodexQuotaWindow
@@ -201,8 +205,7 @@ const isCodexZeroOnlyObservedQuotaPlaceholder = (window: CodexQuotaWindow): bool
   window.observationSource === 'response_header' &&
   window.usedPercent === 0 &&
   isCodexMainQuotaWindow(window) &&
-  !isValidQuotaResetAtMs(window.resetAtMs) &&
-  readCodexWindowDurationMs(window) === null;
+  !hasReliableCodexWindowEvidence(window);
 
 const stampCodexQuotaWindows = (
   windows: CodexQuotaWindow[] | undefined,
