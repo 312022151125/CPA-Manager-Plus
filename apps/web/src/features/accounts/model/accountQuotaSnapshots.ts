@@ -690,7 +690,10 @@ export const mergeAccountQuotaSnapshotWindows = (
       (snapshotQuotaEvidenceObservedAtMs !== null &&
         snapshotQuotaEvidenceObservedAtMs >= liveQuotaEvidenceObservedAtMs);
     const differentCodexCycle = cycleRelationship === 'different';
+    const snapshotCanSupersedeDifferentCycle = differentCodexCycle && snapshotMetadataIsNewer;
     const quotaEvidenceKind = snapshotQuotaEvidenceKind(snapshot);
+
+    if (differentCodexCycle && !snapshotCanSupersedeDifferentCycle) return definition;
 
     let mergedUsedPercent = definitionUsedPercent;
     let mergedRemainingPercent = definitionRemainingPercent;
@@ -698,7 +701,7 @@ export const mergeAccountQuotaSnapshotWindows = (
       definitionUsedPercent !== null ? definitionQuotaProgressObservedAtMs : null;
     let quotaChanged = false;
 
-    if (differentCodexCycle) {
+    if (snapshotCanSupersedeDifferentCycle) {
       quotaChanged = true;
       if (quotaEvidenceKind === 'used-bearing') {
         mergedUsedPercent = snapshotUsedPercent;
@@ -727,7 +730,7 @@ export const mergeAccountQuotaSnapshotWindows = (
       quotaProgressObservedAtMs = null;
     }
 
-    const useSnapshotMetadata = snapshotMetadataIsNewer || differentCodexCycle;
+    const useSnapshotMetadata = snapshotMetadataIsNewer || snapshotCanSupersedeDifferentCycle;
     if (!useSnapshotMetadata && !quotaChanged) return definition;
     const mergedModelScope = useSnapshotMetadata
       ? snapshotModelScope(snapshot)

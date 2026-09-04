@@ -256,6 +256,161 @@ describe('account quota snapshots', () => {
     }
   );
 
+  it('does not let an older different-cycle used snapshot supersede newer live quota', () => {
+    const definition = makeDefinition({
+      observedAtMs: 3_000,
+      quotaProgressObservedAtMs: 3_000,
+      usedPercent: 3,
+      remainingPercent: 97,
+      currentCycle: makeDefinitionCycle({ id: 11 }),
+      display: {
+        ...makeDefinition().display,
+        observedAtMs: 3_000,
+        quotaProgressObservedAtMs: 3_000,
+        usedPercent: 3,
+        remainingPercent: 97,
+      },
+    });
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [definition],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_000,
+          used_percent: 95,
+          remaining_percent: 5,
+          current_cycle: makeSnapshotCycle({ id: 10 }),
+        }),
+      ]
+    );
+
+    expect(merged).toBe(definition);
+    expect(merged).toMatchObject({
+      observedAtMs: 3_000,
+      usedPercent: 3,
+      remainingPercent: 97,
+      quotaProgressObservedAtMs: 3_000,
+      currentCycle: { id: 11 },
+    });
+  });
+
+  it('does not let an older different-cycle remaining snapshot clear newer live quota', () => {
+    const definition = makeDefinition({
+      observedAtMs: 3_000,
+      quotaProgressObservedAtMs: 3_000,
+      usedPercent: 3,
+      remainingPercent: 97,
+      currentCycle: makeDefinitionCycle({ id: 11 }),
+      display: {
+        ...makeDefinition().display,
+        observedAtMs: 3_000,
+        quotaProgressObservedAtMs: 3_000,
+        usedPercent: 3,
+        remainingPercent: 97,
+      },
+    });
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [definition],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_000,
+          used_percent: undefined,
+          remaining_percent: 40,
+          current_cycle: makeSnapshotCycle({ id: 10 }),
+        }),
+      ]
+    );
+
+    expect(merged).toBe(definition);
+    expect(merged).toMatchObject({
+      observedAtMs: 3_000,
+      usedPercent: 3,
+      remainingPercent: 97,
+      quotaProgressObservedAtMs: 3_000,
+      currentCycle: { id: 11 },
+    });
+  });
+
+  it('does not let an older different-cycle metadata snapshot clear newer live quota', () => {
+    const definition = makeDefinition({
+      observedAtMs: 3_000,
+      quotaProgressObservedAtMs: 3_000,
+      usedPercent: 3,
+      remainingPercent: 97,
+      currentCycle: makeDefinitionCycle({ id: 11 }),
+      display: {
+        ...makeDefinition().display,
+        observedAtMs: 3_000,
+        quotaProgressObservedAtMs: 3_000,
+        usedPercent: 3,
+        remainingPercent: 97,
+      },
+    });
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [definition],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_000,
+          used_percent: undefined,
+          remaining_percent: undefined,
+          current_cycle: makeSnapshotCycle({ id: 10 }),
+        }),
+      ]
+    );
+
+    expect(merged).toBe(definition);
+    expect(merged).toMatchObject({
+      observedAtMs: 3_000,
+      usedPercent: 3,
+      remainingPercent: 97,
+      quotaProgressObservedAtMs: 3_000,
+      currentCycle: { id: 11 },
+    });
+  });
+
+  it('does not let an older boundary-only cycle snapshot supersede newer live quota', () => {
+    const definition = makeDefinition({
+      observedAtMs: 3_000,
+      quotaProgressObservedAtMs: 3_000,
+      usedPercent: 3,
+      remainingPercent: 97,
+      cycleStartMs: 1_000_000,
+      cycleEndMs: 19_000_000,
+      durationSeconds: 18_000,
+      currentCycle: undefined,
+      display: {
+        ...makeDefinition().display,
+        observedAtMs: 3_000,
+        quotaProgressObservedAtMs: 3_000,
+        usedPercent: 3,
+        remainingPercent: 97,
+        resetAtMs: 19_000_000,
+      },
+    });
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [definition],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_000,
+          cycle_start_ms: -17_000_000,
+          cycle_end_ms: 1_000_000,
+          duration_seconds: 18_000,
+          used_percent: undefined,
+          remaining_percent: undefined,
+          current_cycle: undefined,
+        }),
+      ]
+    );
+
+    expect(merged).toBe(definition);
+    expect(merged).toMatchObject({
+      observedAtMs: 3_000,
+      cycleEndMs: 19_000_000,
+      usedPercent: 3,
+      remainingPercent: 97,
+      quotaProgressObservedAtMs: 3_000,
+    });
+  });
+
   it('accepts new-cycle used quota without old-cycle freshness blocking it', () => {
     const [merged] = mergeAccountQuotaSnapshotWindows(
       [
@@ -297,7 +452,7 @@ describe('account quota snapshots', () => {
       ],
       [
         makeSnapshot({
-          observed_at_ms: 2_000,
+          observed_at_ms: 20_000,
           used_percent: undefined,
           remaining_percent: 40,
           current_cycle: makeSnapshotCycle({ id: 11 }),
@@ -323,7 +478,7 @@ describe('account quota snapshots', () => {
       ],
       [
         makeSnapshot({
-          observed_at_ms: 2_000,
+          observed_at_ms: 20_000,
           used_percent: undefined,
           remaining_percent: undefined,
           current_cycle: makeSnapshotCycle({ id: 11 }),
@@ -375,6 +530,8 @@ describe('account quota snapshots', () => {
     const [merged] = mergeAccountQuotaSnapshotWindows(
       [
         makeDefinition({
+          observedAtMs: 1_000,
+          quotaProgressObservedAtMs: 1_000,
           cycleEndMs: 2_000_000,
           usedPercent: 60,
           remainingPercent: 40,
