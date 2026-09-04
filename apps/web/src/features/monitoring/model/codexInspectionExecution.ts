@@ -1156,12 +1156,13 @@ const executeStatusChange = async (
   try {
     const response = await listAuthFiles(requestScope);
     const currentFiles = Array.isArray(response.files) ? response.files : [];
+    const mutationLocatorMembers = actionMembers.length > 0 ? actionMembers : [item];
     if (
       automatic &&
       disabled &&
       normalizeProvider(item.provider) === 'codex' &&
-      (sourceFallbackMembers ?? (actionMembers.length > 0 ? actionMembers : [item])).some(
-        (member) => hasDuplicateCodexPersistedLocator(currentFiles, member)
+      mutationLocatorMembers.some((member) =>
+        hasDuplicateCodexPersistedLocator(currentFiles, member)
       )
     ) {
       return buildStatusChangeExecutionResult(

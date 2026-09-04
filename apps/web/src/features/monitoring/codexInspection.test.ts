@@ -3650,6 +3650,91 @@ describe('executeCodexInspectionActions', () => {
     expect(storage.setItem).toHaveBeenCalledTimes(1);
   });
 
+  it('does not block a canonical automatic credential when a fallback sibling becomes duplicated', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const canonical = createResultItem('disable', {
+      key: 'fallback-granularity.json::auth-1::canonical',
+      fileName: 'fallback-granularity.json',
+      runtimeId: 'runtime-canonical',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'canonical@example.com',
+      displayAccount: 'canonical@example.com',
+    });
+    const sibling = createResultItem('disable', {
+      key: 'fallback-granularity.json::auth-2::sibling',
+      fileName: 'fallback-granularity.json',
+      runtimeId: 'runtime-sibling',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'sibling@example.com',
+      displayAccount: 'sibling@example.com',
+    });
+    const lateDuplicate = createResultItem('disable', {
+      key: 'fallback-granularity.json::auth-2::late-duplicate',
+      fileName: 'fallback-granularity.json',
+      runtimeId: 'runtime-late-duplicate',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'late-duplicate@example.com',
+      displayAccount: 'late-duplicate@example.com',
+    });
+    const initialFiles = [canonical, sibling].map((item) =>
+      createCurrentAuthFile(item, { disabled: false })
+    );
+    const freshFiles = [...initialFiles, createCurrentAuthFile(lateDuplicate, { disabled: false })];
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockImplementation(async (_target, disabled) => ({
+        status: 'ok',
+        disabled,
+        mutationScope: 'credential',
+      }));
+    vi.spyOn(authFilesApi, 'list')
+      .mockResolvedValueOnce({ files: initialFiles })
+      .mockResolvedValue({ files: freshFiles });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [canonical, sibling],
+      referenceItems: [canonical, sibling],
+      previousFiles: [],
+      connectionFingerprint: 'scope-auto-fallback-sibling-toctou',
+      source: 'auto',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeId: 'runtime-canonical',
+        authIndex: 'auth-1',
+      }),
+      true,
+      expect.any(Function)
+    );
+    expect(execution.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountKey: canonical.key,
+          status: 'success',
+          success: true,
+        }),
+        expect.objectContaining({
+          accountKey: sibling.key,
+          status: 'needs_review',
+          success: true,
+          error: expect.stringContaining('authIndex'),
+        }),
+      ])
+    );
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+    const storedOwnership =
+      storage.getItem('cli-proxy-codex-inspection-disable-ownership-v2') ?? '';
+    expect(storedOwnership).toContain(canonical.accountSnapshot);
+    expect(storedOwnership).not.toContain(sibling.accountSnapshot);
+  });
+
   it('blocks an automatic source-file group when any Codex persisted locator is duplicated', async () => {
     const storage = createStorage();
     vi.stubGlobal('localStorage', storage);
@@ -4460,6 +4545,85 @@ describe('executeCodexInspectionActions', () => {
       expect.arrayContaining([
         expect.objectContaining({ accountKey: first.key, status: 'failed', success: false }),
         expect.objectContaining({ accountKey: second.key, status: 'skipped', success: true }),
+      ])
+    );
+  });
+
+  it('allows the canonical plugin attempt before rejecting fallback for a duplicated sibling', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const canonical = createResultItem('disable', {
+      key: 'plugin-sibling-duplicate.json::auth-1',
+      fileName: 'plugin-sibling-duplicate.json',
+      runtimeId: 'runtime-plugin-canonical',
+      provider: 'codex',
+      authIndex: 'auth-1',
+      accountId: 'workspace-1',
+      accountSnapshot: 'canonical@example.com',
+    });
+    const sibling = createResultItem('disable', {
+      key: 'plugin-sibling-duplicate.json::auth-2',
+      fileName: 'plugin-sibling-duplicate.json',
+      runtimeId: 'runtime-plugin-sibling',
+      provider: 'codex',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'sibling@example.com',
+    });
+    const duplicateSibling = createResultItem('disable', {
+      key: 'plugin-sibling-duplicate.json::auth-2::duplicate',
+      fileName: 'plugin-sibling-duplicate.json',
+      runtimeId: 'runtime-plugin-duplicate',
+      provider: 'codex',
+      authIndex: 'auth-2',
+      accountId: 'workspace-1',
+      accountSnapshot: 'other-sibling@example.com',
+    });
+    const initialFiles = [canonical, sibling].map((item) =>
+      createCurrentAuthFile(item, { disabled: false })
+    );
+    const freshFiles = [
+      ...initialFiles,
+      createCurrentAuthFile(duplicateSibling, { disabled: false }),
+    ];
+    const statusSpy = vi
+      .spyOn(authFilesApi, 'setStatusWithFallback')
+      .mockImplementation(async (_target, _disabled, verifyFallback) => {
+        expect(verifyFallback).toEqual(expect.any(Function));
+        await verifyFallback?.();
+        return { status: 'ok', disabled: true, mutationScope: 'source-file' };
+      });
+    const sourceStatusSpy = vi.spyOn(authFilesApi, 'setVerifiedSourceFileStatus');
+    vi.spyOn(authFilesApi, 'list')
+      .mockResolvedValueOnce({ files: initialFiles })
+      .mockResolvedValueOnce({ files: initialFiles })
+      .mockResolvedValueOnce({ files: freshFiles })
+      .mockResolvedValue({ files: freshFiles });
+
+    const execution = await executeCodexInspectionActions({
+      settings: createRunResult().settings,
+      items: [canonical, sibling],
+      referenceItems: [canonical, sibling],
+      previousFiles: [],
+      connectionFingerprint: 'scope-plugin-sibling-duplicate',
+      source: 'auto',
+    });
+
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(sourceStatusSpy).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(execution.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountKey: canonical.key,
+          status: 'failed',
+          success: false,
+        }),
+        expect.objectContaining({
+          accountKey: sibling.key,
+          status: 'skipped',
+          success: true,
+        }),
       ])
     );
   });
