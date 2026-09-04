@@ -12,6 +12,7 @@ import {
   readAuthFileStatusCodexMember,
   readAuthFileStatusCodexMemberInvalid,
   readAuthFileStatusProvider,
+  readAuthFileStatusRuntimeId,
   normalizeCodexMemberSnapshot,
 } from '@/utils/authFileStatusMutation';
 import { sha256RawTextHex } from '@/utils/apiKeyHash';
@@ -437,6 +438,10 @@ const readAuthIndexField = (entry: AuthFileEntry): string => {
 const getAuthFileDedupeKey = (entry: AuthFileEntry): string => {
   const name = readTextField(entry, 'name');
   const authIndex = readAuthIndexField(entry);
+  const runtimeId = readAuthFileStatusRuntimeId(entry);
+  if (name && authIndex && runtimeId) {
+    return `${name}\u0000${authIndex}\u0000${runtimeId}`;
+  }
   if (name && authIndex) return `${name}\u0000${authIndex}`;
   return name || JSON.stringify(entry);
 };
@@ -890,9 +895,7 @@ const authFileRecordMatchesPatchTarget = (
       if (!credentialLocatorPresent || !expectedMember) return false;
       if (readAuthFileStatusCodexMemberInvalid(authFileRecord)) return false;
       const currentMember = readAuthFileStatusCodexMember(authFileRecord);
-      return (
-        !currentMember || currentMember === expectedMember
-      );
+      return !currentMember || currentMember === expectedMember;
     }
     return readAuthFileStatusAccountSnapshot(authFileRecord) === expectedAccountSnapshot;
   }
