@@ -1704,22 +1704,6 @@ export const executeCodexInspectionActions = async ({
 
         if (fallbackMembers.length <= 1) return resultOutcomes;
 
-        if (!result.outcome.success) {
-          resultOutcomes.push(
-            ...fallbackMembers
-              .slice(1)
-              .map((member) =>
-                buildActionValidationOutcome(
-                  member,
-                  'skipped',
-                  '该认证目标已由另一条结果处理',
-                  result.outcome.accountKey
-                )
-              )
-          );
-          return resultOutcomes;
-        }
-
         for (const member of fallbackMembers.slice(1)) {
           const siblingResult = await executeStatusChange(
             member,

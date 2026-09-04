@@ -4349,6 +4349,138 @@ describe('executeCodexInspectionActions', () => {
     expect(storage.setItem).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    {
+      action: 'disable' as const,
+      initialDisabled: false,
+      requestedDisabled: true,
+    },
+    {
+      action: 'enable' as const,
+      initialDisabled: true,
+      requestedDisabled: false,
+    },
+  ])(
+    'continues the $action sibling independently when the canonical credential fails',
+    async ({ action, initialDisabled, requestedDisabled }) => {
+      const storage = createStorage();
+      vi.stubGlobal('localStorage', storage);
+      const first = createResultItem(action, {
+        key: `ordinary-failure.json::auth-1::${action}`,
+        fileName: 'ordinary-failure.json',
+        runtimeId: 'runtime-canonical',
+        authIndex: 'auth-1',
+        accountId: 'account-canonical',
+        accountSnapshot: 'canonical@example.com',
+        displayAccount: 'canonical@example.com',
+        disabled: initialDisabled,
+        autoRecoverEligible: action === 'enable',
+      });
+      const second = createResultItem(action, {
+        key: `ordinary-failure.json::auth-2::${action}`,
+        fileName: 'ordinary-failure.json',
+        runtimeId: 'runtime-sibling',
+        authIndex: 'auth-2',
+        accountId: 'account-sibling',
+        accountSnapshot: 'sibling@example.com',
+        displayAccount: 'sibling@example.com',
+        disabled: initialDisabled,
+        autoRecoverEligible: action === 'enable',
+      });
+      const currentFiles = [first, second].map((item) =>
+        createCurrentAuthFile(item, { disabled: initialDisabled })
+      );
+      const finalFiles = [
+        createCurrentAuthFile(first, { disabled: initialDisabled }),
+        createCurrentAuthFile(second, { disabled: requestedDisabled }),
+      ];
+      const scope = `scope-auto-ordinary-canonical-failure-${action}`;
+      if (action === 'enable') {
+        [first, second].forEach((item) =>
+          recordCodexInspectionDisableOwnership(scope, {
+            fileName: item.fileName,
+            provider: item.provider,
+            authIndex: item.authIndex,
+            accountId: item.accountId,
+            accountSnapshot: item.accountSnapshot,
+          })
+        );
+      }
+      const statusSpy = vi
+        .spyOn(authFilesApi, 'setStatusWithFallback')
+        .mockImplementation(async (target, disabled, verifyFallback) => {
+          if (target.runtimeId === first.runtimeId) {
+            expect(verifyFallback).toEqual(expect.any(Function));
+            throw new Error('canonical credential update failed');
+          }
+          expect(verifyFallback).toBeUndefined();
+          return { status: 'ok', disabled, mutationScope: 'credential' };
+        });
+      const listSpy = vi
+        .spyOn(authFilesApi, 'list')
+        .mockResolvedValueOnce({ files: currentFiles })
+        .mockResolvedValueOnce({ files: currentFiles })
+        .mockResolvedValueOnce({ files: currentFiles })
+        .mockResolvedValueOnce({ files: finalFiles });
+
+      const execution = await executeCodexInspectionActions({
+        settings: createRunResult().settings,
+        items: [first, second],
+        referenceItems: [first, second],
+        previousFiles: [],
+        connectionFingerprint: scope,
+        source: 'auto',
+      });
+
+      expect(listSpy).toHaveBeenCalledTimes(4);
+      expect(statusSpy).toHaveBeenCalledTimes(2);
+      expect(statusSpy.mock.calls.map(([target]) => target.runtimeId)).toEqual([
+        first.runtimeId,
+        second.runtimeId,
+      ]);
+      expect(execution.outcomes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            accountKey: first.key,
+            status: 'failed',
+            success: false,
+            error: 'canonical credential update failed',
+          }),
+          expect.objectContaining({
+            accountKey: second.key,
+            status: 'success',
+            success: true,
+          }),
+        ])
+      );
+      expect(
+        execution.outcomes.find((outcome) => outcome.accountKey === second.key)?.status
+      ).not.toBe('skipped');
+
+      const owned = getCodexInspectionOwnedDisableIdentityKeys(scope, finalFiles);
+      const siblingOwnershipKey = getCodexInspectionOwnershipIdentityKey({
+        fileName: second.fileName,
+        provider: second.provider,
+        authIndex: second.authIndex,
+        accountId: second.accountId,
+        accountSnapshot: second.accountSnapshot,
+      });
+      const canonicalOwnershipKey = getCodexInspectionOwnershipIdentityKey({
+        fileName: first.fileName,
+        provider: first.provider,
+        authIndex: first.authIndex,
+        accountId: first.accountId,
+        accountSnapshot: first.accountSnapshot,
+      });
+      if (action === 'disable') {
+        expect(owned).toEqual(new Set([siblingOwnershipKey]));
+        expect(storage.setItem).toHaveBeenCalledTimes(1);
+      } else {
+        expect(owned).toEqual(new Set([canonicalOwnershipKey]));
+      }
+    }
+  );
+
   it('blocks a duplicate plugin locator without falling back for a unique sibling', async () => {
     const storage = createStorage();
     vi.stubGlobal('localStorage', storage);
@@ -4470,13 +4602,13 @@ describe('executeCodexInspectionActions', () => {
       source: 'auto',
     });
 
-    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalledTimes(2);
     expect(sourceStatusSpy).not.toHaveBeenCalled();
     expect(storage.setItem).not.toHaveBeenCalled();
     expect(execution.outcomes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ accountKey: first.key, status: 'failed', success: false }),
-        expect.objectContaining({ accountKey: second.key, status: 'skipped', success: true }),
+        expect.objectContaining({ accountKey: second.key, status: 'failed', success: false }),
       ])
     );
   });
@@ -4538,13 +4670,13 @@ describe('executeCodexInspectionActions', () => {
       source: 'auto',
     });
 
-    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalledTimes(2);
     expect(sourceStatusSpy).not.toHaveBeenCalled();
     expect(storage.setItem).not.toHaveBeenCalled();
     expect(execution.outcomes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ accountKey: first.key, status: 'failed', success: false }),
-        expect.objectContaining({ accountKey: second.key, status: 'skipped', success: true }),
+        expect.objectContaining({ accountKey: second.key, status: 'failed', success: false }),
       ])
     );
   });
@@ -4621,7 +4753,7 @@ describe('executeCodexInspectionActions', () => {
         }),
         expect.objectContaining({
           accountKey: sibling.key,
-          status: 'skipped',
+          status: 'needs_review',
           success: true,
         }),
       ])
