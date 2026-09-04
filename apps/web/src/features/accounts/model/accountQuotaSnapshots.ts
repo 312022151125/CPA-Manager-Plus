@@ -28,6 +28,7 @@ import {
   isCodexLegacyAllScopeReplacement,
   isCodexMainProviderWindowId,
   inferCodexQuotaScopeFromProviderWindowId,
+  shouldClearInheritedCodexQuotaProgress,
 } from '@/utils/quota/codexQuota';
 
 const INCOMPLETE_MODEL_SCOPE_KIND = 'feature';
@@ -102,6 +103,76 @@ const resolveSnapshotQuotaProgressObservedAtMs = (
     return quotaObservedAtMs;
   }
   return isValidQuotaProgressObservedAtMs(snapshot.observed_at_ms) ? snapshot.observed_at_ms : null;
+};
+
+const resolveSnapshotQuotaEvidenceObservedAtMs = (
+  snapshot: AccountQuotaSnapshotWindow
+): number | null => {
+  const fieldObservedAtMs = snapshot.field_sources?.quota?.observed_at_ms;
+  if (isValidQuotaProgressObservedAtMs(fieldObservedAtMs)) return fieldObservedAtMs;
+  return isValidQuotaProgressObservedAtMs(snapshot.observed_at_ms) ? snapshot.observed_at_ms : null;
+};
+
+type SnapshotQuotaEvidenceKind = 'used-bearing' | 'remaining-only' | 'metadata-only';
+
+const snapshotQuotaEvidenceKind = (
+  snapshot: AccountQuotaSnapshotWindow
+): SnapshotQuotaEvidenceKind => {
+  if (isFiniteQuotaProgress(snapshot.used_percent)) return 'used-bearing';
+  if (isFiniteQuotaProgress(snapshot.remaining_percent)) return 'remaining-only';
+  return 'metadata-only';
+};
+
+const resolveDefinitionQuotaEvidenceObservedAtMs = (
+  definition: AccountQuotaWindowDefinition
+): number | null => {
+  if (isFiniteQuotaProgress(definition.usedPercent)) {
+    if (definition.quotaProgressObservedAtMs !== undefined) {
+      return isValidQuotaProgressObservedAtMs(definition.quotaProgressObservedAtMs)
+        ? definition.quotaProgressObservedAtMs
+        : null;
+    }
+  }
+  if (
+    isFiniteQuotaProgress(definition.usedPercent) ||
+    isFiniteQuotaProgress(definition.remainingPercent)
+  ) {
+    return isValidQuotaProgressObservedAtMs(definition.observedAtMs)
+      ? definition.observedAtMs
+      : null;
+  }
+  return null;
+};
+
+type CodexSnapshotCycleRelationship = 'same' | 'different' | 'unknown';
+
+const resolveCodexSnapshotCycleRelationship = (
+  definition: AccountQuotaWindowDefinition,
+  snapshot: AccountQuotaSnapshotWindow
+): CodexSnapshotCycleRelationship => {
+  if (definition.currentCycle && snapshot.current_cycle) {
+    return definition.currentCycle.id === snapshot.current_cycle.id &&
+      definition.currentCycle.activationId === snapshot.current_cycle.activation_id
+      ? 'same'
+      : 'different';
+  }
+
+  return shouldClearInheritedCodexQuotaProgress(
+    {
+      providerWindowId: definition.providerWindowId,
+      endMs: definition.currentCycle?.scheduledEndMs ?? definition.cycleEndMs,
+      durationSeconds: definition.currentCycle?.durationSeconds ?? definition.durationSeconds,
+      boundaryAccuracy: definition.currentCycle?.boundaryAccuracy ?? definition.boundaryAccuracy,
+    },
+    {
+      providerWindowId: snapshot.provider_window_id,
+      endMs: snapshot.current_cycle?.scheduled_end_ms ?? snapshot.cycle_end_ms,
+      durationSeconds: snapshot.current_cycle?.duration_seconds ?? snapshot.duration_seconds,
+      boundaryAccuracy: snapshot.current_cycle?.boundary_accuracy ?? snapshot.boundary_accuracy,
+    }
+  )
+    ? 'different'
+    : 'unknown';
 };
 
 const compareSnapshotFieldFreshness =
@@ -591,9 +662,18 @@ export const mergeAccountQuotaSnapshotWindows = (
       !Number.isFinite(definition.observedAtMs) ||
       snapshot.observed_at_ms >= definition.observedAtMs;
     const currentCycle = snapshotCycleDefinition(snapshot.current_cycle);
+    const isCodex = definition.provider === 'codex' || options.provider === 'codex';
+    const cycleRelationship = isCodex
+      ? resolveCodexSnapshotCycleRelationship(definition, snapshot)
+      : 'unknown';
     const definitionUsedPercent = isFiniteQuotaProgress(definition.usedPercent)
       ? definition.usedPercent
       : null;
+    const definitionRemainingPercent = isFiniteQuotaProgress(definition.remainingPercent)
+      ? definition.remainingPercent
+      : definitionUsedPercent !== null
+        ? remainingPercentFromUsed(definitionUsedPercent)
+        : null;
     const snapshotUsedPercent = isFiniteQuotaProgress(snapshot.used_percent)
       ? snapshot.used_percent
       : null;
@@ -601,42 +681,60 @@ export const mergeAccountQuotaSnapshotWindows = (
       ? snapshot.remaining_percent
       : null;
     const definitionQuotaProgressObservedAtMs =
-      definitionUsedPercent !== null &&
-      isValidQuotaProgressObservedAtMs(definition.quotaProgressObservedAtMs)
-        ? definition.quotaProgressObservedAtMs
-        : null;
+      resolveDefinitionQuotaEvidenceObservedAtMs(definition);
     const snapshotQuotaProgressObservedAtMs = resolveSnapshotQuotaProgressObservedAtMs(snapshot);
-    const useSnapshotQuotaProgress =
-      snapshotUsedPercent !== null &&
-      (definitionUsedPercent === null ||
-        definitionQuotaProgressObservedAtMs === null ||
-        (snapshotQuotaProgressObservedAtMs !== null &&
-          snapshotQuotaProgressObservedAtMs >= definitionQuotaProgressObservedAtMs));
-    const mergedUsedPercent = useSnapshotQuotaProgress
-      ? snapshotUsedPercent
-      : definition.usedPercent;
-    const useSnapshotRemainingPercent =
-      snapshotRemainingPercent !== null &&
-      (useSnapshotQuotaProgress || (snapshotUsedPercent === null && snapshotMetadataIsNewer));
-    const mergedRemainingPercent = useSnapshotQuotaProgress
-      ? useSnapshotRemainingPercent
-        ? snapshotRemainingPercent
-        : remainingPercentFromUsed(snapshotUsedPercent)
-      : useSnapshotRemainingPercent
-        ? snapshotRemainingPercent
-        : definition.remainingPercent;
-    const quotaProgressObservedAtMs = useSnapshotQuotaProgress
-      ? snapshotQuotaProgressObservedAtMs
-      : definitionUsedPercent !== null
-        ? definitionQuotaProgressObservedAtMs
-        : null;
-    if (!snapshotMetadataIsNewer && !useSnapshotQuotaProgress) return definition;
-    const mergedModelScope = snapshotMetadataIsNewer
+    const snapshotQuotaEvidenceObservedAtMs = resolveSnapshotQuotaEvidenceObservedAtMs(snapshot);
+    const liveQuotaEvidenceObservedAtMs = definitionQuotaProgressObservedAtMs;
+    const snapshotQuotaIsAtLeastLive =
+      liveQuotaEvidenceObservedAtMs === null ||
+      (snapshotQuotaEvidenceObservedAtMs !== null &&
+        snapshotQuotaEvidenceObservedAtMs >= liveQuotaEvidenceObservedAtMs);
+    const differentCodexCycle = cycleRelationship === 'different';
+    const quotaEvidenceKind = snapshotQuotaEvidenceKind(snapshot);
+
+    let mergedUsedPercent = definitionUsedPercent;
+    let mergedRemainingPercent = definitionRemainingPercent;
+    let quotaProgressObservedAtMs =
+      definitionUsedPercent !== null ? definitionQuotaProgressObservedAtMs : null;
+    let quotaChanged = false;
+
+    if (differentCodexCycle) {
+      quotaChanged = true;
+      if (quotaEvidenceKind === 'used-bearing') {
+        mergedUsedPercent = snapshotUsedPercent;
+        mergedRemainingPercent =
+          snapshotRemainingPercent ?? remainingPercentFromUsed(snapshotUsedPercent);
+        quotaProgressObservedAtMs = snapshotQuotaProgressObservedAtMs;
+      } else if (quotaEvidenceKind === 'remaining-only') {
+        mergedUsedPercent = null;
+        mergedRemainingPercent = snapshotRemainingPercent;
+        quotaProgressObservedAtMs = null;
+      } else {
+        mergedUsedPercent = null;
+        mergedRemainingPercent = null;
+        quotaProgressObservedAtMs = null;
+      }
+    } else if (quotaEvidenceKind === 'used-bearing' && snapshotQuotaIsAtLeastLive) {
+      quotaChanged = true;
+      mergedUsedPercent = snapshotUsedPercent;
+      mergedRemainingPercent =
+        snapshotRemainingPercent ?? remainingPercentFromUsed(snapshotUsedPercent);
+      quotaProgressObservedAtMs = snapshotQuotaProgressObservedAtMs;
+    } else if (quotaEvidenceKind === 'remaining-only' && snapshotQuotaIsAtLeastLive) {
+      quotaChanged = true;
+      mergedUsedPercent = null;
+      mergedRemainingPercent = snapshotRemainingPercent;
+      quotaProgressObservedAtMs = null;
+    }
+
+    const useSnapshotMetadata = snapshotMetadataIsNewer || differentCodexCycle;
+    if (!useSnapshotMetadata && !quotaChanged) return definition;
+    const mergedModelScope = useSnapshotMetadata
       ? snapshotModelScope(snapshot)
       : definition.modelScope;
     return {
       ...definition,
-      ...(snapshotMetadataIsNewer
+      ...(useSnapshotMetadata
         ? {
             windowMode: snapshot.window_mode,
             observationSource: snapshot.source,
@@ -655,7 +753,7 @@ export const mergeAccountQuotaSnapshotWindows = (
       quotaProgressObservedAtMs,
       display: {
         ...definition.display,
-        ...(snapshotMetadataIsNewer
+        ...(useSnapshotMetadata
           ? {
               observationSource: snapshot.source,
               observedAtMs: snapshot.observed_at_ms,

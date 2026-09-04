@@ -19,6 +19,8 @@ const MONTH_SECONDS = 2_592_000;
 const MIN_MONTH_SECONDS = 28 * 24 * 60 * 60;
 const MAX_MONTH_SECONDS = 31 * 24 * 60 * 60;
 
+export const CODEX_QUOTA_BOUNDARY_JITTER_MS = 60_000;
+
 export const CODEX_MAIN_QUOTA_SCOPE_KEY = 'codex_main';
 export const CODEX_SPARK_MODEL_ID = 'gpt-5.3-codex-spark';
 export const CODEX_CODE_REVIEW_SCOPE_KEY = 'code_review';
@@ -196,10 +198,7 @@ export const normalizeCodexModelId = (value: string | null | undefined): string 
     .toLowerCase();
 };
 
-export const canonicalizeCodexProviderWindowId = (
-  value: string,
-  windowKind?: string
-): string => {
+export const canonicalizeCodexProviderWindowId = (value: string, windowKind?: string): string => {
   const id = value.trim().toLowerCase();
   const normalizedWindowKind = windowKind?.trim().toLowerCase().replace(/_/g, '-');
   if (id === 'primary') return 'five-hour';
@@ -213,13 +212,105 @@ export const canonicalizeCodexProviderWindowId = (
   return id;
 };
 
+export type CodexQuotaCycleEvidence = {
+  providerWindowId?: string | null;
+  endMs?: number | null;
+  durationSeconds?: number | null;
+  boundaryAccuracy?: 'exact' | 'derived' | 'estimated' | 'unknown' | null;
+};
+
+type CodexQuotaCadenceClass = 'five_hour' | 'weekly' | 'monthly';
+
+const isFinitePositive = (value: number | null | undefined): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0;
+
+const codexQuotaCadenceClass = (
+  evidence: CodexQuotaCycleEvidence
+): CodexQuotaCadenceClass | null => {
+  const durationSeconds = evidence.durationSeconds;
+  if (isFinitePositive(durationSeconds)) {
+    if (Math.abs(durationSeconds - FIVE_HOUR_SECONDS) <= CODEX_QUOTA_BOUNDARY_JITTER_MS / 1000) {
+      return 'five_hour';
+    }
+    if (Math.abs(durationSeconds - WEEK_SECONDS) <= CODEX_QUOTA_BOUNDARY_JITTER_MS / 1000) {
+      return 'weekly';
+    }
+    if (durationSeconds >= MIN_MONTH_SECONDS && durationSeconds <= MAX_MONTH_SECONDS) {
+      return 'monthly';
+    }
+  }
+
+  const providerWindowId = evidence.providerWindowId?.trim().toLowerCase() ?? '';
+  const canonicalID = providerWindowId ? canonicalizeCodexProviderWindowId(providerWindowId) : '';
+  if (canonicalID === 'five-hour' || canonicalID.endsWith('-five-hour')) return 'five_hour';
+  if (canonicalID === 'weekly' || canonicalID.endsWith('-weekly')) return 'weekly';
+  if (canonicalID === 'monthly' || canonicalID.endsWith('-monthly')) return 'monthly';
+  return null;
+};
+
+const readCodexCycleDurationMs = (evidence: CodexQuotaCycleEvidence): number | null => {
+  if (!isFinitePositive(evidence.durationSeconds)) return null;
+  const durationMs = evidence.durationSeconds * 1000;
+  return Number.isFinite(durationMs) && durationMs > 0 ? durationMs : null;
+};
+
+const isCodexCadenceDelta = (deltaMs: number, cadenceMs: number): boolean => {
+  const cycleCount = Math.round(deltaMs / cadenceMs);
+  return (
+    cycleCount >= 1 && Math.abs(deltaMs - cycleCount * cadenceMs) <= CODEX_QUOTA_BOUNDARY_JITTER_MS
+  );
+};
+
+/**
+ * Returns true only when newer Codex window evidence proves that an inherited
+ * quota percentage belongs to an older cycle. Boundary jitter and uncertain
+ * forward movement remain compatible so metadata-only observations do not
+ * erase usable quota evidence.
+ */
+export const shouldClearInheritedCodexQuotaProgress = (
+  active: CodexQuotaCycleEvidence,
+  observed: CodexQuotaCycleEvidence
+): boolean => {
+  const activeClass = codexQuotaCadenceClass(active);
+  const observedClass = codexQuotaCadenceClass(observed);
+  const activeDurationMs = readCodexCycleDurationMs(active);
+  const observedDurationMs = readCodexCycleDurationMs(observed);
+
+  if (activeClass !== null && observedClass !== null && activeClass !== observedClass) {
+    return true;
+  }
+
+  const activeEndMs = active.endMs;
+  const observedEndMs = observed.endMs;
+  if (!isFinitePositive(activeEndMs) || !isFinitePositive(observedEndMs)) return false;
+
+  const deltaMs = observedEndMs - activeEndMs;
+  if (deltaMs < -CODEX_QUOTA_BOUNDARY_JITTER_MS) return true;
+  if (Math.abs(deltaMs) <= CODEX_QUOTA_BOUNDARY_JITTER_MS) return false;
+
+  const cadenceMs =
+    activeDurationMs ??
+    observedDurationMs ??
+    (activeClass === 'five_hour' || observedClass === 'five_hour'
+      ? FIVE_HOUR_SECONDS * 1000
+      : activeClass === 'weekly' || observedClass === 'weekly'
+        ? WEEK_SECONDS * 1000
+        : null);
+  if (cadenceMs !== null && isCodexCadenceDelta(deltaMs, cadenceMs)) return true;
+
+  if (activeClass === 'monthly' && observedClass === 'monthly') {
+    return deltaMs >= MIN_MONTH_SECONDS * 1000 - CODEX_QUOTA_BOUNDARY_JITTER_MS;
+  }
+
+  return observed.boundaryAccuracy === 'exact' || observed.boundaryAccuracy === 'derived';
+};
+
 export type CodexProviderWindowIdentity = {
   id: string;
   providerWindowAliases?: string[];
 };
 
-const normalizeCodexProviderWindowToken = (value: string): string =>
-  value.trim().toLowerCase();
+const normalizeCodexProviderWindowToken = (value: string): string => value.trim().toLowerCase();
 
 const inferCodexProviderWindowKind = (value: string): string | undefined => {
   const id = normalizeCodexProviderWindowToken(value);
@@ -328,7 +419,9 @@ export const findCodexProviderWindowMatch = (
     (alias) => !CODEX_AMBIGUOUS_PROVIDER_WINDOW_ALIASES.has(alias)
   );
   const matchingActiveWindows = activeWindows.filter((window) =>
-    usableAliases.some((alias) => providerWindowAliasMatches(window, candidate.window).includes(alias))
+    usableAliases.some((alias) =>
+      providerWindowAliasMatches(window, candidate.window).includes(alias)
+    )
   );
   if (matchingActiveWindows.length !== 1) return -1;
   return candidate.index;
@@ -351,9 +444,7 @@ export const isCodexMainQuotaModelScope = (scope: QuotaModelScope | null | undef
   scope.key?.trim().toLowerCase() === CODEX_MAIN_QUOTA_SCOPE_KEY &&
   scope.complete !== false;
 
-export const isCodexSparkModelScope = (
-  scope: QuotaModelScope | null | undefined
-): boolean =>
+export const isCodexSparkModelScope = (scope: QuotaModelScope | null | undefined): boolean =>
   scope?.kind === 'models' &&
   scope.complete !== false &&
   (scope.models ?? []).some((model) => normalizeCodexModelId(model) === CODEX_SPARK_MODEL_ID);
@@ -761,7 +852,9 @@ const addCodexRateLimitWindows = (
       genericLabelKey,
       { ...genericLabelParams, duration },
       options?.modelScope ?? incompleteCodexFeatureScope('scope_unknown'),
-      aliasesForWindow(`${genericIdPrefix ? `${genericIdPrefix}-` : ''}window-${duration}-${index}`),
+      aliasesForWindow(
+        `${genericIdPrefix ? `${genericIdPrefix}-` : ''}window-${duration}-${index}`
+      ),
       window,
       limitReached,
       allowed,

@@ -1,13 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import type { AccountQuotaSnapshotWindow } from '@/services/api/usageService';
+import type {
+  AccountQuotaSnapshotCycle,
+  AccountQuotaSnapshotWindow,
+} from '@/services/api/usageService';
 import { CODEX_SPARK_MODEL_ID } from '@/utils/quota/codexQuota';
-import type { AccountQuotaWindowDefinition } from './accountQuotaWindowDefinitions';
+import type {
+  AccountQuotaCycleDefinition,
+  AccountQuotaWindowDefinition,
+} from './accountQuotaWindowDefinitions';
 import {
   buildAccountQuotaSnapshotWriteEntries,
   mergeCodexResetCreditsFromQuotaSnapshots,
   mergeAccountQuotaSnapshotWindows,
 } from './accountQuotaSnapshots';
 import type { AccountRow } from './accountRows';
+import {
+  buildAccountQuotaDisplayWindow,
+  type AccountQuotaDisplayWindow,
+} from './accountQuotaDisplayWindows';
+import { buildAccountQuotaWindowDefinitions } from './accountQuotaWindowDefinitions';
 
 const makeDefinition = (
   overrides: Partial<AccountQuotaWindowDefinition> = {}
@@ -58,26 +69,59 @@ const makeSnapshot = (
   source: 'response_header',
   observed_at_ms: 20_000,
   boundary_accuracy: 'derived',
-  cycle_start_ms: 2_000,
-  cycle_end_ms: 20_002_000,
-  duration_seconds: 20_000,
+  cycle_start_ms: 1_000,
+  cycle_end_ms: 19_001_000,
+  duration_seconds: 19_000,
   used_percent: 35,
   remaining_percent: 65,
   stale: false,
   ...overrides,
 });
 
-const makeSnapshotRow = (): AccountRow =>
+const makeSnapshotCycle = (
+  overrides: Partial<AccountQuotaSnapshotCycle> = {}
+): AccountQuotaSnapshotCycle => ({
+  id: 10,
+  activation_id: 1,
+  state: 'active',
+  scheduled_start_ms: 1_000,
+  scheduled_end_ms: 19_001_000,
+  actual_start_ms: 1_000,
+  duration_seconds: 19_000,
+  boundary_accuracy: 'exact',
+  forecast_eligible: true,
+  ...overrides,
+});
+
+const makeDefinitionCycle = (
+  overrides: Partial<AccountQuotaCycleDefinition> = {}
+): AccountQuotaCycleDefinition => ({
+  id: 10,
+  activationId: 1,
+  state: 'active',
+  scheduledStartMs: 1_000,
+  scheduledEndMs: 19_001_000,
+  actualStartMs: 1_000,
+  actualEndMs: null,
+  durationSeconds: 19_000,
+  boundaryAccuracy: 'exact',
+  endReason: '',
+  parentCycleId: null,
+  forecastEligible: true,
+  ...overrides,
+});
+
+const makeSnapshotRow = (provider: 'codex' | 'antigravity' = 'codex'): AccountRow =>
   ({
-    selectionKey: 'codex.json\u0000auth-1',
-    fileName: 'codex.json',
-    provider: 'codex',
+    selectionKey: `${provider}.json\u0000auth-1`,
+    fileName: `${provider}.json`,
+    provider,
     authIndex: 'auth-1',
     accountLabel: 'user@example.com',
     raw: {
-      name: 'codex.json',
-      provider: 'codex',
-      type: 'codex',
+      name: `${provider}.json`,
+      provider,
+      type: provider,
       auth_index: 'auth-1',
       account: 'user@example.com',
     },
@@ -107,6 +151,7 @@ describe('account quota snapshots', () => {
     const definition = makeDefinition({
       observedAtMs: 1_000,
       quotaProgressObservedAtMs: 1_000,
+      currentCycle: makeDefinitionCycle(),
       remainingPercent: 50,
       usedPercent: 50,
       display: {
@@ -128,6 +173,7 @@ describe('account quota snapshots', () => {
           field_sources: {
             quota: { source: 'response_header', observed_at_ms: 2_000 },
           },
+          current_cycle: makeSnapshotCycle(),
         }),
       ]
     );
@@ -173,6 +219,185 @@ describe('account quota snapshots', () => {
       remainingPercent: 40,
       quotaProgressObservedAtMs: 2_000,
       display: { quotaProgressObservedAtMs: 2_000 },
+    });
+  });
+
+  it.each([
+    { label: 'cycle id', id: 11, activationId: 1, cycle: { id: 11 } },
+    { label: 'activation id', id: 10, activationId: 2, cycle: { activation_id: 2 } },
+  ])(
+    'does not inherit quota across a different lifecycle $label',
+    ({ cycle, id, activationId }) => {
+      const [merged] = mergeAccountQuotaSnapshotWindows(
+        [
+          makeDefinition({
+            observedAtMs: 1_000,
+            usedPercent: 95,
+            remainingPercent: 5,
+            currentCycle: makeDefinitionCycle(),
+          }),
+        ],
+        [
+          makeSnapshot({
+            observed_at_ms: 2_000,
+            used_percent: undefined,
+            remaining_percent: undefined,
+            current_cycle: makeSnapshotCycle(cycle),
+          }),
+        ]
+      );
+
+      expect(merged).toMatchObject({
+        usedPercent: null,
+        remainingPercent: null,
+        quotaProgressObservedAtMs: null,
+        currentCycle: { id, activationId },
+      });
+    }
+  );
+
+  it('accepts new-cycle used quota without old-cycle freshness blocking it', () => {
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [
+        makeDefinition({
+          observedAtMs: 3_000,
+          quotaProgressObservedAtMs: 2_000,
+          usedPercent: 95,
+          remainingPercent: 5,
+          currentCycle: makeDefinitionCycle(),
+        }),
+      ],
+      [
+        makeSnapshot({
+          observed_at_ms: 4_000,
+          used_percent: 3,
+          remaining_percent: 97,
+          field_sources: { quota: { source: 'api_query', observed_at_ms: 1_000 } },
+          current_cycle: makeSnapshotCycle({ id: 11 }),
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      usedPercent: 3,
+      remainingPercent: 97,
+      quotaProgressObservedAtMs: 1_000,
+      currentCycle: { id: 11 },
+    });
+  });
+
+  it('keeps only remaining evidence when a new cycle snapshot is remaining-only', () => {
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [
+        makeDefinition({
+          usedPercent: 95,
+          remainingPercent: 5,
+          currentCycle: makeDefinitionCycle(),
+        }),
+      ],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_000,
+          used_percent: undefined,
+          remaining_percent: 40,
+          current_cycle: makeSnapshotCycle({ id: 11 }),
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      usedPercent: null,
+      remainingPercent: 40,
+      quotaProgressObservedAtMs: null,
+    });
+  });
+
+  it('clears all inherited quota for a new-cycle metadata-only snapshot', () => {
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [
+        makeDefinition({
+          usedPercent: 95,
+          remainingPercent: 5,
+          currentCycle: makeDefinitionCycle(),
+        }),
+      ],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_000,
+          used_percent: undefined,
+          remaining_percent: undefined,
+          current_cycle: makeSnapshotCycle({ id: 11 }),
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      usedPercent: null,
+      remainingPercent: null,
+      quotaProgressObservedAtMs: null,
+    });
+  });
+
+  it('clears inherited quota on a boundary-only fixed-window rollover', () => {
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [
+        makeDefinition({
+          observedAtMs: 1_000,
+          cycleEndMs: 1_000_000,
+          durationSeconds: 18_000,
+          usedPercent: 95,
+          remainingPercent: 5,
+          currentCycle: undefined,
+        }),
+      ],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_000,
+          cycle_start_ms: 1_000_000,
+          cycle_end_ms: 19_000_000,
+          duration_seconds: 18_000,
+          used_percent: undefined,
+          remaining_percent: undefined,
+          current_cycle: undefined,
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      usedPercent: null,
+      remainingPercent: null,
+      quotaProgressObservedAtMs: null,
+      cycleEndMs: 19_000_000,
+    });
+  });
+
+  it('clears inherited quota after a materially backward boundary correction', () => {
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [
+        makeDefinition({
+          cycleEndMs: 2_000_000,
+          usedPercent: 60,
+          remainingPercent: 40,
+          currentCycle: undefined,
+        }),
+      ],
+      [
+        makeSnapshot({
+          observed_at_ms: 3_000,
+          cycle_start_ms: 1_000,
+          cycle_end_ms: 1_000_000,
+          used_percent: undefined,
+          remaining_percent: undefined,
+          boundary_accuracy: 'estimated',
+          current_cycle: undefined,
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      usedPercent: null,
+      remainingPercent: null,
+      quotaProgressObservedAtMs: null,
     });
   });
 
@@ -308,14 +533,14 @@ describe('account quota snapshots', () => {
 
     expect(merged).toMatchObject({
       observedAtMs: 2_000,
-      usedPercent: 20,
+      usedPercent: null,
       remainingPercent: 40,
-      quotaProgressObservedAtMs: 1_000,
+      quotaProgressObservedAtMs: null,
       display: {
         observedAtMs: 2_000,
-        usedPercent: 20,
+        usedPercent: null,
         remainingPercent: 40,
-        quotaProgressObservedAtMs: 1_000,
+        quotaProgressObservedAtMs: null,
       },
     });
 
@@ -337,6 +562,49 @@ describe('account quota snapshots', () => {
         usedPercent: null,
         remainingPercent: 35,
         quotaProgressObservedAtMs: null,
+      },
+    });
+  });
+
+  it('does not let stale remaining evidence override a newer live quota pair', () => {
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [
+        makeDefinition({
+          observedAtMs: 3_000,
+          quotaProgressObservedAtMs: 2_500,
+          usedPercent: 20,
+          remainingPercent: 80,
+          display: {
+            ...makeDefinition().display,
+            observedAtMs: 3_000,
+            quotaProgressObservedAtMs: 2_500,
+            usedPercent: 20,
+            remainingPercent: 80,
+          },
+        }),
+      ],
+      [
+        makeSnapshot({
+          observed_at_ms: 3_000,
+          used_percent: undefined,
+          remaining_percent: 40,
+          field_sources: {
+            quota: { source: 'api_query', observed_at_ms: 2_000 },
+          },
+        }),
+      ]
+    );
+
+    expect(merged).toMatchObject({
+      observedAtMs: 3_000,
+      usedPercent: 20,
+      remainingPercent: 80,
+      quotaProgressObservedAtMs: 2_500,
+      display: {
+        observedAtMs: 3_000,
+        usedPercent: 20,
+        remainingPercent: 80,
+        quotaProgressObservedAtMs: 2_500,
       },
     });
   });
@@ -386,6 +654,63 @@ describe('account quota snapshots', () => {
       remainingPercent: 40,
       quotaProgressObservedAtMs: 2_000,
       display: { quotaProgressObservedAtMs: 2_000 },
+    });
+  });
+
+  it('preserves non-Codex observedAt compatibility for snapshot write and stale merge', () => {
+    const observedAtMs = 3_000;
+    const display: AccountQuotaDisplayWindow = buildAccountQuotaDisplayWindow({
+      key: 'antigravity-five-hour',
+      label: '5H',
+      kind: 'five_hour',
+      remainingPercent: 40,
+      usedPercent: 60,
+      resetLabel: '-',
+      source: 'antigravity',
+      observedAtMs,
+    });
+    const [definition] = buildAccountQuotaWindowDefinitions([display]);
+
+    expect(definition.quotaProgressObservedAtMs).toBe(observedAtMs);
+
+    const row = makeSnapshotRow('antigravity');
+    const [entry] = buildAccountQuotaSnapshotWriteEntries(
+      [row],
+      new Map([[row.selectionKey, [definition]]]),
+      {
+        getObservation: () => ({
+          source: 'api_query',
+          observed_at_ms: observedAtMs,
+          inventory_scope_key: 'antigravity:quota',
+          inventory_mode: 'complete',
+        }),
+      }
+    );
+
+    expect(entry.windows[0]).toMatchObject({
+      observed_at_ms: observedAtMs,
+      used_percent: 60,
+      remaining_percent: 40,
+    });
+
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [definition],
+      [
+        makeSnapshot({
+          provider_window_id: definition.providerWindowId,
+          observed_at_ms: 2_000,
+          used_percent: 50,
+          remaining_percent: 50,
+        }),
+      ],
+      { provider: 'antigravity' }
+    );
+
+    expect(merged).toMatchObject({
+      observedAtMs: observedAtMs,
+      usedPercent: 60,
+      remainingPercent: 40,
+      quotaProgressObservedAtMs: observedAtMs,
     });
   });
 

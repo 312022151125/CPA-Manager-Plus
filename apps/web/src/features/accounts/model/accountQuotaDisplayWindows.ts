@@ -311,12 +311,10 @@ export const buildQuotaWindowRange = (
 };
 
 const resolveQuotaProgressObservedAtMs = ({
-  source,
   usedPercent,
   quotaProgressObservedAtMs,
   observedAtMs,
 }: {
-  source: AccountQuotaWindowSource | undefined;
   usedPercent: number | null;
   quotaProgressObservedAtMs: number | null | undefined;
   observedAtMs: number | null | undefined;
@@ -329,7 +327,6 @@ const resolveQuotaProgressObservedAtMs = ({
       ? quotaProgressObservedAtMs
       : null;
   }
-  if (source !== 'codex') return null;
   return typeof observedAtMs === 'number' && Number.isFinite(observedAtMs) && observedAtMs > 0
     ? observedAtMs
     : null;
@@ -425,7 +422,6 @@ export const buildAccountQuotaDisplayWindow = ({
     observationSource,
     observedAtMs,
     quotaProgressObservedAtMs: resolveQuotaProgressObservedAtMs({
-      source,
       usedPercent,
       quotaProgressObservedAtMs,
       observedAtMs,

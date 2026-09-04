@@ -33,6 +33,7 @@ import {
   isValidQuotaResetAtMs,
   resolveCodexUsageQuotaScope,
   resolveCodexPlanType,
+  shouldClearInheritedCodexQuotaProgress,
 } from '@/utils/quota';
 import {
   buildObservedCodexQuotaFromHeaderSnapshot,
@@ -141,6 +142,9 @@ type CodexQuotaMergeState = DisplayQuotaState & Partial<CodexQuotaState>;
 const readFiniteTimestamp = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 
+const readPositiveTimestamp = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+
 const hasObservedValue = (value: unknown): boolean => {
   if (value === undefined || value === null) return false;
   if (typeof value === 'string') return value.trim() !== '';
@@ -154,8 +158,6 @@ const hasKnownResetLabel = (value: unknown): value is string => {
   return trimmed !== '' && trimmed !== '-';
 };
 
-const CODEX_FIXED_BOUNDARY_JITTER_MS = 60_000;
-
 const readCodexWindowDurationMs = (window: CodexQuotaWindow): number | null => {
   const seconds = window.limitWindowSeconds;
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return null;
@@ -163,43 +165,9 @@ const readCodexWindowDurationMs = (window: CodexQuotaWindow): number | null => {
   return Number.isFinite(durationMs) && durationMs > 0 ? durationMs : null;
 };
 
-const hasReliableCodexResetBoundary = (window: CodexQuotaWindow): boolean =>
-  isValidQuotaResetAtMs(window.resetAtMs) && window.resetAccuracy !== 'unknown';
-
 const hasReliableCodexWindowEvidence = (window: CodexQuotaWindow): boolean =>
   readCodexWindowDurationMs(window) !== null ||
   (isValidQuotaResetAtMs(window.resetAtMs) && window.resetAccuracy === 'exact');
-
-const isCodexConfirmedCycleRollover = (
-  activeWindow: CodexQuotaWindow,
-  observedWindow: CodexQuotaWindow
-): boolean => {
-  if (
-    !hasReliableCodexResetBoundary(activeWindow) ||
-    !hasReliableCodexResetBoundary(observedWindow)
-  ) {
-    return false;
-  }
-
-  const activeDurationMs = readCodexWindowDurationMs(activeWindow);
-  const observedDurationMs = readCodexWindowDurationMs(observedWindow);
-  if (activeDurationMs === null) return false;
-  if (
-    observedDurationMs !== null &&
-    Math.abs(observedDurationMs - activeDurationMs) > CODEX_FIXED_BOUNDARY_JITTER_MS
-  ) {
-    return false;
-  }
-
-  const resetDeltaMs = (observedWindow.resetAtMs ?? 0) - (activeWindow.resetAtMs ?? 0);
-  if (resetDeltaMs <= CODEX_FIXED_BOUNDARY_JITTER_MS) return false;
-
-  const cycleCount = Math.round(resetDeltaMs / activeDurationMs);
-  return (
-    cycleCount >= 1 &&
-    Math.abs(resetDeltaMs - cycleCount * activeDurationMs) <= CODEX_FIXED_BOUNDARY_JITTER_MS
-  );
-};
 
 const isCodexZeroOnlyObservedQuotaPlaceholder = (window: CodexQuotaWindow): boolean =>
   window.observationSource === 'response_header' &&
@@ -219,7 +187,7 @@ const stampCodexQuotaWindows = (
     const quotaProgressObservedAtMs = !hasQuotaProgress
       ? null
       : window.quotaProgressObservedAtMs !== undefined
-        ? readFiniteTimestamp(window.quotaProgressObservedAtMs)
+        ? readPositiveTimestamp(window.quotaProgressObservedAtMs)
         : stampedObservedAtMs;
     return {
       ...window,
@@ -239,10 +207,23 @@ const mergeCodexQuotaWindow = (
     typeof observedWindow.usedPercent === 'number' && Number.isFinite(observedWindow.usedPercent);
   const observedQuotaProgressObservedAtMs = hasObservedUsedPercent
     ? observedWindow.quotaProgressObservedAtMs !== undefined
-      ? readFiniteTimestamp(observedWindow.quotaProgressObservedAtMs)
-      : readFiniteTimestamp(observedWindow.observedAtMs)
+      ? readPositiveTimestamp(observedWindow.quotaProgressObservedAtMs)
+      : readPositiveTimestamp(observedWindow.observedAtMs)
     : null;
-  const confirmedCycleRollover = isCodexConfirmedCycleRollover(activeWindow, observedWindow);
+  const confirmedCycleRollover = shouldClearInheritedCodexQuotaProgress(
+    {
+      providerWindowId: activeWindow.id,
+      endMs: activeWindow.resetAtMs,
+      durationSeconds: activeWindow.limitWindowSeconds,
+      boundaryAccuracy: activeWindow.resetAccuracy,
+    },
+    {
+      providerWindowId: observedWindow.id,
+      endMs: observedWindow.resetAtMs,
+      durationSeconds: observedWindow.limitWindowSeconds,
+      boundaryAccuracy: observedWindow.resetAccuracy,
+    }
+  );
   const resetMetadata = hasObservedResetAt
     ? {
         resetLabel: hasObservedResetLabel ? observedWindow.resetLabel : '-',

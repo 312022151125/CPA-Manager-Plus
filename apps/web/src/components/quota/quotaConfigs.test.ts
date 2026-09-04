@@ -658,6 +658,146 @@ describe('resolveQuotaDisplayState', () => {
     });
   });
 
+  it('clears inherited progress across a monthly calendar boundary variation', () => {
+    const activeResetAtMs = Date.parse('2026-01-31T00:00:00Z');
+    const observedResetAtMs = activeResetAtMs + 31 * 24 * 60 * 60 * 1000;
+    const result = resolveQuotaDisplayState(
+      {
+        status: 'success',
+        fetchedAtMs: 1_000,
+        quotaInventoryObserved: true,
+        windows: [
+          {
+            id: 'monthly',
+            label: 'Monthly limit',
+            usedPercent: 40,
+            resetLabel: 'cycle A-B',
+            resetAtMs: activeResetAtMs,
+            resetAccuracy: 'estimated',
+            limitWindowSeconds: 30 * 24 * 60 * 60,
+            observedAtMs: 1_000,
+            quotaProgressObservedAtMs: 1_000,
+          },
+        ],
+      },
+      {
+        status: 'success',
+        observedAtMs: 2_000,
+        observedFromUsageHeaders: true,
+        windows: [
+          {
+            id: 'monthly',
+            label: 'Monthly limit',
+            usedPercent: null,
+            resetLabel: 'cycle B-C',
+            resetAtMs: observedResetAtMs,
+            resetAccuracy: 'estimated',
+            limitWindowSeconds: 31 * 24 * 60 * 60,
+            observationSource: 'response_header',
+          },
+        ],
+      }
+    ) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      usedPercent: null,
+      quotaProgressObservedAtMs: null,
+      resetAtMs: observedResetAtMs,
+      limitWindowSeconds: 31 * 24 * 60 * 60,
+    });
+  });
+
+  it('uses the standard window cadence when Codex duration metadata is missing', () => {
+    const result = resolveQuotaDisplayState(
+      {
+        status: 'success',
+        fetchedAtMs: 1_000,
+        quotaInventoryObserved: true,
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly limit',
+            usedPercent: 50,
+            resetLabel: 'cycle A-B',
+            resetAtMs: 1_000_000,
+            resetAccuracy: 'estimated',
+            limitWindowSeconds: null,
+            observedAtMs: 1_000,
+            quotaProgressObservedAtMs: 1_000,
+          },
+        ],
+      },
+      {
+        status: 'success',
+        observedAtMs: 2_000,
+        observedFromUsageHeaders: true,
+        windows: [
+          {
+            id: 'weekly',
+            label: 'Weekly limit',
+            usedPercent: null,
+            resetLabel: 'cycle B-C',
+            resetAtMs: 1_000_000 + 7 * 24 * 60 * 60 * 1000,
+            resetAccuracy: 'estimated',
+            limitWindowSeconds: null,
+            observationSource: 'response_header',
+          },
+        ],
+      }
+    ) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      usedPercent: null,
+      quotaProgressObservedAtMs: null,
+    });
+  });
+
+  it('clears inherited progress after a materially backward Codex boundary', () => {
+    const result = resolveQuotaDisplayState(
+      {
+        status: 'success',
+        fetchedAtMs: 1_000,
+        quotaInventoryObserved: true,
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            usedPercent: 75,
+            resetLabel: 'later boundary',
+            resetAtMs: 1_000_000,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: 18_000,
+            observedAtMs: 1_000,
+            quotaProgressObservedAtMs: 1_000,
+          },
+        ],
+      },
+      {
+        status: 'success',
+        observedAtMs: 2_000,
+        observedFromUsageHeaders: true,
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            usedPercent: null,
+            resetLabel: 'corrected boundary',
+            resetAtMs: 900_000,
+            resetAccuracy: 'estimated',
+            limitWindowSeconds: 18_000,
+            observationSource: 'response_header',
+          },
+        ],
+      }
+    ) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      usedPercent: null,
+      quotaProgressObservedAtMs: null,
+      resetAtMs: 900_000,
+    });
+  });
+
   it('ignores a zero-only main-window Header placeholder without creating or changing quota', () => {
     const placeholder = {
       id: 'five-hour',
