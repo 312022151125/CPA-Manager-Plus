@@ -765,6 +765,42 @@ describe('shouldClearInheritedCodexQuotaProgress', () => {
     ).toBe(true);
   });
 
+  it.each([
+    ['indexed five-hour', 'spark-five-hour-0', 5 * 60 * 60 * 1000],
+    ['indexed weekly', 'spark-weekly-0', 7 * 24 * 60 * 60 * 1000],
+    ['indexed monthly', 'spark-monthly-0', 31 * 24 * 60 * 60 * 1000],
+    ['indexed generic weekly', 'future-feature-weekly-0', 7 * 24 * 60 * 60 * 1000],
+  ])(
+    '%s uses the provider window cadence when duration is missing',
+    (_label, providerWindowId, deltaMs) => {
+      expect(
+        shouldClearInheritedCodexQuotaProgress(
+          base({ providerWindowId, durationSeconds: null, boundaryAccuracy: 'estimated' }),
+          base({
+            providerWindowId,
+            endMs: 1_000_000 + deltaMs,
+            durationSeconds: null,
+            boundaryAccuracy: 'estimated',
+          })
+        )
+      ).toBe(true);
+    }
+  );
+
+  it('keeps an indexed scoped window compatible within boundary jitter when duration is missing', () => {
+    expect(
+      shouldClearInheritedCodexQuotaProgress(
+        base({ providerWindowId: 'spark-weekly-0', durationSeconds: null }),
+        base({
+          providerWindowId: 'spark-weekly-0',
+          endMs: 1_030_000,
+          durationSeconds: null,
+          boundaryAccuracy: 'estimated',
+        })
+      )
+    ).toBe(false);
+  });
+
   it('uses strong exact boundary evidence when cadence is unavailable', () => {
     expect(
       shouldClearInheritedCodexQuotaProgress(

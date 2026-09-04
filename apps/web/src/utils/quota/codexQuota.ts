@@ -221,6 +221,18 @@ export type CodexQuotaCycleEvidence = {
 
 type CodexQuotaCadenceClass = 'five_hour' | 'weekly' | 'monthly';
 
+const normalizeCodexProviderWindowToken = (value: string): string => value.trim().toLowerCase();
+
+const inferCodexCadenceToken = (
+  value: string | null | undefined
+): CodexQuotaCadenceClass | null => {
+  const id = normalizeCodexProviderWindowToken(value ?? '');
+  if (/(?:^|-)five-hour(?:-|$)/.test(id)) return 'five_hour';
+  if (/(?:^|-)weekly(?:-|$)/.test(id)) return 'weekly';
+  if (/(?:^|-)monthly(?:-|$)/.test(id)) return 'monthly';
+  return null;
+};
+
 const isFinitePositive = (value: number | null | undefined): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0;
 
@@ -242,10 +254,7 @@ const codexQuotaCadenceClass = (
 
   const providerWindowId = evidence.providerWindowId?.trim().toLowerCase() ?? '';
   const canonicalID = providerWindowId ? canonicalizeCodexProviderWindowId(providerWindowId) : '';
-  if (canonicalID === 'five-hour' || canonicalID.endsWith('-five-hour')) return 'five_hour';
-  if (canonicalID === 'weekly' || canonicalID.endsWith('-weekly')) return 'weekly';
-  if (canonicalID === 'monthly' || canonicalID.endsWith('-monthly')) return 'monthly';
-  return null;
+  return inferCodexCadenceToken(canonicalID);
 };
 
 const readCodexCycleDurationMs = (evidence: CodexQuotaCycleEvidence): number | null => {
@@ -310,16 +319,10 @@ export type CodexProviderWindowIdentity = {
   providerWindowAliases?: string[];
 };
 
-const normalizeCodexProviderWindowToken = (value: string): string => value.trim().toLowerCase();
-
 const inferCodexProviderWindowKind = (value: string): string | undefined => {
   const id = normalizeCodexProviderWindowToken(value);
-  if (id === 'primary' || id === 'five-hour' || /(?:^|-)five-hour(?:-|$)/.test(id)) {
-    return 'five_hour';
-  }
-  if (id === 'weekly' || /(?:^|-)weekly(?:-|$)/.test(id)) return 'weekly';
-  if (id === 'monthly' || /(?:^|-)monthly(?:-|$)/.test(id)) return 'monthly';
-  return undefined;
+  if (id === 'primary') return 'five_hour';
+  return inferCodexCadenceToken(id) ?? undefined;
 };
 
 const codexProviderWindowIdsEquivalent = (left: string, right: string): boolean => {

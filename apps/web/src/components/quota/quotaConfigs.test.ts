@@ -752,6 +752,66 @@ describe('resolveQuotaDisplayState', () => {
     });
   });
 
+  it('clears inherited progress for an indexed scoped window when duration metadata is missing', () => {
+    const sparkScope = {
+      kind: 'models' as const,
+      models: [CODEX_SPARK_MODEL_ID],
+      complete: true,
+    };
+    const activeResetAtMs = Date.parse('2026-01-05T00:00:00Z');
+    const observedResetAtMs = activeResetAtMs + 7 * 24 * 60 * 60 * 1000;
+    const result = resolveQuotaDisplayState(
+      {
+        status: 'success',
+        fetchedAtMs: activeResetAtMs - 1_000,
+        quotaInventoryObserved: true,
+        windows: [
+          {
+            id: 'spark-weekly-0',
+            label: 'Spark weekly limit',
+            usedPercent: 80,
+            resetLabel: 'cycle A-B',
+            resetAtMs: activeResetAtMs,
+            resetAccuracy: 'estimated',
+            limitWindowSeconds: null,
+            observedAtMs: activeResetAtMs - 1_000,
+            quotaProgressObservedAtMs: activeResetAtMs - 1_000,
+            modelScope: sparkScope,
+          },
+        ],
+      },
+      {
+        status: 'success',
+        observedAtMs: activeResetAtMs + 1_000,
+        observedFromUsageHeaders: true,
+        observedModelScope: sparkScope,
+        windows: [
+          {
+            id: 'spark-weekly-0',
+            label: 'Spark weekly limit',
+            usedPercent: null,
+            resetLabel: 'cycle B-C',
+            resetAtMs: observedResetAtMs,
+            resetAccuracy: 'estimated',
+            limitWindowSeconds: null,
+            observationSource: 'response_header',
+            modelScope: sparkScope,
+          },
+        ],
+      }
+    ) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      id: 'spark-weekly-0',
+      usedPercent: null,
+      quotaProgressObservedAtMs: null,
+      resetAtMs: observedResetAtMs,
+      resetAccuracy: 'estimated',
+      observedAtMs: activeResetAtMs + 1_000,
+      observationSource: 'response_header',
+    });
+  });
+
   it('clears inherited progress after a materially backward Codex boundary', () => {
     const result = resolveQuotaDisplayState(
       {
