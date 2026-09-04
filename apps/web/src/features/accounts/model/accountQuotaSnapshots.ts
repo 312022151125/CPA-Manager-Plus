@@ -282,6 +282,11 @@ const toSnapshotWindow = (
     isFiniteQuotaProgress(definition.usedPercent) &&
     isValidQuotaProgressObservedAtMs(definition.quotaProgressObservedAtMs) &&
     definition.quotaProgressObservedAtMs === snapshotObservedAtMs;
+  const remainingOnlyBelongsToObservation =
+    !isFiniteQuotaProgress(definition.usedPercent) &&
+    isFiniteQuotaProgress(definition.remainingPercent) &&
+    isValidQuotaProgressObservedAtMs(definition.observedAtMs) &&
+    definition.observedAtMs === snapshotObservedAtMs;
   return {
     provider_window_id: definition.providerWindowId,
     provider_window_aliases: definition.providerWindowAliases,
@@ -302,7 +307,9 @@ const toSnapshotWindow = (
           used_percent: definition.usedPercent ?? undefined,
           remaining_percent: definition.remainingPercent ?? undefined,
         }
-      : {}),
+      : remainingOnlyBelongsToObservation
+        ? { remaining_percent: definition.remainingPercent ?? undefined }
+        : {}),
     reset_credits_available:
       definition.provider === 'codex'
         ? (codexQuota?.rateLimitResetCreditsAvailableCount ?? undefined)
