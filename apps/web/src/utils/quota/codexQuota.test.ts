@@ -302,6 +302,50 @@ describe('buildCodexQuotaWindowInfos', () => {
     ]);
   });
 
+  it('builds a Team weekly bonus window with its structural monthly cadence suffix', () => {
+    const windows = buildCodexQuotaWindowInfos({
+      plan_type: 'team',
+      additional_rate_limits: [
+        {
+          limit_name: 'Weekly Bonus',
+          rate_limit: {
+            secondary_window: { used_percent: 80 },
+          },
+        },
+      ],
+    });
+
+    expect(windows).toMatchObject([
+      {
+        id: 'weekly-bonus-monthly-0',
+        usedPercent: 80,
+        limitWindowSeconds: null,
+      },
+    ]);
+  });
+
+  it('builds a non-Team five hour bonus window with its structural weekly cadence suffix', () => {
+    const windows = buildCodexQuotaWindowInfos({
+      plan_type: 'plus',
+      additional_rate_limits: [
+        {
+          limit_name: 'Five Hour Bonus',
+          rate_limit: {
+            secondary_window: { used_percent: 80 },
+          },
+        },
+      ],
+    });
+
+    expect(windows).toMatchObject([
+      {
+        id: 'five-hour-bonus-weekly-0',
+        usedPercent: 80,
+        limitWindowSeconds: null,
+      },
+    ]);
+  });
+
   it('normalizes additional rate limit labels into stable ids and params', () => {
     const windows = buildCodexQuotaWindowInfos({
       additional_rate_limits: [
@@ -795,6 +839,75 @@ describe('shouldClearInheritedCodexQuotaProgress', () => {
           providerWindowId: 'spark-weekly-0',
           endMs: 1_030_000,
           durationSeconds: null,
+          boundaryAccuracy: 'estimated',
+        })
+      )
+    ).toBe(false);
+  });
+
+  it.each([
+    ['weekly bonus monthly', 'weekly-bonus-monthly-0', 30 * 24 * 60 * 60 * 1000],
+    ['five hour bonus weekly', 'five-hour-bonus-weekly-0', 7 * 24 * 60 * 60 * 1000],
+    [
+      'cadence-like prefix with five-hour suffix',
+      'monthly-preview-five-hour-3',
+      5 * 60 * 60 * 1000,
+    ],
+  ])(
+    '%s clears inherited progress from the structural cadence suffix',
+    (_label, providerWindowId, deltaMs) => {
+      expect(
+        shouldClearInheritedCodexQuotaProgress(
+          base({ providerWindowId, durationSeconds: null, boundaryAccuracy: 'estimated' }),
+          base({
+            providerWindowId,
+            endMs: 1_000_000 + deltaMs,
+            durationSeconds: null,
+            boundaryAccuracy: 'estimated',
+          })
+        )
+      ).toBe(true);
+    }
+  );
+
+  it('does not infer cadence from a feature prefix without a structural suffix', () => {
+    expect(
+      shouldClearInheritedCodexQuotaProgress(
+        base({
+          providerWindowId: 'weekly-bonus',
+          durationSeconds: null,
+          boundaryAccuracy: 'estimated',
+        }),
+        base({
+          providerWindowId: 'weekly-bonus',
+          endMs: 1_000_000 + 7 * 24 * 60 * 60 * 1000,
+          durationSeconds: null,
+          boundaryAccuracy: 'estimated',
+        })
+      )
+    ).toBe(false);
+  });
+
+  it('keeps trusted duration authoritative over a conflicting provider id suffix', () => {
+    expect(
+      shouldClearInheritedCodexQuotaProgress(
+        base({ providerWindowId: 'weekly-bonus-monthly-0', durationSeconds: 604_800 }),
+        base({
+          providerWindowId: 'weekly-bonus-monthly-0',
+          endMs: 1_000_000 + 7 * 24 * 60 * 60 * 1000,
+          durationSeconds: 604_800,
+          boundaryAccuracy: 'estimated',
+        })
+      )
+    ).toBe(true);
+
+    expect(
+      shouldClearInheritedCodexQuotaProgress(
+        base({ providerWindowId: 'weekly-bonus-monthly-0', durationSeconds: 604_800 }),
+        base({
+          providerWindowId: 'weekly-bonus-monthly-0',
+          endMs: 1_000_000 + 30 * 24 * 60 * 60 * 1000,
+          durationSeconds: 604_800,
           boundaryAccuracy: 'estimated',
         })
       )

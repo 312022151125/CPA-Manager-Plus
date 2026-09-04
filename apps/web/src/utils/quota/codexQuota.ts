@@ -227,10 +227,17 @@ const inferCodexCadenceToken = (
   value: string | null | undefined
 ): CodexQuotaCadenceClass | null => {
   const id = normalizeCodexProviderWindowToken(value ?? '');
-  if (/(?:^|-)five-hour(?:-|$)/.test(id)) return 'five_hour';
-  if (/(?:^|-)weekly(?:-|$)/.test(id)) return 'weekly';
-  if (/(?:^|-)monthly(?:-|$)/.test(id)) return 'monthly';
-  return null;
+  const match = id.match(/(?:^|-)(five-hour|weekly|monthly)(?:-\d+)?$/);
+  switch (match?.[1]) {
+    case 'five-hour':
+      return 'five_hour';
+    case 'weekly':
+      return 'weekly';
+    case 'monthly':
+      return 'monthly';
+    default:
+      return null;
+  }
 };
 
 const isFinitePositive = (value: number | null | undefined): value is number =>

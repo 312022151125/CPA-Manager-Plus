@@ -1,7 +1,7 @@
 import type { TFunction } from 'i18next';
 import { describe, expect, it } from 'vitest';
 import type { CodexQuotaState } from '@/types';
-import { CODEX_SPARK_MODEL_ID } from '@/utils/quota/codexQuota';
+import { buildCodexQuotaWindowInfos, CODEX_SPARK_MODEL_ID } from '@/utils/quota/codexQuota';
 import {
   ANTIGRAVITY_CONFIG,
   buildObservedCodexQuotaState,
@@ -808,6 +808,69 @@ describe('resolveQuotaDisplayState', () => {
       resetAtMs: observedResetAtMs,
       resetAccuracy: 'estimated',
       observedAtMs: activeResetAtMs + 1_000,
+      observationSource: 'response_header',
+    });
+  });
+
+  it('clears inherited progress for an adversarial feature-prefixed monthly window', () => {
+    const activeObservedAtMs = Date.parse('2026-01-05T00:00:00Z');
+    const observedAtMs = Date.parse('2026-02-04T00:00:00Z');
+    const [builtWindow] = buildCodexQuotaWindowInfos(
+      {
+        plan_type: 'team',
+        additional_rate_limits: [
+          {
+            limit_name: 'Weekly Bonus',
+            rate_limit: {
+              secondary_window: { used_percent: 80 },
+            },
+          },
+        ],
+      },
+      { observedAtMs: activeObservedAtMs }
+    );
+    expect(builtWindow).toMatchObject({
+      id: 'weekly-bonus-monthly-0',
+      limitWindowSeconds: null,
+    });
+
+    const activeWindow = {
+      ...builtWindow,
+      resetLabel: 'cycle A-B',
+      resetAtMs: activeObservedAtMs,
+      observedAtMs: activeObservedAtMs,
+      quotaProgressObservedAtMs: activeObservedAtMs,
+    };
+    const observedWindow = {
+      ...builtWindow,
+      usedPercent: null,
+      resetLabel: 'cycle B-C',
+      resetAtMs: observedAtMs,
+      observedAtMs,
+      observationSource: 'response_header' as const,
+    };
+    const result = resolveQuotaDisplayState(
+      {
+        status: 'success',
+        fetchedAtMs: activeObservedAtMs,
+        quotaInventoryObserved: true,
+        windows: [activeWindow],
+      },
+      {
+        status: 'success',
+        observedAtMs,
+        observedFromUsageHeaders: true,
+        observedModelScope: builtWindow.modelScope,
+        windows: [observedWindow],
+      }
+    ) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      id: 'weekly-bonus-monthly-0',
+      usedPercent: null,
+      quotaProgressObservedAtMs: null,
+      resetAtMs: observedAtMs,
+      observedAtMs,
       observationSource: 'response_header',
     });
   });
