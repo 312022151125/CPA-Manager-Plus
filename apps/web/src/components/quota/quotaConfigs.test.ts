@@ -506,7 +506,10 @@ describe('resolveQuotaDisplayState', () => {
             id: 'weekly',
             label: 'Weekly limit',
             usedPercent: 50,
-            resetLabel: '07/07 12:00',
+            resetLabel: 'cycle B',
+            resetAtMs: 7_000,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: 5,
             observedAtMs: 1_000,
             quotaProgressObservedAtMs: 1_000,
           },
@@ -521,7 +524,10 @@ describe('resolveQuotaDisplayState', () => {
             id: 'weekly',
             label: 'Weekly limit',
             usedPercent: null,
-            resetLabel: '07/08 12:00',
+            resetLabel: 'cycle B (header)',
+            resetAtMs: 7_000,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: 5,
             quotaProgressObservedAtMs: null,
           },
         ],
@@ -532,7 +538,220 @@ describe('resolveQuotaDisplayState', () => {
       usedPercent: 50,
       observedAtMs: 2_000,
       quotaProgressObservedAtMs: 1_000,
-      resetLabel: '07/08 12:00',
+      resetLabel: 'cycle B (header)',
+    });
+  });
+
+  it('clears inherited quota progress after a confirmed Codex cycle rollover', () => {
+    const result = resolveQuotaDisplayState(
+      {
+        status: 'success',
+        fetchedAtMs: 1_000,
+        quotaInventoryObserved: true,
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            usedPercent: 95,
+            resetLabel: 'cycle A-B',
+            resetAtMs: 300_000,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: 300,
+            observedAtMs: 1_000,
+            quotaProgressObservedAtMs: 1_000,
+            modelScope: { kind: 'family', key: 'codex_main', complete: true },
+          },
+        ],
+      },
+      {
+        status: 'success',
+        observedAtMs: 2_000,
+        observedFromUsageHeaders: true,
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            usedPercent: null,
+            resetLabel: 'cycle B-C',
+            resetAtMs: 600_000,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: 300,
+            observationSource: 'response_header',
+            modelScope: { kind: 'family', key: 'codex_main', complete: true },
+          },
+        ],
+      }
+    ) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      usedPercent: null,
+      quotaProgressObservedAtMs: null,
+      resetAtMs: 600_000,
+      resetLabel: 'cycle B-C',
+      limitWindowSeconds: 300,
+    });
+  });
+
+  it('accepts quota progress when the new Codex cycle later reports usage', () => {
+    const rollover = resolveQuotaDisplayState(
+      {
+        status: 'success',
+        fetchedAtMs: 1_000,
+        quotaInventoryObserved: true,
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            usedPercent: 95,
+            resetLabel: 'cycle A-B',
+            resetAtMs: 300_000,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: 300,
+            observedAtMs: 1_000,
+            quotaProgressObservedAtMs: 1_000,
+            modelScope: { kind: 'family', key: 'codex_main', complete: true },
+          },
+        ],
+      },
+      {
+        status: 'success',
+        observedAtMs: 2_000,
+        observedFromUsageHeaders: true,
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            usedPercent: null,
+            resetLabel: 'cycle B-C',
+            resetAtMs: 600_000,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: 300,
+            observationSource: 'response_header',
+            modelScope: { kind: 'family', key: 'codex_main', complete: true },
+          },
+        ],
+      }
+    ) as CodexQuotaState;
+    const recovered = resolveQuotaDisplayState(rollover, {
+      status: 'success',
+      observedAtMs: 2_100,
+      observedFromUsageHeaders: true,
+      windows: [
+        {
+          id: 'five-hour',
+          label: '5-hour limit',
+          usedPercent: 3,
+          resetLabel: 'cycle B-C',
+          resetAtMs: 600_000,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 300,
+          observationSource: 'response_header',
+          modelScope: { kind: 'family', key: 'codex_main', complete: true },
+        },
+      ],
+    }) as CodexQuotaState;
+
+    expect(recovered.windows[0]).toMatchObject({
+      usedPercent: 3,
+      quotaProgressObservedAtMs: 2_100,
+      resetAtMs: 600_000,
+    });
+  });
+
+  it('ignores a zero-only main-window Header placeholder without creating or changing quota', () => {
+    const placeholder = {
+      id: 'five-hour',
+      label: '5-hour limit',
+      usedPercent: 0,
+      resetLabel: '-',
+      resetAtMs: null,
+      resetAccuracy: 'unknown' as const,
+      limitWindowSeconds: null,
+      observationSource: 'response_header' as const,
+      modelScope: { kind: 'family' as const, key: 'codex_main', complete: true },
+    };
+    const observedQuota: CodexQuotaState = {
+      status: 'success',
+      observedAtMs: 2_000,
+      observedFromUsageHeaders: true,
+      windows: [placeholder],
+    };
+    const result = resolveQuotaDisplayState(
+      {
+        status: 'success',
+        fetchedAtMs: 1_000,
+        quotaInventoryObserved: true,
+        windows: [
+          {
+            ...placeholder,
+            usedPercent: 40,
+            observedAtMs: 1_000,
+            quotaProgressObservedAtMs: 1_000,
+            observationSource: 'api_query',
+          },
+        ],
+      },
+      observedQuota
+    ) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      usedPercent: 40,
+      quotaProgressObservedAtMs: 1_000,
+      observedAtMs: 1_000,
+    });
+    expect(
+      resolveQuotaDisplayState(
+        { status: 'success', quotaInventoryObserved: false, windows: [] },
+        observedQuota
+      )
+    ).toMatchObject({ windows: [] });
+  });
+
+  it('accepts a legitimate zero quota when the Header has a reliable new cycle boundary', () => {
+    const result = resolveQuotaDisplayState(
+      {
+        status: 'success',
+        fetchedAtMs: 1_000,
+        quotaInventoryObserved: true,
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            usedPercent: 40,
+            resetLabel: 'cycle A-B',
+            resetAtMs: 300_000,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: 300,
+            observedAtMs: 1_000,
+            quotaProgressObservedAtMs: 1_000,
+            modelScope: { kind: 'family', key: 'codex_main', complete: true },
+          },
+        ],
+      },
+      {
+        status: 'success',
+        observedAtMs: 2_000,
+        observedFromUsageHeaders: true,
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            usedPercent: 0,
+            resetLabel: 'cycle B-C',
+            resetAtMs: 600_000,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: 300,
+            observationSource: 'response_header',
+            modelScope: { kind: 'family', key: 'codex_main', complete: true },
+          },
+        ],
+      }
+    ) as CodexQuotaState;
+
+    expect(result.windows[0]).toMatchObject({
+      usedPercent: 0,
+      quotaProgressObservedAtMs: 2_000,
+      resetAtMs: 600_000,
     });
   });
 

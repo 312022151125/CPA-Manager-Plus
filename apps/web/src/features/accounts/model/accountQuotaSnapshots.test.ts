@@ -309,28 +309,74 @@ describe('account quota snapshots', () => {
     expect(merged).toMatchObject({
       observedAtMs: 2_000,
       usedPercent: 20,
-      remainingPercent: 80,
+      remainingPercent: 40,
       quotaProgressObservedAtMs: 1_000,
       display: {
         observedAtMs: 2_000,
         usedPercent: 20,
-        remainingPercent: 80,
+        remainingPercent: 40,
         quotaProgressObservedAtMs: 1_000,
+      },
+    });
+
+    const [snapshotOnly] = mergeAccountQuotaSnapshotWindows(
+      [],
+      [
+        makeSnapshot({
+          observed_at_ms: 2_000,
+          used_percent: undefined,
+          remaining_percent: 35,
+        }),
+      ]
+    );
+    expect(snapshotOnly).toMatchObject({
+      usedPercent: null,
+      remainingPercent: 35,
+      quotaProgressObservedAtMs: null,
+      display: {
+        usedPercent: null,
+        remainingPercent: 35,
+        quotaProgressObservedAtMs: null,
       },
     });
   });
 
   it('derives the remaining percentage when a newer snapshot only has used percentage', () => {
+    const snapshot = makeSnapshot({
+      observed_at_ms: 2_000,
+      used_percent: 60,
+      remaining_percent: undefined,
+      field_sources: {
+        quota: { source: 'api_query', observed_at_ms: 2_000 },
+      },
+    });
     const [merged] = mergeAccountQuotaSnapshotWindows(
       [makeDefinition({ quotaProgressObservedAtMs: 1_000 })],
+      [snapshot]
+    );
+
+    expect(merged).toMatchObject({
+      usedPercent: 60,
+      remainingPercent: 40,
+      quotaProgressObservedAtMs: 2_000,
+    });
+
+    const [snapshotOnly] = mergeAccountQuotaSnapshotWindows([], [snapshot]);
+    expect(snapshotOnly).toMatchObject({
+      usedPercent: 60,
+      remainingPercent: 40,
+      quotaProgressObservedAtMs: 2_000,
+    });
+  });
+
+  it('restores legacy snapshot quota provenance from the snapshot observation time', () => {
+    const [merged] = mergeAccountQuotaSnapshotWindows(
+      [],
       [
         makeSnapshot({
           observed_at_ms: 2_000,
           used_percent: 60,
           remaining_percent: undefined,
-          field_sources: {
-            quota: { source: 'api_query', observed_at_ms: 2_000 },
-          },
         }),
       ]
     );
@@ -339,6 +385,7 @@ describe('account quota snapshots', () => {
       usedPercent: 60,
       remainingPercent: 40,
       quotaProgressObservedAtMs: 2_000,
+      display: { quotaProgressObservedAtMs: 2_000 },
     });
   });
 
@@ -688,12 +735,18 @@ describe('account quota snapshots', () => {
       boundary_accuracy: 'unknown',
     });
 
-    const merged = mergeAccountQuotaSnapshotWindows([], [makeSnapshot({
-      ...entry.windows[0],
-      provider_window_id: 'future-feature-weekly-0',
-      window_kind: 'weekly',
-      stale: false,
-    })], { provider: 'codex' });
+    const merged = mergeAccountQuotaSnapshotWindows(
+      [],
+      [
+        makeSnapshot({
+          ...entry.windows[0],
+          provider_window_id: 'future-feature-weekly-0',
+          window_kind: 'weekly',
+          stale: false,
+        }),
+      ],
+      { provider: 'codex' }
+    );
     expect(merged).toMatchObject([
       expect.objectContaining({
         providerWindowId: 'future-feature-weekly-0',

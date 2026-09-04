@@ -28,6 +28,7 @@ import {
   fetchXaiQuota,
   filterFreshCodexQuotaWindows,
   findCodexProviderWindowMatch,
+  isCodexMainQuotaWindow,
   isCodexMainQuotaModelScope,
   isValidQuotaResetAtMs,
   resolveCodexUsageQuotaScope,
@@ -153,6 +154,56 @@ const hasKnownResetLabel = (value: unknown): value is string => {
   return trimmed !== '' && trimmed !== '-';
 };
 
+const CODEX_FIXED_BOUNDARY_JITTER_MS = 60_000;
+
+const readCodexWindowDurationMs = (window: CodexQuotaWindow): number | null => {
+  const seconds = window.limitWindowSeconds;
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return null;
+  const durationMs = seconds * 1000;
+  return Number.isFinite(durationMs) && durationMs > 0 ? durationMs : null;
+};
+
+const hasReliableCodexResetBoundary = (window: CodexQuotaWindow): boolean =>
+  isValidQuotaResetAtMs(window.resetAtMs) && window.resetAccuracy !== 'unknown';
+
+const isCodexConfirmedCycleRollover = (
+  activeWindow: CodexQuotaWindow,
+  observedWindow: CodexQuotaWindow
+): boolean => {
+  if (
+    !hasReliableCodexResetBoundary(activeWindow) ||
+    !hasReliableCodexResetBoundary(observedWindow)
+  ) {
+    return false;
+  }
+
+  const activeDurationMs = readCodexWindowDurationMs(activeWindow);
+  const observedDurationMs = readCodexWindowDurationMs(observedWindow);
+  if (activeDurationMs === null) return false;
+  if (
+    observedDurationMs !== null &&
+    Math.abs(observedDurationMs - activeDurationMs) > CODEX_FIXED_BOUNDARY_JITTER_MS
+  ) {
+    return false;
+  }
+
+  const resetDeltaMs = (observedWindow.resetAtMs ?? 0) - (activeWindow.resetAtMs ?? 0);
+  if (resetDeltaMs <= CODEX_FIXED_BOUNDARY_JITTER_MS) return false;
+
+  const cycleCount = Math.round(resetDeltaMs / activeDurationMs);
+  return (
+    cycleCount >= 1 &&
+    Math.abs(resetDeltaMs - cycleCount * activeDurationMs) <= CODEX_FIXED_BOUNDARY_JITTER_MS
+  );
+};
+
+const isCodexZeroOnlyObservedQuotaPlaceholder = (window: CodexQuotaWindow): boolean =>
+  window.observationSource === 'response_header' &&
+  window.usedPercent === 0 &&
+  isCodexMainQuotaWindow(window) &&
+  !isValidQuotaResetAtMs(window.resetAtMs) &&
+  readCodexWindowDurationMs(window) === null;
+
 const stampCodexQuotaWindows = (
   windows: CodexQuotaWindow[] | undefined,
   observationSource: NonNullable<CodexQuotaWindow['observationSource']>,
@@ -188,6 +239,7 @@ const mergeCodexQuotaWindow = (
       ? readFiniteTimestamp(observedWindow.quotaProgressObservedAtMs)
       : readFiniteTimestamp(observedWindow.observedAtMs)
     : null;
+  const confirmedCycleRollover = isCodexConfirmedCycleRollover(activeWindow, observedWindow);
   const resetMetadata = hasObservedResetAt
     ? {
         resetLabel: hasObservedResetLabel ? observedWindow.resetLabel : '-',
@@ -204,14 +256,13 @@ const mergeCodexQuotaWindow = (
 
   return {
     ...activeWindow,
+    ...(confirmedCycleRollover ? { usedPercent: null, quotaProgressObservedAtMs: null } : {}),
     ...(hasObservedValue(observedWindow.label) ? { label: observedWindow.label } : {}),
     ...(hasObservedValue(observedWindow.labelKey) ? { labelKey: observedWindow.labelKey } : {}),
     ...(observedWindow.labelParams && Object.keys(observedWindow.labelParams).length > 0
       ? { labelParams: observedWindow.labelParams }
       : {}),
-    ...(hasObservedUsedPercent
-      ? { usedPercent: observedWindow.usedPercent }
-      : {}),
+    ...(hasObservedUsedPercent ? { usedPercent: observedWindow.usedPercent } : {}),
     ...(hasObservedUsedPercent
       ? { quotaProgressObservedAtMs: observedQuotaProgressObservedAtMs }
       : {}),
@@ -290,7 +341,7 @@ const mergeObservedQuotaIntoActive = <TState extends DisplayQuotaState>(
     observed.windows,
     'response_header',
     readFiniteTimestamp(observed.observedAtMs)
-  );
+  )?.filter((window) => !isCodexZeroOnlyObservedQuotaPlaceholder(window));
   const scopedObservation =
     observed.observedFromUsageHeaders === true &&
     (observed.observedModelScope === undefined ||
@@ -347,7 +398,7 @@ const appendMissingObservedQuotaWindows = <TState extends DisplayQuotaState>(
       observed.windows,
       'response_header',
       readFiniteTimestamp(observed.observedAtMs)
-    ) ?? [];
+    )?.filter((window) => !isCodexZeroOnlyObservedQuotaPlaceholder(window)) ?? [];
   const isAlreadyRepresented = (observedIndex: number): boolean => {
     return activeWindows.some(
       (_, activeIndex) =>
@@ -515,9 +566,7 @@ export const buildObservedCodexQuotaState = (
               observationSource: 'response_header',
               observedAtMs: snapshot?.timestamp_ms ?? null,
               quotaProgressObservedAtMs:
-                fallbackUsedPercent !== null
-                  ? readFiniteTimestamp(snapshot?.timestamp_ms)
-                  : null,
+                fallbackUsedPercent !== null ? readFiniteTimestamp(snapshot?.timestamp_ms) : null,
               modelScope: observedScope.modelScope,
             },
           ]
@@ -580,7 +629,6 @@ export const CLAUDE_CONFIG: QuotaConfig<ClaudeQuotaState, ClaudeQuotaData> = {
   buildSuccessState: (data, file) => ({
     status: 'success',
     windows: data.windows,
-    quotaProgressObservedAtMs: data.quotaProgressObservedAtMs ?? null,
     quotaInventoryObserved: data.quotaInventoryObserved,
     extraUsage: data.extraUsage,
     planType: data.planType,
@@ -613,7 +661,6 @@ export const ANTIGRAVITY_CONFIG: QuotaConfig<AntigravityQuotaState, AntigravityQ
   buildSuccessState: (data, file) => ({
     status: 'success',
     groups: data.groups,
-    quotaProgressObservedAtMs: data.quotaProgressObservedAtMs ?? null,
     quotaInventoryObserved: data.quotaInventoryObserved,
     subscription: data.subscription ?? null,
     serverTimeOffsetMs: data.serverTimeOffsetMs,
@@ -692,7 +739,6 @@ export const KIMI_CONFIG: QuotaConfig<KimiQuotaState, KimiQuotaData> = {
   buildSuccessState: (data, file) => ({
     status: 'success',
     rows: data.rows,
-    quotaProgressObservedAtMs: data.quotaProgressObservedAtMs ?? null,
     quotaInventoryObserved: data.quotaInventoryObserved,
     ...buildQuotaCredentialIdentity(file),
     fetchedAtMs: Date.now(),

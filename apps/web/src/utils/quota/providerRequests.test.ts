@@ -372,48 +372,6 @@ describe('fetchCodexQuota', () => {
 });
 
 describe('fetchClaudeQuota', () => {
-  it('records quota progress before a delayed profile request completes', async () => {
-    let resolveProfile!: (value: unknown) => void;
-    const profilePromise = new Promise((resolve) => {
-      resolveProfile = resolve;
-    });
-    mocks.request.mockImplementation(({ url }: { url: string }) => {
-      if (url === CLAUDE_USAGE_URL) {
-        return Promise.resolve({
-          statusCode: 200,
-          hasStatusCode: true,
-          header: {},
-          bodyText: '',
-          body: {
-            five_hour: {
-              utilization: 40,
-              resets_at: '2026-07-01T10:00:00Z',
-            },
-          },
-        });
-      }
-      return profilePromise;
-    });
-    const nowSpy = vi.spyOn(Date, 'now').mockReturnValueOnce(1_000).mockReturnValue(2_000);
-
-    const pending = fetchClaudeQuota(
-      { name: 'claude.json', type: 'claude', authIndex: 'claude-1' },
-      t
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-    resolveProfile({
-      statusCode: 200,
-      hasStatusCode: true,
-      header: {},
-      bodyText: '',
-      body: {},
-    });
-
-    await expect(pending).resolves.toMatchObject({ quotaProgressObservedAtMs: 1_000 });
-    nowSpy.mockRestore();
-  });
-
   it('adds model-scoped weekly limits from the existing usage request', async () => {
     const resetAt = '2026-07-08T21:00:00+00:00';
     mocks.request
@@ -1915,11 +1873,7 @@ describe('fetchKimiQuota', () => {
       t
     );
 
-    expect(result).toEqual({
-      rows: [],
-      quotaProgressObservedAtMs: expect.any(Number),
-      quotaInventoryObserved: false,
-    });
+    expect(result).toEqual({ rows: [], quotaInventoryObserved: false });
   });
 
   it('accepts an explicit empty limits array as a complete inventory', async () => {
@@ -1936,11 +1890,7 @@ describe('fetchKimiQuota', () => {
       t
     );
 
-    expect(result).toEqual({
-      rows: [],
-      quotaProgressObservedAtMs: expect.any(Number),
-      quotaInventoryObserved: true,
-    });
+    expect(result).toEqual({ rows: [], quotaInventoryObserved: true });
   });
 });
 
@@ -3235,53 +3185,6 @@ describe('probeXaiInference', () => {
 });
 
 describe('fetchAntigravityQuota', () => {
-  it('records quota progress before a delayed subscription request completes', async () => {
-    let resolveSubscription!: (value: null) => void;
-    const subscriptionPromise = new Promise<null>((resolve) => {
-      resolveSubscription = resolve;
-    });
-    mocks.getSubscription.mockReturnValue(subscriptionPromise);
-    mocks.request.mockResolvedValueOnce({
-      statusCode: 200,
-      hasStatusCode: true,
-      header: {},
-      bodyText: '',
-      body: {
-        groups: [
-          {
-            displayName: 'Gemini models',
-            buckets: [
-              {
-                bucketId: 'gemini-weekly',
-                displayName: 'Weekly limit',
-                window: 'weekly',
-                remainingFraction: 0.7,
-                resetTime: '2026-07-02T00:00:00Z',
-              },
-            ],
-          },
-        ],
-      },
-    });
-    const nowSpy = vi.spyOn(Date, 'now').mockReturnValueOnce(1_000).mockReturnValue(2_000);
-
-    const pending = fetchAntigravityQuota(
-      {
-        name: 'antigravity.json',
-        type: 'antigravity',
-        authIndex: 'ag-1',
-        project_id: 'project-1',
-      },
-      t
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-    resolveSubscription(null);
-
-    await expect(pending).resolves.toMatchObject({ quotaProgressObservedAtMs: 1_000 });
-    nowSpy.mockRestore();
-  });
-
   it('uses quota summary data and includes subscription plan data', async () => {
     mocks.getSubscription.mockResolvedValue({
       plan: 'pro',

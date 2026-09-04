@@ -315,7 +315,6 @@ export interface CredentialScopedQuotaState {
 export interface ClaudeQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   windows: ClaudeQuotaWindow[];
-  quotaProgressObservedAtMs?: number | null;
   quotaInventoryObserved?: boolean;
   extraUsage?: ClaudeExtraUsage | null;
   planType?: string | null;
@@ -350,7 +349,6 @@ export interface AntigravityQuotaBucket {
 export interface AntigravityQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   groups: AntigravityQuotaGroup[];
-  quotaProgressObservedAtMs?: number | null;
   quotaInventoryObserved?: boolean;
   subscription?: AntigravityQuotaSubscription | null;
   serverTimeOffsetMs?: number | null;
@@ -476,7 +474,6 @@ export interface KimiQuotaRow {
 export interface KimiQuotaState extends CredentialScopedQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   rows: KimiQuotaRow[];
-  quotaProgressObservedAtMs?: number | null;
   quotaInventoryObserved?: boolean;
   error?: string;
   errorStatus?: number;
@@ -604,7 +601,6 @@ export interface XaiBillingSummary {
   billingPeriodStart?: string;
   billingPeriodEnd?: string;
   usedPercent: number | null;
-  quotaProgressObservedAtMs?: number | null;
   officialApiHealth?: XaiOfficialApiHealth;
   partial?: boolean;
   diagnostics?: XaiBillingDiagnostic[];
