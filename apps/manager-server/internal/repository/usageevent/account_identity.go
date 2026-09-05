@@ -3,7 +3,6 @@ package usageevent
 import (
 	"context"
 	"database/sql"
-	"sort"
 	"strings"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
@@ -39,12 +38,13 @@ func ResolveCodexLegacyAccountKey(
 	events := make([]legacyAccountIdentityEvent, 0)
 	for _, predicate := range legacyAccountIdentityPredicates(authFile, authIndex) {
 		rows, err := queryer.QueryContext(ctx, `select
-			e.id,
 			coalesce(e.provider, ''),
 			coalesce(e.auth_provider_snapshot, ''),
 			coalesce(e.auth_account_id_snapshot, ''),
 			coalesce(e.auth_project_id_snapshot, ''),
-			coalesce(e.account_snapshot, '')
+			coalesce(e.account_snapshot, ''),
+			coalesce(e.auth_snapshot_at_ms, 0),
+			coalesce(e.created_at_ms, 0)
 		from usage_events e
 		where `+predicate.sql, predicate.args...)
 		if err != nil {
@@ -56,7 +56,6 @@ func ResolveCodexLegacyAccountKey(
 		}
 		events = append(events, predicateEvents...)
 	}
-	sort.Slice(events, func(i, j int) bool { return events[i].id < events[j].id })
 	if !legacyAccountIdentityAllowed(events, targetAccountID, targetMember) {
 		return "", false, nil
 	}
@@ -143,12 +142,13 @@ func legacySourceIdentityGuards() string {
 }
 
 type legacyAccountIdentityEvent struct {
-	id              int64
-	provider        string
-	authProvider    string
-	accountID       string
-	projectID       string
-	accountSnapshot string
+	provider         string
+	authProvider     string
+	accountID        string
+	projectID        string
+	accountSnapshot  string
+	authSnapshotAtMS int64
+	createdAtMS      int64
 }
 
 func scanLegacyAccountIdentityRows(rows *sql.Rows) ([]legacyAccountIdentityEvent, error) {
@@ -157,12 +157,13 @@ func scanLegacyAccountIdentityRows(rows *sql.Rows) ([]legacyAccountIdentityEvent
 	for rows.Next() {
 		var event legacyAccountIdentityEvent
 		if err := rows.Scan(
-			&event.id,
 			&event.provider,
 			&event.authProvider,
 			&event.accountID,
 			&event.projectID,
 			&event.accountSnapshot,
+			&event.authSnapshotAtMS,
+			&event.createdAtMS,
 		); err != nil {
 			return nil, err
 		}
@@ -174,11 +175,32 @@ func scanLegacyAccountIdentityRows(rows *sql.Rows) ([]legacyAccountIdentityEvent
 	return events, nil
 }
 
+func legacyIdentityEvidenceAtMS(event legacyAccountIdentityEvent) (int64, bool) {
+	if event.authSnapshotAtMS > 0 {
+		return event.authSnapshotAtMS, true
+	}
+	if event.createdAtMS > 0 {
+		return event.createdAtMS, true
+	}
+	return 0, false
+}
+
 func legacyAccountIdentityAllowed(
 	events []legacyAccountIdentityEvent,
 	targetAccountID, targetMember string,
 ) bool {
-	strongWorkspaceFound := false
+	trustedWorkspaceFound := false
+	directWorkspaceFound := false
+	weakFound := false
+
+	var minTrustedEvidenceAt int64
+	hasTrustedEvidenceAt := false
+	trustedChronologyKnown := true
+
+	var maxWeakEvidenceAt int64
+	hasWeakEvidenceAt := false
+	weakChronologyKnown := true
+
 	for _, event := range events {
 		hasProvider := false
 		for _, value := range []string{event.provider, event.authProvider} {
@@ -211,21 +233,43 @@ func legacyAccountIdentityAllowed(
 			if !workspaceOK || workspace != targetAccountID {
 				return false
 			}
+			trustedWorkspaceFound = true
 			if directWorkspacePresent {
-				strongWorkspaceFound = true
+				directWorkspaceFound = true
+			}
+			evidenceTime, timeOK := legacyIdentityEvidenceAtMS(event)
+			if !timeOK {
+				trustedChronologyKnown = false
+			} else if !hasTrustedEvidenceAt || evidenceTime < minTrustedEvidenceAt {
+				minTrustedEvidenceAt = evidenceTime
+				hasTrustedEvidenceAt = true
 			}
 			continue
 		}
 
-		// A fully legacy event with no Workspace provenance is eligible only
-		// as a leading prefix. Once direct Workspace evidence has established
-		// the member identity, a later regression to weak evidence is
-		// ambiguous credential reuse and must fail closed.
-		if strongWorkspaceFound {
-			return false
+		weakFound = true
+		evidenceTime, timeOK := legacyIdentityEvidenceAtMS(event)
+		if !timeOK {
+			weakChronologyKnown = false
+		} else if !hasWeakEvidenceAt || evidenceTime > maxWeakEvidenceAt {
+			maxWeakEvidenceAt = evidenceTime
+			hasWeakEvidenceAt = true
 		}
 	}
-	return strongWorkspaceFound
+
+	if !trustedWorkspaceFound {
+		return false
+	}
+	if !weakFound {
+		return true
+	}
+	if !directWorkspaceFound {
+		return false
+	}
+	if !weakChronologyKnown || !trustedChronologyKnown || !hasWeakEvidenceAt || !hasTrustedEvidenceAt {
+		return false
+	}
+	return maxWeakEvidenceAt < minTrustedEvidenceAt
 }
 
 func normalizeIdentityProvider(value string) string {
