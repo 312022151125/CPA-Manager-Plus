@@ -43,10 +43,18 @@ type LegacyBackfillResult struct {
 	Completed      bool
 }
 
+type CyclePlanEvidence struct {
+	SnapshotCount    int64
+	MissingPlanCount int64
+	PlanTypes        []string
+}
+
 type Repository interface {
 	InsertObservationWrites(ctx context.Context, writes []model.AccountQuotaObservationWrite) error
 	ListCandidates(ctx context.Context, accountKey, provider string, limit int) ([]model.AccountQuotaSnapshot, error)
 	ListWindowStates(ctx context.Context, accountKey, provider string) ([]model.AccountQuotaWindowState, error)
+	ListLegacyCodexWorkspaceWindowStates(ctx context.Context, accountKey, provider string) ([]model.AccountQuotaWindowState, error)
+	ListCyclePlanEvidence(ctx context.Context, cycleIDs []int64) (map[int64]CyclePlanEvidence, error)
 }
 
 type repository struct {
@@ -621,6 +629,61 @@ func (r *repository) ListCandidates(ctx context.Context, accountKey, provider st
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (r *repository) ListCyclePlanEvidence(ctx context.Context, cycleIDs []int64) (map[int64]CyclePlanEvidence, error) {
+	uniqueIDs := make([]int64, 0, len(cycleIDs))
+	seen := make(map[int64]struct{}, len(cycleIDs))
+	for _, cycleID := range cycleIDs {
+		if cycleID <= 0 {
+			continue
+		}
+		if _, exists := seen[cycleID]; exists {
+			continue
+		}
+		seen[cycleID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, cycleID)
+	}
+	if len(uniqueIDs) == 0 {
+		return map[int64]CyclePlanEvidence{}, nil
+	}
+	sort.Slice(uniqueIDs, func(i, j int) bool { return uniqueIDs[i] < uniqueIDs[j] })
+	placeholders := make([]string, len(uniqueIDs))
+	args := make([]any, len(uniqueIDs))
+	for index, cycleID := range uniqueIDs {
+		placeholders[index] = "?"
+		args[index] = cycleID
+	}
+	rows, err := r.db.QueryContext(ctx, `select
+		cycle_id, lower(trim(coalesce(plan_type, ''))) as normalized_plan_type, count(*)
+		from account_quota_snapshots
+		where cycle_id in (`+strings.Join(placeholders, ",")+`)
+		group by cycle_id, normalized_plan_type
+		order by cycle_id, normalized_plan_type`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	evidenceByCycle := make(map[int64]CyclePlanEvidence, len(uniqueIDs))
+	for rows.Next() {
+		var cycleID, count int64
+		var planType string
+		if err := rows.Scan(&cycleID, &planType, &count); err != nil {
+			return nil, err
+		}
+		evidence := evidenceByCycle[cycleID]
+		evidence.SnapshotCount += count
+		if planType == "" {
+			evidence.MissingPlanCount += count
+		} else {
+			evidence.PlanTypes = append(evidence.PlanTypes, planType)
+		}
+		evidenceByCycle[cycleID] = evidence
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return evidenceByCycle, nil
 }
 
 func nullString(value string) any {
