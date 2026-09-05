@@ -46,6 +46,62 @@ func quotaSnapshotTestAccount() AccountTarget {
 	}
 }
 
+func writeQuotaLifecycleSnapshotForKey(
+	t *testing.T,
+	service *Service,
+	accountKey, observationID string,
+	observedAtMS, cycleStartMS, cycleEndMS, durationSeconds int64,
+	usedPercent float64,
+	planType string,
+) {
+	t.Helper()
+	entry := WriteEntry{
+		Provider: "codex",
+		Observation: &ObservationInput{
+			Source:              "api_query",
+			SourceObservationID: observationID,
+			ObservedAtMS:        observedAtMS,
+			InventoryScopeKey:   "codex:rate-limits",
+			InventoryMode:       "partial",
+		},
+		Windows: []WindowInput{{
+			ProviderWindowID:    "weekly",
+			WindowKind:          "weekly",
+			WindowMode:          "fixed",
+			ModelScopeKind:      "family",
+			ModelScopeKey:       "codex_main",
+			Source:              "api_query",
+			SourceObservationID: observationID,
+			ObservedAtMS:        observedAtMS,
+			BoundaryAccuracy:    "exact",
+			CycleStartMS:        &cycleStartMS,
+			CycleEndMS:          &cycleEndMS,
+			DurationSeconds:     &durationSeconds,
+			UsedPercent:         &usedPercent,
+			PlanType:            planType,
+		}},
+	}
+	observation, err := normalizeObservationInput(accountKey, "codex", entry, service.now().UnixMilli())
+	if err != nil {
+		t.Fatalf("normalize quota observation: %v", err)
+	}
+	snapshot, err := normalizeWindowInput(accountKey, "codex", entry.Windows[0], service.now().UnixMilli())
+	if err != nil {
+		t.Fatalf("normalize quota snapshot: %v", err)
+	}
+	snapshot.InventoryScopeKey = observation.InventoryScopeKey
+	write := model.AccountQuotaObservationWrite{
+		Observation: observation,
+		Snapshots:   []model.AccountQuotaSnapshot{snapshot},
+	}
+	write.Observation.WindowCount = len(write.Snapshots)
+	write.Snapshots[0].ContentHash = snapshotContentHash(write.Snapshots[0])
+	write.Observation.ObservationHash = observationHash(write)
+	if err := service.store.QuotaSnapshots.InsertObservationWrites(context.Background(), []model.AccountQuotaObservationWrite{write}); err != nil {
+		t.Fatalf("write quota lifecycle snapshot: %v", err)
+	}
+}
+
 func TestWriteQuerySelectsLatestCompleteObservationAndMergesCodexResetCredits(t *testing.T) {
 	service := newQuotaSnapshotTestService(t, 20_000)
 	cycleStart := int64(10_000)
@@ -201,6 +257,202 @@ func TestCodexQuotaSnapshotsStayMemberScopedAndIgnoreLegacyWorkspaceKey(t *testi
 	}
 	if aliceRows != 1 || bobRows != 1 || legacyRows != 1 {
 		t.Fatalf("quota snapshot rows were migrated/fanned out: Alice=%d Bob=%d legacy=%d", aliceRows, bobRows, legacyRows)
+	}
+}
+
+func TestQueryBridgesLegacyCodexPreviousCycleOnlyForConsistentPersonalPlan(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		previousPlan      string
+		legacyCurrentPlan string
+		memberCurrentPlan string
+		mixedMemberPlan   string
+		memberStartOffset int64
+		wantBridge        bool
+	}{
+		{name: "Plus", previousPlan: "plus", legacyCurrentPlan: "plus", memberCurrentPlan: "plus", wantBridge: true},
+		{name: "Free", previousPlan: "free", legacyCurrentPlan: "free", memberCurrentPlan: "free", wantBridge: true},
+		{name: "Pro", previousPlan: "pro", legacyCurrentPlan: "pro", memberCurrentPlan: "pro", wantBridge: true},
+		{name: "Go", previousPlan: "go", legacyCurrentPlan: "go", memberCurrentPlan: "go", wantBridge: true},
+		{name: "normalized personal plan", previousPlan: " Plus ", legacyCurrentPlan: "PLUS", memberCurrentPlan: "plus", wantBridge: true},
+		{name: "Team", previousPlan: "team", legacyCurrentPlan: "team", memberCurrentPlan: "team"},
+		{name: "Business", previousPlan: "business", legacyCurrentPlan: "business", memberCurrentPlan: "business"},
+		{name: "Enterprise", previousPlan: "enterprise", legacyCurrentPlan: "enterprise", memberCurrentPlan: "enterprise"},
+		{name: "Edu", previousPlan: "edu", legacyCurrentPlan: "edu", memberCurrentPlan: "edu"},
+		{name: "unknown plan", previousPlan: "", legacyCurrentPlan: "", memberCurrentPlan: ""},
+		{name: "future plan", previousPlan: "starter", legacyCurrentPlan: "starter", memberCurrentPlan: "starter"},
+		{name: "plan changed", previousPlan: "free", legacyCurrentPlan: "plus", memberCurrentPlan: "plus"},
+		{name: "mixed member cycle", previousPlan: "plus", legacyCurrentPlan: "plus", memberCurrentPlan: "plus", mixedMemberPlan: "team"},
+		{name: "current boundary mismatch", previousPlan: "plus", legacyCurrentPlan: "plus", memberCurrentPlan: "plus", memberStartOffset: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, path := newQuotaSnapshotTestServiceWithPath(t, 250_000)
+			account := AccountTarget{
+				AuthFileSnapshot:      "member.json",
+				AuthProviderSnapshot:  "codex",
+				AuthAccountIDSnapshot: "workspace-1",
+				AuthIndex:             "auth-member",
+				AccountSnapshot:       "member@example.com",
+				Source:                "member.json",
+			}
+			memberKey, memberOK := usageidentity.AccountKey(account.identityFields("codex"))
+			legacyKey, legacyOK := usageidentity.LegacyCodexWorkspaceAccountKey("codex", "workspace-1")
+			if !memberOK || !legacyOK || memberKey == legacyKey {
+				t.Fatalf("quota bridge keys = member:%q/%v legacy:%q/%v", memberKey, memberOK, legacyKey, legacyOK)
+			}
+
+			const durationSeconds = int64(100)
+			const previousStartMS = int64(100_000)
+			const currentStartMS = int64(200_000)
+			const currentEndMS = int64(300_000)
+			writeQuotaLifecycleSnapshotForKey(t, service, legacyKey, "legacy-previous", 150_000,
+				previousStartMS, currentStartMS, durationSeconds, 70, test.previousPlan)
+			writeQuotaLifecycleSnapshotForKey(t, service, legacyKey, "legacy-current", 220_000,
+				currentStartMS, currentEndMS, durationSeconds, 90, test.legacyCurrentPlan)
+			memberStartMS := currentStartMS + test.memberStartOffset
+			memberEndMS := currentEndMS + test.memberStartOffset
+			writeQuotaLifecycleSnapshotForKey(t, service, memberKey, "member-current", 221_000,
+				memberStartMS, memberEndMS, durationSeconds, 11, test.memberCurrentPlan)
+			if test.mixedMemberPlan != "" {
+				writeQuotaLifecycleSnapshotForKey(t, service, memberKey, "member-current-mixed", 222_000,
+					memberStartMS, memberEndMS, durationSeconds, 12, test.mixedMemberPlan)
+			}
+
+			result, err := service.Query(context.Background(), QueryRequest{Accounts: []QueryAccount{{
+				RowKey: "member", Provider: "codex", Account: account,
+			}}, NowMS: 250_000})
+			if err != nil {
+				t.Fatalf("query bridged quota lifecycle: %v", err)
+			}
+			if len(result.Items) != 1 || len(result.Items[0].Windows) != 1 {
+				t.Fatalf("quota bridge result = %#v", result)
+			}
+			window := result.Items[0].Windows[0]
+			wantUsedPercent := 11.0
+			if test.mixedMemberPlan != "" {
+				wantUsedPercent = 12
+			}
+			if window.UsedPercent == nil || *window.UsedPercent != wantUsedPercent {
+				t.Fatalf("member current usage was replaced by legacy workspace data: %#v", window)
+			}
+			if gotBridge := window.PreviousCycle != nil; gotBridge != test.wantBridge {
+				t.Fatalf("previous cycle bridged = %v, want %v: %#v", gotBridge, test.wantBridge, window.PreviousCycle)
+			}
+			if test.wantBridge {
+				if window.CurrentCycle == nil || window.PreviousCycle.ActualStartMS != previousStartMS ||
+					window.PreviousCycle.ActualEndMS == nil || *window.PreviousCycle.ActualEndMS != currentStartMS ||
+					window.PreviousCycle.EndReason != "scheduled" ||
+					window.PreviousCycle.ActivationID == window.CurrentCycle.ActivationID {
+					t.Fatalf("bridged previous cycle = %#v current=%#v", window.PreviousCycle, window.CurrentCycle)
+				}
+			}
+
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatalf("open quota bridge database: %v", err)
+			}
+			defer db.Close()
+			var legacySnapshots, memberSnapshots int
+			if err := db.QueryRow(`select count(*) from account_quota_snapshots where account_key = ?`, legacyKey).Scan(&legacySnapshots); err != nil {
+				t.Fatalf("count legacy quota snapshots: %v", err)
+			}
+			if err := db.QueryRow(`select count(*) from account_quota_snapshots where account_key = ?`, memberKey).Scan(&memberSnapshots); err != nil {
+				t.Fatalf("count member quota snapshots: %v", err)
+			}
+			wantMemberSnapshots := 1
+			if test.mixedMemberPlan != "" {
+				wantMemberSnapshots = 2
+			}
+			if legacySnapshots != 2 || memberSnapshots != wantMemberSnapshots {
+				t.Fatalf("quota query rewrote snapshots: legacy=%d member=%d", legacySnapshots, memberSnapshots)
+			}
+		})
+	}
+}
+
+func TestQueryKeepsMemberPreviousCycleInsteadOfLegacyWorkspaceCycle(t *testing.T) {
+	service := newQuotaSnapshotTestService(t, 250_000)
+	account := AccountTarget{
+		AuthFileSnapshot:      "member.json",
+		AuthProviderSnapshot:  "codex",
+		AuthAccountIDSnapshot: "workspace-1",
+		AuthIndex:             "auth-member",
+		AccountSnapshot:       "member@example.com",
+		Source:                "member.json",
+	}
+	memberKey, _ := usageidentity.AccountKey(account.identityFields("codex"))
+	legacyKey, _ := usageidentity.LegacyCodexWorkspaceAccountKey("codex", "workspace-1")
+	for _, accountKey := range []string{legacyKey, memberKey} {
+		writeQuotaLifecycleSnapshotForKey(t, service, accountKey, accountKey+"-previous", 150_000,
+			100_000, 200_000, 100, 70, "plus")
+		writeQuotaLifecycleSnapshotForKey(t, service, accountKey, accountKey+"-current", 220_000,
+			200_000, 300_000, 100, 10, "plus")
+	}
+
+	result, err := service.Query(context.Background(), QueryRequest{Accounts: []QueryAccount{{
+		RowKey: "member", Provider: "codex", Account: account,
+	}}, NowMS: 250_000})
+	if err != nil {
+		t.Fatalf("query member lifecycle: %v", err)
+	}
+	if len(result.Items) != 1 || len(result.Items[0].Windows) != 1 {
+		t.Fatalf("member lifecycle result = %#v", result)
+	}
+	window := result.Items[0].Windows[0]
+	if window.CurrentCycle == nil || window.PreviousCycle == nil ||
+		window.PreviousCycle.ActivationID != window.CurrentCycle.ActivationID {
+		t.Fatalf("member previous cycle was replaced by legacy workspace cycle: current=%#v previous=%#v", window.CurrentCycle, window.PreviousCycle)
+	}
+}
+
+func TestLegacyCodexQuotaBridgeAcceptsOnlyReliableClosedCycleReasons(t *testing.T) {
+	currentStartMS := int64(200_000)
+	currentEndMS := int64(300_000)
+	previousEndMS := currentStartMS
+	durationSeconds := int64(100)
+	cycle := func(id, activationID int64, state, endReason string, startMS int64, endMS *int64) *model.AccountQuotaCycle {
+		return &model.AccountQuotaCycle{
+			ID:               id,
+			ActivationID:     activationID,
+			State:            state,
+			ScheduledStartMS: &startMS,
+			ScheduledEndMS:   endMS,
+			ActualStartMS:    startMS,
+			ActualEndMS:      endMS,
+			DurationSeconds:  &durationSeconds,
+			BoundaryAccuracy: "exact",
+			EndReason:        endReason,
+		}
+	}
+	for _, test := range []struct {
+		endReason string
+		want      bool
+	}{
+		{endReason: "scheduled", want: true},
+		{endReason: "provider_reset", want: true},
+		{endReason: "early_reset", want: true},
+		{endReason: "mode_changed"},
+		{endReason: "window_removed"},
+		{endReason: ""},
+	} {
+		t.Run(test.endReason, func(t *testing.T) {
+			current := model.AccountQuotaWindowState{
+				WindowMode:   "fixed",
+				Availability: "active",
+				CurrentCycle: cycle(3, 2, "active", "", currentStartMS, nil),
+			}
+			legacy := model.AccountQuotaWindowState{
+				WindowMode:    "fixed",
+				Availability:  "active",
+				CurrentCycle:  cycle(2, 1, "active", "", currentStartMS, nil),
+				PreviousCycle: cycle(1, 1, "closed", test.endReason, 100_000, &previousEndMS),
+			}
+			current.CurrentCycle.ScheduledEndMS = &currentEndMS
+			legacy.CurrentCycle.ScheduledEndMS = &currentEndMS
+			if got := legacyCodexQuotaBridgeCyclesMatch(current, legacy); got != test.want {
+				t.Fatalf("legacyCodexQuotaBridgeCyclesMatch(%q) = %v, want %v", test.endReason, got, test.want)
+			}
+		})
 	}
 }
 
