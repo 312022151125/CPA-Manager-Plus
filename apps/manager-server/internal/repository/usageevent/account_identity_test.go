@@ -164,6 +164,97 @@ func TestResolveCodexLegacyAccountKeyRequiresProviderAndMatchingAccountIDs(t *te
 	}
 }
 
+func TestResolveCodexLegacyAccountKeyAcceptsOnlyLeadingWeakIdentityPrefix(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		buildEvents func() []usage.Event
+		wantAllowed bool
+	}{
+		{
+			name: "weak prefix followed by direct workspace",
+			buildEvents: func() []usage.Event {
+				weak := identityTestEvent("weak-prefix", 1, "codex-a.json", "auth-a", "codex", "")
+				strong := identityTestEvent("strong-anchor", 2, "codex-a.json", "auth-a", "codex", "account-a")
+				return []usage.Event{weak, strong}
+			},
+			wantAllowed: true,
+		},
+		{
+			name: "weak source prefix followed by direct file workspace",
+			buildEvents: func() []usage.Event {
+				weak := identityTestEvent("weak-source-prefix", 1, "", "auth-a", "codex", "")
+				weak.Source = "codex-a.json"
+				strong := identityTestEvent("strong-file-anchor", 2, "codex-a.json", "auth-a", "codex", "account-a")
+				return []usage.Event{weak, strong}
+			},
+			wantAllowed: true,
+		},
+		{
+			name: "valid marked prefix followed by direct workspace",
+			buildEvents: func() []usage.Event {
+				marked := identityTestEvent("marked-prefix", 1, "codex-a.json", "auth-a", "codex", "")
+				marked.AuthProjectIDSnapshot = usageidentity.CodexAccountIDSnapshot("account-a")
+				strong := identityTestEvent("strong-anchor", 2, "codex-a.json", "auth-a", "codex", "account-a")
+				return []usage.Event{marked, strong}
+			},
+			wantAllowed: true,
+		},
+		{
+			name: "weak identity without direct anchor",
+			buildEvents: func() []usage.Event {
+				return []usage.Event{identityTestEvent("weak-only", 1, "codex-a.json", "auth-a", "codex", "")}
+			},
+			wantAllowed: false,
+		},
+		{
+			name: "weak identity after direct anchor",
+			buildEvents: func() []usage.Event {
+				strong := identityTestEvent("strong-anchor", 1, "codex-a.json", "auth-a", "codex", "account-a")
+				weak := identityTestEvent("weak-tail", 2, "codex-a.json", "auth-a", "codex", "")
+				return []usage.Event{strong, weak}
+			},
+			wantAllowed: false,
+		},
+		{
+			name: "malformed provenance prefix",
+			buildEvents: func() []usage.Event {
+				invalid := identityTestEvent("invalid-prefix", 1, "codex-a.json", "auth-a", "codex", "")
+				invalid.AuthProjectIDSnapshot = "codex-account-id:v1:"
+				strong := identityTestEvent("strong-anchor", 2, "codex-a.json", "auth-a", "codex", "account-a")
+				return []usage.Event{invalid, strong}
+			},
+			wantAllowed: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+			if err != nil {
+				t.Fatalf("open database: %v", err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			repo := New(db)
+			if _, err := repo.InsertBatch(context.Background(), test.buildEvents()); err != nil {
+				t.Fatalf("insert identity events: %v", err)
+			}
+
+			key, allowed, err := repo.ResolveCodexLegacyAccountKey(context.Background(), usageidentity.Fields{
+				AuthFileSnapshot:      "codex-a.json",
+				AuthIndex:             "auth-a",
+				AuthProviderSnapshot:  "codex",
+				AuthAccountIDSnapshot: "account-a",
+				AccountSnapshot:       "same@example.com",
+				Source:                "codex-a.json",
+			})
+			if err != nil {
+				t.Fatalf("resolve legacy identity: %v", err)
+			}
+			if allowed != test.wantAllowed {
+				t.Fatalf("allowed = %v, want %v (key=%q)", allowed, test.wantAllowed, key)
+			}
+		})
+	}
+}
+
 func TestResolveCodexLegacyAccountKeyAcceptsLegacySourceFile(t *testing.T) {
 	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
 	if err != nil {

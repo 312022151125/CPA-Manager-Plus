@@ -3,6 +3,7 @@ package usageevent
 import (
 	"context"
 	"database/sql"
+	"sort"
 	"strings"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
@@ -35,9 +36,10 @@ func ResolveCodexLegacyAccountKey(
 		return "", false, nil
 	}
 
-	evidence := legacyAccountIdentityEvidence{}
+	events := make([]legacyAccountIdentityEvent, 0)
 	for _, predicate := range legacyAccountIdentityPredicates(authFile, authIndex) {
 		rows, err := queryer.QueryContext(ctx, `select
+			e.id,
 			coalesce(e.provider, ''),
 			coalesce(e.auth_provider_snapshot, ''),
 			coalesce(e.auth_account_id_snapshot, ''),
@@ -48,24 +50,17 @@ func ResolveCodexLegacyAccountKey(
 		if err != nil {
 			return "", false, err
 		}
-		predicateEvidence := legacyAccountIdentityEvidence{}
-		allowed, err := scanLegacyAccountIdentity(rows, targetAccountID, targetMember, &predicateEvidence)
+		predicateEvents, err := scanLegacyAccountIdentityRows(rows)
 		if err != nil {
 			return "", false, err
 		}
-		if !allowed {
-			// An empty predicate is expected when a legacy event used one of the
-			// other physical-identity shapes. Continue so source-only history can
-			// still be inherited; any rows that were found but failed validation
-			// remain a fail-closed conflict.
-			if predicateEvidence.found {
-				return "", false, nil
-			}
-			continue
-		}
-		evidence.found = evidence.found || predicateEvidence.found
+		events = append(events, predicateEvents...)
 	}
-	return legacyKey, evidence.found, nil
+	sort.Slice(events, func(i, j int) bool { return events[i].id < events[j].id })
+	if !legacyAccountIdentityAllowed(events, targetAccountID, targetMember) {
+		return "", false, nil
+	}
+	return legacyKey, true, nil
 }
 
 // ResolveCodexLegacyAccountKey evaluates the same check through a short
@@ -147,55 +142,90 @@ func legacySourceIdentityGuards() string {
 		and (e.auth_label_snapshot is null or lower(trim(e.source)) <> lower(trim(e.auth_label_snapshot)))`
 }
 
-type legacyAccountIdentityEvidence struct {
-	found bool
+type legacyAccountIdentityEvent struct {
+	id              int64
+	provider        string
+	authProvider    string
+	accountID       string
+	projectID       string
+	accountSnapshot string
 }
 
-func scanLegacyAccountIdentity(
-	rows *sql.Rows,
-	targetAccountID, targetMember string,
-	evidence *legacyAccountIdentityEvidence,
-) (bool, error) {
+func scanLegacyAccountIdentityRows(rows *sql.Rows) ([]legacyAccountIdentityEvent, error) {
 	defer rows.Close()
+	events := make([]legacyAccountIdentityEvent, 0)
 	for rows.Next() {
-		evidence.found = true
-		var provider, authProvider, accountID, projectID, accountSnapshot string
-		if err := rows.Scan(&provider, &authProvider, &accountID, &projectID, &accountSnapshot); err != nil {
-			return false, err
+		var event legacyAccountIdentityEvent
+		if err := rows.Scan(
+			&event.id,
+			&event.provider,
+			&event.authProvider,
+			&event.accountID,
+			&event.projectID,
+			&event.accountSnapshot,
+		); err != nil {
+			return nil, err
 		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+func legacyAccountIdentityAllowed(
+	events []legacyAccountIdentityEvent,
+	targetAccountID, targetMember string,
+) bool {
+	strongWorkspaceFound := false
+	for _, event := range events {
 		hasProvider := false
-		for _, value := range []string{provider, authProvider} {
+		for _, value := range []string{event.provider, event.authProvider} {
 			normalized := normalizeIdentityProvider(value)
 			if normalized == "" {
 				continue
 			}
 			hasProvider = true
 			if normalized != "codex" {
-				return false, nil
+				return false
 			}
 		}
 		if !hasProvider {
-			return false, nil
+			return false
 		}
 
-		member, memberOK := usageidentity.NormalizeCodexMemberSnapshot(accountSnapshot)
+		member, memberOK := usageidentity.NormalizeCodexMemberSnapshot(event.accountSnapshot)
 		if !memberOK || member != targetMember {
-			return false, nil
+			return false
 		}
 
+		directWorkspacePresent := strings.Trim(event.accountID, " ") != ""
+		markedWorkspacePresent := usageidentity.HasCodexAccountIDSnapshotMarker(event.projectID)
 		workspace, workspaceOK := usageidentity.ResolveCodexWorkspace(usageidentity.Fields{
-			AuthAccountIDSnapshot: accountID,
-			AuthProjectIDSnapshot: projectID,
-			AccountSnapshot:       accountSnapshot,
+			AuthAccountIDSnapshot: event.accountID,
+			AuthProjectIDSnapshot: event.projectID,
+			AccountSnapshot:       event.accountSnapshot,
 		})
-		if !workspaceOK || workspace != targetAccountID {
-			return false, nil
+		if directWorkspacePresent || markedWorkspacePresent {
+			if !workspaceOK || workspace != targetAccountID {
+				return false
+			}
+			if directWorkspacePresent {
+				strongWorkspaceFound = true
+			}
+			continue
+		}
+
+		// A fully legacy event with no Workspace provenance is eligible only
+		// as a leading prefix. Once direct Workspace evidence has established
+		// the member identity, a later regression to weak evidence is
+		// ambiguous credential reuse and must fail closed.
+		if strongWorkspaceFound {
+			return false
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-	return evidence.found, nil
+	return strongWorkspaceFound
 }
 
 func normalizeIdentityProvider(value string) string {
