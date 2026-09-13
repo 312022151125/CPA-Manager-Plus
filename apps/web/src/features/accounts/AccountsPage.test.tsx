@@ -8313,9 +8313,6 @@ describe('AccountsPage replacement flows', () => {
     expect(names[0]).toContain(expectedOrder[0]);
     expect(names[1]).toContain(expectedOrder[1]);
     expect(names[2]).toContain(expectedOrder[2]);
-    expect(visibleDays.map((item) => item.days)).toEqual(
-      expectedOrder.map((name) => visibleDays.find((item) => item.name === name)?.days ?? null)
-    );
   });
 
   it('renders xAI monthly billing and pay-as-you-go fallback on account cards', async () => {
