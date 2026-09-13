@@ -28,7 +28,14 @@ import {
   buildQuotaCredentialIdentity,
   getQuotaCredentialStoreKey,
 } from '@/utils/quota/credentialScope';
-import type { AccountCredentialEvidenceBoundary } from './accountCredentialEvidence';
+import {
+  reconcileCodexQuotaEvidence,
+  type AccountCredentialEvidenceBoundary,
+} from './accountCredentialEvidence';
+import {
+  buildAccountSubscriptionPresentation,
+  resolveAccountListSubscriptionQuota,
+} from './accountSubscriptionPresentation';
 
 const CODEX_MAIN_SCOPE = { kind: 'family', key: 'codex_main', complete: true } as const;
 
@@ -2735,6 +2742,133 @@ describe('accountRows', () => {
     expect(
       sortAccountRows(rows, { key: 'created', direction: 'asc' }).map((row) => row.fileName)
     ).toEqual(['low.json', 'high.json', 'middle.json']);
+  });
+
+  it('keeps card remainingDays homologous with sort=remaining when display quota is idle', () => {
+    const nowMs = 1_800_000_000_000;
+    const soonerUntilMs = nowMs + 3 * 86_400_000;
+    const splitUntilMs = nowMs + 5 * 86_400_000;
+    const laterUntilMs = nowMs + 20 * 86_400_000;
+    const files: AuthFileItem[] = [
+      { name: 'later.json', type: 'codex', planType: 'plus' },
+      { name: 'split.json', type: 'codex', planType: 'plus', last_refresh: 2_000 },
+      { name: 'sooner.json', type: 'codex', planType: 'plus' },
+    ];
+    const soonerQuota: CodexQuotaState = {
+      status: 'success',
+      windows: [],
+      planType: 'plus',
+      subscriptionActiveUntil: soonerUntilMs,
+    };
+    const laterQuota: CodexQuotaState = {
+      status: 'success',
+      windows: [],
+      planType: 'plus',
+      subscriptionActiveUntil: laterUntilMs,
+    };
+    // Live provider quota still has a future until, but the display/override path
+    // used by buildAccountRows matches AccountsPage getDisplayCodexQuota: reconcile
+    // drops the 401-signal quota after credential refresh, then an evidence
+    // boundary yields { status: 'idle', windows: [] } and strips until.
+    const splitActiveQuota: CodexQuotaState = {
+      status: 'success',
+      windows: [],
+      planType: 'plus',
+      subscriptionActiveUntil: splitUntilMs,
+      errorStatus: 401,
+      fetchedAtMs: 1_000,
+    };
+    const splitDisplayQuota =
+      reconcileCodexQuotaEvidence({
+        providerQuota: splitActiveQuota,
+        credentialRefreshAtMs: 2_000,
+      }) ?? { status: 'idle' as const, windows: [] };
+    expect(splitDisplayQuota).toEqual({ status: 'idle', windows: [] });
+    expect(splitActiveQuota.subscriptionActiveUntil).toBe(splitUntilMs);
+
+    const rows = buildAccountRows(
+      files,
+      {
+        ...emptyStores(),
+        codexQuota: {
+          'later.json': laterQuota,
+          'split.json': splitActiveQuota,
+          'sooner.json': soonerQuota,
+        },
+      },
+      undefined,
+      {
+        codexQuotaBySelectionKey: new Map<string, CodexQuotaState>([
+          [getAuthFileSelectionKey(files[0]), laterQuota],
+          [getAuthFileSelectionKey(files[1]), splitDisplayQuota],
+          [getAuthFileSelectionKey(files[2]), soonerQuota],
+        ]),
+      }
+    );
+    const byName = Object.fromEntries(rows.map((row) => [row.fileName, row]));
+    const remainingDaysFromUntil = (untilMs: number | null): number | null =>
+      untilMs !== null && untilMs > nowMs
+        ? Math.max(1, Math.ceil((untilMs - nowMs) / 86_400_000))
+        : null;
+    const cardByName = Object.fromEntries(
+      rows.map((row) => {
+        const activeQuota =
+          row.fileName === 'split.json'
+            ? splitActiveQuota
+            : row.fileName === 'later.json'
+              ? laterQuota
+              : soonerQuota;
+        const displayQuota =
+          row.fileName === 'split.json'
+            ? splitDisplayQuota
+            : row.fileName === 'later.json'
+              ? laterQuota
+              : soonerQuota;
+        return [
+          row.fileName,
+          buildAccountSubscriptionPresentation({
+            row,
+            codexQuota: resolveAccountListSubscriptionQuota({
+              provider: row.provider,
+              displayCodexQuota: displayQuota,
+              activeCodexQuota: activeQuota,
+            }),
+            nowMs,
+          }),
+        ];
+      })
+    );
+
+    expect(byName['sooner.json']?.subscriptionUntilMs).toBe(soonerUntilMs);
+    expect(byName['later.json']?.subscriptionUntilMs).toBe(laterUntilMs);
+    expect(cardByName['sooner.json']?.remainingDays).toBe(3);
+    expect(cardByName['later.json']?.remainingDays).toBe(20);
+    expect(cardByName['sooner.json']?.subscriptionUntilMs).toBe(
+      byName['sooner.json']?.subscriptionUntilMs
+    );
+    expect(cardByName['later.json']?.subscriptionUntilMs).toBe(
+      byName['later.json']?.subscriptionUntilMs
+    );
+    expect(cardByName['split.json']?.subscriptionUntilMs).toBe(
+      byName['split.json']?.subscriptionUntilMs
+    );
+    expect(cardByName['split.json']?.remainingDays).toBe(
+      remainingDaysFromUntil(byName['split.json']?.subscriptionUntilMs ?? null)
+    );
+    expect(
+      sortAccountRows(rows, { key: 'remaining', direction: 'asc' }).map((row) => row.fileName)
+    ).toEqual(
+      [...rows]
+        .sort((left, right) => {
+          const leftDays = cardByName[left.fileName]?.remainingDays ?? null;
+          const rightDays = cardByName[right.fileName]?.remainingDays ?? null;
+          if (leftDays === null && rightDays === null) return 0;
+          if (leftDays === null) return 1;
+          if (rightDays === null) return -1;
+          return leftDays - rightDays;
+        })
+        .map((row) => row.fileName)
+    );
   });
 
   it('sorts paid Codex rows by subscription remaining time', () => {

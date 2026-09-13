@@ -16,6 +16,22 @@ export interface AccountSubscriptionPresentation {
   remainingDays: number | null;
 }
 
+/**
+ * Codex quota for list-card subscription presentation.
+ * Must stay the same object `buildAccountRows` received via accountQuotaOverrides.
+ *
+ * AccountsPage currently passes both the live provider quota and the display/override
+ * quota; the card historically read the live quota, which can disagree with sort.
+ */
+export const resolveAccountListSubscriptionQuota = (input: {
+  provider: string;
+  displayCodexQuota?: CodexQuotaState | null;
+  activeCodexQuota?: CodexQuotaState | null;
+}): CodexQuotaState | null | undefined => {
+  if (input.provider !== 'codex') return undefined;
+  return input.activeCodexQuota;
+};
+
 export const parseValidSubscriptionUntilMs = (value: unknown): number | null => {
   const numeric =
     typeof value === 'number'

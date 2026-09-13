@@ -39,7 +39,13 @@ import {
   getAuthFileSelectionKey,
 } from '@/features/authFiles/model/credentialStatus';
 import type { AuthFilesCredentialMutation } from '@/features/authFiles/hooks/useAuthFilesData';
-import { clearAccountCredentialEvidenceBoundaryStateCache } from './model/accountCredentialEvidenceStorage';
+import {
+  clearAccountCredentialEvidenceBoundaryStateCache,
+  saveAccountCredentialEvidenceBoundaryState,
+} from './model/accountCredentialEvidenceStorage';
+import { createCredentialInspectionSnapshotScopeKey } from './hooks/useCredentialInspectionSnapshot';
+import { createCodexInspectionConnectionFingerprint } from '@/features/monitoring/codexInspection';
+import type { AccountCredentialEvidenceBoundary } from './model/accountCredentialEvidence';
 import {
   clearAccountCredentialMutationMarkersForTests,
   createAccountCredentialMutationBaseline,
@@ -550,6 +556,7 @@ const { mocks } = vi.hoisted(() => {
         if (typeof options.tokens === 'string') parts.push(options.tokens);
         if (typeof options.cost === 'string') parts.push(options.cost);
         if (typeof options.rate === 'string') parts.push(options.rate);
+        if (typeof options.days === 'number') parts.push(String(options.days));
         return parts.length > 0 ? `${key}:${parts.join(':')}` : key;
       },
       quotaDisplayWindowsOverride: null as AccountQuotaDisplayWindow[] | null,
@@ -8179,6 +8186,136 @@ describe('AccountsPage replacement flows', () => {
     expect(names[0]).toContain('sooner.json');
     expect(names[1]).toContain('later.json');
     expect(names[2]).toContain('unknown.json');
+  });
+
+  it('keeps card remaining days homologous with sort=remaining when display quota is idle', async () => {
+    const now = Date.now();
+    const soonerDays = 3;
+    const splitDays = 5;
+    const laterDays = 20;
+    const soonerFile = {
+      ...makeCodexFile('sooner.json', 'auth-sooner', 'sooner@example.com'),
+      planType: 'plus',
+    } as AuthFileItem;
+    const splitFile = {
+      ...makeCodexFile('split.json', 'auth-split', 'split@example.com'),
+      planType: 'plus',
+      last_refresh: 2_000,
+    } as AuthFileItem;
+    const laterFile = {
+      ...makeCodexFile('later.json', 'auth-later', 'later@example.com'),
+      planType: 'plus',
+    } as AuthFileItem;
+    mocks.files = [laterFile, splitFile, soonerFile];
+    mocks.quotaState.codexQuota = {
+      ...buildCredentialScopedQuotaRecord(laterFile, {
+        status: 'success',
+        planType: 'plus',
+        windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 10, resetLabel: '2026-01-10' }],
+        subscriptionActiveUntil: now + laterDays * 86_400_000,
+      }),
+      ...buildCredentialScopedQuotaRecord(splitFile, {
+        status: 'success',
+        planType: 'plus',
+        windows: [],
+        subscriptionActiveUntil: now + splitDays * 86_400_000,
+        errorStatus: 401,
+        fetchedAtMs: 1_000,
+      }),
+      ...buildCredentialScopedQuotaRecord(soonerFile, {
+        status: 'success',
+        planType: 'plus',
+        windows: [{ id: 'weekly', label: 'Weekly', usedPercent: 10, resetLabel: '2026-01-10' }],
+        subscriptionActiveUntil: now + soonerDays * 86_400_000,
+      }),
+    };
+    const emptyBoundary = (): AccountCredentialEvidenceBoundary => ({
+      localAtMs: 0,
+      inspectionAtMs: 0,
+      inspectionBaselinePending: false,
+      headerAtMs: 0,
+      headerBaselinePending: false,
+      actionAtMs: 0,
+      actionBaselinePending: false,
+      authenticationActionAtMs: 0,
+      authenticationActionBaselinePending: false,
+      quotaActionAtMs: 0,
+      quotaActionBaselinePending: false,
+      cooldownAtMs: 0,
+      cooldownBaselinePending: false,
+      fallbackInspectionAtMs: 0,
+      fallbackInspectionBaselinePending: false,
+      fallbackHeaderAtMs: 0,
+      fallbackHeaderBaselinePending: false,
+      fallbackActionAtMs: 0,
+      fallbackActionBaselinePending: false,
+      fallbackCooldownAtMs: 0,
+      fallbackCooldownBaselinePending: false,
+      authenticationAtMs: 0,
+      rawStatusAtMs: 0,
+      rawStatusMessages: [],
+      rawStatusCodes: [],
+    });
+    const scopeKey = createCredentialInspectionSnapshotScopeKey(
+      createCodexInspectionConnectionFingerprint(mocks.apiBase, mocks.managementKey),
+      mocks.panelFeatureAvailability.managerServiceBase ?? '',
+      mocks.managementKey
+    );
+    saveAccountCredentialEvidenceBoundaryState(scopeKey, {
+      evidence: new Map([
+        [
+          getAuthFileSelectionKey(splitFile),
+          {
+            ...emptyBoundary(),
+            localAtMs: 2_000,
+          },
+        ],
+      ]),
+      status: new Map(),
+    });
+
+    const renderer = await renderAccountsPage();
+    const soonerText = getAccountCardText(renderer, getAuthFileSelectionKey(soonerFile));
+    const splitText = getAccountCardText(renderer, getAuthFileSelectionKey(splitFile));
+    const laterText = getAccountCardText(renderer, getAuthFileSelectionKey(laterFile));
+
+    await act(async () => {
+      findHostButtonByAriaLabel(
+        renderer,
+        'accounts.sort_label: accounts.col_recent'
+      ).props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.sort_remaining').props.onClick();
+    });
+
+    const names = getAccountListItemTexts(renderer);
+    const remainingOnCard = (text: string): number | null => {
+      const match = text.match(/accounts\.list_plan_remaining_days:(\d+)/);
+      return match ? Number(match[1]) : null;
+    };
+    const visibleDays = [
+      { name: 'sooner.json', days: remainingOnCard(soonerText) },
+      { name: 'split.json', days: remainingOnCard(splitText) },
+      { name: 'later.json', days: remainingOnCard(laterText) },
+    ];
+    const expectedOrder = [...visibleDays]
+      .sort((left, right) => {
+        if (left.days === null && right.days === null) return 0;
+        if (left.days === null) return 1;
+        if (right.days === null) return -1;
+        return left.days - right.days;
+      })
+      .map((item) => item.name);
+
+    expect(remainingOnCard(soonerText)).toBe(soonerDays);
+    expect(remainingOnCard(laterText)).toBe(laterDays);
+    expect(names[0]).toContain(expectedOrder[0]);
+    expect(names[1]).toContain(expectedOrder[1]);
+    expect(names[2]).toContain(expectedOrder[2]);
+    expect(visibleDays.map((item) => item.days)).toEqual(
+      expectedOrder.map((name) => visibleDays.find((item) => item.name === name)?.days ?? null)
+    );
   });
 
   it('renders xAI monthly billing and pay-as-you-go fallback on account cards', async () => {
