@@ -259,6 +259,47 @@ func TestPriceMutationsNotifyPricingRollup(t *testing.T) {
 	}
 }
 
+func TestSyncPreservesManualPriceOnExactMatch(t *testing.T) {
+	ctx := context.Background()
+	st := testutil.NewStore(t, testutil.NewConfig(t))
+	if err := st.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-test": {
+			Prompt: 9, Completion: 18, PromptConfigured: true, CompletionConfigured: true,
+			Source: "manual",
+		},
+	}); err != nil {
+		t.Fatalf("save manual price: %v", err)
+	}
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"gpt-test":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002},
+			"fresh-model":{"input_cost_per_token":0.000003,"output_cost_per_token":0.000004}
+		}`))
+	}))
+	t.Cleanup(source.Close)
+	syncURL := source.URL
+
+	result, err := New(st, &syncURL).Sync(ctx, SyncRequest{Models: []string{"gpt-test", "fresh-model"}})
+	if err != nil {
+		t.Fatalf("sync prices: %v", err)
+	}
+	if result.Imported != 1 || len(result.Preserved) != 1 || result.Preserved[0] != "gpt-test" {
+		t.Fatalf("sync result = %#v", result)
+	}
+	if _, matched := result.Matched["gpt-test"]; matched {
+		t.Fatalf("manual price reported as matched: %#v", result.Matched)
+	}
+	manual := result.Prices["gpt-test"]
+	if manual.Source != "manual" || manual.Prompt != 9 || manual.Completion != 18 || manual.SyncedAtMS != nil {
+		t.Fatalf("manual price was overwritten: %#v", manual)
+	}
+	if fresh := result.Prices["fresh-model"]; fresh.Source != SyncSourceLiteLLM || fresh.Prompt != 3 || fresh.Completion != 4 {
+		t.Fatalf("fresh model was not imported: %#v", fresh)
+	}
+}
+
 func TestModelsDevPriceCacheReusesETagConcurrently(t *testing.T) {
 	const etag = `"catalog-v1"`
 	var requestCount atomic.Int32
