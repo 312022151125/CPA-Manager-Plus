@@ -18,13 +18,13 @@ export interface AccountSubscriptionPresentation {
 
 /**
  * Codex quota for list-card subscription presentation.
- * Must stay the same object `buildAccountRows` received via accountQuotaOverrides
- * (`getDisplayCodexQuota`), not the live provider quota.
+ * Same input `buildAccountRows` uses for `subscriptionUntilMs` when AccountsPage
+ * passes `accountQuotaOverrides`: display/override quota only, including `undefined`
+ * when the override map omits the key. Never the live store quota.
  */
 export const resolveAccountListSubscriptionQuota = (input: {
   provider: string;
   displayCodexQuota?: CodexQuotaState | null;
-  activeCodexQuota?: CodexQuotaState | null;
 }): CodexQuotaState | null | undefined => {
   if (input.provider !== 'codex') return undefined;
   return input.displayCodexQuota;

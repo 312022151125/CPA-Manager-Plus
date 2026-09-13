@@ -8460,8 +8460,6 @@ export function AccountsPage() {
       quotaWindows,
       requestEvidence: requestEvidenceBySelectionKey.get(row.selectionKey),
     });
-    const activeCodexQuota =
-      row.provider === CODEX_CONFIG.type ? getActiveCodexQuota(row.raw) : undefined;
     const displayCodexQuota =
       row.provider === CODEX_CONFIG.type ? getDisplayCodexQuota(row.raw) : undefined;
     const subscriptionPresentation = buildAccountSubscriptionPresentation({
@@ -8469,10 +8467,10 @@ export function AccountsPage() {
       codexQuota: resolveAccountListSubscriptionQuota({
         provider: row.provider,
         displayCodexQuota,
-        activeCodexQuota,
       }),
     });
-    const codexQuotaState = activeCodexQuota;
+    const codexQuotaState =
+      row.provider === CODEX_CONFIG.type ? getActiveCodexQuota(row.raw) : undefined;
     const codexResetCreditsCount =
       codexQuotaState?.rateLimitResetCreditsAvailableCount ??
       codexQuotaState?.rateLimitResetCredits?.length ??

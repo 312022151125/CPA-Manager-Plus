@@ -435,10 +435,16 @@ export const buildAccountRows = (
     const effectiveFile = inspectionSupersedesRawDisabled
       ? { ...file, disabled: inspection.disabled }
       : file;
-    const codexQuota =
+    const overrideCodexQuotaBySelectionKey = overrides?.codexQuotaBySelectionKey;
+    const storeCodexQuota =
+      provider === 'codex' ? getCredentialScopedQuotaState(stores.codexQuota, file) : undefined;
+    const overrideCodexQuota = overrideCodexQuotaBySelectionKey?.get(selectionKey);
+    const codexQuota = overrideCodexQuota ?? storeCodexQuota;
+    const subscriptionCodexQuota =
       provider === 'codex'
-        ? (overrides?.codexQuotaBySelectionKey?.get(selectionKey) ??
-          getCredentialScopedQuotaState(stores.codexQuota, file))
+        ? overrideCodexQuotaBySelectionKey
+          ? overrideCodexQuota
+          : storeCodexQuota
         : undefined;
     const credentialAuthenticationBoundaryAtMs = Math.max(
       evidenceBoundary?.authenticationAtMs ?? 0,
@@ -503,7 +509,7 @@ export const buildAccountRows = (
         planType,
         raw: file,
       },
-      codexQuota,
+      codexQuota: subscriptionCodexQuota,
     }).subscriptionUntilMs;
     return {
       key: file.name,

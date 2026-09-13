@@ -2812,12 +2812,6 @@ describe('accountRows', () => {
         : null;
     const cardByName = Object.fromEntries(
       rows.map((row) => {
-        const activeQuota =
-          row.fileName === 'split.json'
-            ? splitActiveQuota
-            : row.fileName === 'later.json'
-              ? laterQuota
-              : soonerQuota;
         const displayQuota =
           row.fileName === 'split.json'
             ? splitDisplayQuota
@@ -2831,7 +2825,6 @@ describe('accountRows', () => {
             codexQuota: resolveAccountListSubscriptionQuota({
               provider: row.provider,
               displayCodexQuota: displayQuota,
-              activeCodexQuota: activeQuota,
             }),
             nowMs,
           }),
