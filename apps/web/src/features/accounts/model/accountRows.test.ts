@@ -2871,6 +2871,65 @@ describe('accountRows', () => {
     );
   });
 
+  it('does not take store live until when override map omits a Codex key', () => {
+    const nowMs = 1_800_000_000_000;
+    const storeUntilMs = nowMs + 5 * 86_400_000;
+    const laterUntilMs = nowMs + 20 * 86_400_000;
+    const laterFile: AuthFileItem = { name: 'later.json', type: 'codex', planType: 'plus' };
+    const splitFile: AuthFileItem = { name: 'split.json', type: 'codex', planType: 'plus' };
+    const laterQuota: CodexQuotaState = {
+      status: 'success',
+      windows: [],
+      planType: 'plus',
+      subscriptionActiveUntil: laterUntilMs,
+    };
+    const splitStoreQuota: CodexQuotaState = {
+      status: 'success',
+      windows: [],
+      planType: 'plus',
+      subscriptionActiveUntil: storeUntilMs,
+    };
+    const overrideMap = new Map<string, CodexQuotaState>([
+      [getAuthFileSelectionKey(laterFile), laterQuota],
+    ]);
+
+    const rows = buildAccountRows(
+      [laterFile, splitFile],
+      {
+        ...emptyStores(),
+        codexQuota: {
+          'later.json': laterQuota,
+          'split.json': splitStoreQuota,
+        },
+      },
+      undefined,
+      { codexQuotaBySelectionKey: overrideMap }
+    );
+    const byName = Object.fromEntries(rows.map((row) => [row.fileName, row]));
+    const splitRow = byName['split.json'];
+    expect(splitRow).toBeDefined();
+    const splitCard = buildAccountSubscriptionPresentation({
+      row: splitRow,
+      codexQuota: resolveAccountListSubscriptionQuota({
+        provider: splitRow.provider,
+        displayCodexQuota: undefined,
+      }),
+      nowMs,
+    });
+
+    expect(overrideMap.has(getAuthFileSelectionKey(splitFile))).toBe(false);
+    expect(splitStoreQuota.subscriptionActiveUntil).toBe(storeUntilMs);
+    expect(byName['later.json']?.subscriptionUntilMs).toBe(laterUntilMs);
+    expect(splitRow?.subscriptionUntilMs).not.toBe(storeUntilMs);
+    expect(splitRow?.subscriptionUntilMs).toBeNull();
+    expect(splitCard.subscriptionUntilMs).toBe(splitRow?.subscriptionUntilMs);
+    expect(splitCard.remainingDays).toBeNull();
+    expect(splitCard.liveSubscriptionUntilMs).toBeNull();
+    expect(
+      sortAccountRows(rows, { key: 'remaining', direction: 'asc' }).map((row) => row.fileName)
+    ).toEqual(['later.json', 'split.json']);
+  });
+
   it('sorts paid Codex rows by subscription remaining time', () => {
     const now = 1_800_000_000_000;
     const rows = buildAccountRows(
