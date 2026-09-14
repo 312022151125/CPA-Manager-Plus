@@ -8591,6 +8591,70 @@ describe('AccountsPage replacement flows', () => {
     expect(quotaRegion.props['aria-label']).not.toContain('Billing');
   });
 
+  it('renders xAI weekly and product quota observations for unconfirmed plan without billing/PAYG windows or disable recommendation (issue #744)', async () => {
+    const file = {
+      name: 'xai-issue-744.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-744-1',
+      account: 'xai-744@example.com',
+      priority: 0,
+      disabled: false,
+      planType: null,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.quotaState.xaiQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      billing: {
+        periodType: 'weekly',
+        usagePercent: 2,
+        periodStart: '2026-09-11T13:42:16.586061+00:00',
+        periodEnd: '2026-09-18T13:42:16.586061+00:00',
+        productUsage: [{ product: 'GrokBuild', usagePercent: 2 }],
+        monthlyLimitCents: 0,
+        usedCents: 0,
+        includedUsedCents: 0,
+        onDemandCapCents: 0,
+        onDemandUsedCents: 0,
+        onDemandUsedPercent: null,
+        billingPeriodStart: '2026-09-01T00:00:00Z',
+        billingPeriodEnd: '2026-10-01T00:00:00Z',
+        usedPercent: 0,
+      },
+    });
+
+    const renderer = await renderAccountsPage();
+    const selectionKey = getAuthFileSelectionKey(file);
+    const card = findAccountCardByKey(renderer, selectionKey);
+    const quotaRegion = findAccountDetailRegion(renderer, selectionKey, 'quota');
+
+    expect(readText(card)).toContain('Weekly');
+    expect(readText(card)).toContain('98%');
+    expect(readText(card)).not.toContain('Billing');
+    expect(readText(card)).not.toContain('Pay-As-You-Go');
+    expect(readText(card)).not.toContain('SuperGrok');
+    expect(readText(card)).not.toContain('Heavy');
+
+    expect(readText(card)).not.toContain('disable');
+    expect(readText(card)).not.toContain('recommend_disable');
+
+    await act(async () => {
+      quotaRegion.props.onClick({ stopPropagation: vi.fn() });
+    });
+    await flushPromises();
+
+    const standardGroup = renderer.root.findAllByProps({ 'data-quota-window-group': 'standard' });
+    expect(standardGroup.length).toBeGreaterThan(0);
+    expect(readText(standardGroup[0])).toContain('xai_quota.weekly_credits');
+    expect(readText(standardGroup[0])).toContain('98%');
+
+    const otherGroup = renderer.root.findByProps({ 'data-quota-window-group': 'other' });
+    expect(readText(otherGroup)).toContain('GrokBuild');
+    expect(readText(otherGroup)).toContain('98%');
+    expect(readText(otherGroup)).not.toContain('xai_quota.monthly_credits');
+    expect(readText(otherGroup)).not.toContain('xai_quota.pay_as_you_go_label');
+  });
+
   it('renders Kimi summary-only quota on the account card', async () => {
     const file = {
       name: 'kimi-summary.json',
