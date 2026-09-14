@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,7 +19,7 @@ func TestStorePausesRollupsUntilUsageCacheAccountingMigrationCompletes(t *testin
 	t.Cleanup(func() { _ = db.Close() })
 
 	if _, err := db.InsertEvents(context.Background(), []usage.Event{{
-		EventHash:   "rollup-event",
+		EventHash:   testCanonicalHash("rollup-event"),
 		TimestampMS: 1_778_000_000_000,
 		Timestamp:   "2026-05-06T00:00:00Z",
 		Model:       "gpt-test",
@@ -68,7 +70,7 @@ func TestStorePersistsAccountSnapshot(t *testing.T) {
 
 	_, err = db.InsertEvents(context.Background(), []usage.Event{
 		{
-			EventHash:            "event-1",
+			EventHash:            testCanonicalHash("event-1"),
 			TimestampMS:          1_778_000_000_000,
 			Timestamp:            "2026-05-06T00:00:00Z",
 			Model:                "gpt-test",
@@ -478,7 +480,7 @@ func TestStorePersistsRequestedAndResolvedModels(t *testing.T) {
 
 	_, err = db.InsertEvents(context.Background(), []usage.Event{
 		{
-			EventHash:      "event-dual",
+			EventHash:      testCanonicalHash("event-dual"),
 			TimestampMS:    1_778_000_001_000,
 			Timestamp:      "2026-05-06T00:00:01Z",
 			Model:          "gpt-5.4",
@@ -645,4 +647,9 @@ func TestStoreAPIKeyAliasesActiveHashesMigration(t *testing.T) {
 	}, []string{newHash, activeHash}, true); err == nil || err.Error() != "api key alias already exists" {
 		t.Fatalf("active conflict should be rejected, got err = %v", err)
 	}
+}
+
+func testCanonicalHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }

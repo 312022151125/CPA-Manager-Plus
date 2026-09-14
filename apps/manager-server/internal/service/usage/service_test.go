@@ -2,6 +2,8 @@ package usage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -105,10 +107,12 @@ func TestImportNotifiesAfterPartialSuccess(t *testing.T) {
 }
 
 func writeImportTestEvent(builder *strings.Builder, hash string, timestampMS int64) {
+	sum := sha256.Sum256([]byte(hash))
+	canonicalHash := hex.EncodeToString(sum[:])
 	_, _ = fmt.Fprintf(
 		builder,
 		`{"event_hash":%q,"timestamp_ms":%d,"timestamp":"2026-01-02T03:04:05Z","model":"gpt-test","endpoint":"POST /v1/responses"}`+"\n",
-		hash,
+		canonicalHash,
 		timestampMS,
 	)
 }

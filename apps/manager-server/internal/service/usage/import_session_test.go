@@ -3,6 +3,8 @@ package usage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -25,9 +27,11 @@ func TestImportSessionUploadsChunksAndCompletesWithStreamingParser(t *testing.T)
 		TTL:            time.Hour,
 	})
 	defer cancel()
+	h1 := sha256.Sum256([]byte("session-one"))
+	h2 := sha256.Sum256([]byte("session-two"))
 	payload := strings.Join([]string{
-		`{"event_hash":"session-one","timestamp_ms":1,"timestamp":"2026-01-01T00:00:00Z","model":"gpt-test"}`,
-		`{"event_hash":"session-two","timestamp_ms":2,"timestamp":"2026-01-01T00:00:01Z","model":"gpt-test"}`,
+		`{"event_hash":"` + hex.EncodeToString(h1[:]) + `","timestamp_ms":1,"timestamp":"2026-01-01T00:00:00Z","model":"gpt-test"}`,
+		`{"event_hash":"` + hex.EncodeToString(h2[:]) + `","timestamp_ms":2,"timestamp":"2026-01-01T00:00:01Z","model":"gpt-test"}`,
 	}, "\n") + "\n"
 
 	session, err := service.CreateImportSession(context.Background(), "../history.jsonl", int64(len(payload)), "")

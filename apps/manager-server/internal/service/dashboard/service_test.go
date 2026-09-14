@@ -2,6 +2,8 @@ package dashboard
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"math"
 	"path/filepath"
@@ -674,8 +676,13 @@ func dashboardEvent(
 	totalTokens int64,
 	latencyMS *int64,
 ) usage.Event {
+	eventHash := hash
+	if len(eventHash) != 64 {
+		sum := sha256.Sum256([]byte(hash))
+		eventHash = hex.EncodeToString(sum[:])
+	}
 	return usage.Event{
-		EventHash:       hash,
+		EventHash:       eventHash,
 		TimestampMS:     timestampMS,
 		Timestamp:       time.UnixMilli(timestampMS).UTC().Format(time.RFC3339Nano),
 		Model:           model,

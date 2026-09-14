@@ -2,6 +2,8 @@ package monitoring
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1191,7 +1193,7 @@ func TestAnalyticsAppliesFilters(t *testing.T) {
 	if resp.Summary == nil || resp.Summary.TotalCalls != 1 || resp.Summary.FailureCalls != 0 {
 		t.Fatalf("filtered summary = %#v", resp.Summary)
 	}
-	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "filter-a" {
+	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != testCanonicalHash("filter-a") {
 		t.Fatalf("filtered events = %#v", resp.Events)
 	}
 
@@ -1209,7 +1211,7 @@ func TestAnalyticsAppliesFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("analytics api key hash search: %v", err)
 	}
-	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "filter-c" {
+	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != testCanonicalHash("filter-c") {
 		t.Fatalf("api key hash search events = %#v", resp.Events)
 	}
 }
@@ -1308,7 +1310,7 @@ func TestAnalyticsSearchMatchesResolvedModelAndProjectID(t *testing.T) {
 		t.Fatalf("insert events: %v", err)
 	}
 
-	for _, query := range []string{"req-search-42", "search-new-fields", "gpt-resolved-search", "vertex-project-42"} {
+	for _, query := range []string{"req-search-42", testCanonicalHash("search-new-fields"), "gpt-resolved-search", "vertex-project-42"} {
 		resp, err := New(db).Analytics(ctx, Request{
 			FromMS:      fromMS,
 			ToMS:        toMS,
@@ -1318,7 +1320,7 @@ func TestAnalyticsSearchMatchesResolvedModelAndProjectID(t *testing.T) {
 		if err != nil {
 			t.Fatalf("analytics search %q: %v", query, err)
 		}
-		if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "search-new-fields" {
+		if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != testCanonicalHash("search-new-fields") {
 			t.Fatalf("search %q events = %#v", query, resp.Events)
 		}
 	}
@@ -1357,7 +1359,7 @@ func TestAnalyticsSearchMatchesAccountSnapshotsWhenSourceIsMasked(t *testing.T) 
 		if resp.Summary == nil || resp.Summary.TotalCalls != 1 {
 			t.Fatalf("search %q summary = %#v", query, resp.Summary)
 		}
-		if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "search-account-alice" {
+		if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != testCanonicalHash("search-account-alice") {
 			t.Fatalf("search %q events = %#v", query, resp.Events)
 		}
 	}
@@ -1420,7 +1422,7 @@ func TestAnalyticsAppliesMinLatencyFilter(t *testing.T) {
 	if resp.Summary == nil || resp.Summary.TotalCalls != 1 {
 		t.Fatalf("filtered latency summary = %#v", resp.Summary)
 	}
-	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "latency-slow" {
+	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != testCanonicalHash("latency-slow") {
 		t.Fatalf("filtered latency events = %#v", resp.Events)
 	}
 }
@@ -1469,7 +1471,7 @@ func TestAnalyticsAppliesCacheStatusFilter(t *testing.T) {
 				t.Fatalf("filtered cache events = %#v", resp.Events)
 			}
 			for index, want := range tt.wantHashes {
-				if resp.Events.Items[index].EventHash != want {
+				if resp.Events.Items[index].EventHash != testCanonicalHash(want) {
 					t.Fatalf("event %d hash = %q, want %q; events = %#v", index, resp.Events.Items[index].EventHash, want, resp.Events)
 				}
 			}
@@ -1541,7 +1543,7 @@ func TestAnalyticsAppliesAccountFallbackFilter(t *testing.T) {
 	if resp.Summary == nil || resp.Summary.TotalCalls != 1 || resp.Summary.SuccessCalls != 1 {
 		t.Fatalf("summary = %#v", resp.Summary)
 	}
-	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "account-alice" {
+	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != testCanonicalHash("account-alice") {
 		t.Fatalf("events = %#v", resp.Events)
 	}
 
@@ -1559,7 +1561,7 @@ func TestAnalyticsAppliesAccountFallbackFilter(t *testing.T) {
 	if resp.Summary == nil || resp.Summary.TotalCalls != 1 {
 		t.Fatalf("auth label summary = %#v", resp.Summary)
 	}
-	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "account-alice" {
+	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != testCanonicalHash("account-alice") {
 		t.Fatalf("auth label events = %#v", resp.Events)
 	}
 }
@@ -1908,11 +1910,11 @@ func TestAnalyticsEventsPageUsesNormalizedTotalInput(t *testing.T) {
 	fromMS := int64(1_778_400_000_000)
 	events := []usage.Event{
 		{
-			EventHash: "xai-included", TimestampMS: fromMS + 1, Timestamp: "2026-05-06T00:00:00Z",
+			EventHash: testCanonicalHash("xai-included"), TimestampMS: fromMS + 1, Timestamp: "2026-05-06T00:00:00Z",
 			ExecutorType: "XAIExecutor", Model: "grok-4", InputTokens: 100, CacheReadTokens: 40, OutputTokens: 20, CreatedAtMS: fromMS + 1,
 		},
 		{
-			EventHash: "claude-separate", TimestampMS: fromMS + 2, Timestamp: "2026-05-06T00:00:01Z",
+			EventHash: testCanonicalHash("claude-separate"), TimestampMS: fromMS + 2, Timestamp: "2026-05-06T00:00:01Z",
 			ExecutorType: "ClaudeExecutor", Model: "claude-sonnet", InputTokens: 100, CacheReadTokens: 40, OutputTokens: 20, CreatedAtMS: fromMS + 2,
 		},
 	}
@@ -1937,7 +1939,7 @@ func TestAnalyticsEventsPageUsesNormalizedTotalInput(t *testing.T) {
 	for _, item := range resp.Events.Items {
 		inputs[item.EventHash] = item.InputTokens
 	}
-	if inputs["xai-included"] != 100 || inputs["claude-separate"] != 140 {
+	if inputs[testCanonicalHash("xai-included")] != 100 || inputs[testCanonicalHash("claude-separate")] != 140 {
 		t.Fatalf("normalized event inputs = %#v", inputs)
 	}
 }
@@ -3513,7 +3515,7 @@ func monitoringEvent(
 	latencyMS *int64,
 ) usage.Event {
 	return usage.Event{
-		EventHash:       hash,
+		EventHash:       testCanonicalHash(hash),
 		TimestampMS:     timestampMS,
 		Timestamp:       time.UnixMilli(timestampMS).UTC().Format(time.RFC3339Nano),
 		Model:           model,
@@ -3547,4 +3549,12 @@ func historyTestKey(authFileSnapshot, authIndex, provider, accountSnapshot strin
 		panic("invalid account history test identity")
 	}
 	return key
+}
+
+func testCanonicalHash(hash string) string {
+	if usage.IsCanonicalSHA256Hex(hash) {
+		return hash
+	}
+	sum := sha256.Sum256([]byte(hash))
+	return hex.EncodeToString(sum[:])
 }
