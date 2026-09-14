@@ -1969,6 +1969,39 @@ describe('accountRows', () => {
     });
   });
 
+  it('keeps account-level quota summary unknown for unknown plan with valid weekly observation (issue #744)', () => {
+    const rows = buildAccountRows([{ name: 'xai-issue-744.json', type: 'xai', planType: null }], {
+      ...emptyStores(),
+      xaiQuota: {
+        'xai-issue-744.json': {
+          status: 'success',
+          billing: {
+            periodType: 'weekly',
+            usagePercent: 2.0,
+            periodStart: '2026-09-11T13:42:16.586061+00:00',
+            periodEnd: '2026-09-18T13:42:16.586061+00:00',
+            productUsage: [{ product: 'GrokBuild', usagePercent: 2.0 }],
+            monthlyLimitCents: 0,
+            usedCents: 0,
+            includedUsedCents: 0,
+            onDemandCapCents: 0,
+            onDemandUsedCents: 0,
+            onDemandUsedPercent: null,
+            billingPeriodEnd: '2026-10-01T00:00:00Z',
+            usedPercent: 0,
+          },
+        },
+      },
+    });
+
+    expect(rows[0].quota).toMatchObject({
+      status: 'unknown',
+      remainingPercent: null,
+      usedPercent: null,
+      planType: null,
+    });
+  });
+
   it('keeps cached Codex quota source while appending header diagnostics', () => {
     const rows = buildAccountRows(
       [
