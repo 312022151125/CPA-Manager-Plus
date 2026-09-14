@@ -21,17 +21,20 @@ const (
 )
 
 var (
-	// authColonHeaderRegex matches "Authorization: ..." colon headers across all schemes
-	authColonHeaderRegex = regexp.MustCompile(`(?i)\b((?:proxy[-_]?authorization|authorization)\s*:\s*)[^\r\n]+`)
+	// authColonHeaderRegex matches "Authorization: ..." or "*_authorization: ..." colon headers across all schemes
+	authColonHeaderRegex = regexp.MustCompile(`(?i)\b((?:[a-zA-Z0-9_.-]+[ \t]+)?[a-zA-Z0-9_.-]*authorization)(\s*:\s*)[^\r\n]+`)
 
 	// authSimpleAssignmentRegex matches "Authorization=Basic <token>" or "Authorization=Bearer <token>" and preserves trailing diagnostics
-	authSimpleAssignmentRegex = regexp.MustCompile(`(?i)\b((?:proxy[-_]?authorization|authorization)\s*=\s*)(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]+`)
+	authSimpleAssignmentRegex = regexp.MustCompile(`(?i)\b((?:[a-zA-Z0-9_.-]+[ \t]+)?[a-zA-Z0-9_.-]*authorization)(\s*=\s*)(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]+`)
 
 	// authComplexAssignmentRegex matches unquoted non-Basic/Bearer authorization assignments (e.g. Digest, AWS4) to line end
-	authComplexAssignmentRegex = regexp.MustCompile(`(?i)\b((?:proxy[-_]?authorization|authorization)\s*=\s*)[a-zA-Z][^\r\n]*`)
+	authComplexAssignmentRegex = regexp.MustCompile(`(?i)\b((?:[a-zA-Z0-9_.-]+[ \t]+)?[a-zA-Z0-9_.-]*authorization)(\s*=\s*)[a-zA-Z][^\r\n]*`)
 
-	// cookieColonHeaderRegex matches "Cookie: ..." or "Set-Cookie: ..." colon headers and redacts the full header value
-	cookieColonHeaderRegex = regexp.MustCompile(`(?i)\b((?:set[-_]?cookie|cookie)\s*:\s*)[^\r\n]+`)
+	// cookieColonHeaderRegex matches "Cookie: ..." or "*_cookie: ..." colon headers and redacts the full header value
+	cookieColonHeaderRegex = regexp.MustCompile(`(?i)\b((?:[a-zA-Z0-9_.-]+[ \t]+)?[a-zA-Z0-9_.-]*cookie)(\s*:\s*)[^\r\n]+`)
+
+	// cookieAssignmentRegex matches unquoted cookie assignments (e.g. cookie=session=abc; refresh=def) to line end
+	cookieAssignmentRegex = regexp.MustCompile(`(?i)\b((?:[a-zA-Z0-9_.-]+[ \t]+)?[a-zA-Z0-9_.-]*cookie)(\s*=\s*)([^"'\r\n][^\r\n]*)`)
 
 	// bearerTokenRegex matches standalone Bearer tokens
 	bearerTokenRegex = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`)
@@ -43,15 +46,15 @@ var (
 	// Quoted key matchers
 	quotedKeyDoubleQuotedRegex       = regexp.MustCompile(`(?i)` + quotedKeyPattern + `(\s*[:=]\s*)"((?:[^"\\]|\\.)*)"`)
 	quotedKeySingleQuotedRegex       = regexp.MustCompile(`(?i)` + quotedKeyPattern + `(\s*[:=]\s*)'((?:[^'\\]|\\.)*)'`)
-	quotedKeyUnterminatedDoubleRegex = regexp.MustCompile(`(?i)` + quotedKeyPattern + `(\s*[:=]\s*)"([^"\r\n]*)(\r?\n|$)`)
-	quotedKeyUnterminatedSingleRegex = regexp.MustCompile(`(?i)` + quotedKeyPattern + `(\s*[:=]\s*)'([^'\r\n]*)(\r?\n|$)`)
+	quotedKeyUnterminatedDoubleRegex = regexp.MustCompile(`(?i)` + quotedKeyPattern + `(\s*[:=]\s*)"((?:[^"\\\r\n]|\\.)*\\?)(\r?\n|$)`)
+	quotedKeyUnterminatedSingleRegex = regexp.MustCompile(`(?i)` + quotedKeyPattern + `(\s*[:=]\s*)'((?:[^'\\\r\n]|\\.)*\\?)(\r?\n|$)`)
 	quotedKeyUnquotedRegex           = regexp.MustCompile(`(?i)` + quotedKeyPattern + `(\s*[:=]\s*)(\[redacted\]|[^"',\s&}\]\r\n]+)`)
 
 	// Unquoted key matchers
 	unquotedKeyDoubleQuotedRegex       = regexp.MustCompile(`(?i)` + unquotedKeyPattern + `(\s*[:=]\s*)"((?:[^"\\]|\\.)*)"`)
 	unquotedKeySingleQuotedRegex       = regexp.MustCompile(`(?i)` + unquotedKeyPattern + `(\s*[:=]\s*)'((?:[^'\\]|\\.)*)'`)
-	unquotedKeyUnterminatedDoubleRegex = regexp.MustCompile(`(?i)` + unquotedKeyPattern + `(\s*[:=]\s*)"([^"\r\n]*)(\r?\n|$)`)
-	unquotedKeyUnterminatedSingleRegex = regexp.MustCompile(`(?i)` + unquotedKeyPattern + `(\s*[:=]\s*)'([^'\r\n]*)(\r?\n|$)`)
+	unquotedKeyUnterminatedDoubleRegex = regexp.MustCompile(`(?i)` + unquotedKeyPattern + `(\s*[:=]\s*)"((?:[^"\\\r\n]|\\.)*\\?)(\r?\n|$)`)
+	unquotedKeyUnterminatedSingleRegex = regexp.MustCompile(`(?i)` + unquotedKeyPattern + `(\s*[:=]\s*)'((?:[^'\\\r\n]|\\.)*\\?)(\r?\n|$)`)
 	unquotedKeyUnquotedEqualsRegex     = regexp.MustCompile(`(?i)` + unquotedKeyPattern + `(\s*=\s*)(\[redacted\]|[^"',\s&}\]\r\n]+)`)
 	unquotedKeyUnquotedColonRegex      = regexp.MustCompile(`(?i)` + unquotedKeyPattern + `(\s*:\s*)(\[redacted\]|[^"',\s&}\]\r\n]+)`)
 
@@ -60,7 +63,7 @@ var (
 	strongTokenRegex = regexp.MustCompile(`(?i)\b(sk-proj-[A-Za-z0-9_-]{24,}|sk-ant-[A-Za-z0-9_-]{24,}|sk-[A-Za-z0-9]{24,}|github_pat_[A-Za-z0-9_]{40,}|ghp_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{30,}|hf_[A-Za-z0-9]{30,}|sess-[A-Za-z0-9_-]{24,}|pk_(?:live|test)_[0-9a-zA-Z]{24,}|pk_[0-9a-zA-Z]{24,}|rk_(?:live|test)_[0-9a-zA-Z]{24,}|rk_[0-9a-zA-Z]{24,}|cpamp_[A-Za-z0-9_-]{32,})\b`)
 
 	// malformedUsageKeyRegex handles usage payload "key" alias in malformed JSON fallback path, supporting unterminated quotes
-	malformedUsageKeyRegex = regexp.MustCompile(`(?i)(["']key["']\s*[:=]\s*)(?:"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\\\r\n]|\\.)*'|"[^"\r\n]*|'[^'\r\n]*|[^"',\s&}\]\r\n]+)`)
+	malformedUsageKeyRegex = regexp.MustCompile(`(?i)(["']key["']\s*[:=]\s*)(?:"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\\\r\n]|\\.)*'|"(?:[^"\\\r\n]|\\.)*\\?|'(?:[^'\\\r\n]|\\.)*\\?|[^"',\s&}\]\r\n]+)`)
 )
 
 var secretKeySuffixes = []string{
@@ -164,6 +167,18 @@ func isSecretFieldKey(key string) bool {
 	return false
 }
 
+// isAuthorizationFieldKey checks whether a field key represents an authorization credential.
+func isAuthorizationFieldKey(key string) bool {
+	normalized := normalizeSecretKey(key)
+	return normalized == "authorization" || strings.HasSuffix(normalized, "_authorization")
+}
+
+// isCookieFieldKey checks whether a field key represents a cookie credential.
+func isCookieFieldKey(key string) bool {
+	normalized := normalizeSecretKey(key)
+	return normalized == "cookie" || normalized == "set_cookie" || strings.HasSuffix(normalized, "_cookie")
+}
+
 // normalizeSecretKey normalizes a key (handling camelCase, hyphens, and spaces) to snake_case.
 func normalizeSecretKey(key string) string {
 	trimmed := strings.TrimSpace(key)
@@ -207,25 +222,32 @@ func matchQuotedKeyCandidate(sub []string) (string, bool) {
 }
 
 func matchUnquotedKeyCandidate(sub []string) (nonSecretPrefix string, secretKey string, ok bool) {
-	if len(sub) < 3 {
+	if len(sub) < 2 {
 		return "", "", false
 	}
 	rawKey := sub[1]
 	if rawKey == "" {
 		return "", "", false
 	}
+	if isSecretFieldKey(rawKey) {
+		return "", rawKey, true
+	}
 	words := strings.Fields(rawKey)
-	for i := 0; i < len(words); i++ {
-		candidate := strings.Join(words[i:], " ")
-		if isSecretFieldKey(candidate) {
-			var p string
-			if i > 0 {
+	if len(words) > 1 {
+		for i := 1; i < len(words); i++ {
+			candidate := strings.Join(words[i:], " ")
+			if isSecretFieldKey(candidate) {
+				norm := normalizeSecretKey(candidate)
+				if norm == "token" {
+					continue
+				}
 				idx := strings.Index(rawKey, candidate)
+				var p string
 				if idx > 0 {
 					p = rawKey[:idx]
 				}
+				return p, candidate, true
 			}
-			return p, candidate, true
 		}
 	}
 	return "", "", false
@@ -354,6 +376,88 @@ func containsSecretAssignment(input string) bool {
 	return false
 }
 
+func sanitizeAuthorizationHeadersAndAssignments(input string) string {
+	res := authColonHeaderRegex.ReplaceAllStringFunc(input, func(m string) string {
+		sub := authColonHeaderRegex.FindStringSubmatch(m)
+		if len(sub) < 3 || !isAuthorizationFieldKey(sub[1]) {
+			return m
+		}
+		val := strings.TrimSpace(m[len(sub[1])+len(sub[2]):])
+		if val == "[redacted]" {
+			return m
+		}
+		return sub[1] + sub[2] + "[redacted]"
+	})
+
+	res = authSimpleAssignmentRegex.ReplaceAllStringFunc(res, func(m string) string {
+		sub := authSimpleAssignmentRegex.FindStringSubmatch(m)
+		if len(sub) < 3 || !isAuthorizationFieldKey(sub[1]) {
+			return m
+		}
+		return sub[1] + sub[2] + "[redacted]"
+	})
+
+	res = authComplexAssignmentRegex.ReplaceAllStringFunc(res, func(m string) string {
+		sub := authComplexAssignmentRegex.FindStringSubmatch(m)
+		if len(sub) < 3 || !isAuthorizationFieldKey(sub[1]) {
+			return m
+		}
+		return sub[1] + sub[2] + "[redacted]"
+	})
+	return res
+}
+
+func sanitizeCookieHeadersAndAssignments(input string) string {
+	res := cookieColonHeaderRegex.ReplaceAllStringFunc(input, func(m string) string {
+		sub := cookieColonHeaderRegex.FindStringSubmatch(m)
+		if len(sub) < 3 || !isCookieFieldKey(sub[1]) {
+			return m
+		}
+		val := strings.TrimSpace(m[len(sub[1])+len(sub[2]):])
+		if val == "[redacted]" {
+			return m
+		}
+		return sub[1] + sub[2] + "[redacted]"
+	})
+
+	res = cookieAssignmentRegex.ReplaceAllStringFunc(res, func(m string) string {
+		sub := cookieAssignmentRegex.FindStringSubmatch(m)
+		if len(sub) < 4 || !isCookieFieldKey(sub[1]) {
+			return m
+		}
+		val := strings.TrimSpace(sub[3])
+		if val == "[redacted]" {
+			return m
+		}
+		return sub[1] + sub[2] + "[redacted]"
+	})
+	return res
+}
+
+func containsAuthorizationHeaderOrAssignment(value string) bool {
+	for _, re := range []*regexp.Regexp{authColonHeaderRegex, authSimpleAssignmentRegex, authComplexAssignmentRegex} {
+		matches := re.FindAllStringSubmatch(value, -1)
+		for _, sub := range matches {
+			if len(sub) > 1 && isAuthorizationFieldKey(sub[1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsCookieHeaderOrAssignment(value string) bool {
+	for _, re := range []*regexp.Regexp{cookieColonHeaderRegex, cookieAssignmentRegex} {
+		matches := re.FindAllStringSubmatch(value, -1)
+		for _, sub := range matches {
+			if len(sub) > 1 && isCookieFieldKey(sub[1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ContainsCredentialToken reports whether value contains an explicit strong token credential.
 func ContainsCredentialToken(value string) bool {
 	return strongTokenRegex.MatchString(value) || bearerTokenRegex.MatchString(value)
@@ -362,10 +466,8 @@ func ContainsCredentialToken(value string) bool {
 // ContainsCredential reports whether value contains credentials (tokens, headers, or secret key-values).
 func ContainsCredential(value string) bool {
 	return ContainsCredentialToken(value) ||
-		authColonHeaderRegex.MatchString(value) ||
-		authSimpleAssignmentRegex.MatchString(value) ||
-		authComplexAssignmentRegex.MatchString(value) ||
-		cookieColonHeaderRegex.MatchString(value) ||
+		containsAuthorizationHeaderOrAssignment(value) ||
+		containsCookieHeaderOrAssignment(value) ||
 		pemPrivateKeyBlockRegex.MatchString(value) ||
 		containsSecretAssignment(value)
 }
@@ -376,10 +478,8 @@ func SanitizeCredentialText(value string) string {
 		return ""
 	}
 	res := value
-	res = authColonHeaderRegex.ReplaceAllString(res, `${1}[redacted]`)
-	res = authSimpleAssignmentRegex.ReplaceAllString(res, `${1}[redacted]`)
-	res = authComplexAssignmentRegex.ReplaceAllString(res, `${1}[redacted]`)
-	res = cookieColonHeaderRegex.ReplaceAllString(res, `${1}[redacted]`)
+	res = sanitizeAuthorizationHeadersAndAssignments(res)
+	res = sanitizeCookieHeadersAndAssignments(res)
 	res = pemPrivateKeyBlockRegex.ReplaceAllString(res, `[redacted]`)
 	res = bearerTokenRegex.ReplaceAllString(res, `Bearer [redacted]`)
 

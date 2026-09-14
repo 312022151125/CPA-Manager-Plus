@@ -962,6 +962,26 @@ func TestSanitizeCredentialTextIdempotent(t *testing.T) {
 			name:  "proxy_authorization assignment",
 			input: "proxy_authorization=proxy-secret-token-1111",
 		},
+		{
+			name:  "upstream_authorization Basic with trailing",
+			input: "upstream_authorization=Basic dXNlcjpwYXNz trailing diagnostic",
+		},
+		{
+			name:  "cookie unquoted multi-pair",
+			input: "cookie=session=abc; refresh=def",
+		},
+		{
+			name:  "session_cookie unquoted colon multi-pair",
+			input: "session_cookie: user=alice; token=secret123; path=/",
+		},
+		{
+			name:  "password unterminated escaped quotes",
+			input: `password="abc\"def`,
+		},
+		{
+			name:  "password unterminated trailing backslash",
+			input: `password="abc\`,
+		},
 	}
 
 	for _, tc := range cases {
@@ -1321,5 +1341,273 @@ func TestNestedAuthorizationErrorSchemaPreservation(t *testing.T) {
 	}
 	if !strings.Contains(sanitized, "errors") {
 		t.Fatalf("SanitizeJSONForPersistence stripped errors parent: %s", sanitized)
+	}
+}
+
+func TestAuthorizationMultiTokenValues(t *testing.T) {
+	cases := []struct {
+		name       string
+		input      string
+		secret     string
+		diagnostic string
+		expected   string
+	}{
+		{
+			name:       "upstream_authorization Basic with trailing diagnostic",
+			input:      "upstream_authorization=Basic dXNlcjpwYXNz (status=failed)",
+			secret:     "dXNlcjpwYXNz",
+			diagnostic: "(status=failed)",
+			expected:   "upstream_authorization=[redacted] (status=failed)",
+		},
+		{
+			name:       "service_authorization Bearer with trailing diagnostic",
+			input:      "service_authorization=Bearer token-xyz-12345 (retry_count=3)",
+			secret:     "token-xyz-12345",
+			diagnostic: "(retry_count=3)",
+			expected:   "service_authorization=[redacted] (retry_count=3)",
+		},
+		{
+			name:       "upstream_authorization Digest sanitized to line end",
+			input:      `upstream_authorization=Digest username="admin", realm="testrealm", nonce="12345"`,
+			secret:     "testrealm",
+			diagnostic: "",
+			expected:   "upstream_authorization=[redacted]",
+		},
+		{
+			name:       "proxy_authorization AWS4 sanitized to line end",
+			input:      "proxy_authorization=AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, Signature=abcdef",
+			secret:     "AKIAIOSFODNN7EXAMPLE",
+			diagnostic: "",
+			expected:   "proxy_authorization=[redacted]",
+		},
+		{
+			name:       "custom_authorization colon header",
+			input:      "custom_authorization: Bearer secret-auth-token-9999",
+			secret:     "secret-auth-token-9999",
+			diagnostic: "",
+			expected:   "custom_authorization: [redacted]",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !ContainsCredential(tc.input) {
+				t.Fatalf("ContainsCredential returned false for %q", tc.input)
+			}
+			cleaned := SanitizeCredentialText(tc.input)
+			if strings.Contains(cleaned, tc.secret) {
+				t.Fatalf("SanitizeCredentialText leaked secret %q in: %s", tc.secret, cleaned)
+			}
+			if tc.diagnostic != "" && !strings.Contains(cleaned, tc.diagnostic) {
+				t.Fatalf("SanitizeCredentialText lost trailing diagnostic %q in: %s", tc.diagnostic, cleaned)
+			}
+			if cleaned != tc.expected {
+				t.Fatalf("SanitizeCredentialText = %q, want %q", cleaned, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCookieUnquotedMultiPairValues(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		leaks    []string
+		expected string
+	}{
+		{
+			name:     "cookie unquoted multi-pair",
+			input:    "cookie=session=abc; refresh=def; secure=true",
+			leaks:    []string{"session=abc", "refresh=def", "secure=true"},
+			expected: "cookie=[redacted]",
+		},
+		{
+			name:     "session_cookie unquoted multi-pair colon",
+			input:    "session_cookie: user=alice; token=secret123; path=/",
+			leaks:    []string{"user=alice", "secret123"},
+			expected: "session_cookie: [redacted]",
+		},
+		{
+			name:     "cookie idempotent with already redacted value",
+			input:    "cookie=[redacted]",
+			leaks:    nil,
+			expected: "cookie=[redacted]",
+		},
+		{
+			name:     "session_cookie colon idempotent with already redacted value",
+			input:    "session_cookie: [redacted]",
+			leaks:    nil,
+			expected: "session_cookie: [redacted]",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cleaned := SanitizeCredentialText(tc.input)
+			for _, leak := range tc.leaks {
+				if strings.Contains(cleaned, leak) {
+					t.Fatalf("SanitizeCredentialText leaked %q in: %s", leak, cleaned)
+				}
+			}
+			if cleaned != tc.expected {
+				t.Fatalf("SanitizeCredentialText = %q, want %q", cleaned, tc.expected)
+			}
+			// Idempotence check
+			secondPass := SanitizeCredentialText(cleaned)
+			if secondPass != tc.expected {
+				t.Fatalf("SanitizeCredentialText second pass modified output: got %q, want %q", secondPass, tc.expected)
+			}
+		})
+	}
+}
+
+func TestUnterminatedQuotedEscapedQuotes(t *testing.T) {
+	cases := []struct {
+		name       string
+		input      string
+		leaks      []string
+		diagnostic string
+		expected   string
+	}{
+		{
+			name:       `unterminated double quoted with escaped quote`,
+			input:      `password="abc\"def`,
+			leaks:      []string{`abc\"def`, `\"def`, `def`},
+			diagnostic: "",
+			expected:   `password="[redacted]`,
+		},
+		{
+			name:       `unterminated double quoted multiline preserves next line`,
+			input:      "password=\"abc\\\"def\nnext: diagnostic info",
+			leaks:      []string{`abc\"def`, `def`},
+			diagnostic: "next: diagnostic info",
+			expected:   "password=\"[redacted]\nnext: diagnostic info",
+		},
+		{
+			name:       `unterminated single quoted with escaped quote`,
+			input:      `client_secret='abc\'def`,
+			leaks:      []string{`abc\'def`, `\'def`, `def`},
+			diagnostic: "",
+			expected:   `client_secret='[redacted]`,
+		},
+		{
+			name:       `unterminated double quote with trailing single backslash`,
+			input:      `password="abc\`,
+			leaks:      []string{`abc\`},
+			diagnostic: "",
+			expected:   `password="[redacted]`,
+		},
+		{
+			name:       `closed double quote with escaped quote intact`,
+			input:      `password="abc\"def" trailing`,
+			leaks:      []string{`abc\"def`},
+			diagnostic: "trailing",
+			expected:   `password="[redacted]" trailing`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cleaned := SanitizeCredentialText(tc.input)
+			for _, leak := range tc.leaks {
+				if strings.Contains(cleaned, leak) {
+					t.Fatalf("SanitizeCredentialText leaked %q in: %s", leak, cleaned)
+				}
+			}
+			if tc.diagnostic != "" && !strings.Contains(cleaned, tc.diagnostic) {
+				t.Fatalf("SanitizeCredentialText lost diagnostic %q in: %s", tc.diagnostic, cleaned)
+			}
+			if cleaned != tc.expected {
+				t.Fatalf("SanitizeCredentialText = %q, want %q", cleaned, tc.expected)
+			}
+		})
+	}
+
+	// Also test malformed json fallback with escaped quotes
+	malformedJSON := `{"key":"abc\"def`
+	sanitizedJSON := SanitizeJSONForPersistence(malformedJSON)
+	if strings.Contains(sanitizedJSON, "abc") || strings.Contains(sanitizedJSON, "def") {
+		t.Fatalf("SanitizeJSONForPersistence leaked escaped unterminated quote: %s", sanitizedJSON)
+	}
+	if !strings.Contains(sanitizedJSON, `"[redacted]"`) {
+		t.Fatalf("SanitizeJSONForPersistence missing [redacted] in: %s", sanitizedJSON)
+	}
+
+	// Malformed single-quoted root key
+	malformedSingleQuoteJSON := `{'key':'abc\'def`
+	sanitizedSingleQuoteJSON := SanitizeJSONForPersistence(malformedSingleQuoteJSON)
+	if strings.Contains(sanitizedSingleQuoteJSON, "abc") || strings.Contains(sanitizedSingleQuoteJSON, "def") {
+		t.Fatalf("SanitizeJSONForPersistence leaked escaped unterminated single quote: %s", sanitizedSingleQuoteJSON)
+	}
+	if !strings.Contains(sanitizedSingleQuoteJSON, `"[redacted]"`) {
+		t.Fatalf("SanitizeJSONForPersistence missing [redacted] in: %s", sanitizedSingleQuoteJSON)
+	}
+}
+
+func TestSpacedSafeKeyPreservation(t *testing.T) {
+	safeCases := []string{
+		"max token=1000",
+		"token count=20",
+		"cache key=model-cache",
+		"routing key=node-a",
+		"model key=gpt-5",
+		"session id=session-a",
+		"total tokens: 50",
+		"prompt token: 20",
+	}
+
+	for _, input := range safeCases {
+		t.Run("safe_"+input, func(t *testing.T) {
+			if ContainsCredential(input) {
+				t.Fatalf("ContainsCredential false-positived on safe input: %q", input)
+			}
+			cleaned := SanitizeCredentialText(input)
+			if cleaned != input {
+				t.Fatalf("SanitizeCredentialText mutated safe input: got %q, want %q", cleaned, input)
+			}
+		})
+	}
+
+	// In contrast, genuine secrets with spaced keys must still be sanitized
+	secretCases := []struct {
+		input    string
+		secret   string
+		expected string
+	}{
+		{
+			input:    "api key=ordinary-secret-12345",
+			secret:   "ordinary-secret-12345",
+			expected: "api key=[redacted]",
+		},
+		{
+			input:    "access token: ordinary-secret-12345",
+			secret:   "ordinary-secret-12345",
+			expected: "access token: [redacted]",
+		},
+		{
+			input:    "error api key=ordinary-secret-12345",
+			secret:   "ordinary-secret-12345",
+			expected: "error api key=[redacted]",
+		},
+		{
+			input:    "failed cpa management key=ordinary-secret-12345",
+			secret:   "ordinary-secret-12345",
+			expected: "failed cpa management key=[redacted]",
+		},
+	}
+
+	for _, tc := range secretCases {
+		t.Run("secret_"+tc.input, func(t *testing.T) {
+			if !ContainsCredential(tc.input) {
+				t.Fatalf("ContainsCredential missed genuine secret: %q", tc.input)
+			}
+			cleaned := SanitizeCredentialText(tc.input)
+			if strings.Contains(cleaned, tc.secret) {
+				t.Fatalf("SanitizeCredentialText leaked secret in: %s", cleaned)
+			}
+			if cleaned != tc.expected {
+				t.Fatalf("SanitizeCredentialText = %q, want %q", cleaned, tc.expected)
+			}
+		})
 	}
 }
