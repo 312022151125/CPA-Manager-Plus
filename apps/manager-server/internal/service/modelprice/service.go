@@ -325,8 +325,6 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 	for _, modelID := range result.Preserved {
 		delete(selection.Matched, modelID)
 	}
-	preserved = append(preserved, result.Preserved...)
-	sort.Strings(preserved)
 	if result.Imported > 0 {
 		s.notifyPricesChanged()
 	}

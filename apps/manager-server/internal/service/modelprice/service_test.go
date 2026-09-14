@@ -266,6 +266,12 @@ func TestSyncPreservesManualPriceOnExactMatch(t *testing.T) {
 		"gpt-test": {
 			Prompt: 9, Completion: 18, PromptConfigured: true, CompletionConfigured: true,
 			Source: "manual",
+			ContextTiers: []store.ModelPriceContextTier{
+				{ThresholdTokens: 200_000, Prompt: 27, Completion: 36, PromptConfigured: true, CompletionConfigured: true},
+			},
+			ServiceTiers: []store.ModelPriceServiceTier{
+				{Mode: "fast", ServiceTier: "priority", Prompt: 45, Completion: 54, PromptConfigured: true, CompletionConfigured: true},
+			},
 		},
 	}); err != nil {
 		t.Fatalf("save manual price: %v", err)
@@ -285,7 +291,7 @@ func TestSyncPreservesManualPriceOnExactMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync prices: %v", err)
 	}
-	if result.Imported != 1 || len(result.Preserved) != 1 || result.Preserved[0] != "gpt-test" {
+	if result.Imported != 1 || len(result.Preserved) != 0 {
 		t.Fatalf("sync result = %#v", result)
 	}
 	if _, matched := result.Matched["gpt-test"]; matched {
@@ -294,6 +300,15 @@ func TestSyncPreservesManualPriceOnExactMatch(t *testing.T) {
 	manual := result.Prices["gpt-test"]
 	if manual.Source != "manual" || manual.Prompt != 9 || manual.Completion != 18 || manual.SyncedAtMS != nil {
 		t.Fatalf("manual price was overwritten: %#v", manual)
+	}
+	if len(manual.ContextTiers) != 1 || manual.ContextTiers[0].ThresholdTokens != 200_000 ||
+		manual.ContextTiers[0].Prompt != 27 || manual.ContextTiers[0].Completion != 36 {
+		t.Fatalf("manual context tier was overwritten: %#v", manual.ContextTiers)
+	}
+	if len(manual.ServiceTiers) != 1 || manual.ServiceTiers[0].Mode != "fast" ||
+		manual.ServiceTiers[0].ServiceTier != "priority" || manual.ServiceTiers[0].Prompt != 45 ||
+		manual.ServiceTiers[0].Completion != 54 {
+		t.Fatalf("manual service tier was overwritten: %#v", manual.ServiceTiers)
 	}
 	if fresh := result.Prices["fresh-model"]; fresh.Source != SyncSourceLiteLLM || fresh.Prompt != 3 || fresh.Completion != 4 {
 		t.Fatalf("fresh model was not imported: %#v", fresh)
