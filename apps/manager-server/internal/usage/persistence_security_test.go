@@ -892,3 +892,434 @@ func TestSafeSourceFilenameRegression(t *testing.T) {
 		t.Fatalf("safe filename source was erroneously modified: got %q, want %q", prep.Source, safeSource)
 	}
 }
+
+func TestSanitizeCredentialTextIdempotent(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "plain unquoted api_key",
+			input: "api_key=my-super-secret-key-12345",
+		},
+		{
+			name:  "double quoted api_key",
+			input: `api_key="secret value inside quotes"`,
+		},
+		{
+			name:  "single quoted password",
+			input: `password='secret value in single quotes'`,
+		},
+		{
+			name:  "Cookie colon header",
+			input: `Cookie: session=secret-cookie-value; theme=dark`,
+		},
+		{
+			name:  "Set-Cookie colon header",
+			input: `Set-Cookie: session="secret-val"; Path=/; HttpOnly`,
+		},
+		{
+			name:  "Authorization colon header Basic",
+			input: `Authorization: Basic dXNlcjpwYXNz`,
+		},
+		{
+			name:  "Authorization colon header Bearer",
+			input: `Authorization: Bearer eyJhbGciOiJIUzI1Ni...`,
+		},
+		{
+			name:  "Authorization simple assignment Basic with trailing diagnostic",
+			input: `request failed Authorization=Basic dXNlcjpwYXNz logged after retry`,
+		},
+		{
+			name:  "Authorization simple assignment Bearer with trailing diagnostic",
+			input: `error Authorization=Bearer eyJhbGciOiJIUzI1Ni... trailing diagnostic`,
+		},
+		{
+			name:  "PEM private key block",
+			input: "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC...\n-----END PRIVATE KEY-----\ntrailing diagnostic info",
+		},
+		{
+			name:  "PEM encrypted private key block",
+			input: "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFDjBABgkqhkiG9w0BBQ0wMzAbBgkqhkiG9w0BBQwwDgQI...\n-----END ENCRYPTED PRIVATE KEY-----\nerror: decrypt failed",
+		},
+		{
+			name:  "PEM DSA private key block",
+			input: "-----BEGIN DSA PRIVATE KEY-----\nMIIBugIBAAKCAQEA...\n-----END DSA PRIVATE KEY-----\nerror: dsa rejected",
+		},
+		{
+			name:  "namespaced openai_api_key",
+			input: "openai_api_key=secret-openai-value-9999",
+		},
+		{
+			name:  "camelCase secretKey",
+			input: "secretKey=my-secret-key-val-8888",
+		},
+		{
+			name:  "session_cookie assignment",
+			input: "session_cookie=my-cookie-session-token",
+		},
+		{
+			name:  "proxy_authorization assignment",
+			input: "proxy_authorization=proxy-secret-token-1111",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			once := SanitizeCredentialText(tc.input)
+			twice := SanitizeCredentialText(once)
+			if once != twice {
+				t.Fatalf("SanitizeCredentialText is not idempotent for %q:\nOnce : %q\nTwice: %q", tc.name, once, twice)
+			}
+			if strings.Contains(once, "[redacted]]") {
+				t.Fatalf("SanitizeCredentialText produced double bracket [redacted]]: %q", once)
+			}
+		})
+	}
+}
+
+func TestSingleTaxonomySecretAssignments(t *testing.T) {
+	// All keys that isSecretFieldKey recognizes must be scrubbed in plain assignments
+	keys := []string{
+		"secretKey",
+		"secretValue",
+		"openai_api_key",
+		"anthropic_auth_token",
+		"proxy_authorization",
+		"upstream_authorization",
+		"session_cookie",
+		"auth_cookie",
+		"browser_cookie",
+		"response_set_cookie",
+	}
+
+	for _, key := range keys {
+		t.Run(key, func(t *testing.T) {
+			if !isSecretFieldKey(key) {
+				t.Fatalf("key %q must be recognized by isSecretFieldKey", key)
+			}
+
+			// Plain unquoted assignment
+			input := fmt.Sprintf("diagnostics %s=ordinary-secret-12345 status=fail", key)
+			cleaned := SanitizeCredentialText(input)
+			if strings.Contains(cleaned, "ordinary-secret-12345") {
+				t.Fatalf("leaked secret in unquoted assignment %q: %s", key, cleaned)
+			}
+			if !strings.Contains(cleaned, fmt.Sprintf("%s=[redacted]", key)) {
+				t.Fatalf("missing %s=[redacted] in: %s", key, cleaned)
+			}
+
+			// Quoted assignment
+			quotedInput := fmt.Sprintf(`prefix %s="ordinary-secret-12345" suffix`, key)
+			cleanedQuoted := SanitizeCredentialText(quotedInput)
+			if strings.Contains(cleanedQuoted, "ordinary-secret-12345") {
+				t.Fatalf("leaked secret in quoted assignment %q: %s", key, cleanedQuoted)
+			}
+			if !strings.Contains(cleanedQuoted, fmt.Sprintf(`%s="[redacted]"`, key)) {
+				t.Fatalf("missing %s=\"[redacted]\" in: %s", key, cleanedQuoted)
+			}
+		})
+	}
+}
+
+func TestSafeAssignmentsNonSecretByteForByte(t *testing.T) {
+	safeList := []string{
+		"max_token=1000",
+		"token_count=20",
+		"cache_key=model",
+		"routing_key=node",
+		"session_id=abc",
+		"model_key=gpt-5",
+		"authorization_error=invalid_grant",
+		"cookie_count=5",
+	}
+
+	for _, safe := range safeList {
+		t.Run(safe, func(t *testing.T) {
+			if ContainsCredential(safe) {
+				t.Fatalf("ContainsCredential false positive on safe parameter: %q", safe)
+			}
+			cleaned := SanitizeCredentialText(safe)
+			if cleaned != safe {
+				t.Fatalf("SanitizeCredentialText modified safe parameter: got %q, want %q", cleaned, safe)
+			}
+		})
+	}
+}
+
+func TestUnterminatedQuotedSecretAssignments(t *testing.T) {
+	cases := []struct {
+		name       string
+		input      string
+		secret     string
+		diagnostic string
+	}{
+		{
+			name:       "unterminated double quoted password",
+			input:      "status: error\npassword=\"my-secret-password-12345\nnext_diagnostic: ok",
+			secret:     "my-secret-password-12345",
+			diagnostic: "next_diagnostic: ok",
+		},
+		{
+			name:       "unterminated single quoted client_secret",
+			input:      "client_secret='my-client-secret-67890\ninfo: second line",
+			secret:     "my-client-secret-67890",
+			diagnostic: "info: second line",
+		},
+		{
+			name:       "unterminated double quoted secretKey",
+			input:      "secretKey=\"my-secret-key-11111\nwarning: connection lost",
+			secret:     "my-secret-key-11111",
+			diagnostic: "warning: connection lost",
+		},
+		{
+			name:       "unterminated single quoted session_cookie",
+			input:      "session_cookie='cookie-data-22222\nserver: 10.0.0.1",
+			secret:     "cookie-data-22222",
+			diagnostic: "server: 10.0.0.1",
+		},
+		{
+			name:       "unterminated quoted key and quoted secret",
+			input:      "\"api_key\"=\"unclosed-api-key-9999\nlog: done",
+			secret:     "unclosed-api-key-9999",
+			diagnostic: "log: done",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cleaned := SanitizeCredentialText(tc.input)
+			if strings.Contains(cleaned, tc.secret) {
+				t.Fatalf("SanitizeCredentialText leaked unterminated secret in: %s", cleaned)
+			}
+			if !strings.Contains(cleaned, tc.diagnostic) {
+				t.Fatalf("SanitizeCredentialText lost next-line diagnostic: %s", cleaned)
+			}
+			if !strings.Contains(cleaned, "[redacted]") {
+				t.Fatalf("SanitizeCredentialText did not include [redacted]: %s", cleaned)
+			}
+		})
+	}
+}
+
+func TestCookieAndSetCookieHeadersAndAssignments(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		secret   string
+		expected string
+	}{
+		{
+			name:     "Cookie colon header unquoted",
+			input:    "Cookie: foo=bar",
+			secret:   "bar",
+			expected: "Cookie: [redacted]",
+		},
+		{
+			name:     "Cookie colon header quoted",
+			input:    `Cookie: foo="a,b"`,
+			secret:   "a,b",
+			expected: "Cookie: [redacted]",
+		},
+		{
+			name:     "Cookie colon header multiple cookies",
+			input:    `Cookie: session=abc; other=def`,
+			secret:   "abc",
+			expected: "Cookie: [redacted]",
+		},
+		{
+			name:     "Set-Cookie colon header with attributes",
+			input:    `Set-Cookie: session="a,b"; Path=/; HttpOnly`,
+			secret:   "a,b",
+			expected: "Set-Cookie: [redacted]",
+		},
+		{
+			name:     "cookie assignment single quoted",
+			input:    `cookie='abc,def'`,
+			secret:   "abc,def",
+			expected: `cookie='[redacted]'`,
+		},
+		{
+			name:     "session_cookie assignment double quoted",
+			input:    `session_cookie="abc,def"`,
+			secret:   "abc,def",
+			expected: `session_cookie="[redacted]"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cleaned := SanitizeCredentialText(tc.input)
+			if strings.Contains(cleaned, tc.secret) {
+				t.Fatalf("SanitizeCredentialText leaked cookie secret %q in: %s", tc.secret, cleaned)
+			}
+			if cleaned != tc.expected {
+				t.Fatalf("SanitizeCredentialText(%q) = %q, want %q", tc.input, cleaned, tc.expected)
+			}
+		})
+	}
+}
+
+func TestAuthorizationColonHeadersAndAssignments(t *testing.T) {
+	cases := []struct {
+		name               string
+		input              string
+		secret             string
+		expected           string
+		preserveDiagnostic string
+	}{
+		{
+			name:     "Authorization colon Bearer",
+			input:    "Authorization: Bearer secret-bearer-token",
+			secret:   "secret-bearer-token",
+			expected: "Authorization: [redacted]",
+		},
+		{
+			name:     "Authorization colon Basic",
+			input:    "Authorization: Basic dXNlcjpwYXNz",
+			secret:   "dXNlcjpwYXNz",
+			expected: "Authorization: [redacted]",
+		},
+		{
+			name:     "Authorization colon Digest",
+			input:    `Authorization: Digest username="Mufasa", realm="myrealm"`,
+			secret:   "Mufasa",
+			expected: "Authorization: [redacted]",
+		},
+		{
+			name:     "Authorization colon AWS4",
+			input:    "Authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request",
+			secret:   "AKIAIOSFODNN7EXAMPLE",
+			expected: "Authorization: [redacted]",
+		},
+		{
+			name:               "Authorization equals Basic with trailing diagnostic",
+			input:              "Authorization=Basic abc trailing diagnostic",
+			secret:             "abc",
+			expected:           "Authorization=[redacted] trailing diagnostic",
+			preserveDiagnostic: "trailing diagnostic",
+		},
+		{
+			name:               "Authorization equals Bearer with trailing diagnostic",
+			input:              "Authorization=Bearer abcdefgh trailing diagnostic",
+			secret:             "abcdefgh",
+			expected:           "Authorization=[redacted] trailing diagnostic",
+			preserveDiagnostic: "trailing diagnostic",
+		},
+		{
+			name:     "authorization double quoted assignment",
+			input:    `authorization="Basic dXNlcjpwYXNz"`,
+			secret:   "dXNlcjpwYXNz",
+			expected: `authorization="[redacted]"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cleaned := SanitizeCredentialText(tc.input)
+			if strings.Contains(cleaned, tc.secret) {
+				t.Fatalf("SanitizeCredentialText leaked secret %q in: %s", tc.secret, cleaned)
+			}
+			if tc.expected != "" && cleaned != tc.expected {
+				t.Fatalf("SanitizeCredentialText(%q) = %q, want %q", tc.input, cleaned, tc.expected)
+			}
+			if tc.preserveDiagnostic != "" && !strings.Contains(cleaned, tc.preserveDiagnostic) {
+				t.Fatalf("SanitizeCredentialText lost diagnostic text %q: %s", tc.preserveDiagnostic, cleaned)
+			}
+		})
+	}
+}
+
+func TestAllPEMPrivateKeyBlocks(t *testing.T) {
+	labels := []string{
+		"PRIVATE KEY",
+		"ENCRYPTED PRIVATE KEY",
+		"RSA PRIVATE KEY",
+		"DSA PRIVATE KEY",
+		"EC PRIVATE KEY",
+		"OPENSSH PRIVATE KEY",
+	}
+
+	for _, label := range labels {
+		t.Run(label, func(t *testing.T) {
+			pemBlock := fmt.Sprintf("-----BEGIN %s-----\nFakeEncryptedKeyMaterialForUnitTestingOnly12345\n-----END %s-----", label, label)
+			fullText := fmt.Sprintf("log error: failed key init\n%s\ntrailing error: code 500", pemBlock)
+
+			cleaned := SanitizeCredentialText(fullText)
+			if strings.Contains(cleaned, "FakeEncryptedKeyMaterial") {
+				t.Fatalf("SanitizeCredentialText leaked PEM body for %s: %s", label, cleaned)
+			}
+			if !strings.Contains(cleaned, "[redacted]") {
+				t.Fatalf("SanitizeCredentialText did not include [redacted]: %s", cleaned)
+			}
+			if !strings.Contains(cleaned, "log error: failed key init") {
+				t.Fatalf("SanitizeCredentialText lost leading text: %s", cleaned)
+			}
+			if !strings.Contains(cleaned, "trailing error: code 500") {
+				t.Fatalf("SanitizeCredentialText lost trailing diagnostic: %s", cleaned)
+			}
+		})
+	}
+}
+
+func TestMalformedUsageRootKeyUnterminatedQuotes(t *testing.T) {
+	// malformed root key with unterminated double quote
+	input1 := `{"key":"ordinary-secret`
+	sanitized1 := SanitizeJSONForPersistence(input1)
+	if strings.Contains(sanitized1, "ordinary-secret") {
+		t.Fatalf("SanitizeJSONForPersistence leaked unterminated root key: %s", sanitized1)
+	}
+	if !strings.Contains(sanitized1, `"[redacted]"`) {
+		t.Fatalf("SanitizeJSONForPersistence missing [redacted] in: %s", sanitized1)
+	}
+
+	// malformed root key with unterminated single quote
+	input2 := `{'key':'ordinary-secret`
+	sanitized2 := SanitizeJSONForPersistence(input2)
+	if strings.Contains(sanitized2, "ordinary-secret") {
+		t.Fatalf("SanitizeJSONForPersistence leaked unterminated single quote root key: %s", sanitized2)
+	}
+	if !strings.Contains(sanitized2, `"[redacted]"`) {
+		t.Fatalf("SanitizeJSONForPersistence missing [redacted] in: %s", sanitized2)
+	}
+
+	// malformed root key with comma
+	input3 := `{"key":"ordinary-secret",`
+	sanitized3 := SanitizeJSONForPersistence(input3)
+	if strings.Contains(sanitized3, "ordinary-secret") {
+		t.Fatalf("SanitizeJSONForPersistence leaked root key with comma: %s", sanitized3)
+	}
+
+	// valid nested key preserved
+	nested := `{"config":{"key":"safe-config-id"}}`
+	sanitizedNested := SanitizeJSONForPersistence(nested)
+	if !strings.Contains(sanitizedNested, "safe-config-id") {
+		t.Fatalf("SanitizeJSONForPersistence wiped valid nested key: %s", sanitizedNested)
+	}
+}
+
+func TestNestedAuthorizationErrorSchemaPreservation(t *testing.T) {
+	inputJSON := `{
+		"errors": {
+			"authorization_error": "HTTP 401 cpaManagementKey=ordinary-secret auth failed"
+		},
+		"status": 401
+	}`
+
+	sanitized := SanitizeJSONForPersistence(inputJSON)
+	if strings.Contains(sanitized, "ordinary-secret") {
+		t.Fatalf("SanitizeJSONForPersistence leaked secret: %s", sanitized)
+	}
+	if !strings.Contains(sanitized, "HTTP 401") {
+		t.Fatalf("SanitizeJSONForPersistence lost HTTP 401: %s", sanitized)
+	}
+	if !strings.Contains(sanitized, "auth failed") {
+		t.Fatalf("SanitizeJSONForPersistence lost auth failed diagnostic: %s", sanitized)
+	}
+	if !strings.Contains(sanitized, "authorization_error") {
+		t.Fatalf("SanitizeJSONForPersistence stripped authorization_error key: %s", sanitized)
+	}
+	if !strings.Contains(sanitized, "errors") {
+		t.Fatalf("SanitizeJSONForPersistence stripped errors parent: %s", sanitized)
+	}
+}

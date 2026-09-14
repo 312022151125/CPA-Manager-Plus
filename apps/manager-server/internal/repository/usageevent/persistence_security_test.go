@@ -412,7 +412,7 @@ func TestResponseMetadataAuthorizationErrorPersistence(t *testing.T) {
 
 	hash := canonicalTestHash("event-with-auth-error-meta")
 	event := makeBaseTestEvent(hash, 2000)
-	event.ResponseMetadataJSON = `{"authorization_error":"cpaManagementKey=ordinary-secret auth failed code=401","status":401}`
+	event.ResponseMetadataJSON = `{"errors":{"authorization_error":"HTTP 401 cpaManagementKey=ordinary-secret auth failed code=401"},"status":401}`
 
 	res, err := repo.InsertBatch(ctx, []usage.Event{event})
 	if err != nil {
@@ -434,11 +434,17 @@ func TestResponseMetadataAuthorizationErrorPersistence(t *testing.T) {
 	if strings.Contains(respMetaJSON, "ordinary-secret") {
 		t.Fatalf("ResponseMetadataJSON leaked secret in DB: %s", respMetaJSON)
 	}
+	if !strings.Contains(respMetaJSON, "HTTP 401") {
+		t.Fatalf("ResponseMetadataJSON dropped HTTP 401 in DB: %s", respMetaJSON)
+	}
 	if !strings.Contains(respMetaJSON, "auth failed code=401") {
 		t.Fatalf("ResponseMetadataJSON dropped diagnostic details in DB: %s", respMetaJSON)
 	}
 	if !strings.Contains(respMetaJSON, "authorization_error") {
 		t.Fatalf("authorization_error key was missing in DB: %s", respMetaJSON)
+	}
+	if !strings.Contains(respMetaJSON, "errors") {
+		t.Fatalf("errors parent object was missing in DB: %s", respMetaJSON)
 	}
 }
 
