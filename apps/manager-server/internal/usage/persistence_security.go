@@ -15,57 +15,70 @@ import (
 // 64-character SHA-256 hexadecimal hash.
 var ErrInvalidEventHash = errors.New("invalid usage event hash")
 
-const (
-	secretKeyPattern = `(?:cpa[-_ ]?management[-_ ]?key|management[-_ ]?key|x[-_ ]?api[-_ ]?key|api[-_ ]?key|apikey|xapikey|cpamanagementkey|managementkey|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|auth[-_ ]?token|authtoken|session[-_ ]?token|sessiontoken|session|client[-_ ]?secret|clientsecret|private[-_ ]?key|privatekey|password|passwd|[a-z0-9_]+_secret|[a-z0-9]+Secret|secret|token)`
-)
-
 var (
 	// authorizationHeaderRegex captures authorization headers across all schemes
 	// (Bearer, Basic, Digest, AWS4-HMAC-SHA256, etc.) and replaces the credential value with [redacted].
 	authorizationHeaderRegex = regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*["']?)(.+?)(["']?\s*(?:\r?\n|$))`)
 	bearerTokenRegex         = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`)
+	pemPrivateKeyBlockRegex  = regexp.MustCompile(`(?s)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----`)
 	cookieJSONRegex          = regexp.MustCompile(`(?i)("?(?:cookie|set[-_]?cookie)"?\s*:\s*")[^"]*(")`)
 	cookieHeaderRegex        = regexp.MustCompile(`(?i)\b(cookie|set[-_]?cookie)\s*[:=]\s*[^,\r\n"}]+`)
 
-	quotedSecretDoubleRegex = regexp.MustCompile(`(?i)("` + secretKeyPattern + `"\s*:\s*")(?:[^"\\]|\\.)*(")`)
-	quotedSecretSingleRegex = regexp.MustCompile(`(?i)('` + secretKeyPattern + `'\s*:\s*')(?:[^'\\]|\\.)*(')`)
-	unquotedSecretRegex     = regexp.MustCompile(`(?i)\b(` + secretKeyPattern + `)\b(\s*[:=]\s*["']?)([^"',\s&}\]\r\n]+)`)
+	doubleQuotedAssignmentRegex = regexp.MustCompile(`(?i)(?:"([^"\r\n]+)"|'([^'\r\n]+)'|\b([a-zA-Z0-9_.-]*?(?:api[-_ ]?key|management[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|auth[-_ ]?token|session[-_ ]?token|client[-_ ]?secret|private[-_ ]?key|password|passwd|[a-z0-9_]+_secret|secret[-_ ][a-z0-9_]+|secret|token|session|cookie|authorization))\b)(\s*[:=]\s*)"((?:[^"\\]|\\.)*)"`)
+	singleQuotedAssignmentRegex = regexp.MustCompile(`(?i)(?:"([^"\r\n]+)"|'([^'\r\n]+)'|\b([a-zA-Z0-9_.-]*?(?:api[-_ ]?key|management[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|auth[-_ ]?token|session[-_ ]?token|client[-_ ]?secret|private[-_ ]?key|password|passwd|[a-z0-9_]+_secret|secret[-_ ][a-z0-9_]+|secret|token|session|cookie|authorization))\b)(\s*[:=]\s*)'((?:[^'\\]|\\.)*)'`)
+	unquotedAssignmentRegex     = regexp.MustCompile(`(?i)(?:"([^"\r\n]+)"|'([^'\r\n]+)'|\b([a-zA-Z0-9_.-]*?(?:api[-_ ]?key|management[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|auth[-_ ]?token|session[-_ ]?token|client[-_ ]?secret|private[-_ ]?key|password|passwd|[a-z0-9_]+_secret|secret[-_ ][a-z0-9_]+|secret|token|session|cookie|authorization))\b)(\s*[:=]\s*)([^"',\s&}\]\r\n]+)`)
 
 	// strongTokenRegex matches authentic tokens without false-positiving on normal file identifiers
-	// like sk-account.json, cpamp_account_backup.json, or AIza_account.json.
-	strongTokenRegex = regexp.MustCompile(`(?i)\b(sk-proj-[A-Za-z0-9_-]{15,}|sk-ant-[A-Za-z0-9_-]{15,}|sk-[A-Za-z0-9_-]{15,}|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{15,}|AIza[0-9A-Za-z_-]{20,}|hf_[A-Za-z0-9]{15,}|sess-[A-Za-z0-9_-]{15,}|pk_(?:live|test)_[0-9a-zA-Z]{15,}|pk_[0-9a-zA-Z_-]{15,}|rk_(?:live|test)_[0-9a-zA-Z]{15,}|rk_[0-9a-zA-Z_-]{15,}|cpamp_[A-Za-z0-9_-]{32,})\b`)
+	// like sk-account-production.json, sk-proj-account-backup1.json, or AIza_account.json.
+	strongTokenRegex = regexp.MustCompile(`(?i)\b(sk-proj-[A-Za-z0-9_-]{24,}|sk-ant-[A-Za-z0-9_-]{24,}|sk-[A-Za-z0-9]{24,}|github_pat_[A-Za-z0-9_]{40,}|ghp_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{30,}|hf_[A-Za-z0-9]{30,}|sess-[A-Za-z0-9_-]{24,}|pk_(?:live|test)_[0-9a-zA-Z]{24,}|pk_[0-9a-zA-Z]{24,}|rk_(?:live|test)_[0-9a-zA-Z]{24,}|rk_[0-9a-zA-Z]{24,}|cpamp_[A-Za-z0-9_-]{32,})\b`)
+
+	malformedUsageKeyRegex = regexp.MustCompile(`(?i)(["']key["']\s*[:=]\s*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^"',\s&}\]\r\n]+)`)
 )
 
+var secretKeySuffixes = []string{
+	"_api_key",
+	"_management_key",
+	"_access_token",
+	"_refresh_token",
+	"_id_token",
+	"_auth_token",
+	"_session_token",
+	"_client_secret",
+	"_private_key",
+	"_password",
+	"_passwd",
+	"_secret",
+}
+
 var secretExactKeys = map[string]bool{
-	"api_key":             true,
-	"apikey":              true,
-	"x_api_key":           true,
-	"xapi_key":            true,
-	"xapikey":             true,
-	"management_key":      true,
-	"managementkey":       true,
-	"cpa_management_key":  true,
-	"cpamanagementkey":    true,
-	"authorization":       true,
-	"authorization_error": true,
-	"cookie":              true,
-	"set_cookie":          true,
-	"access_token":        true,
-	"refresh_token":       true,
-	"id_token":            true,
-	"token":               true,
-	"client_secret":       true,
-	"clientsecret":        true,
-	"private_key":         true,
-	"privatekey":          true,
-	"secret":              true,
-	"password":            true,
-	"passwd":              true,
-	"auth_token":          true,
-	"authtoken":           true,
-	"session":             true,
-	"session_token":       true,
-	"sessiontoken":        true,
+	"api_key":            true,
+	"apikey":             true,
+	"x_api_key":          true,
+	"xapi_key":           true,
+	"xapikey":            true,
+	"management_key":     true,
+	"managementkey":      true,
+	"cpa_management_key": true,
+	"cpamanagementkey":   true,
+	"authorization":      true,
+	"cookie":             true,
+	"set_cookie":         true,
+	"access_token":       true,
+	"refresh_token":      true,
+	"id_token":           true,
+	"token":              true,
+	"client_secret":      true,
+	"clientsecret":       true,
+	"private_key":        true,
+	"privatekey":         true,
+	"secret":             true,
+	"password":           true,
+	"passwd":             true,
+	"auth_token":         true,
+	"authtoken":          true,
+	"session":            true,
+	"session_token":      true,
+	"sessiontoken":       true,
 }
 
 func sha256Hex(s string) string {
@@ -110,8 +123,13 @@ func isSecretFieldKey(key string) bool {
 	if secretExactKeys[normalized] {
 		return true
 	}
-	if strings.HasSuffix(normalized, "_secret") || strings.HasPrefix(normalized, "secret_") {
+	if strings.HasPrefix(normalized, "secret_") {
 		return true
+	}
+	for _, suffix := range secretKeySuffixes {
+		if strings.HasSuffix(normalized, suffix) {
+			return true
+		}
 	}
 	return false
 }
@@ -145,6 +163,54 @@ func normalizeSecretKey(key string) string {
 	return strings.Trim(builder.String(), "_")
 }
 
+func sanitizeAssignments(input string, re *regexp.Regexp, quote string) string {
+	return re.ReplaceAllStringFunc(input, func(m string) string {
+		sub := re.FindStringSubmatch(m)
+		if len(sub) < 6 {
+			return m
+		}
+		var key string
+		for i := 1; i <= 3; i++ {
+			if sub[i] != "" {
+				key = sub[i]
+				break
+			}
+		}
+		if !isSecretFieldKey(key) {
+			return m
+		}
+		sep := sub[4]
+		sepIdx := strings.Index(m, sep)
+		if sepIdx < 0 {
+			return m
+		}
+		prefix := m[:sepIdx+len(sep)]
+		return prefix + quote + "[redacted]" + quote
+	})
+}
+
+func containsSecretAssignment(input string) bool {
+	for _, re := range []*regexp.Regexp{doubleQuotedAssignmentRegex, singleQuotedAssignmentRegex, unquotedAssignmentRegex} {
+		matches := re.FindAllStringSubmatch(input, -1)
+		for _, sub := range matches {
+			if len(sub) < 6 {
+				continue
+			}
+			var key string
+			for i := 1; i <= 3; i++ {
+				if sub[i] != "" {
+					key = sub[i]
+					break
+				}
+			}
+			if isSecretFieldKey(key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ContainsCredentialToken reports whether value contains an explicit strong token credential.
 func ContainsCredentialToken(value string) bool {
 	return strongTokenRegex.MatchString(value) || bearerTokenRegex.MatchString(value)
@@ -154,11 +220,10 @@ func ContainsCredentialToken(value string) bool {
 func ContainsCredential(value string) bool {
 	return ContainsCredentialToken(value) ||
 		authorizationHeaderRegex.MatchString(value) ||
+		pemPrivateKeyBlockRegex.MatchString(value) ||
 		cookieJSONRegex.MatchString(value) ||
 		cookieHeaderRegex.MatchString(value) ||
-		quotedSecretDoubleRegex.MatchString(value) ||
-		quotedSecretSingleRegex.MatchString(value) ||
-		unquotedSecretRegex.MatchString(value)
+		containsSecretAssignment(value)
 }
 
 // SanitizeCredentialText scrubs credentials from text or malformed JSON payloads.
@@ -168,19 +233,25 @@ func SanitizeCredentialText(value string) string {
 	}
 	res := authorizationHeaderRegex.ReplaceAllString(value, `${1}[redacted]${3}`)
 	res = bearerTokenRegex.ReplaceAllString(res, `Bearer [redacted]`)
+	res = pemPrivateKeyBlockRegex.ReplaceAllString(res, `[redacted]`)
 	res = cookieJSONRegex.ReplaceAllString(res, `${1}[redacted]${2}`)
 	res = cookieHeaderRegex.ReplaceAllString(res, `${1}: [redacted]`)
-	res = quotedSecretDoubleRegex.ReplaceAllString(res, `${1}[redacted]${2}`)
-	res = quotedSecretSingleRegex.ReplaceAllString(res, `${1}[redacted]${2}`)
-	res = unquotedSecretRegex.ReplaceAllString(res, `${1}${2}[redacted]`)
+	res = sanitizeAssignments(res, doubleQuotedAssignmentRegex, "\"")
+	res = sanitizeAssignments(res, singleQuotedAssignmentRegex, "'")
+	res = sanitizeAssignments(res, unquotedAssignmentRegex, "")
 	res = strongTokenRegex.ReplaceAllString(res, `[redacted]`)
 	return res
+}
+
+func sanitizeMalformedUsageJSONFallback(raw string) string {
+	cleaned := malformedUsageKeyRegex.ReplaceAllString(raw, `${1}"[redacted]"`)
+	return FailSummaryFromBody(cleaned)
 }
 
 // SanitizeJSONForPersistence parses raw JSON (using json.Number for precision) and recursively
 // redacts secrets from keys, values, and diagnostic strings.
 // It verifies that raw contains exactly one valid JSON value (EOF check).
-// If raw is not a complete, valid JSON value, it falls back to FailSummaryFromBody(trimmed) (<= 4096 bytes).
+// If raw is not a complete, valid JSON value, it falls back to sanitizeMalformedUsageJSONFallback(trimmed) (<= 4096 bytes).
 func SanitizeJSONForPersistence(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -199,7 +270,7 @@ func SanitizeJSONForPersistence(raw string) string {
 			}
 		}
 	}
-	return FailSummaryFromBody(trimmed)
+	return sanitizeMalformedUsageJSONFallback(trimmed)
 }
 
 func sanitizeJSONValue(value any) any {
@@ -325,7 +396,7 @@ func PrepareSensitiveFieldsForPersistence(event Event) Event {
 	trimmedSource := strings.TrimSpace(event.Source)
 	if trimmedSource != "" {
 		sourceSHA := sha256Hex(trimmedSource)
-		if ContainsCredential(trimmedSource) || (event.APIKeyHash != "" && sourceSHA == event.APIKeyHash) {
+		if ContainsCredential(trimmedSource) || (event.APIKeyHash != "" && strings.EqualFold(sourceSHA, event.APIKeyHash)) {
 			event.Source = "h:" + sourceSHA
 			event.SourceHash = sourceSHA
 		}

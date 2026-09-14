@@ -350,6 +350,98 @@ func TestTransactionAtomicityOnFailure(t *testing.T) {
 	}
 }
 
+func TestUppercaseAPIKeyHashCorrelationRoundTrip(t *testing.T) {
+	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	repo := New(db)
+	ctx := context.Background()
+
+	plainKey := "ordinary-unprefixed-source-key"
+	h := sha256.Sum256([]byte(plainKey))
+	lowerHex := hex.EncodeToString(h[:])
+	upperHex := strings.ToUpper(lowerHex)
+	expectedPseudonym := "h:" + lowerHex
+
+	hash := canonicalTestHash("event-with-uppercase-apikey-hash")
+	event := makeBaseTestEvent(hash, 1000)
+	event.Source = plainKey
+	event.APIKeyHash = upperHex // uppercase SHA-256
+
+	res, err := repo.InsertBatch(ctx, []usage.Event{event})
+	if err != nil {
+		t.Fatalf("insert event with uppercase APIKeyHash: %v", err)
+	}
+	if res.Inserted != 1 {
+		t.Fatalf("expected 1 inserted, got: %+v", res)
+	}
+
+	var (
+		source, sourceHash string
+		apiKeyHash         sql.NullString
+	)
+	err = db.QueryRowContext(ctx, `
+		SELECT source, source_hash, api_key_hash
+		FROM usage_events WHERE event_hash = ?`, hash).
+		Scan(&source, &sourceHash, &apiKeyHash)
+	if err != nil {
+		t.Fatalf("query row for uppercase APIKeyHash event: %v", err)
+	}
+
+	if source != expectedPseudonym {
+		t.Fatalf("Source not pseudonymized: got %q, want %q", source, expectedPseudonym)
+	}
+	if sourceHash != lowerHex {
+		t.Fatalf("SourceHash not lowercase sha256: got %q, want %q", sourceHash, lowerHex)
+	}
+	if !apiKeyHash.Valid || apiKeyHash.String != upperHex {
+		t.Fatalf("APIKeyHash uppercase not preserved in DB: got %v, want %q", apiKeyHash, upperHex)
+	}
+}
+
+func TestResponseMetadataAuthorizationErrorPersistence(t *testing.T) {
+	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	repo := New(db)
+	ctx := context.Background()
+
+	hash := canonicalTestHash("event-with-auth-error-meta")
+	event := makeBaseTestEvent(hash, 2000)
+	event.ResponseMetadataJSON = `{"authorization_error":"cpaManagementKey=ordinary-secret auth failed code=401","status":401}`
+
+	res, err := repo.InsertBatch(ctx, []usage.Event{event})
+	if err != nil {
+		t.Fatalf("insert event with auth error metadata: %v", err)
+	}
+	if res.Inserted != 1 {
+		t.Fatalf("expected 1 inserted, got: %+v", res)
+	}
+
+	var respMetaJSON string
+	err = db.QueryRowContext(ctx, `
+		SELECT response_metadata_json
+		FROM usage_events WHERE event_hash = ?`, hash).
+		Scan(&respMetaJSON)
+	if err != nil {
+		t.Fatalf("query row: %v", err)
+	}
+
+	if strings.Contains(respMetaJSON, "ordinary-secret") {
+		t.Fatalf("ResponseMetadataJSON leaked secret in DB: %s", respMetaJSON)
+	}
+	if !strings.Contains(respMetaJSON, "auth failed code=401") {
+		t.Fatalf("ResponseMetadataJSON dropped diagnostic details in DB: %s", respMetaJSON)
+	}
+	if !strings.Contains(respMetaJSON, "authorization_error") {
+		t.Fatalf("authorization_error key was missing in DB: %s", respMetaJSON)
+	}
+}
+
 func makeBaseTestEvent(hash string, timestampMS int64) usage.Event {
 	return usage.Event{
 		EventHash:        hash,

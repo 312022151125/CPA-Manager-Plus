@@ -243,12 +243,12 @@ func TestUsagePayloadRootKeyAlias(t *testing.T) {
 
 func TestJSONEOFValidationAndTrailingText(t *testing.T) {
 	// Valid JSON prefix followed by trailing diagnostic text must NOT drop the trailing text
-	input := `{"error":"failed"} trailing diagnostic information sk-proj-12345678901234567890`
+	input := `{"error":"failed"} trailing diagnostic information sk-proj-123456789012345678901234`
 	sanitizedBody := SanitizeDiagnosticBody(input)
 	if !strings.Contains(sanitizedBody, "trailing diagnostic information") {
 		t.Fatalf("SanitizeDiagnosticBody dropped trailing text: %s", sanitizedBody)
 	}
-	if strings.Contains(sanitizedBody, "sk-proj-12345678901234567890") {
+	if strings.Contains(sanitizedBody, "sk-proj-123456789012345678901234") {
 		t.Fatalf("SanitizeDiagnosticBody leaked secret in trailing text: %s", sanitizedBody)
 	}
 
@@ -256,7 +256,7 @@ func TestJSONEOFValidationAndTrailingText(t *testing.T) {
 	if !strings.Contains(sanitizedRaw, "trailing diagnostic information") {
 		t.Fatalf("SanitizeJSONForPersistence dropped trailing text on fallback: %s", sanitizedRaw)
 	}
-	if strings.Contains(sanitizedRaw, "sk-proj-12345678901234567890") {
+	if strings.Contains(sanitizedRaw, "sk-proj-123456789012345678901234") {
 		t.Fatalf("SanitizeJSONForPersistence leaked secret in fallback: %s", sanitizedRaw)
 	}
 }
@@ -559,5 +559,336 @@ func TestPrepareSensitiveFieldsForPersistenceEndToEnd(t *testing.T) {
 	// ResponseMetadata preserved
 	if prep.ResponseMetadata == nil || prep.ResponseMetadata.Response == nil || prep.ResponseMetadata.Response.ContentType != "application/json" {
 		t.Fatalf("ResponseMetadata corrupted: %#v", prep.ResponseMetadata)
+	}
+}
+
+func TestFalsePositiveProtectionLongFilenamesMatrix(t *testing.T) {
+	matrix := []string{
+		"sk-account-production.json",
+		"sk-proj-account-backup1.json",
+		"sk-proj-production-account.json",
+		"sk-ant-account-production.json",
+		"sk-ant-backup-account.json",
+		"ghp_account_production.json",
+		"hf_account_production.json",
+		"sess-account-production.json",
+		"cpamp_account_production_backup.json",
+	}
+
+	for _, filename := range matrix {
+		t.Run(filename, func(t *testing.T) {
+			if ContainsCredential(filename) {
+				t.Fatalf("ContainsCredential false positive on safe filename: %q", filename)
+			}
+			cleaned := SanitizeCredentialText(filename)
+			if cleaned != filename {
+				t.Fatalf("SanitizeCredentialText altered safe filename: got %q, want %q", cleaned, filename)
+			}
+			cleanedDiag := SanitizeDiagnosticBody(filename)
+			if cleanedDiag != filename {
+				t.Fatalf("SanitizeDiagnosticBody altered safe filename: got %q, want %q", cleanedDiag, filename)
+			}
+		})
+	}
+}
+
+func TestSafeAssignmentsPreserved(t *testing.T) {
+	safeAssignments := []string{
+		"max_token=1000",
+		"token_count=20",
+		"cache_key=model-cache",
+		"routing_key=node-a",
+		"session_id=session-a",
+		"model_key=gpt-5",
+	}
+
+	for _, safe := range safeAssignments {
+		t.Run(safe, func(t *testing.T) {
+			cleaned := SanitizeCredentialText(safe)
+			if cleaned != safe {
+				t.Fatalf("SanitizeCredentialText corrupted safe assignment: got %q, want %q", cleaned, safe)
+			}
+			cleanedDiag := SanitizeDiagnosticBody(safe)
+			if cleanedDiag != safe {
+				t.Fatalf("SanitizeDiagnosticBody corrupted safe assignment: got %q, want %q", cleanedDiag, safe)
+			}
+		})
+	}
+}
+
+func TestNamespacedStructuredAndTextSecretKeys(t *testing.T) {
+	namespacedKeys := []string{
+		"openai_api_key",
+		"anthropic_api_key",
+		"service_management_key",
+		"oauth_access_token",
+		"openai_refresh_token",
+		"provider_id_token",
+		"anthropic_auth_token",
+		"provider_session_token",
+		"service_client_secret",
+		"ssh_private_key",
+		"db_password",
+		"database_passwd",
+		"custom_secret",
+		"secret_key",
+		"secret_token",
+		"secret_value",
+	}
+
+	for _, key := range namespacedKeys {
+		t.Run(key, func(t *testing.T) {
+			if !isSecretFieldKey(key) {
+				t.Fatalf("key %q must be recognized as secret", key)
+			}
+
+			// Structured JSON sanitization
+			jsonPayload := fmt.Sprintf(`{"%s":"ordinary-secret-12345","diagnostics":"normal"}`, key)
+			sanitizedJSON := SanitizeJSONForPersistence(jsonPayload)
+			if strings.Contains(sanitizedJSON, "ordinary-secret-12345") {
+				t.Fatalf("SanitizeJSONForPersistence leaked secret for key %q: %s", key, sanitizedJSON)
+			}
+			if !strings.Contains(sanitizedJSON, `"[redacted]"`) {
+				t.Fatalf("SanitizeJSONForPersistence missing [redacted] for key %q: %s", key, sanitizedJSON)
+			}
+			if !strings.Contains(sanitizedJSON, "normal") {
+				t.Fatalf("SanitizeJSONForPersistence dropped diagnostic field: %s", sanitizedJSON)
+			}
+
+			// Plain-text assignment sanitization
+			textPayload := fmt.Sprintf("failed with %s=ordinary-secret-12345 trailing", key)
+			sanitizedText := SanitizeCredentialText(textPayload)
+			if strings.Contains(sanitizedText, "ordinary-secret-12345") {
+				t.Fatalf("SanitizeCredentialText leaked secret for key %q: %s", key, sanitizedText)
+			}
+			if !strings.Contains(sanitizedText, fmt.Sprintf("%s=[redacted]", key)) {
+				t.Fatalf("SanitizeCredentialText unexpected redaction for key %q: %s", key, sanitizedText)
+			}
+			if !strings.Contains(sanitizedText, "trailing") {
+				t.Fatalf("SanitizeCredentialText lost trailing diagnostic: %s", sanitizedText)
+			}
+		})
+	}
+
+	// Quoted plain-text assignments
+	quotedCases := []struct {
+		name     string
+		input    string
+		secret   string
+		expected string
+	}{
+		{
+			name:     "double quoted key and double quoted secret",
+			input:    `error: "api_key"="ordinary-secret" details`,
+			secret:   "ordinary-secret",
+			expected: `error: "api_key"="[redacted]" details`,
+		},
+		{
+			name:     "single quoted secret",
+			input:    `connecting with password='hello world secret' status=error`,
+			secret:   "hello world secret",
+			expected: `connecting with password='[redacted]' status=error`,
+		},
+		{
+			name:     "double quoted secret with commas",
+			input:    `env client_secret="abc,def,ghi" next=done`,
+			secret:   "abc,def,ghi",
+			expected: `env client_secret="[redacted]" next=done`,
+		},
+	}
+
+	for _, tc := range quotedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			sanitized := SanitizeCredentialText(tc.input)
+			if strings.Contains(sanitized, tc.secret) {
+				t.Fatalf("SanitizeCredentialText leaked secret %q in: %s", tc.secret, sanitized)
+			}
+			if sanitized != tc.expected {
+				t.Fatalf("SanitizeCredentialText(%q) = %q, want %q", tc.input, sanitized, tc.expected)
+			}
+		})
+	}
+}
+
+func TestPEMPrivateKeyBlockSanitizer(t *testing.T) {
+	blocks := []struct {
+		name       string
+		pem        string
+		diagnostic string
+	}{
+		{
+			name: "BEGIN PRIVATE KEY (PKCS#8)",
+			pem: `-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC6g5c7Y9z8j3L8
+0abcdef123456789+deadbeef/fakepemdataforunittestingonly==
+-----END PRIVATE KEY-----`,
+			diagnostic: "failed to load pkcs8 key: invalid format",
+		},
+		{
+			name: "BEGIN RSA PRIVATE KEY (PKCS#1)",
+			pem: `-----BEGIN RSA PRIVATE KEY-----
+Proc-Type: 4,ENCRYPTED
+DEK-Info: DES-EDE3-CBC,1234567890ABCDEF
+
+MIIEowIBAAKCAQEA123456789fakeRSAkeymaterialforunittesting==
+-----END RSA PRIVATE KEY-----`,
+			diagnostic: "handshake failed with remote peer status=502",
+		},
+		{
+			name: "BEGIN EC PRIVATE KEY (SEC1)",
+			pem: `-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIPfakesec1eckeymaterialforunittestingonly12345
+-----END EC PRIVATE KEY-----`,
+			diagnostic: "ec curve mismatch error code 400",
+		},
+		{
+			name: "BEGIN OPENSSH PRIVATE KEY",
+			pem: `-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz
+c2gtZWQyNTUxOQAAACDummyKeyMaterialForTestingOnly==
+-----END OPENSSH PRIVATE KEY-----`,
+			diagnostic: "ssh host key verification failed",
+		},
+	}
+
+	for _, tc := range blocks {
+		t.Run(tc.name, func(t *testing.T) {
+			fullText := fmt.Sprintf("prefix error info\n%s\n%s", tc.pem, tc.diagnostic)
+
+			// 1. SanitizeDiagnosticBody
+			cleanedDiag := SanitizeDiagnosticBody(fullText)
+			if strings.Contains(cleanedDiag, tc.pem) {
+				t.Fatalf("SanitizeDiagnosticBody leaked PEM block: %s", cleanedDiag)
+			}
+			if !strings.Contains(cleanedDiag, "[redacted]") {
+				t.Fatalf("SanitizeDiagnosticBody did not contain [redacted]: %s", cleanedDiag)
+			}
+			if !strings.Contains(cleanedDiag, tc.diagnostic) {
+				t.Fatalf("SanitizeDiagnosticBody dropped diagnostic info: %s", cleanedDiag)
+			}
+			if !strings.Contains(cleanedDiag, "prefix error info") {
+				t.Fatalf("SanitizeDiagnosticBody dropped prefix info: %s", cleanedDiag)
+			}
+
+			// 2. SanitizeCredentialText
+			cleanedText := SanitizeCredentialText(fullText)
+			if strings.Contains(cleanedText, tc.pem) {
+				t.Fatalf("SanitizeCredentialText leaked PEM block: %s", cleanedText)
+			}
+			if !strings.Contains(cleanedText, tc.diagnostic) {
+				t.Fatalf("SanitizeCredentialText dropped diagnostic info: %s", cleanedText)
+			}
+
+			// 3. In JSON structure
+			jsonBody := fmt.Sprintf(`{"error":%q,"status":500}`, fullText)
+			cleanedJSON := SanitizeJSONForPersistence(jsonBody)
+			if strings.Contains(cleanedJSON, "MIIE") || strings.Contains(cleanedJSON, "b3BlbnNza") || strings.Contains(cleanedJSON, "MHcCAQEEI") {
+				t.Fatalf("SanitizeJSONForPersistence leaked PEM data: %s", cleanedJSON)
+			}
+			if !strings.Contains(cleanedJSON, tc.diagnostic) {
+				t.Fatalf("SanitizeJSONForPersistence dropped diagnostic info: %s", cleanedJSON)
+			}
+		})
+	}
+}
+
+func TestRawJSONUsageKeyAliasAndNested(t *testing.T) {
+	// 1. Valid root "key" in JSON
+	validRoot := `{"key":"ordinary-unprefixed-secret","model":"gpt-4"}`
+	sanitizedRoot := SanitizeJSONForPersistence(validRoot)
+	if strings.Contains(sanitizedRoot, "ordinary-unprefixed-secret") {
+		t.Fatalf("SanitizeJSONForPersistence leaked root key: %s", sanitizedRoot)
+	}
+	if !strings.Contains(sanitizedRoot, `"key":"[redacted]"`) {
+		t.Fatalf("SanitizeJSONForPersistence did not redact root key: %s", sanitizedRoot)
+	}
+
+	// 2. Malformed JSON with root-level "key"
+	malformed := `{"key":"ordinary-unprefixed-secret","model":broken json syntax...`
+	sanitizedMalformed := SanitizeJSONForPersistence(malformed)
+	if strings.Contains(sanitizedMalformed, "ordinary-unprefixed-secret") {
+		t.Fatalf("SanitizeJSONForPersistence fallback leaked malformed root key: %s", sanitizedMalformed)
+	}
+	if !strings.Contains(sanitizedMalformed, `"key":"[redacted]"`) {
+		t.Fatalf("SanitizeJSONForPersistence fallback did not redact root key: %s", sanitizedMalformed)
+	}
+
+	// 3. Valid nested "key" in JSON
+	nested := `{"provider":{"key":"safe-config-key-ident","version":"v1"}}`
+	sanitizedNested := SanitizeJSONForPersistence(nested)
+	if !strings.Contains(sanitizedNested, "safe-config-key-ident") {
+		t.Fatalf("SanitizeJSONForPersistence wiped nested key: %s", sanitizedNested)
+	}
+}
+
+func TestAuthorizationErrorPreservation(t *testing.T) {
+	// Diagnostic error string containing authorization_error / cpaManagementKey
+	input := "HTTP 401 cpaManagementKey=my-super-cpa-secret auth failed: invalid signature"
+	sanitized := SanitizeDiagnosticBody(input)
+	if strings.Contains(sanitized, "my-super-cpa-secret") {
+		t.Fatalf("SanitizeDiagnosticBody leaked secret: %s", sanitized)
+	}
+	if !strings.Contains(sanitized, "HTTP 401") {
+		t.Fatalf("SanitizeDiagnosticBody dropped HTTP 401 status: %s", sanitized)
+	}
+	if !strings.Contains(sanitized, "auth failed: invalid signature") {
+		t.Fatalf("SanitizeDiagnosticBody dropped diagnostic error details: %s", sanitized)
+	}
+	if !strings.Contains(sanitized, "cpaManagementKey=[redacted]") {
+		t.Fatalf("SanitizeDiagnosticBody did not redact cpaManagementKey properly: %s", sanitized)
+	}
+
+	// In ResponseHeaderMetadata JSON
+	metaJSON := `{"authorization_error":"cpaManagementKey=my-super-cpa-secret token rejected","status_code":401}`
+	sanitizedMeta := SanitizeJSONForPersistence(metaJSON)
+	if strings.Contains(sanitizedMeta, "my-super-cpa-secret") {
+		t.Fatalf("SanitizeJSONForPersistence leaked secret in authorization_error: %s", sanitizedMeta)
+	}
+	if !strings.Contains(sanitizedMeta, "token rejected") {
+		t.Fatalf("SanitizeJSONForPersistence dropped diagnostic message inside authorization_error: %s", sanitizedMeta)
+	}
+	if !strings.Contains(sanitizedMeta, "authorization_error") {
+		t.Fatalf("authorization_error key was erroneously stripped: %s", sanitizedMeta)
+	}
+}
+
+func TestUppercaseAPIKeyHashCorrelation(t *testing.T) {
+	plainKey := "ordinary-unprefixed-source-key"
+	lowerHash := sha256Hex(plainKey)
+	upperHash := strings.ToUpper(lowerHash)
+
+	ev := Event{
+		EventHash:  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Source:     plainKey,
+		APIKeyHash: upperHash, // Parser produced uppercase hash
+	}
+
+	prep := PrepareSensitiveFieldsForPersistence(ev)
+
+	expectedPseudonym := "h:" + lowerHash
+	if prep.Source != expectedPseudonym {
+		t.Fatalf("Source not pseudonymized: got %q, want %q", prep.Source, expectedPseudonym)
+	}
+	// APIKeyHash must preserve its original uppercase value
+	if prep.APIKeyHash != upperHash {
+		t.Fatalf("APIKeyHash uppercase not preserved: got %q, want %q", prep.APIKeyHash, upperHash)
+	}
+	// SourceHash must be canonical lowercase SHA-256
+	if prep.SourceHash != lowerHash {
+		t.Fatalf("SourceHash not lowercase sha256: got %q, want %q", prep.SourceHash, lowerHash)
+	}
+}
+
+func TestSafeSourceFilenameRegression(t *testing.T) {
+	safeSource := "sk-account-production.json"
+	ev := Event{
+		EventHash:  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Source:     safeSource,
+		APIKeyHash: "", // No matching hash
+	}
+
+	prep := PrepareSensitiveFieldsForPersistence(ev)
+	if prep.Source != safeSource {
+		t.Fatalf("safe filename source was erroneously modified: got %q, want %q", prep.Source, safeSource)
 	}
 }
