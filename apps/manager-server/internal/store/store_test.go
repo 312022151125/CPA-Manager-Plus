@@ -76,7 +76,7 @@ func TestStorePersistsAccountSnapshot(t *testing.T) {
 			Model:                "gpt-test",
 			Endpoint:             "POST /v1/chat/completions",
 			AuthIndex:            "auth-1",
-			APIKeyHash:           "api-key-hash-1",
+			APIKeyHash:           testCanonicalHash("api-key-hash-1"),
 			ExecutorType:         "codex",
 			AccountSnapshot:      "alice@example.com",
 			AuthLabelSnapshot:    "Alice",
@@ -114,7 +114,7 @@ func TestStorePersistsAccountSnapshot(t *testing.T) {
 	if event.AuthSnapshotAtMS != 1_778_000_000_100 {
 		t.Fatalf("AuthSnapshotAtMS = %d", event.AuthSnapshotAtMS)
 	}
-	if event.APIKeyHash != "api-key-hash-1" {
+	if event.APIKeyHash != testCanonicalHash("api-key-hash-1") {
 		t.Fatalf("APIKeyHash = %q", event.APIKeyHash)
 	}
 	if event.ExecutorType != "codex" {
@@ -126,7 +126,7 @@ func TestStorePersistsAccountSnapshot(t *testing.T) {
 
 	payload := usage.BuildPayload(events)
 	detail := payload.APIs["POST /v1/chat/completions"].Models["gpt-test"].Details[0]
-	if detail.APIKeyHash != "api-key-hash-1" {
+	if detail.APIKeyHash != testCanonicalHash("api-key-hash-1") {
 		t.Fatalf("payload APIKeyHash = %q", detail.APIKeyHash)
 	}
 	if detail.AccountSnapshot != "alice@example.com" {

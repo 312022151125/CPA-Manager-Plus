@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/testutil"
+	usageparser "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
 func TestImportStreamsBatchesIntoStore(t *testing.T) {
@@ -129,3 +130,24 @@ func (r *errorAtEOFReader) Read(buffer []byte) (int, error) {
 	}
 	return read, err
 }
+
+func TestImportRejectsInvalidEventHashWithoutWrappingAsPersistenceError(t *testing.T) {
+	cfg := testutil.NewConfig(t)
+	st := testutil.NewStore(t, cfg)
+	service := New(st)
+
+	invalidPayload := `{"event_hash":"not-a-canonical-hash","timestamp_ms":1,"timestamp":"2026-01-01T00:00:00Z","model":"gpt-test"}` + "\n"
+
+	_, _, err := service.Import(context.Background(), strings.NewReader(invalidPayload))
+	if err == nil {
+		t.Fatal("expected import error for invalid event hash, got nil")
+	}
+	if !errors.Is(err, usageparser.ErrInvalidEventHash) {
+		t.Fatalf("expected errors.Is(err, usageparser.ErrInvalidEventHash), got: %v", err)
+	}
+	var persistenceErr *ImportPersistenceError
+	if errors.As(err, &persistenceErr) {
+		t.Fatalf("expected ErrInvalidEventHash NOT to be wrapped as ImportPersistenceError, got: %v", err)
+	}
+}
+

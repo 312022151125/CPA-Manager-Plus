@@ -166,7 +166,7 @@ func TestSummaryAggregatesCostsAndWindows(t *testing.T) {
 		resp.ChannelHealth[0].AccountSnapshot != "user@example.com" {
 		t.Fatalf("channel health display snapshots = %#v", resp.ChannelHealth[0])
 	}
-	if len(resp.FailureSources) != 1 || resp.FailureSources[0].SourceHash != "source-hash" ||
+	if len(resp.FailureSources) != 1 || resp.FailureSources[0].SourceHash != testCanonicalHash("source-hash") ||
 		resp.FailureSources[0].Failures != 1 {
 		t.Fatalf("failure sources = %#v", resp.FailureSources)
 	}
@@ -663,6 +663,14 @@ func newDashboardTestStore(t *testing.T) *store.Store {
 	return db
 }
 
+func testCanonicalHash(value string) string {
+	if len(value) == 64 {
+		return value
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
 func dashboardEvent(
 	hash string,
 	timestampMS int64,
@@ -676,13 +684,8 @@ func dashboardEvent(
 	totalTokens int64,
 	latencyMS *int64,
 ) usage.Event {
-	eventHash := hash
-	if len(eventHash) != 64 {
-		sum := sha256.Sum256([]byte(hash))
-		eventHash = hex.EncodeToString(sum[:])
-	}
 	return usage.Event{
-		EventHash:       eventHash,
+		EventHash:       testCanonicalHash(hash),
 		TimestampMS:     timestampMS,
 		Timestamp:       time.UnixMilli(timestampMS).UTC().Format(time.RFC3339Nano),
 		Model:           model,
@@ -691,8 +694,8 @@ func dashboardEvent(
 		Path:            "/v1/chat/completions",
 		AuthIndex:       "auth-1",
 		Source:          "user@example.com",
-		SourceHash:      "source-hash",
-		APIKeyHash:      "api-key-hash",
+		SourceHash:      testCanonicalHash("source-hash"),
+		APIKeyHash:      testCanonicalHash("api-key-hash"),
 		AccountSnapshot: "user@example.com",
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,

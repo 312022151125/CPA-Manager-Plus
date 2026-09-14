@@ -14,3 +14,9 @@ func canonicalTestHash(hash string) string {
 	sum := sha256.Sum256([]byte(hash))
 	return hex.EncodeToString(sum[:])
 }
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+

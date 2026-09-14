@@ -4,52 +4,73 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"regexp"
 	"strings"
 	"unicode"
 )
 
+// ErrInvalidEventHash is returned when a new usage event does not contain a canonical
+// 64-character SHA-256 hexadecimal hash.
+var ErrInvalidEventHash = errors.New("invalid usage event hash")
+
+const (
+	secretKeyPattern = `(?:cpa[-_ ]?management[-_ ]?key|management[-_ ]?key|x[-_ ]?api[-_ ]?key|api[-_ ]?key|apikey|xapikey|cpamanagementkey|managementkey|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|auth[-_ ]?token|authtoken|session[-_ ]?token|sessiontoken|session|client[-_ ]?secret|clientsecret|private[-_ ]?key|privatekey|password|passwd|[a-z0-9_]+_secret|[a-z0-9]+Secret|secret|token)`
+)
+
 var (
-	authorizationHeaderRegex = regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,"'{}]+`)
+	// authorizationHeaderRegex captures authorization headers across all schemes
+	// (Bearer, Basic, Digest, AWS4-HMAC-SHA256, etc.) and replaces the credential value with [redacted].
+	authorizationHeaderRegex = regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*["']?)(.+?)(["']?\s*(?:\r?\n|$))`)
 	bearerTokenRegex         = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`)
 	cookieJSONRegex          = regexp.MustCompile(`(?i)("?(?:cookie|set[-_]?cookie)"?\s*:\s*")[^"]*(")`)
 	cookieHeaderRegex        = regexp.MustCompile(`(?i)\b(cookie|set[-_]?cookie)\s*[:=]\s*[^,\r\n"}]+`)
 
-	quotedSecretDoubleRegex = regexp.MustCompile(`(?i)("(?:\w*[-_])*(?:cpa[-_]?management[-_]?key|cpaManagementKey|cpamanagementkey|management[-_]?key|managementKey|managementkey|x[-_]?api[-_]?key|xApiKey|xapikey|api[-_]?key|apiKey|apikey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|client[-_]?secret|clientSecret|clientsecret|private[-_]?key|privateKey|privatekey|[a-z0-9_]+_secret|[a-z0-9]+Secret|secret|token)"\s*:\s*")(?:[^"\\]|\\.)*(")`)
-	quotedSecretSingleRegex = regexp.MustCompile(`(?i)('(?:\w*[-_])*(?:cpa[-_]?management[-_]?key|cpaManagementKey|cpamanagementkey|management[-_]?key|managementKey|managementkey|x[-_]?api[-_]?key|xApiKey|xapikey|api[-_]?key|apiKey|apikey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|client[-_]?secret|clientSecret|clientsecret|private[-_]?key|privateKey|privatekey|[a-z0-9_]+_secret|[a-z0-9]+Secret|secret|token)'\s*:\s*')(?:[^'\\]|\\.)*(')`)
-	unquotedSecretRegex     = regexp.MustCompile(`(?i)\b(cpa[-_]?management[-_]?key|cpaManagementKey|cpamanagementkey|management[-_]?key|managementKey|managementkey|x[-_]?api[-_]?key|xApiKey|xapikey|api[-_]?key|apiKey|apikey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|client[-_]?secret|clientSecret|clientsecret|private[-_]?key|privateKey|privatekey|[a-z0-9_]+_secret|[a-z0-9]+Secret|secret|token)\b(\s*[:=]\s*["']?)([^"',\s&}\]\r\n]+)`)
+	quotedSecretDoubleRegex = regexp.MustCompile(`(?i)("` + secretKeyPattern + `"\s*:\s*")(?:[^"\\]|\\.)*(")`)
+	quotedSecretSingleRegex = regexp.MustCompile(`(?i)('` + secretKeyPattern + `'\s*:\s*')(?:[^'\\]|\\.)*(')`)
+	unquotedSecretRegex     = regexp.MustCompile(`(?i)\b(` + secretKeyPattern + `)\b(\s*[:=]\s*["']?)([^"',\s&}\]\r\n]+)`)
 
-	strongTokenRegex = regexp.MustCompile(`(?i)\b(sk-proj-[A-Za-z0-9_-]{10,}|sk-ant-[A-Za-z0-9_-]{10,}|sk-[A-Za-z0-9_-]{10,}|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{10,}|AIza[0-9A-Za-z_-]{16,}|hf_[A-Za-z0-9]{10,}|sess-[A-Za-z0-9_-]{10,}|pk_(?:live|test)_[0-9a-zA-Z]{10,}|pk_[0-9a-zA-Z_-]{10,}|rk_(?:live|test)_[0-9a-zA-Z]{10,}|rk_[0-9a-zA-Z_-]{10,}|cpamp_[A-Za-z0-9_-]{10,})`)
+	// strongTokenRegex matches authentic tokens without false-positiving on normal file identifiers
+	// like sk-account.json, cpamp_account_backup.json, or AIza_account.json.
+	strongTokenRegex = regexp.MustCompile(`(?i)\b(sk-proj-[A-Za-z0-9_-]{15,}|sk-ant-[A-Za-z0-9_-]{15,}|sk-[A-Za-z0-9_-]{15,}|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{15,}|AIza[0-9A-Za-z_-]{20,}|hf_[A-Za-z0-9]{15,}|sess-[A-Za-z0-9_-]{15,}|pk_(?:live|test)_[0-9a-zA-Z]{15,}|pk_[0-9a-zA-Z_-]{15,}|rk_(?:live|test)_[0-9a-zA-Z]{15,}|rk_[0-9a-zA-Z_-]{15,}|cpamp_[A-Za-z0-9_-]{32,})\b`)
 )
 
 var secretExactKeys = map[string]bool{
-	"api_key":            true,
-	"apikey":             true,
-	"x_api_key":          true,
-	"xapikey":            true,
-	"management_key":     true,
-	"managementkey":      true,
-	"cpa_management_key": true,
-	"cpamanagementkey":   true,
-	"authorization":      true,
-	"cookie":             true,
-	"set_cookie":         true,
-	"access_token":       true,
-	"refresh_token":      true,
-	"id_token":           true,
-	"token":              true,
-	"client_secret":      true,
-	"clientsecret":       true,
-	"private_key":        true,
-	"privatekey":         true,
-	"secret":             true,
-	"password":           true,
-	"passwd":             true,
-	"auth_token":         true,
-	"authtoken":          true,
-	"session":            true,
-	"session_token":      true,
-	"sessiontoken":       true,
+	"api_key":             true,
+	"apikey":              true,
+	"x_api_key":           true,
+	"xapi_key":            true,
+	"xapikey":             true,
+	"management_key":      true,
+	"managementkey":       true,
+	"cpa_management_key":  true,
+	"cpamanagementkey":    true,
+	"authorization":       true,
+	"authorization_error": true,
+	"cookie":              true,
+	"set_cookie":          true,
+	"access_token":        true,
+	"refresh_token":       true,
+	"id_token":            true,
+	"token":               true,
+	"client_secret":       true,
+	"clientsecret":        true,
+	"private_key":         true,
+	"privatekey":          true,
+	"secret":              true,
+	"password":            true,
+	"passwd":              true,
+	"auth_token":          true,
+	"authtoken":           true,
+	"session":             true,
+	"session_token":       true,
+	"sessiontoken":        true,
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 // IsCanonicalSHA256Hex checks whether a string is a canonical 64-character SHA-256 hex string.
@@ -68,9 +89,10 @@ func IsCanonicalSHA256Hex(value string) bool {
 }
 
 // NormalizeOpaqueHashForPersistence ensures that opaque hash fields (such as SourceHash
-// and APIKeyHash) do not leak raw credentials. If a value contains credential patterns,
-// it is deterministically hashed with SHA-256 hex; canonical hex hashes and harmless non-credential
-// identifiers are preserved.
+// and APIKeyHash) do not leak raw credentials.
+// - empty => ""
+// - valid 64-char SHA-256 hex => preserve exactly (lowercase or uppercase)
+// - any other non-empty value => SHA-256(trimmed), lowercase hex
 func NormalizeOpaqueHashForPersistence(value string) string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -79,11 +101,7 @@ func NormalizeOpaqueHashForPersistence(value string) string {
 	if IsCanonicalSHA256Hex(trimmed) {
 		return trimmed
 	}
-	if ContainsCredential(trimmed) {
-		sum := sha256.Sum256([]byte(trimmed))
-		return hex.EncodeToString(sum[:])
-	}
-	return trimmed
+	return sha256Hex(trimmed)
 }
 
 // isSecretFieldKey checks whether a field/property name represents a secret.
@@ -148,7 +166,7 @@ func SanitizeCredentialText(value string) string {
 	if value == "" {
 		return ""
 	}
-	res := authorizationHeaderRegex.ReplaceAllString(value, `${1}[redacted]`)
+	res := authorizationHeaderRegex.ReplaceAllString(value, `${1}[redacted]${3}`)
 	res = bearerTokenRegex.ReplaceAllString(res, `Bearer [redacted]`)
 	res = cookieJSONRegex.ReplaceAllString(res, `${1}[redacted]${2}`)
 	res = cookieHeaderRegex.ReplaceAllString(res, `${1}: [redacted]`)
@@ -160,8 +178,9 @@ func SanitizeCredentialText(value string) string {
 }
 
 // SanitizeJSONForPersistence parses raw JSON (using json.Number for precision) and recursively
-// redacts secrets from keys, values, and diagnostic strings. If raw is not valid JSON,
-// it falls back to SanitizeCredentialText.
+// redacts secrets from keys, values, and diagnostic strings.
+// It verifies that raw contains exactly one valid JSON value (EOF check).
+// If raw is not a complete, valid JSON value, it falls back to FailSummaryFromBody(trimmed) (<= 4096 bytes).
 func SanitizeJSONForPersistence(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -171,38 +190,48 @@ func SanitizeJSONForPersistence(raw string) string {
 	decoder.UseNumber()
 	var payload any
 	if err := decoder.Decode(&payload); err == nil {
-		sanitized := sanitizeJSONValue(payload)
-		out, err := json.Marshal(sanitized)
-		if err == nil {
-			return string(out)
+		var trailing any
+		if err := decoder.Decode(&trailing); errors.Is(err, io.EOF) {
+			sanitized := sanitizeJSONValueWithContext("", payload, 0)
+			out, err := json.Marshal(sanitized)
+			if err == nil {
+				return string(out)
+			}
 		}
 	}
-	return SanitizeCredentialText(trimmed)
+	return FailSummaryFromBody(trimmed)
 }
 
 func sanitizeJSONValue(value any) any {
-	return sanitizeJSONValueWithParent("", value)
+	return sanitizeJSONValueWithContext("", value, 0)
 }
 
-func sanitizeJSONValueWithParent(parentKey string, value any) any {
+func sanitizeJSONValueWithContext(parentKey string, value any, depth int) any {
 	switch v := value.(type) {
 	case map[string]any:
 		result := make(map[string]any, len(v))
 		for key, child := range v {
 			sanitizedKey := key
-			if ContainsCredentialToken(key) {
-				sum := sha256.Sum256([]byte(key))
-				sanitizedKey = "[redacted-key:" + hex.EncodeToString(sum[:]) + "]"
+			if ContainsCredential(key) {
+				sanitizedKey = "[redacted-key:" + sha256Hex(key) + "]"
 			}
 
 			normalizedKey := normalizeSecretKey(key)
+
+			// Root-level "key" in usage payload is treated as API key alias
+			if depth == 0 && normalizedKey == "key" {
+				result[sanitizedKey] = "[redacted]"
+				continue
+			}
+
 			if isSecretFieldKey(key) {
 				result[sanitizedKey] = "[redacted]"
 				continue
 			}
 
 			if maxBytes, ok := requestMetadataMaxBytes(normalizedKey); ok {
-				result[sanitizedKey] = sanitizeRequestMetadata(stringValue(child), maxBytes)
+				cleaned := SanitizeCredentialText(stringValue(child))
+				result[sanitizedKey] = sanitizeRequestMetadata(cleaned, maxBytes)
 				continue
 			}
 
@@ -211,13 +240,13 @@ func sanitizeJSONValueWithParent(parentKey string, value any) any {
 				continue
 			}
 
-			result[sanitizedKey] = sanitizeJSONValueWithParent(normalizedKey, child)
+			result[sanitizedKey] = sanitizeJSONValueWithContext(normalizedKey, child, depth+1)
 		}
 		return result
 	case []any:
 		result := make([]any, len(v))
 		for i, child := range v {
-			result[i] = sanitizeJSONValueWithParent(parentKey, child)
+			result[i] = sanitizeJSONValueWithContext(parentKey, child, depth+1)
 		}
 		return result
 	case string:
@@ -230,6 +259,8 @@ func sanitizeJSONValueWithParent(parentKey string, value any) any {
 }
 
 // SanitizeDiagnosticBody sanitizes failure bodies without truncating to 4096 bytes.
+// It verifies that body is exactly one complete JSON value.
+// If malformed or mixed text, it falls back to SanitizeCredentialText(full input) without truncation.
 func SanitizeDiagnosticBody(body string) string {
 	trimmed := strings.TrimSpace(body)
 	if trimmed == "" {
@@ -239,9 +270,12 @@ func SanitizeDiagnosticBody(body string) string {
 	decoder.UseNumber()
 	var payload any
 	if err := decoder.Decode(&payload); err == nil {
-		sanitized := sanitizeDiagnosticJSONValue(payload)
-		if out, err := json.Marshal(sanitized); err == nil {
-			return string(out)
+		var trailing any
+		if err := decoder.Decode(&trailing); errors.Is(err, io.EOF) {
+			sanitized := sanitizeDiagnosticJSONValue(payload)
+			if out, err := json.Marshal(sanitized); err == nil {
+				return string(out)
+			}
 		}
 	}
 	return SanitizeCredentialText(trimmed)
@@ -253,9 +287,8 @@ func sanitizeDiagnosticJSONValue(value any) any {
 		result := make(map[string]any, len(v))
 		for key, child := range v {
 			sanitizedKey := key
-			if ContainsCredentialToken(key) {
-				sum := sha256.Sum256([]byte(key))
-				sanitizedKey = "[redacted-key:" + hex.EncodeToString(sum[:]) + "]"
+			if ContainsCredential(key) {
+				sanitizedKey = "[redacted-key:" + sha256Hex(key) + "]"
 			}
 
 			if isSecretFieldKey(key) {
@@ -284,16 +317,21 @@ func sanitizeDiagnosticJSONValue(value any) any {
 // PrepareSensitiveFieldsForPersistence enforces the persistence security boundary on an Event
 // before saving it to SQLite. Business and account semantics are strictly preserved.
 func PrepareSensitiveFieldsForPersistence(event Event) Event {
-	if ContainsCredential(event.Source) {
-		sum := sha256.Sum256([]byte(event.Source))
-		hexHash := hex.EncodeToString(sum[:])
-		event.Source = "h:" + hexHash
-		event.SourceHash = hexHash
-	}
-
+	// 1. Normalize opaque hashes first
 	event.SourceHash = NormalizeOpaqueHashForPersistence(event.SourceHash)
 	event.APIKeyHash = NormalizeOpaqueHashForPersistence(event.APIKeyHash)
 
+	// 2. Correlation pseudonymization for Source
+	trimmedSource := strings.TrimSpace(event.Source)
+	if trimmedSource != "" {
+		sourceSHA := sha256Hex(trimmedSource)
+		if ContainsCredential(trimmedSource) || (event.APIKeyHash != "" && sourceSHA == event.APIKeyHash) {
+			event.Source = "h:" + sourceSHA
+			event.SourceHash = sourceSHA
+		}
+	}
+
+	// 3. Diagnostics payloads
 	if event.FailBody != "" {
 		event.FailBody = SanitizeDiagnosticBody(event.FailBody)
 	}
@@ -314,6 +352,35 @@ func PrepareSensitiveFieldsForPersistence(event Event) Event {
 
 	if event.ResponseMetadata != nil {
 		sanitizeResponseHeaderMetadata(event.ResponseMetadata)
+	}
+
+	// 4. Standalone persistence scalar string fields that may carry query/path/diagnostic secrets
+	if event.Endpoint != "" {
+		event.Endpoint = SanitizeCredentialText(event.Endpoint)
+	}
+	if event.Path != "" {
+		event.Path = SanitizeCredentialText(event.Path)
+	}
+	if event.ClientIP != "" {
+		event.ClientIP = SanitizeCredentialText(event.ClientIP)
+	}
+	if event.XForwardedFor != "" {
+		event.XForwardedFor = SanitizeCredentialText(event.XForwardedFor)
+	}
+	if event.UserAgent != "" {
+		event.UserAgent = SanitizeCredentialText(event.UserAgent)
+	}
+	if event.HeaderQuotaPlanType != "" {
+		event.HeaderQuotaPlanType = SanitizeCredentialText(event.HeaderQuotaPlanType)
+	}
+	if event.HeaderErrorKind != "" {
+		event.HeaderErrorKind = SanitizeCredentialText(event.HeaderErrorKind)
+	}
+	if event.HeaderErrorCode != "" {
+		event.HeaderErrorCode = SanitizeCredentialText(event.HeaderErrorCode)
+	}
+	if event.HeaderTraceID != "" {
+		event.HeaderTraceID = SanitizeCredentialText(event.HeaderTraceID)
 	}
 
 	return event

@@ -254,7 +254,7 @@ func TestAnalyticsHeatmapIncludesTopContributors(t *testing.T) {
 		math.Abs(topModel.Cost-2) > 0.000001 {
 		t.Fatalf("top model contributor = %#v", topModel)
 	}
-	if len(point.APIKeyContributors) != 2 || point.APIKeyContributors[0].Key != "api-key-auth-1" ||
+	if len(point.APIKeyContributors) != 2 || point.APIKeyContributors[0].Key != testCanonicalHash("api-key-auth-1") ||
 		point.APIKeyContributors[0].Calls != 2 {
 		t.Fatalf("api key contributors = %#v", point.APIKeyContributors)
 	}
@@ -339,7 +339,7 @@ func TestAnalyticsAPIKeyTimelineBuildsExactPerKeyBuckets(t *testing.T) {
 		FromMS: fromMS,
 		ToMS:   toMS,
 		Filters: Filters{
-			APIKeyHashes: []string{"api-key-auth-1", "api-key-auth-2"},
+			APIKeyHashes: []string{testCanonicalHash("api-key-auth-1"), testCanonicalHash("api-key-auth-2")},
 		},
 		Include: Include{
 			APIKeyTimeline: true,
@@ -358,14 +358,14 @@ func TestAnalyticsAPIKeyTimelineBuildsExactPerKeyBuckets(t *testing.T) {
 	}
 	firstBucketMS := time.UnixMilli(fromMS).UTC().Truncate(time.Hour).UnixMilli()
 	secondBucketMS := time.UnixMilli(fromMS + 60*60*1000).UTC().Truncate(time.Hour).UnixMilli()
-	firstBucket := byKeyBucket[fmt.Sprintf("api-key-auth-1/%d", firstBucketMS)]
+	firstBucket := byKeyBucket[fmt.Sprintf("%s/%d", testCanonicalHash("api-key-auth-1"), firstBucketMS)]
 	if firstBucket.Calls != 2 || firstBucket.Success != 1 || firstBucket.Failure != 1 || firstBucket.TotalTokens != 3_000_000 {
 		t.Fatalf("first api key bucket = %#v", firstBucket)
 	}
 	if firstBucket.Cost <= 0 {
 		t.Fatalf("first api key bucket cost = %#v", firstBucket)
 	}
-	secondBucket := byKeyBucket[fmt.Sprintf("api-key-auth-2/%d", secondBucketMS)]
+	secondBucket := byKeyBucket[fmt.Sprintf("%s/%d", testCanonicalHash("api-key-auth-2"), secondBucketMS)]
 	if secondBucket.Calls != 1 || secondBucket.Success != 1 || secondBucket.Failure != 0 || secondBucket.TotalTokens != 3_000_000 {
 		t.Fatalf("second api key bucket = %#v", secondBucket)
 	}
@@ -1202,7 +1202,7 @@ func TestAnalyticsAppliesFilters(t *testing.T) {
 		FromMS:           fromMS,
 		ToMS:             toMS,
 		SearchQuery:      "raw-api-key",
-		SearchAPIKeyHash: "api-key-auth-2",
+		SearchAPIKeyHash: testCanonicalHash("api-key-auth-2"),
 		Filters: Filters{
 			IncludeFailed: &includeFailed,
 		},
@@ -1244,7 +1244,7 @@ func TestAnalyticsAccountAndAPIKeyStatsUseFullFilteredScope(t *testing.T) {
 		events[index].AccountSnapshot = "team@example.com"
 		events[index].AuthLabelSnapshot = "Team Account"
 		events[index].AuthProviderSnapshot = "codex"
-		events[index].APIKeyHash = "client-key-hash"
+		events[index].APIKeyHash = testCanonicalHash("client-key-hash")
 	}
 	if _, err := db.InsertEvents(ctx, events); err != nil {
 		t.Fatalf("insert events: %v", err)
@@ -1276,7 +1276,7 @@ func TestAnalyticsAccountAndAPIKeyStatsUseFullFilteredScope(t *testing.T) {
 	if len(resp.AccountStats[0].Models) != 2 {
 		t.Fatalf("account model stats = %#v", resp.AccountStats[0].Models)
 	}
-	if len(resp.APIKeyStats) != 1 || resp.APIKeyStats[0].APIKeyHash != "client-key-hash" ||
+	if len(resp.APIKeyStats) != 1 || resp.APIKeyStats[0].APIKeyHash != testCanonicalHash("client-key-hash") ||
 		resp.APIKeyStats[0].Calls != 3 || resp.APIKeyStats[0].FailureCalls != 1 ||
 		resp.APIKeyStats[0].TotalTokens != 43 {
 		t.Fatalf("api key stats = %#v", resp.APIKeyStats)
@@ -1738,12 +1738,12 @@ func TestAnalyticsFilterSelectorsReturnLightweightOptions(t *testing.T) {
 	alice.AccountSnapshot = "alice@example.com"
 	alice.AuthProviderSnapshot = "codex"
 	alice.AuthFileSnapshot = "alice.json"
-	alice.APIKeyHash = "key-alice"
+	alice.APIKeyHash = testCanonicalHash("key-alice")
 	bob := monitoringEvent("selector-bob", fromMS+2_000, "gpt-b", "auth-b", "source-b", false, 10, 5, 0, 0, 15, nil)
 	bob.AccountSnapshot = "bob@example.com"
 	bob.AuthProviderSnapshot = "gemini"
 	bob.AuthFileSnapshot = "bob.json"
-	bob.APIKeyHash = "key-bob"
+	bob.APIKeyHash = testCanonicalHash("key-bob")
 	sourceOnly := monitoringEvent("selector-source-only", fromMS+3_000, "gpt-a", "", "source-only", false, 10, 5, 0, 0, 15, nil)
 	sourceOnly.AccountSnapshot = ""
 	sourceOnly.AuthLabelSnapshot = ""
@@ -1788,7 +1788,7 @@ func TestAnalyticsFilterSelectorsReturnLightweightOptions(t *testing.T) {
 	if !slices.Equal(resp.FilterOptions.Models, []string{"gpt-a", "gpt-b"}) {
 		t.Fatalf("models = %#v", resp.FilterOptions.Models)
 	}
-	if !slices.Equal(resp.FilterOptions.APIKeyHashes, []string{"key-alice", "key-bob"}) {
+	if !slices.Equal(resp.FilterOptions.APIKeyHashes, []string{testCanonicalHash("key-alice"), testCanonicalHash("key-bob")}) {
 		t.Fatalf("api key hashes = %#v", resp.FilterOptions.APIKeyHashes)
 	}
 	if !slices.Equal(resp.FilterOptions.Providers, []string{"codex", "gemini", "openai"}) {
@@ -1813,7 +1813,7 @@ func TestAnalyticsFilterSelectorsReturnLightweightOptions(t *testing.T) {
 	var sourceOnlySelector *AccountStatRow
 	for i := range resp.FilterOptions.AccountStats {
 		row := &resp.FilterOptions.AccountStats[i]
-		if slices.Contains(row.SourceHashes, "source-only") {
+		if slices.Contains(row.SourceHashes, testCanonicalHash("source-only")) {
 			sourceOnlySelector = row
 			break
 		}
@@ -1827,7 +1827,7 @@ func TestAnalyticsFilterSelectorsReturnLightweightOptions(t *testing.T) {
 	var sourceHashOnlySelector *AccountStatRow
 	for i := range resp.FilterOptions.AccountStats {
 		row := &resp.FilterOptions.AccountStats[i]
-		if slices.Contains(row.SourceHashes, "source-hash-only") {
+		if slices.Contains(row.SourceHashes, testCanonicalHash("source-hash-only")) {
 			sourceHashOnlySelector = row
 			break
 		}
@@ -3514,6 +3514,14 @@ func monitoringEvent(
 	totalTokens int64,
 	latencyMS *int64,
 ) usage.Event {
+	var apiKeyHash string
+	if authIndex != "" {
+		apiKeyHash = testCanonicalHash("api-key-" + authIndex)
+	}
+	var canonicalSourceHash string
+	if sourceHash != "" {
+		canonicalSourceHash = testCanonicalHash(sourceHash)
+	}
 	return usage.Event{
 		EventHash:       testCanonicalHash(hash),
 		TimestampMS:     timestampMS,
@@ -3524,8 +3532,8 @@ func monitoringEvent(
 		Path:            "/v1/chat/completions",
 		AuthIndex:       authIndex,
 		Source:          "user@example.com",
-		SourceHash:      sourceHash,
-		APIKeyHash:      "api-key-" + authIndex,
+		SourceHash:      canonicalSourceHash,
+		APIKeyHash:      apiKeyHash,
 		AccountSnapshot: "user@example.com",
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,

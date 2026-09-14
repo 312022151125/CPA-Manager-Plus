@@ -82,9 +82,9 @@ func TestCredentialIDFilterMatchesAllIdentityFallbacks(t *testing.T) {
 		sourceHash string
 		source     string
 	}{
-		{name: "auth file", id: "credential.json", authFile: "credential.json", authIndex: "auth-file", sourceHash: "hash-file", source: "source-file"},
-		{name: "auth index", id: "auth-index", authIndex: "auth-index", sourceHash: "hash-index", source: "source-index"},
-		{name: "source hash", id: "hash-only", sourceHash: "hash-only", source: "source-hash"},
+		{name: "auth file", id: "credential.json", authFile: "credential.json", authIndex: "auth-file", sourceHash: canonicalTestHash("hash-file"), source: "source-file"},
+		{name: "auth index", id: "auth-index", authIndex: "auth-index", sourceHash: canonicalTestHash("hash-index"), source: "source-index"},
+		{name: "source hash", id: canonicalTestHash("hash-only"), sourceHash: canonicalTestHash("hash-only"), source: "source-hash"},
 		{name: "source", id: "source-only", source: "source-only"},
 	}
 	events := make([]usage.Event, 0, len(identities))

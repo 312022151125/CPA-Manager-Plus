@@ -828,3 +828,43 @@ func requireImportSessionErrorCode(t *testing.T, err error, want ImportSessionEr
 		t.Fatalf("error = %v, want code %s", err, want)
 	}
 }
+
+func TestImportSessionRejectsInvalidEventHashAsNonRetryable(t *testing.T) {
+	service, cancel := newImportSessionTestService(t, ImportSessionConfig{
+		Directory:      filepath.Join(t.TempDir(), "imports"),
+		ChunkSizeBytes: 256,
+		DiskQuotaBytes: 1024 * 1024,
+		MaxSessions:    2,
+		TTL:            time.Hour,
+	})
+	defer cancel()
+
+	invalidPayload := `{"event_hash":"invalid-short-hash","timestamp_ms":1,"timestamp":"2026-01-01T00:00:00Z","model":"gpt-test"}` + "\n"
+
+	session, err := service.CreateImportSession(context.Background(), "history.jsonl", int64(len(invalidPayload)), "")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	session, err = service.WriteImportSessionChunk(
+		context.Background(),
+		session.ID,
+		0,
+		int64(len(invalidPayload)),
+		strings.NewReader(invalidPayload),
+	)
+	if err != nil {
+		t.Fatalf("write chunk: %v", err)
+	}
+
+	session, err = service.CompleteImportSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("complete session: %v", err)
+	}
+
+	failed := waitForImportSessionStatus(t, service, session.ID, ImportSessionStatusFailed)
+	if failed.Retryable {
+		t.Fatalf("expected Retryable to be false for ErrInvalidEventHash, got true: %#v", failed)
+	}
+}
+

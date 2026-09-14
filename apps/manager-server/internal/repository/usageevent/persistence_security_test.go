@@ -3,6 +3,7 @@ package usageevent
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"path/filepath"
@@ -101,17 +102,23 @@ func TestSensitiveSourcePseudonymizationRoundTrip(t *testing.T) {
 	repo := New(db)
 	ctx := context.Background()
 
-	secretKey := "sk-proj-sensitiveApiKeyDirectlyInSource123456789"
+	// Case 1: Known-prefix synthetic API key in Source
+	secretKey := "sk-proj-syntheticKeyDirectlyInSource1234567890"
 	h := sha256.Sum256([]byte(secretKey))
 	expectedHex := hex.EncodeToString(h[:])
 	expectedPseudonym := "h:" + expectedHex
 
 	hash1 := canonicalTestHash("event-with-secret-source")
-	event := makeBaseTestEvent(hash1, 1000)
-	event.Source = secretKey
-	event.FailBody = `{"cpaManagementKey":"my-super-cpa-key-999","message":"failed"}`
+	event1 := makeBaseTestEvent(hash1, 1000)
+	event1.Source = secretKey
+	event1.FailBody = `{"cpaManagementKey":"cpa-management-key-sample-123456789","detail":"request failed"}`
+	event1.FailSummary = `{"cpaManagementKey":"cpa-management-key-sample-123456789","short":"fail"}`
+	event1.RawJSON = `{"key":"cpa-management-key-sample-123456789","model":"gpt-test"}`
+	event1.ResponseMetadataJSON = `{"Authorization":"Bearer my-auth-token-123456789"}`
+	event1.APIKeyHash = "raw-secret-apikey-sample"
+	expectedAPIKeyHex := sha256Hex("raw-secret-apikey-sample")
 
-	res, err := repo.InsertBatch(ctx, []usage.Event{event})
+	res, err := repo.InsertBatch(ctx, []usage.Event{event1})
 	if err != nil {
 		t.Fatalf("insert event with sensitive source: %v", err)
 	}
@@ -119,30 +126,110 @@ func TestSensitiveSourcePseudonymizationRoundTrip(t *testing.T) {
 		t.Fatalf("expected 1 inserted, got: %+v", res)
 	}
 
-	// Query from database to verify roundtrip
-	events, err := repo.ListRecent(ctx, 10)
+	// Query SQLite directly to verify actual persisted columns
+	var (
+		source, sourceHash, failBody, failSummary, respMetaJSON, rawJSON string
+		apiKeyHash                                                       sql.NullString
+	)
+	err = db.QueryRowContext(ctx, `
+		SELECT source, source_hash, api_key_hash, fail_body, fail_summary, response_metadata_json, raw_json
+		FROM usage_events WHERE event_hash = ?`, hash1).
+		Scan(&source, &sourceHash, &apiKeyHash, &failBody, &failSummary, &respMetaJSON, &rawJSON)
 	if err != nil {
-		t.Fatalf("latest events: %v", err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
+		t.Fatalf("query row for hash1: %v", err)
 	}
 
-	saved := events[0]
-	if saved.Source != expectedPseudonym {
-		t.Fatalf("Source not pseudonymized in DB: got %q, want %q", saved.Source, expectedPseudonym)
+	if !apiKeyHash.Valid || apiKeyHash.String != expectedAPIKeyHex {
+		t.Fatalf("APIKeyHash not normalized to sha256 in DB: got %v, want %q", apiKeyHash, expectedAPIKeyHex)
 	}
-	if saved.SourceHash != expectedHex {
-		t.Fatalf("SourceHash not populated in DB: got %q, want %q", saved.SourceHash, expectedHex)
+
+	if source != expectedPseudonym {
+		t.Fatalf("Source not pseudonymized in DB: got %q, want %q", source, expectedPseudonym)
 	}
-	if strings.Contains(saved.Source, "sensitiveApiKeyDirectlyInSource") {
-		t.Fatalf("Source leaked plaintext credential in DB: %q", saved.Source)
+	if sourceHash != expectedHex {
+		t.Fatalf("SourceHash not populated in DB: got %q, want %q", sourceHash, expectedHex)
 	}
-	if strings.Contains(saved.FailBody, "my-super-cpa-key-999") {
-		t.Fatalf("FailBody leaked secret in DB: %s", saved.FailBody)
+	if strings.Contains(source, "syntheticKeyDirectlyInSource") {
+		t.Fatalf("Source leaked plaintext credential in DB: %q", source)
 	}
-	if strings.Contains(saved.FailSummary, "my-super-cpa-key-999") {
-		t.Fatalf("FailSummary leaked secret in DB: %s", saved.FailSummary)
+	if strings.Contains(failBody, "cpa-management-key-sample-123456789") {
+		t.Fatalf("FailBody leaked secret in DB: %s", failBody)
+	}
+	if !strings.Contains(failBody, `"detail":"request failed"`) {
+		t.Fatalf("FailBody lost non-secret diagnostic content: %s", failBody)
+	}
+	if strings.Contains(failSummary, "cpa-management-key-sample-123456789") {
+		t.Fatalf("FailSummary leaked secret in DB: %s", failSummary)
+	}
+	if strings.Contains(rawJSON, "cpa-management-key-sample-123456789") {
+		t.Fatalf("RawJSON leaked secret in DB: %s", rawJSON)
+	}
+	if strings.Contains(respMetaJSON, "my-auth-token-123456789") {
+		t.Fatalf("ResponseMetadataJSON leaked secret in DB: %s", respMetaJSON)
+	}
+
+	// Case 2: Plain unprefixed API key correlated with APIKeyHash
+	plainKey := "ordinary-unprefixed-key"
+	plainSum := sha256.Sum256([]byte(plainKey))
+	plainHex := hex.EncodeToString(plainSum[:])
+	plainPseudonym := "h:" + plainHex
+
+	hash2 := canonicalTestHash("event-with-unprefixed-key-source")
+	event2 := makeBaseTestEvent(hash2, 2000)
+	event2.Source = plainKey
+	event2.APIKeyHash = plainHex // Parser computed APIKeyHash = SHA256(plainKey)
+
+	res2, err := repo.InsertBatch(ctx, []usage.Event{event2})
+	if err != nil {
+		t.Fatalf("insert event with plain key source: %v", err)
+	}
+	if res2.Inserted != 1 {
+		t.Fatalf("expected 1 inserted, got: %+v", res2)
+	}
+
+	var (
+		source2, sourceHash2 string
+		apiKeyHash2          sql.NullString
+	)
+	err = db.QueryRowContext(ctx, `
+		SELECT source, source_hash, api_key_hash
+		FROM usage_events WHERE event_hash = ?`, hash2).
+		Scan(&source2, &sourceHash2, &apiKeyHash2)
+	if err != nil {
+		t.Fatalf("query row for hash2: %v", err)
+	}
+
+	if source2 != plainPseudonym {
+		t.Fatalf("plain unprefixed key Source not pseudonymized: got %q, want %q", source2, plainPseudonym)
+	}
+	if sourceHash2 != plainHex {
+		t.Fatalf("plain key SourceHash not set to sha256 hex: got %q, want %q", sourceHash2, plainHex)
+	}
+	if !apiKeyHash2.Valid || apiKeyHash2.String != plainHex {
+		t.Fatalf("apiKeyHash not preserved: got %v, want %q", apiKeyHash2, plainHex)
+	}
+
+	// Case 3: Safe filename source must NOT be pseudonymized
+	safeSource := "sk-account.json"
+	hash3 := canonicalTestHash("event-with-safe-filename-source")
+	event3 := makeBaseTestEvent(hash3, 3000)
+	event3.Source = safeSource
+
+	res3, err := repo.InsertBatch(ctx, []usage.Event{event3})
+	if err != nil {
+		t.Fatalf("insert event with safe filename source: %v", err)
+	}
+	if res3.Inserted != 1 {
+		t.Fatalf("expected 1 inserted, got: %+v", res3)
+	}
+
+	var source3 string
+	err = db.QueryRowContext(ctx, `SELECT source FROM usage_events WHERE event_hash = ?`, hash3).Scan(&source3)
+	if err != nil {
+		t.Fatalf("query row for hash3: %v", err)
+	}
+	if source3 != safeSource {
+		t.Fatalf("safe filename source wrongly pseudonymized: got %q, want %q", source3, safeSource)
 	}
 }
 

@@ -861,10 +861,7 @@ func sanitizeRequestMetadata(value string, maxBytes int) string {
 	if maxBytes <= 0 || len(cleaned) <= maxBytes {
 		return cleaned
 	}
-	if maxBytes <= 3 {
-		return truncateUTF8Bytes(cleaned, maxBytes)
-	}
-	return truncateUTF8Bytes(cleaned, maxBytes-3)
+	return truncateUTF8Bytes(cleaned, maxBytes)
 }
 
 func readStringFromNested(record map[string]any, parent string, keys ...string) string {

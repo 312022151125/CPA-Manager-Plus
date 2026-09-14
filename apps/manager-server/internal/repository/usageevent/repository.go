@@ -13,7 +13,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
-var ErrInvalidEventHash = errors.New("invalid usage event hash")
+var ErrInvalidEventHash = usage.ErrInvalidEventHash
 
 type Repository interface {
 	InsertBatch(ctx context.Context, events []model.UsageEvent) (model.InsertResult, error)
@@ -193,12 +193,8 @@ func (r *repository) prepareUsageEvent(rawEvent model.UsageEvent) preparedUsageE
 		failed = 1
 	}
 	metadataJSON, quotaRecoverAtMS, quotaUsedPercent, quotaPlanType, errorKind, errorCode, traceID := responseHeaderDerivedForInsert(event)
-	failSummarySource := event.FailSummary
-	if failSummarySource == "" {
-		failSummarySource = event.FailBody
-	}
-	failSummary := usage.FailSummaryFromBody(failSummarySource)
-	rawJSON := usage.SafeRawJSON(event.RawJSON)
+	failSummary := event.FailSummary
+	rawJSON := event.RawJSON
 
 	ledgerNowMS := event.CreatedAtMS
 	if ledgerNowMS <= 0 {
