@@ -143,16 +143,13 @@ describe('Demo accounts quota & usage presentation regression', () => {
       });
     };
 
-    // Verify key representative accounts across quota-bearing providers
+    // Verify key representative accounts across all supported providers
     checkProviderPresentation('codex', 'codex-pro-20x-01.json');
     checkProviderPresentation('codex', 'codex-email-user.json');
     checkProviderPresentation('claude', 'claude-team-01.json');
     checkProviderPresentation('antigravity', 'antigravity-builder.json');
     checkProviderPresentation('kimi', 'kimi-coding.json');
-
-    const xaiFreeRow = rows.find((r) => r.fileName === 'xai-ops.json');
-    expect(xaiFreeRow).toBeDefined();
-    expect(buildAccountQuotaDisplayWindows(xaiFreeRow!, options)).toEqual([]);
+    checkProviderPresentation('xai', 'xai-ops.json');
   });
 
   it('provides verifiable rate limit reset credits across demo codex accounts', () => {
