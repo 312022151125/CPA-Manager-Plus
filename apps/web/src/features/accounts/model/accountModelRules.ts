@@ -126,7 +126,7 @@ export const resolveAccountModelRuleIdentity = ({
     };
   }
 
-  const cleanPrefix = (credentialPrefix ?? '').trim().replace(/\/+$/, '');
+  const cleanPrefix = (credentialPrefix ?? '').trim().replace(/^\/+|\/+$/g, '');
   const prefixSegment = `${cleanPrefix.toLowerCase()}/`;
 
   // Priority 2: verified prefix removal

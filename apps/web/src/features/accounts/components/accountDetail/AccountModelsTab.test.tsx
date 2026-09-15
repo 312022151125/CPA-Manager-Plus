@@ -577,6 +577,24 @@ describe('AccountModelsTab', () => {
     expect(editor.updateField).not.toHaveBeenCalledWith('excludedModelsText', 'haochi/gpt-5.5');
   });
 
+  it('writes bare canonical rule id when credential prefix has leading and trailing slashes', () => {
+    const editor = makeEditor({ originalPrefix: '/haochi/', prefix: '/haochi/' });
+    const { renderer } = renderTab({
+      editor,
+      models: [{ id: 'haochi/gpt-5.5' }],
+      modelDefinitions: [{ id: 'gpt-5.5' }],
+    });
+
+    act(() => {
+      findButtonByText(
+        findModelRow(renderer, 'haochi/gpt-5.5'),
+        'accounts.model_disable_for_credential'
+      ).props.onClick();
+    });
+
+    expect(editor.updateField).toHaveBeenCalledWith('excludedModelsText', 'gpt-5.5');
+  });
+
   it('normalizes legacy prefixed exact rule when disabling model (UI Case 2)', () => {
     const editor = makeEditor({
       rules: 'haochi/gpt-5.5',
