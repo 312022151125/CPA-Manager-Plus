@@ -509,6 +509,16 @@ describe('resolveAccountQuota', () => {
     expect(activeSummary.remainingPercent).toBe(54);
     expect(activeSummary.usedPercent).toBe(46);
     expect(activeSummary.planType).toBe('Pro');
+
+    // daily = 80, weekly = 35 -> summary = 35 (limiting window = min(daily, weekly))
+    stores.devinQuota['devin.json::d-1'].windows[0].remainingPercent = 80;
+    stores.devinQuota['devin.json::d-1'].windows[1].remainingPercent = 35;
+
+    const reverseSummary = resolveAccountQuota(file, stores);
+    expect(reverseSummary.status).toBe('ok');
+    expect(reverseSummary.remainingPercent).toBe(35);
+    expect(reverseSummary.usedPercent).toBe(65);
+    expect(reverseSummary.planType).toBe('Pro');
   });
 });
 

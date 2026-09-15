@@ -752,6 +752,26 @@ describe('useVisualConfig', () => {
       harness.unmount();
     });
 
+    it('canonically writes devin.sensitive-words trimming items and dropping empty strings', () => {
+      const harness = mountUseVisualConfig();
+      const initialYaml = ['port: 8080', ''].join('\n');
+
+      act(() => {
+        expect(harness.getCurrent().loadVisualValuesFromYaml(initialYaml).ok).toBe(true);
+        harness.getCurrent().setVisualValues({
+          devinSensitiveWords: [' API ', '', 'Claude Code'],
+        });
+      });
+
+      const resultYaml = harness.getCurrent().applyVisualChangesToYaml(initialYaml);
+      const parsed = parseYaml(resultYaml) as Record<string, unknown>;
+      expect(parsed.devin).toEqual({
+        'sensitive-words': ['API', 'Claude Code'],
+      });
+
+      harness.unmount();
+    });
+
     it('removes the devin map completely when clearing sensitive words and no other fields exist', () => {
       const harness = mountUseVisualConfig();
       const yaml = [

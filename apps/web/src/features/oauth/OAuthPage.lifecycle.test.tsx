@@ -148,6 +148,16 @@ const startCodexAuth = (renderer: ReactTestRenderer): Promise<void> => {
   return promise;
 };
 
+const startDevinAuth = (renderer: ReactTestRenderer): Promise<void> => {
+  let promise!: Promise<void>;
+  act(() => {
+    promise = Promise.resolve(
+      findButton(renderer, 'auth_login.devin_oauth_button').props.onClick()
+    );
+  });
+  return promise;
+};
+
 describe('OAuthPage connection lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -418,5 +428,36 @@ describe('OAuthPage connection lifecycle', () => {
       managementKey: 'key-a',
     });
     expect(mocks.recordMutationMarker).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a late Devin polling response after the CPA connection changes', async () => {
+    const polling = deferred<{ status: 'ok' }>();
+    mocks.startAuth.mockResolvedValue({ url: 'https://auth.example/devin', state: 'state-devin-a' });
+    mocks.getAuthStatus.mockReturnValue(polling.promise);
+    const renderer = await renderOAuthPage();
+    const authPromise = startDevinAuth(renderer);
+    await act(async () => {
+      await authPromise;
+    });
+
+    let pollingPromise!: Promise<void>;
+    await act(async () => {
+      pollingPromise = Promise.resolve(mocks.intervalCallbacks[0]?.());
+      await Promise.resolve();
+    });
+
+    mocks.apiBase = 'http://cpa-b.local:8317';
+    mocks.managementKey = 'key-b';
+    await act(async () => {
+      renderer.update(<OAuthPage />);
+      polling.resolve({ status: 'ok' });
+      await pollingPromise;
+    });
+
+    expect(mocks.recordMutationMarker).not.toHaveBeenCalled();
+    expect(mocks.showNotification).not.toHaveBeenCalledWith(
+      'auth_login.devin_oauth_status_success',
+      'success'
+    );
   });
 });
