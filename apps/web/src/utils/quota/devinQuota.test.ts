@@ -41,19 +41,27 @@ describe('devinQuota normalizers', () => {
     expect(normalizeUnixSecondsToMs(1726000000)).toBe(1726000000000);
     expect(normalizeUnixSecondsToMs('1726000000')).toBe(1726000000000);
     expect(normalizeUnixSecondsToMs(0)).toBeNull();
-    expect(normalizeUnixSecondsToMs(-10)).toBeNull();
-    expect(normalizeUnixSecondsToMs('invalid')).toBeNull();
+    expect(normalizeUnixSecondsToMs(-1)).toBeNull();
+    expect(normalizeUnixSecondsToMs(1.5)).toBeNull();
+    expect(normalizeUnixSecondsToMs('1.5')).toBeNull();
+    expect(normalizeUnixSecondsToMs(Infinity)).toBeNull();
+    expect(normalizeUnixSecondsToMs(NaN)).toBeNull();
+    expect(normalizeUnixSecondsToMs(1e20)).toBeNull();
+    expect(normalizeUnixSecondsToMs('abc')).toBeNull();
+    expect(normalizeUnixSecondsToMs('')).toBeNull();
     expect(normalizeUnixSecondsToMs(null)).toBeNull();
     expect(normalizeUnixSecondsToMs(undefined)).toBeNull();
   });
 
-  it('normalizes ISO timestamp to ms', () => {
+  it('normalizes ISO timestamp to ms and rejects Go/protobuf zero-time', () => {
     expect(normalizeIsoTimestampMs('2026-09-15T10:00:00Z')).toBe(
       Date.parse('2026-09-15T10:00:00Z')
     );
+    expect(normalizeIsoTimestampMs('0001-01-01T00:00:00Z')).toBeNull();
     expect(normalizeIsoTimestampMs('invalid-date')).toBeNull();
     expect(normalizeIsoTimestampMs('')).toBeNull();
     expect(normalizeIsoTimestampMs(null)).toBeNull();
+    expect(normalizeIsoTimestampMs(undefined)).toBeNull();
   });
 
   it('normalizes plan name preserving case and trimming', () => {
@@ -193,5 +201,17 @@ describe('parseDevinQuotaPayload', () => {
     expect(parseDevinQuotaPayload({})).toBeNull();
     expect(parseDevinQuotaPayload(null)).toBeNull();
     expect(parseDevinQuotaPayload(undefined)).toBeNull();
+  });
+
+  it('rejects payloads where only invalid reset timestamp exists without valid observation', () => {
+    const invalidResetOnly = {
+      userStatus: {
+        planStatus: {
+          dailyQuotaResetAtUnix: 1.5,
+          weeklyQuotaResetAtUnix: 'bad',
+        },
+      },
+    };
+    expect(parseDevinQuotaPayload(invalidResetOnly)).toBeNull();
   });
 });

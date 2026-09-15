@@ -2763,5 +2763,31 @@ describe('accountDetailViewModel', () => {
       planEndMs: 1727000000000,
     });
   });
+
+  it('preserves Devin plan metadata on transient refresh error when plan exists', () => {
+    const row = makeRow({
+      provider: 'devin',
+      raw: { name: 'devin.json', type: 'devin', authIndex: '0' },
+    });
+    const viewModel = buildAccountDetailViewModel(row, {
+      devinQuota: {
+        status: 'error',
+        error: 'temporary failure',
+        errorStatus: 502,
+        failedAtMs: 1726000100000,
+        windows: [],
+        observedAtMs: 1726000000000,
+        plan: 'Pro',
+        planStartMs: 1725000000000,
+        planEndMs: 1727000000000,
+      },
+    });
+
+    expect(viewModel.quota.devinPlan).toEqual({
+      plan: 'Pro',
+      planStartMs: 1725000000000,
+      planEndMs: 1727000000000,
+    });
+  });
 });
 

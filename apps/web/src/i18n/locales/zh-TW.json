@@ -1939,7 +1939,7 @@
     "loading": "正在載入配額...",
     "load_failed": "配額取得失敗：{{message}}",
     "missing_auth_index": "驗證檔案缺少 auth_index",
-    "missing_identity": "Devin 憑證缺少 API Key 或 Token",
+    "missing_identity": "Devin 憑證缺少檔案名稱或 auth_index",
     "empty_data": "暫無配額資料",
     "unavailable": "配額不可用",
     "reset_unknown": "重置時間未知",

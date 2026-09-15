@@ -1943,7 +1943,7 @@
     "loading": "Загрузка квоты...",
     "load_failed": "Не удалось загрузить квоту: {{message}}",
     "missing_auth_index": "В файле авторизации отсутствует auth_index",
-    "missing_identity": "В учётных данных Devin отсутствует API-ключ или токен",
+    "missing_identity": "В учётных данных Devin отсутствует имя файла или auth_index",
     "empty_data": "Данные по квоте отсутствуют",
     "unavailable": "Квота недоступна",
     "reset_unknown": "Время сброса неизвестно",

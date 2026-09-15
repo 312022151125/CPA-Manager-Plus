@@ -26,31 +26,28 @@ export const normalizeQuotaPercent = (value: unknown): number | null => {
 };
 
 export const normalizeUnixSecondsToMs = (value: unknown): number | null => {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'boolean') return null;
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  if (typeof value === 'string' && !/^\d+$/.test(value)) return null;
 
-  let sec: number;
-  if (typeof value === 'number') {
-    sec = value;
-  } else if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed || !/^\d+$/.test(trimmed)) return null;
-    sec = Number(trimmed);
-  } else {
-    return null;
+  const seconds = Number(value);
+  const ms = seconds * 1000;
+
+  if (
+    Number.isSafeInteger(seconds) &&
+    seconds > 0 &&
+    Number.isFinite(new Date(ms).getTime())
+  ) {
+    return ms;
   }
-
-  if (!Number.isFinite(sec) || sec <= 0) return null;
-  return Math.trunc(sec * 1000);
+  return null;
 };
 
 export const normalizeIsoTimestampMs = (value: unknown): number | null => {
   if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const ms = Date.parse(trimmed);
-  if (!Number.isFinite(ms)) return null;
-  return ms;
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(value)) return null;
+
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
 };
 
 export const normalizePlanName = (value: unknown): string | null => {

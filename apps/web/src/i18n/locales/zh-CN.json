@@ -1939,7 +1939,7 @@
     "loading": "正在加载额度...",
     "load_failed": "额度获取失败：{{message}}",
     "missing_auth_index": "认证文件缺少 auth_index",
-    "missing_identity": "Devin 凭证缺少 API Key 或 Token",
+    "missing_identity": "Devin 凭证缺少文件名或 auth_index",
     "empty_data": "暂无额度数据",
     "unavailable": "额度不可用",
     "reset_unknown": "重置时间未知",

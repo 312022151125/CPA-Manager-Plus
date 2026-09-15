@@ -855,7 +855,7 @@ const buildDevinQuotaDisplayWindows = (
   options: BuildAccountQuotaDisplayWindowsOptions
 ): AccountQuotaDisplayWindow[] => {
   const quota = getCredentialScopedQuotaState(options.stores.devinQuota, row.raw);
-  if (!quota || quota.status !== 'success' || !quota.windows?.length) return [];
+  if (!quota || !quota.windows?.length) return [];
   return quota.windows.map((window) => {
     const remainingPercent =
       typeof window.remainingPercent === 'number' && Number.isFinite(window.remainingPercent)

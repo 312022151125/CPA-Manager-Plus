@@ -1497,9 +1497,7 @@ export const buildAccountDetailViewModel = (
         options.codexQuota?.rateLimitResetCredits
       ).map((item) => ({ id: item.id, expiresAtMs: item.expiresAtMs })),
       devinPlan:
-        row.provider === 'devin' &&
-        options.devinQuota?.status === 'success' &&
-        options.devinQuota.plan
+        row.provider === 'devin' && options.devinQuota?.plan
           ? {
               plan: options.devinQuota.plan,
               planStartMs: options.devinQuota.planStartMs,

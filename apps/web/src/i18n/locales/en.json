@@ -1941,7 +1941,7 @@
     "loading": "Loading quota...",
     "load_failed": "Failed to load quota: {{message}}",
     "missing_auth_index": "Auth file missing auth_index",
-    "missing_identity": "Devin credential missing API key or token",
+    "missing_identity": "Devin credential is missing its file name or auth_index",
     "empty_data": "No quota data available",
     "unavailable": "Quota unavailable",
     "reset_unknown": "Reset time unknown",
