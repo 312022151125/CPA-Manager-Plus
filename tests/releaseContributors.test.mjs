@@ -163,7 +163,7 @@ describe('release acknowledgement validation', () => {
         english,
         telegram: telegram.replace('https://github.com/camy-x', 'https://github.com/someone-else'),
       })
-    ).toThrow('Telegram release post contributor handles do not match');
+    ).toThrow('Telegram acknowledgement profile and handle differ');
   });
 
   it('rejects acknowledgement sections when there are no external contributors', () => {
