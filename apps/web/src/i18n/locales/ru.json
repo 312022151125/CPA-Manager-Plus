@@ -1641,6 +1641,7 @@
     "filter_codex": "Codex",
     "filter_antigravity": "Antigravity",
     "filter_xai": "xAI",
+    "filter_devin": "Devin",
     "filter_iflow": "iFlow",
     "filter_vertex": "Vertex",
     "filter_empty": "Пусто",
