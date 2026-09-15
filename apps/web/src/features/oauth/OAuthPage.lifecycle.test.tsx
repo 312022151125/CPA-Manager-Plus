@@ -11,6 +11,7 @@ const { mocks } = vi.hoisted(() => ({
     startAuth: vi.fn(),
     getAuthStatus: vi.fn(),
     submitCallback: vi.fn(),
+    cancelSession: vi.fn(),
     authFilesList: vi.fn(async () => ({ files: [] })),
     pluginList: vi.fn(async () => ({ plugins: [] })),
     vertexImport: vi.fn(),
@@ -61,6 +62,7 @@ vi.mock('@/services/api', () => ({
     startAuth: mocks.startAuth,
     getAuthStatus: mocks.getAuthStatus,
     submitCallback: mocks.submitCallback,
+    cancelSession: mocks.cancelSession,
   },
   authFilesApi: {
     list: mocks.authFilesList,
