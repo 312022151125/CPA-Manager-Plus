@@ -569,6 +569,12 @@ export function OAuthPage() {
       status: 'success',
       error: undefined,
       polling: false,
+      ...(provider === 'devin'
+        ? {
+            cancelling: false,
+            cancelError: undefined,
+          }
+        : {}),
       callbackUrl: '',
       callbackSubmitting: false,
       callbackStatus: undefined,
@@ -604,6 +610,8 @@ export function OAuthPage() {
               url: undefined,
               state: undefined,
               callbackUrl: '',
+              cancelling: false,
+              cancelError: undefined,
             }
           : {}),
         status: 'error',
@@ -701,6 +709,8 @@ export function OAuthPage() {
       status: 'waiting',
       polling: true,
       error: undefined,
+      cancelling: false,
+      cancelError: undefined,
       callbackSubmitting: false,
       callbackStatus: undefined,
       callbackError: undefined,

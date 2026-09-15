@@ -142,14 +142,17 @@ const renderOAuthPage = async (): Promise<ReactTestRenderer> => {
   return renderer;
 };
 
+const findDevinLoginButton = (renderer: ReactTestRenderer): ReactTestInstance => {
+  const button =
+    queryDevinButton(renderer, 'auth_login.devin_oauth_button') ||
+    queryDevinButton(renderer, 'auth_login.login_another_account');
+  if (!button) throw new Error('Devin login button not found');
+  return button;
+};
+
 const startDevinAuth = (renderer: ReactTestRenderer): Promise<void> => {
-  let promise!: Promise<void>;
-  act(() => {
-    promise = Promise.resolve(
-      findDevinButton(renderer, 'auth_login.devin_oauth_button').props.onClick()
-    );
-  });
-  return promise;
+  const button = findDevinLoginButton(renderer);
+  return Promise.resolve(button.props.onClick());
 };
 
 const submitDevinCallback = async (renderer: ReactTestRenderer, callbackUrl: string) => {
@@ -177,13 +180,8 @@ const submitDevinCallback = async (renderer: ReactTestRenderer, callbackUrl: str
 };
 
 const cancelDevinAuth = (renderer: ReactTestRenderer): Promise<void> => {
-  let promise!: Promise<void>;
-  act(() => {
-    promise = Promise.resolve(
-      findDevinButton(renderer, 'auth_login.devin_oauth_cancel').props.onClick()
-    );
-  });
-  return promise;
+  const button = findDevinButton(renderer, 'auth_login.devin_oauth_cancel');
+  return Promise.resolve(button.props.onClick());
 };
 
 describe('OAuthPage Devin OAuth lifecycle', () => {
@@ -224,9 +222,8 @@ describe('OAuthPage Devin OAuth lifecycle', () => {
     mocks.getAuthStatus.mockResolvedValue({ status: 'wait' });
 
     const renderer = await renderOAuthPage();
-    const authPromise = startDevinAuth(renderer);
     await act(async () => {
-      await authPromise;
+      await startDevinAuth(renderer);
     });
 
     expect(mocks.startAuth).toHaveBeenCalledWith('devin', {
@@ -454,6 +451,94 @@ describe('OAuthPage Devin OAuth lifecycle', () => {
     // State and Cancel button preserved
     expect(queryDevinButton(renderer, 'auth_login.devin_oauth_cancel')).toBeDefined();
     expect(treeText(renderer)).toContain('https://auth.example/devin');
+  });
+
+  it('clears cancelError when attempt finishes successfully and does not leak to a new Devin login', async () => {
+    mocks.startAuth
+      .mockResolvedValueOnce({
+        url: 'https://auth.example/devin?state=devin-state-1',
+        state: 'devin-state-1',
+      })
+      .mockResolvedValueOnce({
+        url: 'https://auth.example/devin?state=devin-state-2',
+        state: 'devin-state-2',
+      });
+    mocks.cancelSession.mockRejectedValueOnce(new Error('Network error on cancel'));
+    mocks.getAuthStatus.mockResolvedValueOnce({ status: 'ok' });
+
+    const renderer = await renderOAuthPage();
+    await act(async () => {
+      await startDevinAuth(renderer);
+    });
+
+    // Cancel fails, preserves pending state and shows cancelError
+    await act(async () => {
+      await cancelDevinAuth(renderer);
+    });
+    expect(treeText(renderer)).toContain('Network error on cancel');
+    expect(queryDevinButton(renderer, 'auth_login.devin_oauth_cancel')).toBeDefined();
+
+    // Subsequent polling succeeds and finishes the attempt
+    const latestPollingCallback = mocks.intervalCallbacks[mocks.intervalCallbacks.length - 1];
+    await act(async () => {
+      await latestPollingCallback?.();
+    });
+
+    // Attempt completes successfully: cancelError cleared
+    expect(treeText(renderer)).not.toContain('Network error on cancel');
+
+    // Start a new Devin login attempt
+    await act(async () => {
+      await startDevinAuth(renderer);
+    });
+
+    // Old cancel error must not leak into the new login attempt
+    expect(treeText(renderer)).not.toContain('Network error on cancel');
+    expect(treeText(renderer)).toContain('https://auth.example/devin?state=devin-state-2');
+  });
+
+  it('clears cancelError when CPA returns error status and does not leak to a new Devin login', async () => {
+    mocks.startAuth
+      .mockResolvedValueOnce({
+        url: 'https://auth.example/devin?state=devin-state-1',
+        state: 'devin-state-1',
+      })
+      .mockResolvedValueOnce({
+        url: 'https://auth.example/devin?state=devin-state-2',
+        state: 'devin-state-2',
+      });
+    mocks.cancelSession.mockRejectedValueOnce(new Error('Network error on cancel'));
+    mocks.getAuthStatus.mockResolvedValueOnce({ status: 'error', error: 'session expired' });
+
+    const renderer = await renderOAuthPage();
+    await act(async () => {
+      await startDevinAuth(renderer);
+    });
+
+    // Cancel fails, cancelError is displayed
+    await act(async () => {
+      await cancelDevinAuth(renderer);
+    });
+    expect(treeText(renderer)).toContain('Network error on cancel');
+
+    // Polling receives CPA error status
+    const latestPollingCallback = mocks.intervalCallbacks[mocks.intervalCallbacks.length - 1];
+    await act(async () => {
+      await latestPollingCallback?.();
+    });
+
+    // Error status clears cancelError and resets session
+    expect(treeText(renderer)).not.toContain('Network error on cancel');
+    expect(treeText(renderer)).toContain('session expired');
+
+    // Start a new Devin login attempt
+    await act(async () => {
+      await startDevinAuth(renderer);
+    });
+
+    // Old cancel error must not leak into the new login attempt
+    expect(treeText(renderer)).not.toContain('Network error on cancel');
+    expect(treeText(renderer)).toContain('https://auth.example/devin?state=devin-state-2');
   });
 
   it('preserves state and leaves cancel button visible when polling encounters network error', async () => {

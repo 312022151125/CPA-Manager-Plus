@@ -98,6 +98,27 @@ describe('validateDevinCallback', () => {
     });
   });
 
+  it('rejects callback when expected state is undefined or empty', () => {
+    expect(
+      validateDevinCallback(
+        'http://127.0.0.1:8317/callback?code=abc&state=state-a',
+        undefined
+      )
+    ).toEqual({
+      valid: false,
+      errorKey: 'auth_login.devin_callback_state_mismatch',
+    });
+    expect(
+      validateDevinCallback(
+        'http://127.0.0.1:8317/callback?code=abc&state=state-a',
+        '   '
+      )
+    ).toEqual({
+      valid: false,
+      errorKey: 'auth_login.devin_callback_state_mismatch',
+    });
+  });
+
   it('rejects callback missing code, error, and error_description', () => {
     expect(
       validateDevinCallback('http://127.0.0.1:8317/callback?state=expected', 'expected')

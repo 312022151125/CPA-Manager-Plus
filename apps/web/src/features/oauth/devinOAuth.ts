@@ -52,8 +52,11 @@ export function validateDevinCallback(
     return { valid: false, errorKey: 'auth_login.devin_callback_invalid' };
   }
 
-  if (expectedState !== undefined && callbackState !== expectedState.trim()) {
-    return { valid: false, errorKey: 'auth_login.devin_callback_state_mismatch' };
+  if (!expectedState?.trim() || callbackState !== expectedState.trim()) {
+    return {
+      valid: false,
+      errorKey: 'auth_login.devin_callback_state_mismatch',
+    };
   }
 
   return { valid: true };
