@@ -3588,7 +3588,13 @@
           "antigravity_signature_cache": "Включить кэш подписей Antigravity",
           "antigravity_signature_cache_desc": "Предпочитать и проверять кэшированные подписи thinking-блоков",
           "antigravity_signature_strict": "Строгая проверка bypass-подписи",
-          "antigravity_signature_strict_desc": "Применяется только при отключённом кэше подписей; проверяет полное дерево Claude protobuf"
+          "antigravity_signature_strict_desc": "Применяется только при отключённом кэше подписей; проверяет полное дерево Claude protobuf",
+          "devin_title": "Devin",
+          "devin_sensitive_words": "Список чувствительных слов",
+          "devin_sensitive_words_desc": "Настройка чувствительных слов для системных промптов Devin. Совпадающие слова обфусцируются с помощью символов нулевой ширины перед отправкой в Devin.",
+          "devin_sensitive_words_label": "Чувствительные слова",
+          "devin_sensitive_words_placeholder": "Введите чувствительное слово или фразу",
+          "devin_sensitive_words_hint": "По одному слову или фразе на строку. Совпадения в системных промптах Devin обфусцируются символами нулевой ширины. Пустые записи удаляются при сохранении."
         },
         "headers": {
           "title": "Заголовки по умолчанию",

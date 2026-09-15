@@ -3586,7 +3586,13 @@
           "antigravity_signature_cache": "Enable Antigravity Signature Cache",
           "antigravity_signature_cache_desc": "Prefer and validate cached thinking-block signatures",
           "antigravity_signature_strict": "Strict Bypass Signature Validation",
-          "antigravity_signature_strict_desc": "Only applies when the signature cache is disabled; validates the full Claude protobuf tree"
+          "antigravity_signature_strict_desc": "Only applies when the signature cache is disabled; validates the full Claude protobuf tree",
+          "devin_title": "Devin",
+          "devin_sensitive_words": "Sensitive Words",
+          "devin_sensitive_words_desc": "Configure sensitive words for Devin system prompts. Matching words will be obfuscated using zero-width characters before being sent to Devin.",
+          "devin_sensitive_words_label": "Sensitive Words",
+          "devin_sensitive_words_placeholder": "Enter a sensitive word or phrase",
+          "devin_sensitive_words_hint": "One word or phrase per item. Matches in Devin system prompts are obfuscated with zero-width characters. Empty entries are removed when saving."
         },
         "headers": {
           "title": "Header Defaults",

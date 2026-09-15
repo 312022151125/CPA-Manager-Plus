@@ -3584,7 +3584,13 @@
           "antigravity_signature_cache": "啟用 Antigravity 簽名快取",
           "antigravity_signature_cache_desc": "優先使用並校驗快取的 thinking block 簽名",
           "antigravity_signature_strict": "嚴格校驗旁路簽名",
-          "antigravity_signature_strict_desc": "僅在關閉簽名快取時生效，按完整 Claude protobuf 樹校驗"
+          "antigravity_signature_strict_desc": "僅在關閉簽名快取時生效，按完整 Claude protobuf 樹校驗",
+          "devin_title": "Devin",
+          "devin_sensitive_words": "敏感詞列表",
+          "devin_sensitive_words_desc": "設定 Devin 專用的系統提示詞敏感詞列表。命中的敏感詞會在發送至 Devin 時透過零寬字元混淆。",
+          "devin_sensitive_words_label": "敏感詞",
+          "devin_sensitive_words_placeholder": "輸入敏感詞或短語",
+          "devin_sensitive_words_hint": "每項一個詞或短語。命中 Devin 系統提示詞內容時將透過零寬字元混淆，儲存時自動移除空白項。"
         },
         "headers": {
           "title": "Header 預設值",
