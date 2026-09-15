@@ -23,6 +23,11 @@ const dryRunRecord = {
   head_repository: { full_name: repository },
 };
 
+const exactTag = {
+  ref: `refs/tags/${releaseTag}`,
+  object: { type: 'commit', sha: releaseSha },
+};
+
 const jsonResponse = (status, payload) => ({
   ok: status >= 200 && status < 300,
   status,
@@ -91,13 +96,10 @@ describe('release dispatch authorization', () => {
       action: 'validate',
       mode: 'dry-run',
       tagCreated: false,
+      tagReused: false,
       dryRunId: null,
     });
 
-    const existingTag = {
-      ref: `refs/tags/${releaseTag}`,
-      object: { type: 'commit', sha: releaseSha },
-    };
     await expect(
       authorizeReleaseDispatch({
         mode: 'dry-run',
@@ -105,12 +107,12 @@ describe('release dispatch authorization', () => {
         releaseSha,
         repository,
         token: 'token',
-        fetchImpl: makeFetch({ existingTag }).fetchImpl,
+        fetchImpl: makeFetch({ existingTag: exactTag }).fetchImpl,
       })
     ).rejects.toThrow('already exists');
   });
 
-  it('requires explicit publish confirmation, exact SHA, and a successful prior dry-run', async () => {
+  it('requires explicit publish confirmation, exact SHA, a valid attempt, and a successful prior dry-run', async () => {
     const base = {
       mode: 'publish',
       releaseTag,
@@ -140,6 +142,9 @@ describe('release dispatch authorization', () => {
       })
     ).rejects.toThrow('successful dry_run_id');
     await expect(
+      authorizeReleaseDispatch({ ...base, runAttempt: '0', fetchImpl: makeFetch().fetchImpl })
+    ).rejects.toThrow('attempt must be a positive integer');
+    await expect(
       authorizeReleaseDispatch({
         ...base,
         fetchImpl: makeFetch({ dryRun: { ...dryRunRecord, conclusion: 'failure' } }).fetchImpl,
@@ -147,7 +152,7 @@ describe('release dispatch authorization', () => {
     ).rejects.toThrow('expected successful dry-run');
   });
 
-  it('keeps publish authorization read-only before the dedicated tag-creation action', async () => {
+  it('keeps explicit validate action read-only before tag creation', async () => {
     const { calls, fetchImpl } = makeFetch();
     const result = await authorizeReleaseDispatch({
       mode: 'publish',
@@ -165,13 +170,14 @@ describe('release dispatch authorization', () => {
       action: 'validate',
       mode: 'publish',
       tagCreated: false,
+      tagReused: false,
       dryRunId: 12345,
       dryRunAttempt: 1,
     });
     expect(calls.some(({ url, options }) => url.endsWith('/git/refs') && options.method === 'POST')).toBe(false);
   });
 
-  it('creates and re-reads the exact lightweight tag only in the create-tag action', async () => {
+  it('creates and re-reads the exact lightweight tag in the create-tag action', async () => {
     const { calls, fetchImpl } = makeFetch();
     const result = await authorizeReleaseDispatch({
       action: 'create-tag',
@@ -190,6 +196,7 @@ describe('release dispatch authorization', () => {
       action: 'create-tag',
       mode: 'publish',
       tagCreated: true,
+      tagReused: false,
       dryRunId: 12345,
       dryRunAttempt: 1,
     });
@@ -198,6 +205,71 @@ describe('release dispatch authorization', () => {
       ref: `refs/tags/${releaseTag}`,
       sha: releaseSha,
     });
+  });
+
+  it('fails closed when a tag already exists before the first publish attempt', async () => {
+    await expect(
+      authorizeReleaseDispatch({
+        action: 'create-tag',
+        mode: 'publish',
+        releaseTag,
+        releaseSha,
+        expectedSha: releaseSha,
+        dryRunId: '12345',
+        confirmPublish: true,
+        runAttempt: 1,
+        repository,
+        token: 'token',
+        fetchImpl: makeFetch({ existingTag: exactTag }).fetchImpl,
+      })
+    ).rejects.toThrow('already exists before first publish attempt');
+  });
+
+  it('reuses only the exact existing tag on a publish workflow rerun', async () => {
+    const { calls, fetchImpl } = makeFetch({ existingTag: exactTag });
+    await expect(
+      authorizeReleaseDispatch({
+        action: 'create-tag',
+        mode: 'publish',
+        releaseTag,
+        releaseSha,
+        expectedSha: releaseSha,
+        dryRunId: '12345',
+        confirmPublish: true,
+        runAttempt: 2,
+        repository,
+        token: 'token',
+        fetchImpl,
+      })
+    ).resolves.toEqual({
+      action: 'create-tag',
+      mode: 'publish',
+      tagCreated: false,
+      tagReused: true,
+      dryRunId: 12345,
+      dryRunAttempt: 1,
+    });
+    expect(calls.some(({ url, options }) => url.endsWith('/git/refs') && options.method === 'POST')).toBe(false);
+
+    const wrongTag = {
+      ...exactTag,
+      object: { type: 'commit', sha: 'b'.repeat(40) },
+    };
+    await expect(
+      authorizeReleaseDispatch({
+        action: 'create-tag',
+        mode: 'publish',
+        releaseTag,
+        releaseSha,
+        expectedSha: releaseSha,
+        dryRunId: '12345',
+        confirmPublish: true,
+        runAttempt: 2,
+        repository,
+        token: 'token',
+        fetchImpl: makeFetch({ existingTag: wrongTag }).fetchImpl,
+      })
+    ).rejects.toThrow('does not point directly');
   });
 
   it('rejects tag creation outside publish mode', async () => {
@@ -215,10 +287,6 @@ describe('release dispatch authorization', () => {
   });
 
   it('verifies the existing lightweight tag for tag-triggered releases', async () => {
-    const existingTag = {
-      ref: `refs/tags/${releaseTag}`,
-      object: { type: 'commit', sha: releaseSha },
-    };
     await expect(
       authorizeReleaseDispatch({
         mode: 'tag',
@@ -226,12 +294,13 @@ describe('release dispatch authorization', () => {
         releaseSha,
         repository,
         token: 'token',
-        fetchImpl: makeFetch({ existingTag }).fetchImpl,
+        fetchImpl: makeFetch({ existingTag: exactTag }).fetchImpl,
       })
     ).resolves.toEqual({
       action: 'validate',
       mode: 'tag',
       tagCreated: false,
+      tagReused: true,
       dryRunId: null,
     });
   });
