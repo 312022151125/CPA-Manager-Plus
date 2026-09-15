@@ -2740,4 +2740,28 @@ describe('accountDetailViewModel', () => {
       targetTab: 'quota',
     });
   });
+
+  it('attaches Devin plan metadata to quota view model when available', () => {
+    const row = makeRow({
+      provider: 'devin',
+      raw: { name: 'devin.json', type: 'devin', authIndex: '0' },
+    });
+    const viewModel = buildAccountDetailViewModel(row, {
+      devinQuota: {
+        status: 'success',
+        windows: [],
+        observedAtMs: 1726000000000,
+        plan: 'Team',
+        planStartMs: 1725000000000,
+        planEndMs: 1727000000000,
+      },
+    });
+
+    expect(viewModel.quota.devinPlan).toEqual({
+      plan: 'Team',
+      planStartMs: 1725000000000,
+      planEndMs: 1727000000000,
+    });
+  });
 });
+

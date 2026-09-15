@@ -1935,6 +1935,26 @@
     "usage_amount": "Осталось {{remaining}} / {{limit}}",
     "reset_unknown": "сброс неизвестен"
   },
+  "devin_quota": {
+    "title": "Квота Devin",
+    "empty_title": "Файлы авторизации Devin отсутствуют",
+    "empty_desc": "Войдите или загрузите учётные данные Devin, чтобы просмотреть квоту.",
+    "idle": "Не загружено. Нажмите \"Обновить квоту\".",
+    "loading": "Загрузка квоты...",
+    "load_failed": "Не удалось загрузить квоту: {{message}}",
+    "missing_auth_index": "В файле авторизации отсутствует auth_index",
+    "missing_identity": "В учётных данных Devin отсутствует API-ключ или токен",
+    "empty_data": "Данные по квоте отсутствуют",
+    "unavailable": "Квота недоступна",
+    "reset_unknown": "Время сброса неизвестно",
+    "refresh_button": "Обновить квоту",
+    "fetch_all": "Получить все",
+    "daily": "Дневной лимит",
+    "weekly": "Недельный лимит",
+    "plan_label": "Тариф",
+    "plan_start": "Начало тарифа",
+    "plan_end": "Окончание тарифа"
+  },
   "vertex_import": {
     "title": "Вход с Vertex JSON",
     "description": "Загрузите JSON ключа сервисного аккаунта Google, чтобы сохранить его как auth-dir/vertex-<project>.json по тем же правилам, что и помощник CLI vertex-import.",

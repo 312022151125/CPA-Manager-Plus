@@ -1931,6 +1931,26 @@
     "usage_amount": "剩餘 {{remaining}} / {{limit}}",
     "reset_unknown": "重置時間未知"
   },
+  "devin_quota": {
+    "title": "Devin 配額",
+    "empty_title": "暫無 Devin 憑證",
+    "empty_desc": "登入或匯入 Devin 憑證後即可查看配額。",
+    "idle": "點擊此處重新整理配額",
+    "loading": "正在載入配額...",
+    "load_failed": "配額取得失敗：{{message}}",
+    "missing_auth_index": "驗證檔案缺少 auth_index",
+    "missing_identity": "Devin 憑證缺少 API Key 或 Token",
+    "empty_data": "暫無配額資料",
+    "unavailable": "配額不可用",
+    "reset_unknown": "重置時間未知",
+    "refresh_button": "重新整理配額",
+    "fetch_all": "取得全部",
+    "daily": "每日限額",
+    "weekly": "每週限額",
+    "plan_label": "方案",
+    "plan_start": "方案生效時間",
+    "plan_end": "方案到期時間"
+  },
   "vertex_import": {
     "title": "Vertex JSON 登入",
     "description": "上傳 Google 服務帳號 JSON，使用 CLI vertex-import 同步規則寫入 auth-dir/vertex-<project>.json。",
