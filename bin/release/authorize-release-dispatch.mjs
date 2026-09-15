@@ -69,6 +69,7 @@ export const authorizeReleaseDispatch = async ({
   expectedSha = '',
   dryRunId = '',
   confirmPublish = false,
+  runAttempt = 1,
   repository,
   token,
   fetchImpl = fetch,
@@ -77,6 +78,8 @@ export const authorizeReleaseDispatch = async ({
   if (!['validate', 'create-tag'].includes(action)) fail(`Unsupported release action: ${action}`);
   if (!['dry-run', 'publish', 'tag'].includes(mode)) fail(`Unsupported release mode: ${mode}`);
   if (!isFullSha(releaseSha)) fail('Release SHA must be a full commit SHA');
+  if (!isPositiveInteger(runAttempt)) fail('Release workflow attempt must be a positive integer');
+  const currentAttempt = Number(runAttempt);
   if (repository !== 'seakee/CPA-Manager-Plus') fail(`Unexpected repository: ${repository || '<empty>'}`);
   if (!token) fail('Missing GitHub token');
   if (action === 'create-tag' && mode !== 'publish') {
@@ -93,13 +96,13 @@ export const authorizeReleaseDispatch = async ({
 
   if (mode === 'dry-run') {
     if (existingTag) fail(`Release tag already exists: ${releaseTag}`);
-    return { action, mode, tagCreated: false, dryRunId: null };
+    return { action, mode, tagCreated: false, tagReused: false, dryRunId: null };
   }
 
   if (mode === 'tag') {
     if (!existingTag) fail(`Tag-triggered release is missing ${releaseTag}`);
     validateTagRef({ ref: existingTag, releaseTag, releaseSha });
-    return { action, mode, tagCreated: false, dryRunId: null };
+    return { action, mode, tagCreated: false, tagReused: true, dryRunId: null };
   }
 
   if (confirmPublish !== true) fail('Publish dispatch requires explicit confirmation');
@@ -107,7 +110,6 @@ export const authorizeReleaseDispatch = async ({
     fail('Publish dispatch requires expected_sha to match the exact main SHA');
   }
   if (!isPositiveInteger(dryRunId)) fail('Publish dispatch requires a successful dry_run_id');
-  if (existingTag) fail(`Release tag already exists: ${releaseTag}`);
 
   const dryRun = await api(`/actions/runs/${dryRunId}`);
   const validatedRun = validateDryRunRecord({
@@ -117,11 +119,27 @@ export const authorizeReleaseDispatch = async ({
     repository,
   });
 
+  if (existingTag) {
+    validateTagRef({ ref: existingTag, releaseTag, releaseSha });
+    if (currentAttempt === 1) {
+      fail(`Release tag already exists before first publish attempt: ${releaseTag}`);
+    }
+    return {
+      action,
+      mode,
+      tagCreated: false,
+      tagReused: true,
+      dryRunId: validatedRun.runId,
+      dryRunAttempt: validatedRun.runAttempt,
+    };
+  }
+
   if (action === 'validate') {
     return {
       action,
       mode,
       tagCreated: false,
+      tagReused: false,
       dryRunId: validatedRun.runId,
       dryRunAttempt: validatedRun.runAttempt,
     };
@@ -143,6 +161,7 @@ export const authorizeReleaseDispatch = async ({
     action,
     mode,
     tagCreated: true,
+    tagReused: false,
     dryRunId: validatedRun.runId,
     dryRunAttempt: validatedRun.runAttempt,
   };
@@ -150,14 +169,16 @@ export const authorizeReleaseDispatch = async ({
 
 const runCli = async () => {
   try {
+    const mode = process.env.RELEASE_MODE || '';
     const result = await authorizeReleaseDispatch({
-      action: process.env.RELEASE_ACTION || 'validate',
-      mode: process.env.RELEASE_MODE || '',
+      action: process.env.RELEASE_ACTION || (mode === 'publish' ? 'create-tag' : 'validate'),
+      mode,
       releaseTag: process.env.RELEASE_TAG || '',
       releaseSha: process.env.RELEASE_SHA || '',
       expectedSha: process.env.EXPECTED_SHA || '',
       dryRunId: process.env.DRY_RUN_ID || '',
       confirmPublish: process.env.CONFIRM_PUBLISH === 'true',
+      runAttempt: process.env.GITHUB_RUN_ATTEMPT || '1',
       repository: process.env.GITHUB_REPOSITORY || '',
       token: process.env.GITHUB_TOKEN || '',
     });
