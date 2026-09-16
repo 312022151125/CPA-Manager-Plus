@@ -170,3 +170,104 @@ describe('buildRealtimeSourceDisplay opaque source priority (#781)', () => {
     expect(maskedFallback.primary).toBe('m:sk-1...cdef');
   });
 });
+
+describe('buildRealtimeSourceDisplay dynamic/unknown provider display (#686)', () => {
+  it('prefers credential account over unknown provider when channel and source equal provider', () => {
+    const display = buildRealtimeSourceDisplay(
+      {
+        account: 'marscosmo',
+        accountMasked: 'marscosmo',
+        authLabel: 'workbuddy',
+        channel: 'workbuddy',
+        channelHost: '',
+        provider: 'workbuddy',
+        source: 'workbuddy',
+        sourceMasked: 'workbuddy',
+      },
+      t,
+      'masked'
+    );
+
+    expect(display.primary).toBe('marscosmo');
+    expect(display.meta).toBe('Provider: workbuddy');
+
+    const displayFull = buildRealtimeSourceDisplay(
+      {
+        account: 'marscosmo',
+        accountMasked: 'marscosmo',
+        authLabel: 'workbuddy',
+        channel: 'workbuddy',
+        channelHost: '',
+        provider: 'workbuddy',
+        source: 'workbuddy',
+        sourceMasked: 'workbuddy',
+      },
+      t,
+      'full'
+    );
+
+    expect(displayFull.primary).toBe('marscosmo');
+    expect(displayFull.meta).toBe('Provider: workbuddy');
+  });
+
+  it('preserves distinct custom channel name over account for unknown provider', () => {
+    const display = buildRealtimeSourceDisplay(
+      {
+        account: 'marscosmo',
+        accountMasked: 'marscosmo',
+        authLabel: 'workbuddy',
+        channel: 'Team WorkBuddy Relay',
+        channelHost: '',
+        provider: 'workbuddy',
+        source: 'workbuddy',
+        sourceMasked: 'workbuddy',
+      },
+      t,
+      'masked'
+    );
+
+    expect(display.primary).toBe('Team WorkBuddy Relay');
+    expect(display.meta).toBe('Provider: workbuddy');
+  });
+
+  it('preserves specific custom source over account for unknown provider', () => {
+    const display = buildRealtimeSourceDisplay(
+      {
+        account: 'marscosmo',
+        accountMasked: 'marscosmo',
+        authLabel: 'workbuddy',
+        channel: 'workbuddy',
+        channelHost: '',
+        provider: 'workbuddy',
+        source: 'Team Credential',
+        sourceMasked: 'Team Credential',
+      },
+      t,
+      'masked'
+    );
+
+    expect(display.primary).toBe('Team Credential');
+    expect(display.meta).toBe('Provider: workbuddy');
+  });
+
+  it('falls back to unknown provider rather than opaque hash when no account exists', () => {
+    const validHash = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const display = buildRealtimeSourceDisplay(
+      {
+        provider: 'future-provider',
+        channel: 'future-provider',
+        source: `h:${validHash}`,
+        sourceMasked: `h:${validHash}`,
+        account: '',
+        accountMasked: '',
+        authLabel: '',
+        channelHost: '',
+      },
+      t,
+      'masked'
+    );
+
+    expect(display.primary).toBe('future-provider');
+    expect(display.meta).toBe('Provider: future-provider');
+  });
+});

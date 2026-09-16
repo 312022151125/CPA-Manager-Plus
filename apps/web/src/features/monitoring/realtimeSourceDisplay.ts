@@ -4,6 +4,7 @@ import type { AccountDisplayMode } from '@/features/monitoring/accountOverviewSt
 import {
   isGenericMonitoringProviderLabel,
   isKeyDisambiguatedLabel,
+  isProviderLikeMonitoringLabel,
   isRedundantMonitoringLabel,
 } from '@/features/monitoring/model/sourceDisplay';
 import { isOpaqueUsageSourceId } from '@/utils/usage';
@@ -42,8 +43,9 @@ export const buildRealtimeSourceDisplay = (
   const maskedSource = firstReadable(row.sourceMasked, row.accountMasked, row.authLabel, row.source);
   const source = accountDisplayMode === 'full' ? fullSource : maskedSource;
   const nonGenericChannel =
-    channel && !isGenericMonitoringProviderLabel(channel) ? channel : '';
-  const nonGenericSource = source && !isGenericMonitoringProviderLabel(source) ? source : '';
+    channel && !isProviderLikeMonitoringLabel(channel, provider) ? channel : '';
+  const nonGenericSource =
+    source && !isProviderLikeMonitoringLabel(source, provider) ? source : '';
   const readableNonGenericSource =
     nonGenericSource && !isOpaqueUsageSourceId(nonGenericSource) ? nonGenericSource : '';
   const readableAccount = account && !isOpaqueUsageSourceId(account) ? account : '';

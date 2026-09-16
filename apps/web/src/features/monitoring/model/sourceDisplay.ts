@@ -25,6 +25,24 @@ const hasReadableValue = (value: string | null | undefined) => {
 export const isGenericMonitoringProviderLabel = (value: string) =>
   GENERIC_PROVIDER_LABELS.has(value.trim().toLowerCase());
 
+export const isProviderLikeMonitoringLabel = (
+  value: string | null | undefined,
+  provider: string | null | undefined
+) => {
+  const candidate = readString(value);
+  if (!candidate) return false;
+
+  if (isGenericMonitoringProviderLabel(candidate)) {
+    return true;
+  }
+
+  const providerValue = readString(provider);
+  return (
+    Boolean(providerValue) &&
+    candidate.toLowerCase() === providerValue.toLowerCase()
+  );
+};
+
 /**
  * True when `refined` is a key/provider ordinal disambiguation of `base`
  * (for example base=`kuaileshifu`, refined=`kuaileshifu #1`).
@@ -172,9 +190,10 @@ export const buildMonitoringSourceDisplay = (
   const sourceMasked = maskEmailLike(sourceLabel || sourceMeta.displayName);
   const accountMasked = maskEmailLike(account || sourceLabel);
   const fallbackId = shortHash(input.sourceHash || input.apiKeyHash || authIndex);
-  const nonGenericChannel = channel && !isGenericMonitoringProviderLabel(channel) ? channel : '';
+  const nonGenericChannel =
+    channel && !isProviderLikeMonitoringLabel(channel, provider) ? channel : '';
   const nonGenericSource =
-    sourceMasked && !isGenericMonitoringProviderLabel(sourceMasked) ? sourceMasked : '';
+    sourceMasked && !isProviderLikeMonitoringLabel(sourceMasked, provider) ? sourceMasked : '';
   const readableNonGenericSource =
     nonGenericSource && !isOpaqueUsageSourceId(nonGenericSource) ? nonGenericSource : '';
   const readableAccountMasked =
@@ -198,8 +217,8 @@ export const buildMonitoringSourceDisplay = (
       nonGenericChannel,
       channelHost,
       readableNonGenericSource,
-      provider && !isGenericMonitoringProviderLabel(provider) ? provider : '',
       readableAccountMasked,
+      provider && !isGenericMonitoringProviderLabel(provider) ? provider : '',
       apiKeyAlias,
       channel,
       provider,
