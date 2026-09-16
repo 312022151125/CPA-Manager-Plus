@@ -76,8 +76,11 @@ describe('ModelPricesPage Attention UI', () => {
       modelPricesAvailable: true,
       loading: false,
       lastCheckedAtMs: null,
-      check: vi.fn(),
-      capturePendingSnapshot: vi.fn().mockReturnValue(['runtime-new-model']),
+      check: vi.fn().mockResolvedValue(undefined),
+      capturePendingSnapshot: vi.fn().mockReturnValue({
+        scope: 'http://localhost:18317',
+        models: ['runtime-new-model'],
+      }),
       acknowledgeSnapshot: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -138,7 +141,7 @@ describe('ModelPricesPage Attention UI', () => {
     expect(modelBadge.props.children).toBe('待同步');
   });
 
-  it('activates filter=missing when provided in URL query parameters', async () => {
+  it('activates filter=missing initially from URL query, and allows switching to other tabs without being locked', async () => {
     let renderer: ReactTestRenderer;
     await act(async () => {
       renderer = create(
@@ -151,9 +154,31 @@ describe('ModelPricesPage Attention UI', () => {
     const root = renderer!.root;
     const missingBtn = root.findByProps({ 'data-filter': 'missing' });
     expect(missingBtn.props['data-active']).toBe(true);
+
+    // Click 'all' button
+    const allBtn = root.findByProps({ 'data-filter': 'all' });
+    await act(async () => {
+      allBtn.props.onClick();
+    });
+
+    expect(allBtn.props['data-active']).toBe(true);
+    expect(missingBtn.props['data-active']).toBe(false);
+
+    // Click 'candidates' button
+    const candidatesBtn = root.findByProps({ 'data-filter': 'candidates' });
+    await act(async () => {
+      candidatesBtn.props.onClick();
+    });
+    expect(candidatesBtn.props['data-active']).toBe(true);
+    expect(allBtn.props['data-active']).toBe(false);
   });
 
-  it('acknowledges pending snapshot upon clicking Sync Prices', async () => {
+  it('acknowledges all pending snapshot models when runtime discovery succeeds', async () => {
+    mockAttentionState.capturePendingSnapshot = vi.fn().mockReturnValue({
+      scope: 'http://localhost:18317',
+      models: ['model-A', 'model-B'],
+    });
+
     let renderer: ReactTestRenderer;
     await act(async () => {
       renderer = create(
@@ -165,7 +190,6 @@ describe('ModelPricesPage Attention UI', () => {
 
     const root = renderer!.root;
     const syncButton = root.findByProps({ 'data-testid': 'sync-prices-button' });
-    expect(syncButton).toBeDefined();
 
     await act(async () => {
       syncButton.props.onClick();
@@ -173,6 +197,146 @@ describe('ModelPricesPage Attention UI', () => {
 
     expect(mockAttentionState.capturePendingSnapshot).toHaveBeenCalled();
     expect(mockSyncModelPrices).toHaveBeenCalled();
-    expect(mockAttentionState.acknowledgeSnapshot).toHaveBeenCalledWith(['runtime-new-model']);
+    expect(mockAttentionState.acknowledgeSnapshot).toHaveBeenCalledWith({
+      scope: 'http://localhost:18317',
+      models: ['model-A', 'model-B'],
+    });
+  });
+
+  it('acknowledges only (pendingSnapshot ∩ syncModels) when runtime discovery fails with fallback sync success', async () => {
+    mockAttentionState.capturePendingSnapshot = vi.fn().mockReturnValue({
+      scope: 'http://localhost:18317',
+      models: ['known-model-A', 'runtime-only-model-B'],
+    });
+
+    // Provide usage summary containing known-model-A so it enters syncModels
+    vi.spyOn(usageServiceApi, 'getModelPriceUsageSummary').mockResolvedValue({
+      sampled_events: 1,
+      total_events: 1,
+      truncated: false,
+      models: [{ model: 'known-model-A', calls: 1, requested_calls: 1, resolved_calls: 1 }],
+    });
+
+    // Sync succeeds with runtimeModelDiscoveryError
+    mockSyncModelPrices.mockResolvedValueOnce({
+      imported: 1,
+      skipped: 0,
+      prices: {},
+      runtimeModelDiscoveryError: '504 gateway timeout',
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <MemoryRouter initialEntries={['/model-prices']}>
+          <ModelPricesPage />
+        </MemoryRouter>
+      );
+    });
+
+    const root = renderer!.root;
+    const syncButton = root.findByProps({ 'data-testid': 'sync-prices-button' });
+
+    await act(async () => {
+      syncButton.props.onClick();
+    });
+
+    // Only known-model-A was actually synced; runtime-only-model-B must NOT be acknowledged
+    expect(mockAttentionState.acknowledgeSnapshot).toHaveBeenCalledWith({
+      scope: 'http://localhost:18317',
+      models: ['known-model-A'],
+    });
+  });
+
+  it('does not acknowledge runtime-only pending models when discovery fails and syncModels has no overlap', async () => {
+    mockAttentionState.capturePendingSnapshot = vi.fn().mockReturnValue({
+      scope: 'http://localhost:18317',
+      models: ['runtime-only-model-B'],
+    });
+
+    mockSyncModelPrices.mockResolvedValueOnce({
+      imported: 0,
+      skipped: 0,
+      prices: {},
+      runtimeModelDiscoveryError: 'discovery failed',
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <MemoryRouter initialEntries={['/model-prices']}>
+          <ModelPricesPage />
+        </MemoryRouter>
+      );
+    });
+
+    const root = renderer!.root;
+    const syncButton = root.findByProps({ 'data-testid': 'sync-prices-button' });
+
+    await act(async () => {
+      syncButton.props.onClick();
+    });
+
+    // Acknowledge should not be called because acknowledged models is empty
+    expect(mockAttentionState.acknowledgeSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('does not acknowledge any pending snapshot when syncModelPrices rejects', async () => {
+    mockSyncModelPrices.mockRejectedValueOnce(new Error('Sync failed'));
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <MemoryRouter initialEntries={['/model-prices']}>
+          <ModelPricesPage />
+        </MemoryRouter>
+      );
+    });
+
+    const root = renderer!.root;
+    const syncButton = root.findByProps({ 'data-testid': 'sync-prices-button' });
+
+    await act(async () => {
+      syncButton.props.onClick();
+    });
+
+    expect(mockAttentionState.acknowledgeSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('triggers attention.check({ force: true }) after saving manual model price', async () => {
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <MemoryRouter initialEntries={['/model-prices']}>
+          <ModelPricesPage />
+        </MemoryRouter>
+      );
+    });
+
+    const root = renderer!.root;
+    // Open add price modal
+    const addPriceBtn = root.findByProps({ 'data-testid': 'add-price-button' });
+    await act(async () => {
+      addPriceBtn.props.onClick();
+    });
+
+    // Fill draft model and price
+    const modelInput = root.findByProps({ 'data-testid': 'draft-model-input' });
+    const inputPrice = root.findByProps({ 'data-testid': 'draft-input-price' });
+    const outputPrice = root.findByProps({ 'data-testid': 'draft-output-price' });
+
+    await act(async () => {
+      modelInput.props.onChange({ target: { value: 'custom-model' } });
+      inputPrice.props.onChange({ target: { value: '1.5' } });
+      outputPrice.props.onChange({ target: { value: '3.0' } });
+    });
+
+    // Click save
+    const saveBtn = root.findByProps({ 'data-testid': 'save-draft-button' });
+    await act(async () => {
+      saveBtn.props.onClick();
+    });
+
+    expect(mockAttentionState.check).toHaveBeenCalledWith({ force: true });
   });
 });

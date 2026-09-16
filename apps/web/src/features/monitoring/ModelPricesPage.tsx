@@ -13,7 +13,10 @@ import {
 } from '@/services/api/usageService';
 import { useAuthStore, useNotificationStore } from '@/stores';
 import { useUsageData } from '@/features/monitoring/hooks/useUsageData';
-import { useModelPriceAttention } from '@/features/model-price-attention';
+import {
+  useModelPriceAttention,
+  resolveAcknowledgedPendingModelsAfterSync,
+} from '@/features/model-price-attention';
 import attentionStyles from '@/features/model-price-attention/ModelPriceAttention.module.scss';
 import {
   applyCandidatePrice,
@@ -33,9 +36,9 @@ import {
   resolveServiceTierDisplayPrice,
   type ModelPriceFilter,
   type PriceDraft,
-} from '@/features/monitoring/model/modelPricesPageModel';
+} from './model/modelPricesPageModel';
 import { readModelPricesPageUiState, writeModelPricesPageUiState } from './modelPricesPageUiState';
-import { resolveModelPriceSyncNotification } from '@/features/monitoring/model/modelPriceSyncFeedback';
+import { resolveModelPriceSyncNotification } from './model/modelPriceSyncFeedback';
 import styles from './ModelPricesPage.module.scss';
 
 const FILTERS: ModelPriceFilter[] = ['all', 'missing', 'candidates', 'saved'];
@@ -76,12 +79,6 @@ export function ModelPricesPage() {
   const modelPriceServiceBase = featureAvailability.modelPricesAvailable
     ? featureAvailability.managerServiceBase
     : '';
-
-  useEffect(() => {
-    if (validQueryFilter && validQueryFilter !== filter) {
-      setFilter(validQueryFilter);
-    }
-  }, [filter, validQueryFilter]);
 
   const syncModels = useMemo(
     () => buildSyncPriceModelsFromSummary(usageSummary, modelPrices),
@@ -153,8 +150,13 @@ export function ModelPricesPage() {
         includeRuntimeModels: true,
       });
       setSyncResult(result);
-      if (pendingSnapshot.length > 0) {
-        await attention.acknowledgeSnapshot(pendingSnapshot);
+      const acknowledgedSnapshot = resolveAcknowledgedPendingModelsAfterSync({
+        pendingSnapshot,
+        syncModels,
+        runtimeModelDiscoveryError: result?.runtimeModelDiscoveryError,
+      });
+      if (acknowledgedSnapshot.models.length > 0) {
+        await attention.acknowledgeSnapshot(acknowledgedSnapshot);
       }
       const notification = resolveModelPriceSyncNotification({
         result,
@@ -179,6 +181,7 @@ export function ModelPricesPage() {
 
   const handleConfirmCandidate = async (model: string, candidate: ModelPriceSyncCandidate) => {
     await setModelPrices(applyCandidatePrice(modelPrices, model, candidate));
+    void attention.check({ force: true }).catch(() => {});
     setSyncResult((previous) =>
       previous
         ? {
@@ -204,6 +207,7 @@ export function ModelPricesPage() {
         ...price,
       },
     });
+    void attention.check({ force: true }).catch(() => {});
     setDraft(createEmptyPriceDraft());
     setManualEditorOpen(false);
     showNotification(t('usage_stats.model_price_saved'), 'success');
@@ -257,6 +261,7 @@ export function ModelPricesPage() {
             variant="secondary"
             onClick={() => openManualEditor()}
             className={styles.toolbarButton}
+            data-testid="add-price-button"
           >
             {t('model_prices.add_manual')}
           </Button>
@@ -334,6 +339,7 @@ export function ModelPricesPage() {
               value={draft.model}
               onChange={(event) => setDraftField('model', event.target.value)}
               placeholder="gpt-5.5"
+              data-testid="draft-model-input"
             />
             <Input
               label={`${t('usage_stats.model_price_prompt')} ($/1M)`}
@@ -343,6 +349,7 @@ export function ModelPricesPage() {
               onChange={(event) => setDraftField('prompt', event.target.value)}
               placeholder="0.0000"
               step="0.0001"
+              data-testid="draft-input-price"
             />
             <Input
               label={`${t('usage_stats.model_price_completion')} ($/1M)`}
@@ -352,6 +359,7 @@ export function ModelPricesPage() {
               onChange={(event) => setDraftField('completion', event.target.value)}
               placeholder="0.0000"
               step="0.0001"
+              data-testid="draft-output-price"
             />
             <div style={{ display: 'grid', gap: 8 }}>
               <Input
@@ -392,7 +400,7 @@ export function ModelPricesPage() {
               >
                 <IconX size={14} />
               </Button>
-              <Button size="xs" onClick={() => void handleSaveDraft()}>
+              <Button size="xs" onClick={() => void handleSaveDraft()} data-testid="save-draft-button">
                 {t('common.save')}
               </Button>
             </div>

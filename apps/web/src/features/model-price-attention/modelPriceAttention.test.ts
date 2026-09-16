@@ -135,7 +135,10 @@ describe('ModelPriceAttentionStore', () => {
 
     // Capture snapshot at sync start
     const snapshot = store.capturePendingSnapshot();
-    expect(snapshot).toEqual(['gpt-6-sol']);
+    expect(snapshot).toEqual({
+      scope: base,
+      models: ['gpt-6-sol'],
+    });
 
     // Simulate successful sync completion: status refreshed and now gpt-6-sol may be priced or unpriced (unmatched)
     mockApi.getRuntimeModelPricingStatus.mockResolvedValueOnce({
@@ -256,5 +259,159 @@ describe('ModelPriceAttentionStore', () => {
     await store.check({ force: true });
     // Still acknowledged, no pending notification!
     expect(store.getState().pendingModels).toEqual([]);
+  });
+
+  describe('scope management and async race guards', () => {
+    it('resets volatile state immediately when scope changes, allowing fresh check on new scope', async () => {
+      const store = new ModelPriceAttentionStore({
+        base: 'http://server-a',
+        storage,
+        api: mockApi,
+      });
+
+      mockApi.getRuntimeModelPricingStatus.mockResolvedValueOnce({
+        models: ['model-a'],
+        unpricedModels: ['model-a'],
+        count: 1,
+        unpricedCount: 1,
+      });
+      await store.check({ force: true });
+
+      const stateA = store.getState();
+      expect(stateA.runtimeModels).toEqual(['model-a']);
+      expect(stateA.pendingModels).toEqual(['model-a']);
+      expect(stateA.lastCheckedAtMs).not.toBeNull();
+
+      // Configure to server-b
+      store.configure({
+        base: 'http://server-b',
+        modelPricesAvailable: true,
+      });
+
+      // Volatile state should be reset immediately
+      const stateAfterSwitch = store.getState();
+      expect(stateAfterSwitch.runtimeModels).toEqual([]);
+      expect(stateAfterSwitch.unpricedModels).toEqual([]);
+      expect(stateAfterSwitch.pendingModels).toEqual([]);
+      expect(stateAfterSwitch.lastCheckedAtMs).toBeNull();
+      expect(stateAfterSwitch.loading).toBe(false);
+
+      // Fresh check on server-b should succeed immediately without force
+      mockApi.getRuntimeModelPricingStatus.mockResolvedValueOnce({
+        models: ['model-b'],
+        unpricedModels: ['model-b'],
+        count: 1,
+        unpricedCount: 1,
+      });
+      await store.check();
+
+      const stateB = store.getState();
+      expect(stateB.runtimeModels).toEqual(['model-b']);
+      expect(stateB.pendingModels).toEqual(['model-b']);
+    });
+
+    it('ignores stale response when scope switches while check is in-flight', async () => {
+      const store = new ModelPriceAttentionStore({
+        base: 'http://server-a',
+        storage,
+        api: mockApi,
+      });
+
+      let resolveServerA: (value: RuntimeModelPricingStatusResponse) => void;
+      const pendingServerA = new Promise<RuntimeModelPricingStatusResponse>((resolve) => {
+        resolveServerA = resolve;
+      });
+      mockApi.getRuntimeModelPricingStatus.mockReturnValueOnce(pendingServerA);
+
+      // Start check on server-a
+      const checkA = store.check({ force: true });
+
+      // User switches to server-b while check on server-a is in flight
+      store.configure({
+        base: 'http://server-b',
+        modelPricesAvailable: true,
+      });
+
+      // Server A finally resolves
+      resolveServerA!({
+        models: ['model-from-a'],
+        unpricedModels: ['model-from-a'],
+        count: 1,
+        unpricedCount: 1,
+      });
+      await checkA;
+
+      // Server B's state should NOT be modified by server A's response
+      const stateB = store.getState();
+      expect(stateB.runtimeModels).toEqual([]);
+      expect(stateB.pendingModels).toEqual([]);
+      expect(stateB.lastCheckedAtMs).toBeNull();
+    });
+
+    it('ignores snapshot acknowledgment if snapshot belongs to an older scope', async () => {
+      const store = new ModelPriceAttentionStore({
+        base: 'http://server-a',
+        storage,
+        api: mockApi,
+      });
+
+      mockApi.getRuntimeModelPricingStatus.mockResolvedValueOnce({
+        models: ['model-a'],
+        unpricedModels: ['model-a'],
+        count: 1,
+        unpricedCount: 1,
+      });
+      await store.check({ force: true });
+
+      const snapshotA = store.capturePendingSnapshot();
+      expect(snapshotA).toEqual({
+        scope: 'http://server-a',
+        models: ['model-a'],
+      });
+
+      // Switch to server-b
+      store.configure({
+        base: 'http://server-b',
+        modelPricesAvailable: true,
+      });
+
+      // Acknowledging snapshotA on server-b should do nothing
+      await store.acknowledgeSnapshot(snapshotA);
+
+      expect(store.getState().acknowledgedModels).toEqual([]);
+    });
+  });
+
+  describe('failed discovery retry throttling', () => {
+    it('throttles automatic re-checks for 30 minutes after a failed discovery attempt, while force bypasses throttle', async () => {
+      const store = new ModelPriceAttentionStore({
+        base: 'http://localhost:18317',
+        storage,
+        api: mockApi,
+        checkIntervalMs: 30 * 60 * 1000,
+      });
+
+      // 1. Initial attempt fails
+      mockApi.getRuntimeModelPricingStatus.mockRejectedValueOnce(new Error('Network error'));
+      await store.check();
+      expect(mockApi.getRuntimeModelPricingStatus).toHaveBeenCalledTimes(1);
+      expect(store.getState().lastCheckedAtMs).toBeNull();
+
+      // 2. Regular check 1 minute later should be throttled because lastAttemptAtMs is fresh
+      await store.check();
+      expect(mockApi.getRuntimeModelPricingStatus).toHaveBeenCalledTimes(1);
+
+      // 3. Force check bypasses throttle
+      mockApi.getRuntimeModelPricingStatus.mockResolvedValueOnce({
+        models: ['recovered-model'],
+        unpricedModels: ['recovered-model'],
+        count: 1,
+        unpricedCount: 1,
+      });
+      await store.check({ force: true });
+      expect(mockApi.getRuntimeModelPricingStatus).toHaveBeenCalledTimes(2);
+      expect(store.getState().pendingModels).toEqual(['recovered-model']);
+      expect(store.getState().lastCheckedAtMs).not.toBeNull();
+    });
   });
 });

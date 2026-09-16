@@ -5,7 +5,10 @@ import {
   sharedModelPriceAttentionStore,
   type ModelPriceAttentionStore,
 } from './modelPriceAttention';
-import type { ModelPriceAttentionState } from './modelPriceAttentionTypes';
+import type {
+  ModelPriceAttentionState,
+  ModelPriceAttentionSnapshot,
+} from './modelPriceAttentionTypes';
 
 export interface UseModelPriceAttentionOptions {
   store?: ModelPriceAttentionStore;
@@ -16,8 +19,8 @@ export interface UseModelPriceAttentionResult extends ModelPriceAttentionState {
   hasAttention: boolean;
   modelPricesAvailable: boolean;
   check: (options?: { force?: boolean }) => Promise<void>;
-  capturePendingSnapshot: () => string[];
-  acknowledgeSnapshot: (snapshot: string[]) => Promise<void>;
+  capturePendingSnapshot: () => ModelPriceAttentionSnapshot;
+  acknowledgeSnapshot: (snapshot: ModelPriceAttentionSnapshot | string[]) => Promise<void>;
 }
 
 export function useModelPriceAttention(
@@ -38,6 +41,9 @@ export function useModelPriceAttention(
       managementKey,
       modelPricesAvailable,
     });
+    if (modelPricesAvailable && base) {
+      void store.check();
+    }
   }, [base, managementKey, modelPricesAvailable, store]);
 
   const state = useSyncExternalStore(

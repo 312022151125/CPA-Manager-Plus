@@ -16,3 +16,8 @@ export interface ModelPriceAttentionStorageData {
     }
   >;
 }
+
+export interface ModelPriceAttentionSnapshot {
+  scope: string;
+  models: string[];
+}

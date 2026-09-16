@@ -1,5 +1,8 @@
 import { usageServiceApi } from '@/services/api/usageService';
-import type { ModelPriceAttentionState } from './modelPriceAttentionTypes';
+import type {
+  ModelPriceAttentionState,
+  ModelPriceAttentionSnapshot,
+} from './modelPriceAttentionTypes';
 import {
   loadAcknowledgedModels,
   saveAcknowledgedModels,
@@ -21,6 +24,9 @@ export class ModelPriceAttentionStore {
   private storage?: Storage;
   private api: Pick<typeof usageServiceApi, 'getRuntimeModelPricingStatus'>;
   private checkIntervalMs: number;
+
+  private scopeGeneration = 0;
+  private lastAttemptAtMs: number | null = null;
 
   private state: ModelPriceAttentionState = {
     runtimeModels: [],
@@ -55,11 +61,23 @@ export class ModelPriceAttentionStore {
     modelPricesAvailable: boolean;
   }): void {
     const baseChanged = this.base !== options.base;
-    this.base = options.base;
-    this.managementKey = options.managementKey;
-
     if (baseChanged) {
-      this.initAcknowledgedFromStorage();
+      this.scopeGeneration += 1;
+      this.base = options.base;
+      this.managementKey = options.managementKey;
+      this.lastAttemptAtMs = null;
+      this.activeCheckPromise = null;
+      this.state = {
+        runtimeModels: [],
+        unpricedModels: [],
+        pendingModels: [],
+        loading: false,
+        lastCheckedAtMs: null,
+        acknowledgedModels: this.base ? loadAcknowledgedModels(this.base, this.storage) : [],
+      };
+      this.notify();
+    } else {
+      this.managementKey = options.managementKey;
     }
 
     if (!options.modelPricesAvailable || !this.base) {
@@ -68,10 +86,6 @@ export class ModelPriceAttentionStore {
     }
 
     this.ensureAutoCheck();
-    // Trigger initial check if stale or never checked
-    if (this.isCacheExpired()) {
-      void this.check();
-    }
   }
 
   public getState(): ModelPriceAttentionState {
@@ -112,8 +126,8 @@ export class ModelPriceAttentionStore {
   }
 
   public isCacheExpired(): boolean {
-    if (this.state.lastCheckedAtMs === null) return true;
-    return Date.now() - this.state.lastCheckedAtMs >= this.checkIntervalMs;
+    if (this.lastAttemptAtMs === null) return true;
+    return Date.now() - this.lastAttemptAtMs >= this.checkIntervalMs;
   }
 
   public check(options?: { force?: boolean }): Promise<void> {
@@ -130,22 +144,35 @@ export class ModelPriceAttentionStore {
       return this.activeCheckPromise;
     }
 
+    const requestGeneration = this.scopeGeneration;
+    const requestBase = this.base;
+    const requestManagementKey = this.managementKey;
+
+    this.lastAttemptAtMs = Date.now();
     this.state = { ...this.state, loading: true };
     this.notify();
 
     this.activeCheckPromise = (async () => {
       try {
         const res = await this.api.getRuntimeModelPricingStatus(
-          this.base,
-          this.managementKey
+          requestBase,
+          requestManagementKey
         );
+
+        // Discard stale response if scope has switched
+        if (
+          requestGeneration !== this.scopeGeneration ||
+          requestBase !== this.base
+        ) {
+          return;
+        }
 
         const runtimeModels = Array.isArray(res.models) ? res.models : [];
         const unpricedModels = Array.isArray(res.unpricedModels) ? res.unpricedModels : [];
 
         // Invariant: Already priced runtime models (runtimeModels \ unpricedModels)
         // are automatically treated as acknowledged.
-        const currentAck = new Set(loadAcknowledgedModels(this.base, this.storage));
+        const currentAck = new Set(loadAcknowledgedModels(requestBase, this.storage));
         const unpricedSet = new Set(unpricedModels);
         for (const model of runtimeModels) {
           if (!unpricedSet.has(model)) {
@@ -154,7 +181,7 @@ export class ModelPriceAttentionStore {
         }
 
         const nextAcknowledged = Array.from(currentAck).sort();
-        saveAcknowledgedModels(this.base, nextAcknowledged, this.storage);
+        saveAcknowledgedModels(requestBase, nextAcknowledged, this.storage);
 
         const pending = this.computePending(unpricedModels, nextAcknowledged);
 
@@ -168,6 +195,12 @@ export class ModelPriceAttentionStore {
         };
         this.notify();
       } catch {
+        if (
+          requestGeneration !== this.scopeGeneration ||
+          requestBase !== this.base
+        ) {
+          return;
+        }
         // Discovery failure: do not toast, do not clear previous pending state
         this.state = {
           ...this.state,
@@ -175,24 +208,39 @@ export class ModelPriceAttentionStore {
         };
         this.notify();
       } finally {
-        this.activeCheckPromise = null;
+        if (requestGeneration === this.scopeGeneration) {
+          this.activeCheckPromise = null;
+        }
       }
     })();
 
     return this.activeCheckPromise;
   }
 
-  public capturePendingSnapshot(): string[] {
-    return [...this.state.pendingModels];
+  public capturePendingSnapshot(): ModelPriceAttentionSnapshot {
+    return {
+      scope: this.base,
+      models: [...this.state.pendingModels],
+    };
   }
 
-  public async acknowledgeSnapshot(snapshot: string[]): Promise<void> {
-    if (!this.base || !snapshot || snapshot.length === 0) {
+  public async acknowledgeSnapshot(
+    snapshot: ModelPriceAttentionSnapshot | string[]
+  ): Promise<void> {
+    const isArray = Array.isArray(snapshot);
+    const snapshotScope = isArray ? this.base : snapshot?.scope;
+    const modelsToAck = isArray ? snapshot : (snapshot?.models ?? []);
+
+    if (!snapshotScope || snapshotScope !== this.base) {
+      return;
+    }
+
+    if (!modelsToAck || modelsToAck.length === 0) {
       return;
     }
 
     const currentAck = new Set(loadAcknowledgedModels(this.base, this.storage));
-    snapshot.forEach((m) => {
+    modelsToAck.forEach((m) => {
       if (m && m.trim()) {
         currentAck.add(m.trim());
       }
@@ -254,8 +302,10 @@ export class ModelPriceAttentionStore {
 
   public reset(): void {
     this.stopAutoCheck();
+    this.scopeGeneration += 1;
     this.base = '';
     this.managementKey = undefined;
+    this.lastAttemptAtMs = null;
     this.state = {
       runtimeModels: [],
       unpricedModels: [],

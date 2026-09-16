@@ -45,6 +45,8 @@ vi.mock('react-i18next', async (importOriginal) => {
   };
 });
 
+import type { ModelPriceAttentionSnapshot } from './modelPriceAttentionTypes';
+
 describe('ModelPriceAttention UI Integration', () => {
   let mockAttentionState: {
     runtimeModels: string[];
@@ -57,8 +59,8 @@ describe('ModelPriceAttention UI Integration', () => {
     loading: boolean;
     lastCheckedAtMs: number | null;
     check: () => Promise<void>;
-    capturePendingSnapshot: () => string[];
-    acknowledgeSnapshot: (models: string[]) => Promise<void>;
+    capturePendingSnapshot: () => ModelPriceAttentionSnapshot;
+    acknowledgeSnapshot: (snapshot: ModelPriceAttentionSnapshot | string[]) => Promise<void>;
   };
 
   beforeEach(() => {
@@ -73,7 +75,10 @@ describe('ModelPriceAttention UI Integration', () => {
       loading: false,
       lastCheckedAtMs: Date.now(),
       check: vi.fn(async () => {}),
-      capturePendingSnapshot: vi.fn(() => []),
+      capturePendingSnapshot: vi.fn(() => ({
+        scope: 'http://localhost:18317',
+        models: [],
+      })),
       acknowledgeSnapshot: vi.fn(async () => {}),
     };
 
