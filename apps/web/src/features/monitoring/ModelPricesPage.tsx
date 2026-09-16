@@ -33,6 +33,7 @@ import {
   type PriceDraft,
 } from '@/features/monitoring/model/modelPricesPageModel';
 import { readModelPricesPageUiState, writeModelPricesPageUiState } from './modelPricesPageUiState';
+import { resolveModelPriceSyncNotification } from '@/features/monitoring/model/modelPriceSyncFeedback';
 import styles from './ModelPricesPage.module.scss';
 
 const FILTERS: ModelPriceFilter[] = ['all', 'missing', 'candidates', 'saved'];
@@ -128,23 +129,18 @@ export function ModelPricesPage() {
   }, [managementKey, modelPriceServiceBase]);
 
   const handleSync = async () => {
-    if (syncModels.length === 0) {
-      showNotification(t('usage_stats.model_price_sync_no_models'), 'warning');
-      return;
-    }
     setSyncing(true);
     try {
-      const result = await syncModelPrices(syncModels);
+      const result = await syncModelPrices(syncModels, {
+        includeRuntimeModels: true,
+      });
       setSyncResult(result);
-      showNotification(
-        t('model_prices.sync_success_detail', {
-          imported: result.imported,
-          candidates: result.candidates?.length ?? 0,
-          unmatched: result.unmatched?.length ?? 0,
-          preserved: result.preserved?.length ?? 0,
-        }),
-        result.preserved?.length ? 'warning' : 'success'
-      );
+      const notification = resolveModelPriceSyncNotification({
+        result,
+        syncModels,
+        t,
+      });
+      showNotification(notification.message, notification.type);
     } catch (error: unknown) {
       const message = resolveErrorMessage(error, t('common.unknown_error'));
       showNotification(
