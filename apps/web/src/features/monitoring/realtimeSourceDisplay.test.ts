@@ -54,3 +54,119 @@ describe('buildRealtimeSourceDisplay request metadata', () => {
     expect(display.title).toContain('User-Agent: test-client/1.0');
   });
 });
+
+describe('buildRealtimeSourceDisplay opaque source priority (#781)', () => {
+  it('prefers readable host over k:<fingerprint> opaque source (Case 1)', () => {
+    const display = buildRealtimeSourceDisplay(
+      {
+        source: 'k:0123456789abcdef',
+        sourceMasked: 'k:0123456789abcdef',
+        channelHost: 'readable.example.com',
+        channel: 'codex',
+        provider: 'codex',
+        account: '',
+        accountMasked: '',
+        authLabel: '',
+      },
+      t,
+      'masked'
+    );
+
+    expect(display.primary).toBe('readable.example.com');
+    expect(display.primary).not.toContain('k:0123456789abcdef');
+    expect(display.meta).toBe('Provider: codex');
+    expect(display.title).toContain('k:0123456789abcdef');
+  });
+
+  it('prefers readable account/auth label over h:<64 hex> opaque source (Case 2)', () => {
+    const validHash = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const display = buildRealtimeSourceDisplay(
+      {
+        source: `h:${validHash}`,
+        sourceMasked: `h:${validHash}`,
+        authLabel: 'readable-team-account',
+        account: 'readable-team-account',
+        accountMasked: 'readable-team-account',
+        provider: 'codex',
+        channel: 'codex',
+        channelHost: '',
+      },
+      t,
+      'masked'
+    );
+
+    expect(display.primary).toBe('readable-team-account');
+    expect(display.primary).not.toContain('h:');
+  });
+
+  it('prefers readable channel/config name over m:<masked> source (Case 3)', () => {
+    const display = buildRealtimeSourceDisplay(
+      {
+        source: 'm:sk-1...cdef',
+        sourceMasked: 'm:sk-1...cdef',
+        channel: 'custom-production-channel',
+        channelHost: '',
+        provider: 'codex',
+        account: '',
+        accountMasked: '',
+        authLabel: '',
+      },
+      t,
+      'masked'
+    );
+
+    expect(display.primary).toBe('custom-production-channel');
+    expect(display.primary).not.toContain('m:sk-1...cdef');
+  });
+
+  it('falls back to opaque identity when no readable metadata exists (Case 4)', () => {
+    const validHash = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const hashFallback = buildRealtimeSourceDisplay(
+      {
+        source: `h:${validHash}`,
+        sourceMasked: `h:${validHash}`,
+        channel: '',
+        channelHost: '',
+        provider: '',
+        account: '',
+        accountMasked: '',
+        authLabel: '',
+      },
+      t,
+      'masked'
+    );
+    expect(hashFallback.primary).toBe(`h:${validHash}`);
+
+    const keyFallback = buildRealtimeSourceDisplay(
+      {
+        source: 'k:abcdef0123456789',
+        sourceMasked: 'k:abcdef0123456789',
+        channel: '',
+        channelHost: '',
+        provider: '',
+        account: '',
+        accountMasked: '',
+        authLabel: '',
+      },
+      t,
+      'masked'
+    );
+    expect(keyFallback.primary).toBe('k:abcdef0123456789');
+
+    const maskedFallback = buildRealtimeSourceDisplay(
+      {
+        source: 'm:sk-1...cdef',
+        sourceMasked: 'm:sk-1...cdef',
+        channel: '',
+        channelHost: '',
+        provider: '',
+        account: '',
+        accountMasked: '',
+        authLabel: '',
+      },
+      t,
+      'masked'
+    );
+    expect(maskedFallback.primary).toBe('m:sk-1...cdef');
+  });
+});

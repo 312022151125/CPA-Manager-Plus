@@ -6,6 +6,7 @@ import {
   isKeyDisambiguatedLabel,
   isRedundantMonitoringLabel,
 } from '@/features/monitoring/model/sourceDisplay';
+import { isOpaqueUsageSourceId } from '@/utils/usage';
 
 const hasReadableRealtimeValue = (value: string | null | undefined) => {
   const trimmed = String(value || '').trim();
@@ -43,30 +44,42 @@ export const buildRealtimeSourceDisplay = (
   const nonGenericChannel =
     channel && !isGenericMonitoringProviderLabel(channel) ? channel : '';
   const nonGenericSource = source && !isGenericMonitoringProviderLabel(source) ? source : '';
+  const readableNonGenericSource =
+    nonGenericSource && !isOpaqueUsageSourceId(nonGenericSource) ? nonGenericSource : '';
+  const readableAccount = account && !isOpaqueUsageSourceId(account) ? account : '';
   const keyDisambiguatedSource =
-    nonGenericSource &&
-    (isKeyDisambiguatedLabel(nonGenericSource, channel) ||
-      isKeyDisambiguatedLabel(nonGenericSource, host) ||
-      isKeyDisambiguatedLabel(nonGenericSource, account))
-      ? nonGenericSource
+    readableNonGenericSource &&
+    (isKeyDisambiguatedLabel(readableNonGenericSource, channel) ||
+      isKeyDisambiguatedLabel(readableNonGenericSource, host) ||
+      isKeyDisambiguatedLabel(readableNonGenericSource, readableAccount))
+      ? readableNonGenericSource
       : '';
+  const opaqueSource = isOpaqueUsageSourceId(source)
+    ? source
+    : isOpaqueUsageSourceId(row.source)
+    ? row.source
+    : isOpaqueUsageSourceId(account)
+    ? account
+    : '';
   const primary =
     firstReadable(
       keyDisambiguatedSource,
       nonGenericChannel,
       host,
-      nonGenericSource,
+      readableNonGenericSource,
+      readableAccount,
       provider && !isGenericMonitoringProviderLabel(provider) ? provider : '',
-      account || '',
       channel,
-      provider
+      provider,
+      opaqueSource
     ) || '-';
   const metaCandidate = provider
     ? { value: provider, label: t('monitoring.filter_provider') }
     : [
         { value: host, label: t('monitoring.column_host') },
-        { value: account, label: '' },
-        { value: source, label: t('monitoring.source') },
+        { value: readableAccount, label: '' },
+        { value: readableNonGenericSource, label: t('monitoring.source') },
+        { value: opaqueSource, label: t('monitoring.source') },
       ].find(
         (candidate) =>
           candidate.value && !isRedundantMonitoringLabel(candidate.value, primary)
