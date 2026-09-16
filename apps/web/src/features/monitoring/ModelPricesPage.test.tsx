@@ -84,9 +84,7 @@ describe('ModelPricesPage Attention UI', () => {
       acknowledgeSnapshot: vi.fn().mockResolvedValue(undefined),
     };
 
-    vi.spyOn(attentionHook, 'useModelPriceAttention').mockImplementation(
-      () => mockAttentionState
-    );
+    vi.spyOn(attentionHook, 'useModelPriceAttention').mockImplementation(() => mockAttentionState);
   });
 
   it('renders pending count badge on Sync Prices button when pendingCount > 0', async () => {
@@ -337,6 +335,100 @@ describe('ModelPricesPage Attention UI', () => {
       saveBtn.props.onClick();
     });
 
+    expect(mockAttentionState.check).toHaveBeenCalledWith({ force: true });
+  });
+
+  it('preserves special pricing rules and refreshes attention after editing an existing price', async () => {
+    const setModelPrices = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(usageDataHook.useUsageData).mockReturnValue({
+      loading: false,
+      modelPrices: {
+        'tiered-model': {
+          prompt: 5,
+          completion: 25,
+          cache: 0.5,
+          contextTiers: [
+            {
+              thresholdTokens: 128_000,
+              prompt: 10,
+              completion: 0,
+              cache: 0,
+              promptConfigured: true,
+              completionConfigured: false,
+              cacheConfigured: false,
+            },
+          ],
+          serviceTiers: [
+            {
+              mode: 'fast',
+              serviceTier: 'priority',
+              prompt: 0,
+              completion: 50,
+              cache: 0,
+              promptConfigured: true,
+              completionConfigured: true,
+              cacheConfigured: false,
+            },
+          ],
+        },
+      },
+      setModelPrices,
+      syncModelPrices: mockSyncModelPrices,
+      usageServiceAvailable: true,
+    } as unknown as ReturnType<typeof usageDataHook.useUsageData>);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <MemoryRouter initialEntries={['/model-prices']}>
+          <ModelPricesPage />
+        </MemoryRouter>
+      );
+    });
+
+    const root = renderer!.root;
+    const editButton = root
+      .findAllByType('button')
+      .find((button) => button.props['aria-label'] === 'common.edit');
+    if (!editButton) throw new Error('edit button not found');
+
+    await act(async () => {
+      editButton.props.onClick();
+    });
+    const inputPrice = root.findByProps({ 'data-testid': 'draft-input-price' });
+    await act(async () => {
+      inputPrice.props.onChange({ target: { value: '6' } });
+    });
+
+    const saveButton = root.findByProps({ 'data-testid': 'save-draft-button' });
+    await act(async () => {
+      saveButton.props.onClick();
+    });
+
+    expect(setModelPrices).toHaveBeenCalledWith({
+      'tiered-model': expect.objectContaining({
+        prompt: 6,
+        source: 'manual',
+        contextTiers: [
+          expect.objectContaining({
+            thresholdTokens: 128_000,
+            prompt: 10,
+            promptConfigured: true,
+            completionConfigured: false,
+          }),
+        ],
+        serviceTiers: [
+          expect.objectContaining({
+            mode: 'fast',
+            serviceTier: 'priority',
+            prompt: 0,
+            completion: 50,
+            promptConfigured: true,
+            completionConfigured: true,
+          }),
+        ],
+      }),
+    });
     expect(mockAttentionState.check).toHaveBeenCalledWith({ force: true });
   });
 });

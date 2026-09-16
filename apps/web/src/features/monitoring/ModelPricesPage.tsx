@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { IconPencil, IconSearch, IconTrash2, IconX } from '@/components/ui/icons';
+import { IconPencil, IconPlus, IconSearch, IconTrash2, IconX } from '@/components/ui/icons';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import {
   usageServiceApi,
@@ -24,7 +24,9 @@ import {
   buildModelPriceSummary,
   buildPriceFromDraft,
   buildSyncPriceModelsFromSummary,
+  createEmptyContextTierDraft,
   createEmptyPriceDraft,
+  createEmptyServiceTierDraft,
   createPriceDraft,
   filterModelPriceRows,
   formatContextThreshold,
@@ -34,14 +36,34 @@ import {
   groupModelPriceCandidatesBySource,
   resolveContextTierDisplayPrice,
   resolveServiceTierDisplayPrice,
+  validatePriceDraft,
+  type ContextTierDraft,
   type ModelPriceFilter,
   type PriceDraft,
+  type PriceRuleDraft,
+  type ServiceTierDraft,
 } from './model/modelPricesPageModel';
 import { readModelPricesPageUiState, writeModelPricesPageUiState } from './modelPricesPageUiState';
 import { resolveModelPriceSyncNotification } from './model/modelPriceSyncFeedback';
 import styles from './ModelPricesPage.module.scss';
 
 const FILTERS: ModelPriceFilter[] = ['all', 'missing', 'candidates', 'saved'];
+
+const RULE_PRICE_FIELDS = [
+  { field: 'prompt', labelKey: 'usage_stats.model_price_prompt' },
+  { field: 'completion', labelKey: 'usage_stats.model_price_completion' },
+  { field: 'cache', labelKey: 'usage_stats.model_price_cache' },
+  { field: 'cacheRead', labelKey: 'usage_stats.model_price_cache_read' },
+  { field: 'cacheCreation', labelKey: 'usage_stats.model_price_cache_creation' },
+] as const satisfies readonly { field: keyof PriceRuleDraft; labelKey: string }[];
+
+type BasePriceDraftField =
+  | 'model'
+  | 'prompt'
+  | 'completion'
+  | 'cache'
+  | 'cacheRead'
+  | 'cacheCreation';
 
 const resolveErrorMessage = (error: unknown, fallback: string) => {
   const rawMessage = error instanceof Error ? error.message : String(error || fallback);
@@ -195,6 +217,11 @@ export function ModelPricesPage() {
   };
 
   const handleSaveDraft = async () => {
+    const validationError = validatePriceDraft(draft);
+    if (validationError) {
+      showNotification(t(`model_prices.rule_error_${validationError}`), 'warning');
+      return;
+    }
     const price = buildPriceFromDraft(draft);
     const model = draft.model.trim();
     if (!model || !price) {
@@ -223,8 +250,54 @@ export function ModelPricesPage() {
     }
   };
 
-  const setDraftField = (field: keyof PriceDraft, value: string) => {
+  const setDraftField = (field: BasePriceDraftField, value: string) => {
     setDraft((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const addContextTier = () => {
+    setDraft((previous) => ({
+      ...previous,
+      contextTiers: [...previous.contextTiers, createEmptyContextTierDraft()],
+    }));
+  };
+
+  const updateContextTier = (index: number, field: keyof ContextTierDraft, value: string) => {
+    setDraft((previous) => ({
+      ...previous,
+      contextTiers: previous.contextTiers.map((tier, tierIndex) =>
+        tierIndex === index ? { ...tier, [field]: value } : tier
+      ),
+    }));
+  };
+
+  const removeContextTier = (index: number) => {
+    setDraft((previous) => ({
+      ...previous,
+      contextTiers: previous.contextTiers.filter((_tier, tierIndex) => tierIndex !== index),
+    }));
+  };
+
+  const addServiceTier = () => {
+    setDraft((previous) => ({
+      ...previous,
+      serviceTiers: [...previous.serviceTiers, createEmptyServiceTierDraft()],
+    }));
+  };
+
+  const updateServiceTier = (index: number, field: keyof ServiceTierDraft, value: string) => {
+    setDraft((previous) => ({
+      ...previous,
+      serviceTiers: previous.serviceTiers.map((tier, tierIndex) =>
+        tierIndex === index ? { ...tier, [field]: value } : tier
+      ),
+    }));
+  };
+
+  const removeServiceTier = (index: number) => {
+    setDraft((previous) => ({
+      ...previous,
+      serviceTiers: previous.serviceTiers.filter((_tier, tierIndex) => tierIndex !== index),
+    }));
   };
 
   const openManualEditor = (model = '', price = modelPrices[model]) => {
@@ -400,21 +473,137 @@ export function ModelPricesPage() {
               >
                 <IconX size={14} />
               </Button>
-              <Button size="xs" onClick={() => void handleSaveDraft()} data-testid="save-draft-button">
+              <Button
+                size="xs"
+                onClick={() => void handleSaveDraft()}
+                data-testid="save-draft-button"
+              >
                 {t('common.save')}
               </Button>
             </div>
-            {(modelPrices[draft.model.trim()]?.contextTiers?.length ?? 0) +
-              (modelPrices[draft.model.trim()]?.serviceTiers?.length ?? 0) >
-            0 ? (
-              <div className={styles.tierClearNotice}>
-                {t('model_prices.manual_clears_pricing_rules', {
-                  count:
-                    (modelPrices[draft.model.trim()]?.contextTiers?.length ?? 0) +
-                    (modelPrices[draft.model.trim()]?.serviceTiers?.length ?? 0),
-                })}
-              </div>
-            ) : null}
+            <div className={styles.pricingRulesEditor}>
+              <section className={styles.ruleSection}>
+                <div className={styles.ruleSectionHeader}>
+                  <div>
+                    <strong>{t('model_prices.context_rules')}</strong>
+                    <span>{t('model_prices.context_rules_hint')}</span>
+                  </div>
+                  <Button size="xs" variant="secondary" onClick={addContextTier}>
+                    <IconPlus size={13} />
+                    <span>{t('model_prices.add_context_rule')}</span>
+                  </Button>
+                </div>
+                {draft.contextTiers.length === 0 ? (
+                  <span className={styles.ruleEmpty}>{t('model_prices.no_pricing_rules')}</span>
+                ) : (
+                  <div className={styles.ruleList}>
+                    {draft.contextTiers.map((tier, index) => (
+                      <div className={styles.contextRuleRow} key={`context-${index}`}>
+                        <Input
+                          label={t('model_prices.threshold_tokens')}
+                          className={styles.compactInput}
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={tier.thresholdTokens}
+                          onChange={(event) =>
+                            updateContextTier(index, 'thresholdTokens', event.target.value)
+                          }
+                          placeholder="128000"
+                        />
+                        {RULE_PRICE_FIELDS.map(({ field, labelKey }) => (
+                          <Input
+                            key={field}
+                            label={`${t(labelKey)} ($/1M)`}
+                            className={styles.compactInput}
+                            type="number"
+                            min="0"
+                            step="0.0001"
+                            value={tier[field]}
+                            onChange={(event) =>
+                              updateContextTier(index, field, event.target.value)
+                            }
+                            placeholder={t('model_prices.inherit_price_placeholder')}
+                          />
+                        ))}
+                        <button
+                          type="button"
+                          className={styles.ruleDeleteButton}
+                          title={t('common.delete')}
+                          aria-label={t('common.delete')}
+                          onClick={() => removeContextTier(index)}
+                        >
+                          <IconTrash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className={styles.ruleSection}>
+                <div className={styles.ruleSectionHeader}>
+                  <div>
+                    <strong>{t('model_prices.service_tier_rules')}</strong>
+                    <span>{t('model_prices.service_tier_rules_hint')}</span>
+                  </div>
+                  <Button size="xs" variant="secondary" onClick={addServiceTier}>
+                    <IconPlus size={13} />
+                    <span>{t('model_prices.add_service_rule')}</span>
+                  </Button>
+                </div>
+                {draft.serviceTiers.length === 0 ? (
+                  <span className={styles.ruleEmpty}>{t('model_prices.no_pricing_rules')}</span>
+                ) : (
+                  <div className={styles.ruleList}>
+                    {draft.serviceTiers.map((tier, index) => (
+                      <div className={styles.serviceRuleRow} key={`service-${index}`}>
+                        <Input
+                          label={t('model_prices.service_mode')}
+                          className={styles.compactInput}
+                          value={tier.mode}
+                          onChange={(event) => updateServiceTier(index, 'mode', event.target.value)}
+                          placeholder="fast"
+                        />
+                        <Input
+                          label={t('model_prices.service_tier')}
+                          className={styles.compactInput}
+                          value={tier.serviceTier}
+                          onChange={(event) =>
+                            updateServiceTier(index, 'serviceTier', event.target.value)
+                          }
+                          placeholder="priority"
+                        />
+                        {RULE_PRICE_FIELDS.map(({ field, labelKey }) => (
+                          <Input
+                            key={field}
+                            label={`${t(labelKey)} ($/1M)`}
+                            className={styles.compactInput}
+                            type="number"
+                            min="0"
+                            step="0.0001"
+                            value={tier[field]}
+                            onChange={(event) =>
+                              updateServiceTier(index, field, event.target.value)
+                            }
+                            placeholder={t('model_prices.inherit_price_placeholder')}
+                          />
+                        ))}
+                        <button
+                          type="button"
+                          className={styles.ruleDeleteButton}
+                          title={t('common.delete')}
+                          aria-label={t('common.delete')}
+                          onClick={() => removeServiceTier(index)}
+                        >
+                          <IconTrash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </div>
           </div>
         ) : null}
 
@@ -450,8 +639,7 @@ export function ModelPricesPage() {
                     candidates.find(
                       (candidate) =>
                         getModelPriceCandidateIdentity(candidate) === requestedCandidateIdentity
-                    ) ??
-                    candidates[0];
+                    ) ?? candidates[0];
                   const selectedCandidateIdentity = selectedCandidate
                     ? getModelPriceCandidateIdentity(selectedCandidate)
                     : '';
