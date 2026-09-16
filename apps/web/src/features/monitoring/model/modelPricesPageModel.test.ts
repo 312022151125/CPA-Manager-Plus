@@ -58,6 +58,23 @@ describe('modelPricesPageModel', () => {
     ]);
   });
 
+  it('includes runtime models without prior usage in row universe', () => {
+    const rows = buildModelPriceRows(
+      null,
+      {},
+      [],
+      ['runtime-only-model']
+    );
+    expect(rows).toEqual([
+      expect.objectContaining({
+        model: 'runtime-only-model',
+        calls: 0,
+        hasPrice: false,
+        candidateCount: 0,
+      }),
+    ]);
+  });
+
   it('marks missing models with candidates before saved rows', () => {
     const rows = buildModelPriceRows(
       usageSummary,

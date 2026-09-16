@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -13,6 +13,8 @@ import {
 } from '@/services/api/usageService';
 import { useAuthStore, useNotificationStore } from '@/stores';
 import { useUsageData } from '@/features/monitoring/hooks/useUsageData';
+import { useModelPriceAttention } from '@/features/model-price-attention';
+import attentionStyles from '@/features/model-price-attention/ModelPriceAttention.module.scss';
 import {
   applyCandidatePrice,
   buildModelPriceRows,
@@ -50,13 +52,22 @@ export function ModelPricesPage() {
   const { showNotification } = useNotificationStore();
   const managementKey = useAuthStore((state) => state.managementKey);
   const featureAvailability = usePanelFeatureAvailability();
+  const attention = useModelPriceAttention();
   const { loading, modelPrices, setModelPrices, syncModelPrices, usageServiceAvailable } =
     useUsageData({ loadUsageEvents: false });
   const [usageSummary, setUsageSummary] = useState<ModelPriceUsageSummaryResponse | null>(null);
   const [usageSummaryLoading, setUsageSummaryLoading] = useState(false);
+  const [searchParams] = useSearchParams();
+  const queryFilter = searchParams.get('filter');
+  const validQueryFilter =
+    queryFilter && FILTERS.includes(queryFilter as ModelPriceFilter)
+      ? (queryFilter as ModelPriceFilter)
+      : null;
   const initialUiState = useRef(readModelPricesPageUiState());
   const [search, setSearch] = useState(() => initialUiState.current.search);
-  const [filter, setFilter] = useState<ModelPriceFilter>(() => initialUiState.current.filter);
+  const [filter, setFilter] = useState<ModelPriceFilter>(
+    () => validQueryFilter ?? initialUiState.current.filter
+  );
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<ModelPriceSyncResponse | null>(null);
   const [selectedCandidates, setSelectedCandidates] = useState<Record<string, string>>({});
@@ -66,6 +77,12 @@ export function ModelPricesPage() {
     ? featureAvailability.managerServiceBase
     : '';
 
+  useEffect(() => {
+    if (validQueryFilter && validQueryFilter !== filter) {
+      setFilter(validQueryFilter);
+    }
+  }, [filter, validQueryFilter]);
+
   const syncModels = useMemo(
     () => buildSyncPriceModelsFromSummary(usageSummary, modelPrices),
     [modelPrices, usageSummary]
@@ -73,8 +90,8 @@ export function ModelPricesPage() {
 
   const candidateSets = useMemo(() => syncResult?.candidates ?? [], [syncResult?.candidates]);
   const rows = useMemo(
-    () => buildModelPriceRows(usageSummary, modelPrices, candidateSets),
-    [candidateSets, modelPrices, usageSummary]
+    () => buildModelPriceRows(usageSummary, modelPrices, candidateSets, attention.runtimeModels),
+    [attention.runtimeModels, candidateSets, modelPrices, usageSummary]
   );
   const summary = useMemo(() => buildModelPriceSummary(rows), [rows]);
   const visibleRows = useMemo(
@@ -130,11 +147,15 @@ export function ModelPricesPage() {
 
   const handleSync = async () => {
     setSyncing(true);
+    const pendingSnapshot = attention.capturePendingSnapshot();
     try {
       const result = await syncModelPrices(syncModels, {
         includeRuntimeModels: true,
       });
       setSyncResult(result);
+      if (pendingSnapshot.length > 0) {
+        await attention.acknowledgeSnapshot(pendingSnapshot);
+      }
       const notification = resolveModelPriceSyncNotification({
         result,
         syncModels,
@@ -239,8 +260,18 @@ export function ModelPricesPage() {
           >
             {t('model_prices.add_manual')}
           </Button>
-          <Button size="xs" onClick={() => void handleSync()} loading={syncing}>
-            {t('usage_stats.model_price_sync')}
+          <Button
+            size="xs"
+            onClick={() => void handleSync()}
+            loading={syncing}
+            data-testid="sync-prices-button"
+          >
+            <span>{t('usage_stats.model_price_sync')}</span>
+            {attention.pendingCount > 0 ? (
+              <span className={attentionStyles.syncButtonBadge} data-testid="sync-pending-badge">
+                {attention.pendingCount}
+              </span>
+            ) : null}
           </Button>
         </div>
       </section>
@@ -265,6 +296,8 @@ export function ModelPricesPage() {
                   filter === item ? styles.filterButtonActive : ''
                 }`}
                 onClick={() => setFilter(item)}
+                data-filter={item}
+                data-active={filter === item}
               >
                 <span>{t(`model_prices.filter_${item}`)}</span>
                 <strong>{filterCounts[item]}</strong>
@@ -421,7 +454,17 @@ export function ModelPricesPage() {
                     <tr key={row.model}>
                       <td className={styles.modelCell}>
                         <div className={styles.modelContent}>
-                          <strong>{row.model}</strong>
+                          <strong>
+                            {row.model}
+                            {attention.pendingModels.includes(row.model) ? (
+                              <span
+                                className={attentionStyles.pendingBadge}
+                                data-testid={`pending-badge-${row.model}`}
+                              >
+                                {t('model_prices.pending_sync_badge')}
+                              </span>
+                            ) : null}
+                          </strong>
                           {!row.hasPrice && candidates.length > 0 ? (
                             <span>{t('model_prices.needs_confirmation')}</span>
                           ) : !row.hasPrice ? (
