@@ -420,6 +420,11 @@ export interface ModelPriceSyncSourceResult {
   error?: string;
 }
 
+export interface ModelPriceSyncRequest {
+  models?: string[];
+  includeRuntimeModels?: boolean;
+}
+
 export interface ModelPriceSyncResponse extends ModelPricesResponse {
   source?: string;
   sources?: string[];
@@ -431,6 +436,8 @@ export interface ModelPriceSyncResponse extends ModelPricesResponse {
   preserved?: string[];
   proxyUsed?: boolean;
   sourceResults?: ModelPriceSyncSourceResult[];
+  runtimeModelCount?: number;
+  runtimeModelDiscoveryError?: string;
 }
 
 export interface ApiKeyAlias {
@@ -3165,16 +3172,31 @@ export const usageServiceApi = {
   syncModelPrices: async (
     base: string,
     managementKey?: string,
-    models?: string[]
+    modelsOrRequest?: string[] | ModelPriceSyncRequest,
+    options?: { includeRuntimeModels?: boolean }
   ): Promise<ModelPriceSyncResponse> => {
+    let payload: ModelPriceSyncRequest = {};
+    if (Array.isArray(modelsOrRequest)) {
+      payload = {
+        models: modelsOrRequest,
+        ...(options?.includeRuntimeModels !== undefined
+          ? { includeRuntimeModels: options.includeRuntimeModels }
+          : {}),
+      };
+    } else if (modelsOrRequest) {
+      payload = modelsOrRequest;
+    } else if (options?.includeRuntimeModels !== undefined) {
+      payload = { includeRuntimeModels: options.includeRuntimeModels };
+    }
+
     if (__DEMO_SITE__ && isDemoMode()) {
-      return getDemoModelPriceSyncResponse(models);
+      return getDemoModelPriceSyncResponse(payload.models);
     }
 
     return withUsageServiceError(async () => {
       const response = await axios.post<ModelPriceSyncResponse>(
         buildUrl(base, '/v0/management/model-prices/sync'),
-        models ? { models } : {},
+        payload,
         {
           timeout: 45 * 1000,
           headers: authHeaders(managementKey),
