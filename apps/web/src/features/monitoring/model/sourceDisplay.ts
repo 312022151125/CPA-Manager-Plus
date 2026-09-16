@@ -1,6 +1,6 @@
 import type { CredentialInfo } from '@/types/sourceInfo';
 import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver';
-import { normalizeAuthIndex } from '@/utils/usage';
+import { isOpaqueUsageSourceId, normalizeAuthIndex } from '@/utils/usage';
 import { maskEmailLike, readString } from './base';
 import type { MonitoringAuthMeta, MonitoringChannelMeta } from './types';
 
@@ -175,34 +175,49 @@ export const buildMonitoringSourceDisplay = (
   const nonGenericChannel = channel && !isGenericMonitoringProviderLabel(channel) ? channel : '';
   const nonGenericSource =
     sourceMasked && !isGenericMonitoringProviderLabel(sourceMasked) ? sourceMasked : '';
+  const readableNonGenericSource =
+    nonGenericSource && !isOpaqueUsageSourceId(nonGenericSource) ? nonGenericSource : '';
+  const readableAccountMasked =
+    accountMasked && !isOpaqueUsageSourceId(accountMasked) ? accountMasked : '';
+  const opaqueSource = isOpaqueUsageSourceId(sourceMasked)
+    ? sourceMasked
+    : isOpaqueUsageSourceId(accountMasked)
+    ? accountMasked
+    : '';
   const keyDisambiguatedSource =
-    nonGenericSource &&
-    (isKeyDisambiguatedLabel(nonGenericSource, channel) ||
-      isKeyDisambiguatedLabel(nonGenericSource, channelHost) ||
-      isKeyDisambiguatedLabel(nonGenericSource, labelCandidates) ||
-      isKeyDisambiguatedLabel(nonGenericSource, account))
-      ? nonGenericSource
+    readableNonGenericSource &&
+    (isKeyDisambiguatedLabel(readableNonGenericSource, channel) ||
+      isKeyDisambiguatedLabel(readableNonGenericSource, channelHost) ||
+      isKeyDisambiguatedLabel(readableNonGenericSource, labelCandidates) ||
+      isKeyDisambiguatedLabel(readableNonGenericSource, account))
+      ? readableNonGenericSource
       : '';
   const primary =
     firstReadable(
       keyDisambiguatedSource,
       nonGenericChannel,
       channelHost,
-      nonGenericSource,
+      readableNonGenericSource,
       provider && !isGenericMonitoringProviderLabel(provider) ? provider : '',
-      accountMasked,
+      readableAccountMasked,
       apiKeyAlias,
       channel,
       provider,
+      opaqueSource,
       fallbackId
     ) || '-';
   const meta = firstReadable(
     provider && !isRedundantMonitoringLabel(provider, primary) ? provider : '',
     channelHost && !isRedundantMonitoringLabel(channelHost, primary) ? channelHost : '',
-    accountMasked && !isRedundantMonitoringLabel(accountMasked, primary) ? accountMasked : '',
-    sourceMasked && !isRedundantMonitoringLabel(sourceMasked, primary) ? sourceMasked : '',
+    readableAccountMasked && !isRedundantMonitoringLabel(readableAccountMasked, primary)
+      ? readableAccountMasked
+      : '',
+    readableNonGenericSource && !isRedundantMonitoringLabel(readableNonGenericSource, primary)
+      ? readableNonGenericSource
+      : '',
     apiKeyAlias && !isRedundantMonitoringLabel(apiKeyAlias, primary) ? apiKeyAlias : '',
-    channel && !isRedundantMonitoringLabel(channel, primary) ? channel : ''
+    channel && !isRedundantMonitoringLabel(channel, primary) ? channel : '',
+    opaqueSource && !isRedundantMonitoringLabel(opaqueSource, primary) ? opaqueSource : ''
   );
   const title = Array.from(
     new Set(
