@@ -15,6 +15,7 @@ import {
   getDemoModelPrices,
   getDemoMonitoringAnalytics,
   getDemoQuotaCooldowns,
+  getDemoRuntimeModelPricingStatus,
   getDemoUsagePayload,
   getDemoUsageServiceInfo,
   getDemoUsageServiceStatus,
@@ -438,6 +439,13 @@ export interface ModelPriceSyncResponse extends ModelPricesResponse {
   sourceResults?: ModelPriceSyncSourceResult[];
   runtimeModelCount?: number;
   runtimeModelDiscoveryError?: string;
+}
+
+export interface RuntimeModelPricingStatusResponse {
+  models: string[];
+  unpricedModels: string[];
+  count: number;
+  unpricedCount: number;
 }
 
 export interface ApiKeyAlias {
@@ -2940,6 +2948,28 @@ export const usageServiceApi = {
     return withUsageServiceError(async () => {
       const response = await axios.get<ModelPriceUsageSummaryResponse>(
         buildUrl(base, '/v0/management/model-prices/usage-summary'),
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+          signal,
+        }
+      );
+      return response.data;
+    });
+  },
+
+  getRuntimeModelPricingStatus: async (
+    base: string,
+    managementKey?: string,
+    signal?: AbortSignal
+  ): Promise<RuntimeModelPricingStatusResponse> => {
+    if (__DEMO_SITE__ && isDemoMode()) {
+      return getDemoRuntimeModelPricingStatus();
+    }
+
+    return withUsageServiceError(async () => {
+      const response = await axios.get<RuntimeModelPricingStatusResponse>(
+        buildUrl(base, '/v0/management/model-prices/runtime-models'),
         {
           timeout: USAGE_SERVICE_TIMEOUT_MS,
           headers: authHeaders(managementKey),

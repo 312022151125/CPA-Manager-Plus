@@ -1844,3 +1844,212 @@ func TestSyncPreferredSourceFailurePreservationWithRuntimeModels(t *testing.T) {
 		t.Fatalf("expected models.dev price to be preserved, got %#v", p)
 	}
 }
+
+func TestRuntimeModelPricingStatus(t *testing.T) {
+	st := testutil.NewStore(t, testutil.NewConfig(t))
+
+	initialPrices := map[string]store.ModelPrice{
+		"synced-model": {
+			Prompt:     1.0,
+			Completion: 2.0,
+			Source:     SyncSourceLiteLLM,
+		},
+		"manual-model": {
+			Prompt:     0.5,
+			Completion: 1.5,
+			Source:     "manual",
+		},
+	}
+	if err := st.SaveModelPrices(context.Background(), initialPrices); err != nil {
+		t.Fatalf("save initial prices: %v", err)
+	}
+
+	remoteCalled := false
+	remoteServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remoteCalled = true
+		http.Error(w, "should not call remote price sources", http.StatusInternalServerError)
+	}))
+	defer remoteServer.Close()
+
+	cpaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v0/management/api-keys":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"api-keys": []string{"secret-key-1", "secret-key-2"},
+			})
+		case "/v1/models":
+			if r.Header.Get("Authorization") != "Bearer secret-key-1" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{"id": "zebra-model"},
+					{"id": "synced-model"},
+					{"id": "alpha-model"},
+					{"id": "manual-model"},
+					{"id": "alpha-model"},
+					{"id": "   "},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cpaServer.Close()
+
+	resolver := staticSetupResolver{
+		setup: store.Setup{
+			CPAUpstreamURL: cpaServer.URL,
+			ManagementKey:  "mgmt-secret-key",
+		},
+	}
+	remoteURL := remoteServer.URL
+	svc := New(st, &remoteURL, resolver)
+
+	status, err := svc.RuntimeModelPricingStatus(context.Background())
+	if err != nil {
+		t.Fatalf("RuntimeModelPricingStatus failed: %v", err)
+	}
+
+	if remoteCalled {
+		t.Fatal("RuntimeModelPricingStatus must not call remote price sources")
+	}
+
+	expectedModels := []string{"alpha-model", "manual-model", "synced-model", "zebra-model"}
+	if len(status.Models) != len(expectedModels) {
+		t.Fatalf("expected %d models, got %d: %#v", len(expectedModels), len(status.Models), status.Models)
+	}
+	for i, m := range expectedModels {
+		if status.Models[i] != m {
+			t.Fatalf("expected model at %d to be %s, got %s", i, m, status.Models[i])
+		}
+	}
+	if status.Count != 4 {
+		t.Fatalf("expected count 4, got %d", status.Count)
+	}
+
+	expectedUnpriced := []string{"alpha-model", "zebra-model"}
+	if len(status.UnpricedModels) != len(expectedUnpriced) {
+		t.Fatalf("expected %d unpriced models, got %d: %#v", len(expectedUnpriced), len(status.UnpricedModels), status.UnpricedModels)
+	}
+	for i, m := range expectedUnpriced {
+		if status.UnpricedModels[i] != m {
+			t.Fatalf("expected unpriced model at %d to be %s, got %s", i, m, status.UnpricedModels[i])
+		}
+	}
+	if status.UnpricedCount != 2 {
+		t.Fatalf("expected unpricedCount 2, got %d", status.UnpricedCount)
+	}
+
+	storedPrices, err := st.LoadModelPrices(context.Background())
+	if err != nil {
+		t.Fatalf("load prices: %v", err)
+	}
+	if len(storedPrices) != 2 {
+		t.Fatalf("expected 2 stored prices, got %d", len(storedPrices))
+	}
+}
+
+func TestRuntimeModelPricingStatus_AllUnpricedWhenNoPrices(t *testing.T) {
+	st := testutil.NewStore(t, testutil.NewConfig(t))
+
+	cpaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v0/management/api-keys":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"api-keys": []string{"test-key"},
+			})
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{"id": "m1"},
+					{"id": "m2"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cpaServer.Close()
+
+	resolver := staticSetupResolver{
+		setup: store.Setup{
+			CPAUpstreamURL: cpaServer.URL,
+			ManagementKey:  "mgmt-key",
+		},
+	}
+	svc := New(st, nil, resolver)
+
+	status, err := svc.RuntimeModelPricingStatus(context.Background())
+	if err != nil {
+		t.Fatalf("RuntimeModelPricingStatus failed: %v", err)
+	}
+	if status.Count != 2 || status.UnpricedCount != 2 {
+		t.Fatalf("expected count=2 and unpricedCount=2, got count=%d, unpriced=%d", status.Count, status.UnpricedCount)
+	}
+	if len(status.UnpricedModels) != 2 || status.UnpricedModels[0] != "m1" || status.UnpricedModels[1] != "m2" {
+		t.Fatalf("unexpected unpriced models: %#v", status.UnpricedModels)
+	}
+}
+
+func TestRuntimeModelPricingStatus_ZeroModels(t *testing.T) {
+	st := testutil.NewStore(t, testutil.NewConfig(t))
+
+	cpaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v0/management/api-keys":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"api-keys": []string{"test-key"},
+			})
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cpaServer.Close()
+
+	resolver := staticSetupResolver{
+		setup: store.Setup{
+			CPAUpstreamURL: cpaServer.URL,
+			ManagementKey:  "mgmt-key",
+		},
+	}
+	svc := New(st, nil, resolver)
+
+	status, err := svc.RuntimeModelPricingStatus(context.Background())
+	if err != nil {
+		t.Fatalf("RuntimeModelPricingStatus failed: %v", err)
+	}
+	if status.Count != 0 || status.UnpricedCount != 0 {
+		t.Fatalf("expected count=0, unpricedCount=0, got %d, %d", status.Count, status.UnpricedCount)
+	}
+	if status.Models == nil || status.UnpricedModels == nil {
+		t.Fatal("expected models and unpricedModels to be non-nil empty slices")
+	}
+}
+
+func TestRuntimeModelPricingStatus_DiscoveryFailure(t *testing.T) {
+	st := testutil.NewStore(t, testutil.NewConfig(t))
+
+	cpaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "cpa internal error", http.StatusInternalServerError)
+	}))
+	defer cpaServer.Close()
+
+	resolver := staticSetupResolver{
+		setup: store.Setup{
+			CPAUpstreamURL: cpaServer.URL,
+			ManagementKey:  "mgmt-key",
+		},
+	}
+	svc := New(st, nil, resolver)
+
+	_, err := svc.RuntimeModelPricingStatus(context.Background())
+	if err == nil {
+		t.Fatal("expected error on discovery failure, got nil")
+	}
+}

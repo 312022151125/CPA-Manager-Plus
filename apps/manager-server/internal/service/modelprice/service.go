@@ -319,7 +319,7 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 			discoveryTimeout = defaultRuntimeModelDiscoveryTimeout
 		}
 		discoveryCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
-		runtimeModels, err := s.discoverRuntimeModels(discoveryCtx)
+		runtimeModels, err := s.DiscoverRuntimeModels(discoveryCtx)
 		cancel()
 
 		if err != nil {
@@ -403,7 +403,56 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 	}, nil
 }
 
-func (s *Service) discoverRuntimeModels(ctx context.Context) ([]string, error) {
+type RuntimeModelPricingStatus struct {
+	Models         []string `json:"models"`
+	UnpricedModels []string `json:"unpricedModels"`
+	Count          int      `json:"count"`
+	UnpricedCount  int      `json:"unpricedCount"`
+}
+
+func (s *Service) RuntimeModelPricingStatus(ctx context.Context) (RuntimeModelPricingStatus, error) {
+	discoveryTimeout := s.runtimeModelDiscoveryTimeout
+	if discoveryTimeout <= 0 {
+		discoveryTimeout = defaultRuntimeModelDiscoveryTimeout
+	}
+	discoveryCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
+	models, err := s.DiscoverRuntimeModels(discoveryCtx)
+	cancel()
+	if err != nil {
+		return RuntimeModelPricingStatus{}, err
+	}
+
+	prices, err := s.store.LoadModelPrices(ctx)
+	if err != nil {
+		return RuntimeModelPricingStatus{}, err
+	}
+
+	normalizedModels := normalizedRequestedModels(models)
+	sort.Strings(normalizedModels)
+
+	unpricedModels := make([]string, 0, len(normalizedModels))
+	for _, m := range normalizedModels {
+		if _, exists := prices[m]; !exists {
+			unpricedModels = append(unpricedModels, m)
+		}
+	}
+
+	if normalizedModels == nil {
+		normalizedModels = []string{}
+	}
+	if unpricedModels == nil {
+		unpricedModels = []string{}
+	}
+
+	return RuntimeModelPricingStatus{
+		Models:         normalizedModels,
+		UnpricedModels: unpricedModels,
+		Count:          len(normalizedModels),
+		UnpricedCount:  len(unpricedModels),
+	}, nil
+}
+
+func (s *Service) DiscoverRuntimeModels(ctx context.Context) ([]string, error) {
 	if s.setupResolver == nil {
 		return nil, errors.New("runtime model discovery failed: missing setup resolver")
 	}

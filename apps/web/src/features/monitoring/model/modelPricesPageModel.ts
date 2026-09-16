@@ -151,7 +151,8 @@ export const buildCandidateMap = (candidateSets: ModelPriceSyncCandidateSet[] = 
 export const buildModelPriceRows = (
   summary: ModelPriceUsageSummaryResponse | null,
   prices: Record<string, ModelPrice>,
-  candidateSets: ModelPriceSyncCandidateSet[] = []
+  candidateSets: ModelPriceSyncCandidateSet[] = [],
+  runtimeModels: string[] = []
 ): ModelPriceRow[] => {
   const rowMap = new Map<string, ModelPriceRow>();
   const candidateMap = buildCandidateMap(candidateSets);
@@ -175,6 +176,10 @@ export const buildModelPriceRows = (
 
   Object.keys(prices).forEach(ensureRow);
   candidateMap.forEach((_candidates, model) => ensureRow(model));
+  runtimeModels.forEach((model) => {
+    const trimmed = typeof model === 'string' ? model.trim() : '';
+    if (trimmed) ensureRow(trimmed);
+  });
 
   summary?.models?.forEach((item) => {
     if (!item.model) return;
