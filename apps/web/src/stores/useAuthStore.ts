@@ -443,6 +443,14 @@ export const useAuthStore = create<AuthStoreState>()(
 // 监听全局未授权事件
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('unauthorized', () => {
+    // pending v1 credential verification 期间，
+    // 中间请求的 401 不一定代表当前 remembered credential 无效，
+    // 尤其 manager_embedded 场景可能是保存的 CPA Management Key 失效；
+    // 此时由 restoreSession / login 错误捕获流程最终裁决认证结果，避免提前 logout 导致写门控过早解除。
+    if (deferAuthPersistence) {
+      return;
+    }
+
     useAuthStore.getState().logout();
   });
 

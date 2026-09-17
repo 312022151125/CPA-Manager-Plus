@@ -65,11 +65,29 @@ vi.mock('@/services/api/usageService', async () => {
   };
 });
 
-const createStubWindow = (host = 'cpa.local:8317') => ({
-  location: { host },
-  addEventListener: vi.fn(),
-  removeEventListener: vi.fn(),
-});
+const createStubWindow = (host = 'cpa.local:8317') => {
+  const listeners = new Map<string, Set<EventListener>>();
+
+  return {
+    location: { host },
+    addEventListener: vi.fn((type: string, listener: EventListener) => {
+      if (!listeners.has(type)) {
+        listeners.set(type, new Set());
+      }
+      listeners.get(type)!.add(listener);
+    }),
+    removeEventListener: vi.fn((type: string, listener: EventListener) => {
+      listeners.get(type)?.delete(listener);
+    }),
+    dispatchEvent: vi.fn((event: Event) => {
+      const set = listeners.get(event.type);
+      if (set) {
+        set.forEach((listener) => listener(event));
+      }
+      return true;
+    }),
+  };
+};
 
 describe('useAuthStore logout', () => {
   let storage: StorageLike;
@@ -493,6 +511,153 @@ describe('useAuthStore v1 obfuscation persistence gate and v2 migration', () => 
     const restoreResult = await useAuthStore.getState().restoreSession();
     expect(restoreResult).toBe(false);
     expect(fetchConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('9. preserves raw v1 auth byte-for-byte in Manager Embedded when first-stage CPA returns 401 and second-stage fallback suffers transient failure', async () => {
+    // Stage 1: fetchConfig CPA 401, dispatches unauthorized event
+    fetchConfigMock.mockImplementation(async () => {
+      window.dispatchEvent(new Event('unauthorized'));
+      throw Object.assign(new Error('Unauthorized'), { status: 401 });
+    });
+
+    // Stage 2: Manager Server fallback fails with 500 / network error
+    usageServiceGetManagerConfigMock.mockRejectedValue(
+      Object.assign(new Error('Server Error'), { status: 500 })
+    );
+
+    const v1Payload = {
+      state: {
+        apiBase: 'http://manager.local:18317',
+        managementKey: 'manager-admin-key',
+        rememberPassword: true,
+        serverVersion: null,
+        serverBuildDate: null,
+        sessionMode: 'manager_embedded',
+        sessionPanelBase: 'http://manager.local:18317',
+      },
+      version: 0,
+    };
+
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, v1Payload);
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+
+    const { useAuthStore } = await import('./useAuthStore');
+
+    const result = await useAuthStore.getState().restoreSession({
+      expectedMode: 'manager_embedded',
+      expectedPanelBase: 'http://manager.local:18317',
+    });
+
+    expect(result).toBe(false);
+
+    // Byte-for-byte identical: MUST NOT be erased by premature unauthorized logout, nor migrated to v2
+    expect(storage.getItem('cli-proxy-auth')).toBe(rawV1);
+    expect(storage.getItem('isLoggedIn')).toBe('true');
+  });
+
+  it('10. migrates v1 auth to v2 in Manager Embedded when first-stage CPA returns 401 but manager fallback succeeds', async () => {
+    // Stage 1: fetchConfig CPA 401, dispatches unauthorized event
+    fetchConfigMock.mockImplementation(async () => {
+      window.dispatchEvent(new Event('unauthorized'));
+      throw Object.assign(new Error('Unauthorized'), { status: 401 });
+    });
+
+    // Stage 2: Manager Server getManagerConfig succeeds with admin key
+    usageServiceGetManagerConfigMock.mockResolvedValue({
+      config: {
+        cpaConnection: {
+          cpaBaseUrl: 'http://cpa.local:8317',
+          managementKey: 'stale-cpa-key',
+        },
+        collector: {
+          enabled: false,
+          collectorMode: 'auto',
+          queue: 'usage',
+          popSide: 'right',
+          batchSize: 100,
+          pollIntervalMs: 500,
+          queryLimit: 50000,
+        },
+        externalUsageService: {
+          enabled: false,
+          serviceBase: '',
+        },
+      },
+      source: 'db',
+    });
+
+    const v1Payload = {
+      state: {
+        apiBase: 'http://manager.local:18317',
+        managementKey: 'manager-admin-key',
+        rememberPassword: true,
+        serverVersion: null,
+        serverBuildDate: null,
+        sessionMode: 'manager_embedded',
+        sessionPanelBase: 'http://manager.local:18317',
+      },
+      version: 0,
+    };
+
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, v1Payload);
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+    // Pre-populate standalone keys to verify cleanup
+    storage.setItem('apiBase', 'http://manager.local:18317');
+    storage.setItem('apiUrl', 'http://manager.local:18317');
+    storage.setItem('managementKey', 'legacy-key-to-clean');
+
+    const { useAuthStore } = await import('./useAuthStore');
+
+    const result = await useAuthStore.getState().restoreSession({
+      expectedMode: 'manager_embedded',
+      expectedPanelBase: 'http://manager.local:18317',
+    });
+
+    expect(result).toEqual({ recoveryMode: 'manager_config' });
+
+    expect(useAuthStore.getState()).toMatchObject({
+      isAuthenticated: true,
+      apiBase: 'http://manager.local:18317',
+      managementKey: 'manager-admin-key',
+      sessionMode: 'manager_embedded',
+      connectionStatus: 'connected',
+    });
+
+    // Successfully migrated to enc::v2::
+    const finalStoredAuth = storage.getItem('cli-proxy-auth');
+    expect(finalStoredAuth).toBeTruthy();
+    expect(finalStoredAuth!.startsWith('enc::v2::')).toBe(true);
+
+    // Legacy standalone keys cleaned up
+    expect(storage.getItem('apiBase')).toBeNull();
+    expect(storage.getItem('apiUrl')).toBeNull();
+    expect(storage.getItem('managementKey')).toBeNull();
+    expect(storage.getItem('isLoggedIn')).toBe('true');
+  });
+
+  it('11. ordinary authenticated v2 session logs out when unauthorized event is received', async () => {
+    const { useAuthStore } = await import('./useAuthStore');
+
+    useAuthStore.setState({
+      isAuthenticated: true,
+      apiBase: 'http://cpa.local:8317',
+      managementKey: 'active-v2-key',
+      connectionStatus: 'connected',
+    });
+    storage.setItem('isLoggedIn', 'true');
+
+    // Dispatch global unauthorized event on regular authenticated session (deferAuthPersistence is false)
+    window.dispatchEvent(new Event('unauthorized'));
+
+    expect(useAuthStore.getState()).toMatchObject({
+      isAuthenticated: false,
+      apiBase: '',
+      managementKey: '',
+      connectionStatus: 'disconnected',
+    });
+    expect(storage.getItem('isLoggedIn')).toBeNull();
   });
 });
 
