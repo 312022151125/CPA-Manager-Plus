@@ -744,5 +744,217 @@ describe('useAuthStore v1 obfuscation persistence gate and v2 migration', () => 
     expect(storage.getItem('managementKey')).toBe('updated-by-another-tab');
     expect(storage.getItem('isLoggedIn')).toBe('true');
   });
+
+  it('14. does not restore or overwrite when shared storage changes after hydration but before restoreSession', async () => {
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, createV1AuthState('tab-a-old-v1-key'));
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+
+    // Step 2: import store (Zustand hydrates v1-A, sets deferAuthPersistence=true, captures pendingLegacyAuthSnapshot)
+    const { useAuthStore } = await import('./useAuthStore');
+
+    // Step 3: Tab B successfully logs in before Tab A calls restoreSession
+    const { obfuscateData } = await import('@/utils/encryption');
+    const newerV2Payload = {
+      state: {
+        apiBase: 'http://cpa.local:8317',
+        managementKey: 'new-key-from-tab-b',
+        rememberPassword: true,
+        serverVersion: null,
+        serverBuildDate: null,
+        sessionMode: '',
+        sessionPanelBase: '',
+      },
+      version: 0,
+    };
+    const newerRawV2 = obfuscateData(JSON.stringify(newerV2Payload));
+    storage.setItem('cli-proxy-auth', newerRawV2);
+    storage.setItem('isLoggedIn', 'true');
+
+    // Step 4: Tab A finally calls restoreSession()
+    const result = await useAuthStore.getState().restoreSession();
+
+    expect(result).toBe(false);
+    expect(storage.getItem('cli-proxy-auth')).toBe(newerRawV2);
+    expect(storage.getItem('isLoggedIn')).toBe('true');
+    expect(fetchConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('15. does not commit stale successful auto-restore when shared storage changed in-flight', async () => {
+    let resolveFetch!: (value: unknown) => void;
+    fetchConfigMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, createV1AuthState('tab-a-old-key'));
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+
+    const { useAuthStore } = await import('./useAuthStore');
+    const { obfuscateData } = await import('@/utils/encryption');
+
+    // Tab A begins session restoration
+    const restorePromise = useAuthStore.getState().restoreSession();
+    expect(fetchConfigMock).toHaveBeenCalled();
+
+    // While Tab A request is in-flight, Tab B updates shared storage with newer v2
+    const newerV2Payload = {
+      state: {
+        apiBase: 'http://cpa.local:8317',
+        managementKey: 'new-key-from-tab-b',
+        rememberPassword: true,
+        serverVersion: null,
+        serverBuildDate: null,
+        sessionMode: '',
+        sessionPanelBase: '',
+      },
+      version: 0,
+    };
+    const newerRawV2 = obfuscateData(JSON.stringify(newerV2Payload));
+    storage.setItem('cli-proxy-auth', newerRawV2);
+    storage.setItem('isLoggedIn', 'true');
+
+    // Tab A in-flight request succeeds
+    resolveFetch({ models: [] });
+
+    const result = await restorePromise;
+    expect(result).toBe(false);
+
+    // Tab B's newer v2 must be preserved byte-for-byte
+    expect(storage.getItem('cli-proxy-auth')).toBe(newerRawV2);
+    expect(storage.getItem('isLoggedIn')).toBe('true');
+  });
+
+  it('16. does not commit stale Manager Embedded auto-restore when shared storage changed during fallback', async () => {
+    // Stage 1: fetchConfig CPA 401, dispatches unauthorized event
+    fetchConfigMock.mockImplementation(async () => {
+      window.dispatchEvent(new Event('unauthorized'));
+      throw Object.assign(new Error('Unauthorized'), { status: 401 });
+    });
+
+    let resolveManagerConfig!: (value: unknown) => void;
+    usageServiceGetManagerConfigMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveManagerConfig = resolve;
+        })
+    );
+
+    const v1Payload = {
+      state: {
+        apiBase: 'http://manager.local:18317',
+        managementKey: 'manager-admin-key',
+        rememberPassword: true,
+        serverVersion: null,
+        serverBuildDate: null,
+        sessionMode: 'manager_embedded',
+        sessionPanelBase: 'http://manager.local:18317',
+      },
+      version: 0,
+    };
+
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, v1Payload);
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+
+    const { useAuthStore } = await import('./useAuthStore');
+    const { obfuscateData } = await import('@/utils/encryption');
+
+    const restorePromise = useAuthStore.getState().restoreSession({
+      expectedMode: 'manager_embedded',
+      expectedPanelBase: 'http://manager.local:18317',
+    });
+
+    // Wait for CPA 401 to trigger getManagerConfig
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(usageServiceGetManagerConfigMock).toHaveBeenCalled();
+
+    // While fallback is in-flight, another tab logs in and writes newer v2
+    const newerV2Payload = {
+      state: {
+        apiBase: 'http://manager.local:18317',
+        managementKey: 'new-key-from-tab-b',
+        rememberPassword: true,
+        serverVersion: null,
+        serverBuildDate: null,
+        sessionMode: 'manager_embedded',
+        sessionPanelBase: 'http://manager.local:18317',
+      },
+      version: 0,
+    };
+    const newerRawV2 = obfuscateData(JSON.stringify(newerV2Payload));
+    storage.setItem('cli-proxy-auth', newerRawV2);
+    storage.setItem('isLoggedIn', 'true');
+
+    // Fallback succeeds
+    resolveManagerConfig({
+      config: {
+        cpaConnection: {
+          cpaBaseUrl: 'http://cpa.local:8317',
+          hasManagementKey: true,
+        },
+      },
+    });
+
+    const result = await restorePromise;
+    expect(result).toBe(false);
+
+    // Stale success MUST NOT overwrite Tab B newer v2
+    expect(storage.getItem('cli-proxy-auth')).toBe(newerRawV2);
+    expect(storage.getItem('isLoggedIn')).toBe('true');
+  });
+
+  it('17. allows manual login to commit and overwrite even if stale legacy snapshot existed', async () => {
+    fetchConfigMock.mockResolvedValue({ models: [] });
+
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, createV1AuthState('tab-a-old-v1-key'));
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+
+    const { useAuthStore } = await import('./useAuthStore');
+    const { obfuscateData, deobfuscateData } = await import('@/utils/encryption');
+
+    // Tab B updates shared storage before Tab A calls restoreSession
+    const newerRawV2 = obfuscateData(
+      JSON.stringify({
+        state: {
+          apiBase: 'http://cpa.local:8317',
+          managementKey: 'tab-b-key',
+          rememberPassword: true,
+        },
+        version: 0,
+      })
+    );
+    storage.setItem('cli-proxy-auth', newerRawV2);
+
+    // Tab A restoreSession detects mismatch and aborts (stale, gate=true)
+    const restoreResult = await useAuthStore.getState().restoreSession();
+    expect(restoreResult).toBe(false);
+
+    // User explicitly types new credentials and triggers manual login
+    fetchConfigMock.mockClear();
+    fetchConfigMock.mockResolvedValue({ models: [] });
+
+    await useAuthStore.getState().login({
+      apiBase: 'http://cpa.local:8317',
+      managementKey: 'explicit-manual-key',
+      rememberPassword: true,
+    });
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().managementKey).toBe('explicit-manual-key');
+    expect(storage.getItem('isLoggedIn')).toBe('true');
+
+    // The manual login successfully committed new v2
+    const storedAuth = storage.getItem('cli-proxy-auth');
+    expect(storedAuth).toBeTruthy();
+    expect(storedAuth!.startsWith('enc::v2::')).toBe(true);
+    const parsed = JSON.parse(deobfuscateData(storedAuth!));
+    expect(parsed.state.managementKey).toBe('explicit-manual-key');
+  });
 });
 

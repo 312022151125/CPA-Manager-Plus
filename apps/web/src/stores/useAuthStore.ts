@@ -67,6 +67,7 @@ type PendingLegacyAuthSnapshot = {
  */
 let deferAuthPersistence = false;
 let pendingLegacyAuthSnapshot: PendingLegacyAuthSnapshot | null = null;
+let pendingLegacyRestoreInFlight = false;
 
 function captureLegacyAuthSnapshot(): PendingLegacyAuthSnapshot {
   try {
@@ -171,7 +172,17 @@ export const useAuthStore = create<AuthStoreState>()(
         if (restoreSessionPromise) return restoreSessionPromise;
 
         restoreSessionPromise = (async () => {
-          if (hasPendingV1AuthStorage()) {
+          if (pendingLegacyAuthSnapshot !== null) {
+            if (!legacyAuthSnapshotMatches(pendingLegacyAuthSnapshot)) {
+              // Hydration 期间建立的 snapshot 在进入 restoreSession 前已被其他上下文修改（如另一 tab 成功登录）。
+              // 当前 tab 的内存状态已失效，保持 deferAuthPersistence = true 阻断覆盖写，直接放弃本次旧自动恢复。
+              set({
+                connectionStatus: 'disconnected',
+              });
+              return false;
+            }
+            deferAuthPersistence = true;
+          } else if (hasPendingV1AuthStorage()) {
             deferAuthPersistence = true;
             pendingLegacyAuthSnapshot = captureLegacyAuthSnapshot();
           } else {
@@ -229,15 +240,22 @@ export const useAuthStore = create<AuthStoreState>()(
           apiClient.setConfig({ apiBase: resolvedBase, managementKey: resolvedKey });
 
           if (wasLoggedIn && resolvedBase && resolvedKey) {
+            const isLegacyRestore = pendingLegacyAuthSnapshot !== null;
+            if (isLegacyRestore) {
+              pendingLegacyRestoreInFlight = true;
+            }
             try {
               const restoredSessionMode = options?.expectedMode ?? (sessionMode || undefined);
-              const result = await get().login({
+              const result = (await get().login({
                 apiBase: resolvedBase,
                 managementKey: resolvedKey,
                 rememberPassword: resolvedRememberPassword,
                 sessionMode: restoredSessionMode,
                 sessionPanelBase: options?.expectedPanelBase || get().sessionPanelBase,
-              });
+              })) as LoginResult & { stale?: boolean };
+              if (result?.stale) {
+                return false;
+              }
               return result.recoveryMode ? result : {};
             } catch (error) {
               console.warn('Auto login failed:', error);
@@ -250,7 +268,11 @@ export const useAuthStore = create<AuthStoreState>()(
                     : undefined;
 
               if (status === 401) {
-                if (legacyAuthSnapshotMatches(pendingLegacyAuthSnapshot)) {
+                const isStaleLegacyRestore =
+                  pendingLegacyAuthSnapshot !== null &&
+                  !legacyAuthSnapshotMatches(pendingLegacyAuthSnapshot);
+
+                if (!isStaleLegacyRestore) {
                   pendingLegacyAuthSnapshot = null;
                   deferAuthPersistence = false;
                   clearLegacyAuthKeys();
@@ -277,6 +299,8 @@ export const useAuthStore = create<AuthStoreState>()(
               }
 
               return false;
+            } finally {
+              pendingLegacyRestoreInFlight = false;
             }
           }
 
@@ -298,6 +322,23 @@ export const useAuthStore = create<AuthStoreState>()(
         const quotaCacheScope = sha256Hex(`${apiBase}\u0000${managementKey}`);
 
         const markAuthenticated = (result: LoginResult = {}) => {
+          if (pendingLegacyRestoreInFlight) {
+            if (
+              pendingLegacyAuthSnapshot &&
+              !legacyAuthSnapshotMatches(pendingLegacyAuthSnapshot)
+            ) {
+              // 自动恢复请求期间 shared storage 已被其他上下文更新，当前旧 auto-restore 成功结果已失效，
+              // 不得向共享存储提交认证结果或清除 legacy keys。
+              // 保持 deferAuthPersistence = true 阻断覆盖写。
+              useUsageServiceStore.getState().clearUsageServiceConfig();
+              set({
+                isAuthenticated: false,
+                connectionStatus: 'disconnected',
+              });
+              return { stale: true } as LoginResult & { stale?: boolean };
+            }
+          }
+
           pendingLegacyAuthSnapshot = null;
           deferAuthPersistence = false;
           clearLegacyAuthKeys();
@@ -380,6 +421,7 @@ export const useAuthStore = create<AuthStoreState>()(
 
       // 登出
       logout: () => {
+        pendingLegacyRestoreInFlight = false;
         pendingLegacyAuthSnapshot = null;
         deferAuthPersistence = false;
         clearLegacyAuthKeys();
