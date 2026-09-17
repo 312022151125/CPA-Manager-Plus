@@ -558,7 +558,9 @@ detect_existing_installation() {
      [ -e "$install_dir/cliproxyapi/config.yaml" ]; then
     has_docker_files="1"
   fi
-  if [ -e "$install_dir/run.sh" ] || [ -e "$install_dir/data/usage.sqlite" ]; then
+  if [ -e "$install_dir/run.sh" ] ||
+     [ -e "$install_dir/cpa-manager-plus.service" ] ||
+     [ -e "$install_dir/data/usage.sqlite" ]; then
     has_native_files="1"
   fi
   for native_config in "$install_dir"/runtime/*/config.json; do
@@ -572,7 +574,8 @@ detect_existing_installation() {
     existing_install_state="managed"
   elif [ "$has_docker_files" = "1" ]; then
     existing_install_state="partial"
-  elif [ -f "$install_dir/run.sh" ] && [ "$has_native_runtime_config" = "1" ]; then
+  elif { [ -f "$install_dir/run.sh" ] || [ -f "$install_dir/cpa-manager-plus.service" ]; } &&
+       [ "$has_native_runtime_config" = "1" ]; then
     existing_install_state="native-managed"
   elif [ "$has_native_files" = "1" ]; then
     existing_install_state="native-partial"
@@ -1056,6 +1059,7 @@ parse_native_run_paths() {
   native_run_data_dir_declared="0"
   native_run_db_path_declared="0"
   native_run_data_key_path_declared="0"
+  [ -f "$install_dir/run.sh" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       [[:space:]]*\#*) continue ;;
@@ -1229,8 +1233,8 @@ reconcile_legacy_native_manager_paths() {
   local legacy_runtime_data_dir="$native_existing_config_dir/data"
   local resolved_canonical_key=""
 
-  # Condition A: If the currently resolved DB path is already a regular readable file, do not fallback
-  if [ -f "$native_db_path" ] && [ -r "$native_db_path" ]; then
+  # Condition A: If the currently resolved DB path already exists as any filesystem object (including symlinks/dangling symlinks/directories), do not fallback
+  if [ -e "$native_db_path" ] || [ -L "$native_db_path" ]; then
     return 0
   fi
 
@@ -1264,6 +1268,19 @@ reconcile_legacy_native_manager_paths() {
       return 0
     fi
   fi
+
+  # Legacy runtime dataset remnants: if any SQLite dataset artifact or data.key exists in legacy runtime data dir, do not fallback
+  local remnant=""
+  for remnant in \
+    "$legacy_runtime_data_dir/usage.sqlite" \
+    "$legacy_runtime_data_dir/usage.sqlite-wal" \
+    "$legacy_runtime_data_dir/usage.sqlite-shm" \
+    "$legacy_runtime_data_dir/usage.sqlite-journal" \
+    "$legacy_runtime_data_dir/data.key"; do
+    if [ -e "$remnant" ] || [ -L "$remnant" ]; then
+      return 0
+    fi
+  done
 
   # Logical dataset check: both canonical usage.sqlite and data.key must be regular readable files
   if [ ! -f "$canonical_db_path" ] || [ ! -r "$canonical_db_path" ] ||
@@ -2063,40 +2080,63 @@ locate_existing_native_config() {
   local config=""
   local found=""
 
-  runtime_package="$(awk '
-    /^# CPAMP_RUNTIME_PACKAGE=/ {
-      sub(/^# CPAMP_RUNTIME_PACKAGE=/, "")
-      print
-      exit
-    }
-  ' "$install_dir/run.sh")"
-  if [ -n "$runtime_package" ]; then
-    validate_native_runtime_package "$runtime_package"
-    config="$install_dir/runtime/$runtime_package/config.json"
-    [ -f "$config" ] || die "Native runtime marker points to a missing config: $config"
-    native_existing_binary_dir="$(cd "$(dirname "$config")" && pwd -P)"
-    native_existing_config_file="$native_existing_binary_dir/config.json"
-    return
-  fi
-
-  run_binary_dir="$(awk '
-    /^[[:space:]]*cd[[:space:]]+"[^"]+"[[:space:]]*$/ {
-      value = $0
-      sub(/^[[:space:]]*cd[[:space:]]+"/, "", value)
-      sub(/"[[:space:]]*$/, "", value)
-      print value
-      exit
-    }
-  ' "$install_dir/run.sh")"
-  if [ -n "$run_binary_dir" ]; then
-    case "$run_binary_dir" in
-      /*) ;;
-      *) run_binary_dir="$install_dir/$run_binary_dir" ;;
-    esac
-    if [ -f "$run_binary_dir/config.json" ]; then
-      native_existing_binary_dir="$(cd "$run_binary_dir" && pwd -P)"
+  if [ -f "$install_dir/run.sh" ]; then
+    runtime_package="$(awk '
+      /^# CPAMP_RUNTIME_PACKAGE=/ {
+        sub(/^# CPAMP_RUNTIME_PACKAGE=/, "")
+        print
+        exit
+      }
+    ' "$install_dir/run.sh")"
+    if [ -n "$runtime_package" ]; then
+      validate_native_runtime_package "$runtime_package"
+      config="$install_dir/runtime/$runtime_package/config.json"
+      [ -f "$config" ] || die "Native runtime marker points to a missing config: $config"
+      native_existing_binary_dir="$(cd "$(dirname "$config")" && pwd -P)"
       native_existing_config_file="$native_existing_binary_dir/config.json"
       return
+    fi
+
+    run_binary_dir="$(awk '
+      /^[[:space:]]*cd[[:space:]]+"[^"]+"[[:space:]]*$/ {
+        value = $0
+        sub(/^[[:space:]]*cd[[:space:]]+"/, "", value)
+        sub(/"[[:space:]]*$/, "", value)
+        print value
+        exit
+      }
+    ' "$install_dir/run.sh")"
+    if [ -n "$run_binary_dir" ]; then
+      case "$run_binary_dir" in
+        /*) ;;
+        *) run_binary_dir="$install_dir/$run_binary_dir" ;;
+      esac
+      if [ -f "$run_binary_dir/config.json" ]; then
+        native_existing_binary_dir="$(cd "$run_binary_dir" && pwd -P)"
+        native_existing_config_file="$native_existing_binary_dir/config.json"
+        return
+      fi
+    fi
+  elif [ -f "$install_dir/cpa-manager-plus.service" ]; then
+    run_binary_dir="$(awk -F= '
+      /^[[:space:]]*WorkingDirectory=/ {
+        value = $2
+        sub(/^"/, "", value)
+        sub(/"$/, "", value)
+        print value
+        exit
+      }
+    ' "$install_dir/cpa-manager-plus.service")"
+    if [ -n "$run_binary_dir" ]; then
+      case "$run_binary_dir" in
+        /*) ;;
+        *) run_binary_dir="$install_dir/$run_binary_dir" ;;
+      esac
+      if [ -f "$run_binary_dir/config.json" ]; then
+        native_existing_binary_dir="$(cd "$run_binary_dir" && pwd -P)"
+        native_existing_config_file="$native_existing_binary_dir/config.json"
+        return
+      fi
     fi
   fi
 

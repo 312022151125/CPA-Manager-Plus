@@ -6245,8 +6245,11 @@ exit 22
   it('fails closed when config.json specifies custom dbPath that does not exist', () => {
     const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
     const legacy = writeLegacyNativeInstall(installDir, {
+      configDataDir: './data',
+      omitConfigDataKeyPath: true,
       configDbPath: path.join(installDir, 'custom-missing.sqlite'),
     });
+    rmSync(path.join(installDir, 'cpa-manager-plus.service'));
 
     try {
       const result = spawnSync('bash', [installerPath], {
@@ -6275,6 +6278,8 @@ exit 22
   it('fails closed when run.sh specifies custom USAGE_DB_PATH that does not exist', () => {
     const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
     const legacy = writeLegacyNativeInstall(installDir, {
+      configDataDir: './data',
+      omitConfigDataKeyPath: true,
       runEnvironment: `export USAGE_DB_PATH=${path.join(installDir, 'custom-missing.sqlite')}\n`,
     });
     rmSync(path.join(installDir, 'cpa-manager-plus.service'));
@@ -6307,9 +6312,11 @@ exit 22
     const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
     const customDbPath = path.join(installDir, 'custom-missing.sqlite');
     const legacy = writeLegacyNativeInstall(installDir, {
-      runEnvironment: `export USAGE_DB_PATH=${customDbPath}\n`,
+      configDataDir: './data',
+      omitConfigDataKeyPath: true,
       serviceEnvironment: `Environment="USAGE_DB_PATH=${customDbPath}"\n`,
     });
+    rmSync(legacy.runPath);
 
     try {
       const result = spawnSync('bash', [installerPath], {
@@ -6342,6 +6349,177 @@ exit 22
       omitConfigDataKeyPath: true,
       omitDataKeyFile: true,
     });
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).not.toContain('Detected a legacy native Manager data layout');
+      expect(combinedOutput(result)).toContain('Manager database is missing or is not a regular file');
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when config.json specifies custom non-canonical dataKeyPath', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const customKeyPath = path.join(installDir, 'custom-missing.key');
+    const legacy = writeLegacyNativeInstall(installDir, {
+      configDataDir: './data',
+      configDataKeyPath: customKeyPath,
+    });
+    rmSync(path.join(installDir, 'cpa-manager-plus.service'));
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).not.toContain('Detected a legacy native Manager data layout');
+      expect(combinedOutput(result)).toContain('Manager database is missing or is not a regular file');
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not fall back when runtime DB is a directory', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const legacy = writeLegacyNativeInstall(installDir, {
+      configDataDir: './data',
+      omitConfigDataKeyPath: true,
+    });
+    rmSync(path.join(installDir, 'cpa-manager-plus.service'));
+    mkdirSync(path.join(legacy.binaryDir, 'data', 'usage.sqlite'), { recursive: true });
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).not.toContain('Detected a legacy native Manager data layout');
+      expect(combinedOutput(result)).toContain('Manager database is missing or is not a regular file');
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not fall back when runtime DB is a dangling symlink', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const legacy = writeLegacyNativeInstall(installDir, {
+      configDataDir: './data',
+      omitConfigDataKeyPath: true,
+    });
+    rmSync(path.join(installDir, 'cpa-manager-plus.service'));
+    mkdirSync(path.join(legacy.binaryDir, 'data'), { recursive: true });
+    symlinkSync(
+      path.join(legacy.binaryDir, 'data', 'missing-target.sqlite'),
+      path.join(legacy.binaryDir, 'data', 'usage.sqlite')
+    );
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).not.toContain('Detected a legacy native Manager data layout');
+      expect(combinedOutput(result)).toContain('Manager database is missing or is not a regular file');
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not fall back when legacy runtime dataset has leftover WAL file', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const legacy = writeLegacyNativeInstall(installDir, {
+      configDataDir: './data',
+      omitConfigDataKeyPath: true,
+    });
+    rmSync(path.join(installDir, 'cpa-manager-plus.service'));
+    mkdirSync(path.join(legacy.binaryDir, 'data'), { recursive: true });
+    writeFileSync(path.join(legacy.binaryDir, 'data', 'usage.sqlite-wal'), 'wal-remnant\n');
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).not.toContain('Detected a legacy native Manager data layout');
+      expect(combinedOutput(result)).toContain('Manager database is missing or is not a regular file');
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not fall back when legacy runtime dataset has leftover data.key', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const legacy = writeLegacyNativeInstall(installDir, {
+      configDataDir: './data',
+      omitConfigDataKeyPath: true,
+    });
+    rmSync(path.join(installDir, 'cpa-manager-plus.service'));
+    mkdirSync(path.join(legacy.binaryDir, 'data'), { recursive: true });
+    writeFileSync(path.join(legacy.binaryDir, 'data', 'data.key'), 'key-remnant\n');
 
     try {
       const result = spawnSync('bash', [installerPath], {
