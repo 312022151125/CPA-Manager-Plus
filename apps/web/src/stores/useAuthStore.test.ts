@@ -659,5 +659,90 @@ describe('useAuthStore v1 obfuscation persistence gate and v2 migration', () => 
     });
     expect(storage.getItem('isLoggedIn')).toBeNull();
   });
+
+  it('12. does not let a stale v1 401 overwrite a newer auth state written by another tab', async () => {
+    let rejectFetch!: (error: unknown) => void;
+    fetchConfigMock.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectFetch = reject;
+        })
+    );
+
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, createV1AuthState('stale-v1-key'));
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+
+    const { useAuthStore } = await import('./useAuthStore');
+    const { obfuscateData } = await import('@/utils/encryption');
+
+    // Tab A begins session restoration
+    const restorePromise = useAuthStore.getState().restoreSession();
+
+    // Verify fetchConfig is actually pending
+    expect(fetchConfigMock).toHaveBeenCalled();
+
+    // While Tab A request is in-flight, Tab B successfully authenticates and writes newer v2 state
+    const newerV2Payload = {
+      state: {
+        apiBase: 'http://cpa.local:8317',
+        managementKey: 'new-correct-key-from-tab-b',
+        rememberPassword: true,
+        serverVersion: null,
+        serverBuildDate: null,
+        sessionMode: '',
+        sessionPanelBase: '',
+      },
+      version: 0,
+    };
+    const newerRawV2 = obfuscateData(JSON.stringify(newerV2Payload));
+    storage.setItem('cli-proxy-auth', newerRawV2);
+    storage.setItem('isLoggedIn', 'true');
+
+    // Tab A slow request finally rejects with 401
+    rejectFetch(Object.assign(new Error('Unauthorized'), { status: 401 }));
+
+    const result = await restorePromise;
+    expect(result).toBe(false);
+
+    // Stale 401 MUST NOT overwrite Tab B newer v2 ciphertext
+    expect(storage.getItem('cli-proxy-auth')).toBe(newerRawV2);
+    // Stale 401 MUST NOT delete Tab B active login state
+    expect(storage.getItem('isLoggedIn')).toBe('true');
+  });
+
+  it('13. does not let a stale v1 401 delete standalone legacy keys updated by another context during verification', async () => {
+    let rejectFetch!: (error: unknown) => void;
+    fetchConfigMock.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectFetch = reject;
+        })
+    );
+
+    const rawLegacyKeyV1 = createV1Blob(TEST_HOST, TEST_UA, 'standalone-v1-key');
+    storage.setItem('managementKey', rawLegacyKeyV1);
+    storage.setItem('apiBase', 'http://cpa.local:8317');
+    storage.setItem('isLoggedIn', 'true');
+
+    const { useAuthStore } = await import('./useAuthStore');
+
+    // Tab A starts restoration with standalone key
+    const restorePromise = useAuthStore.getState().restoreSession();
+    expect(fetchConfigMock).toHaveBeenCalled();
+
+    // Another context updates storage during the verification window
+    storage.setItem('managementKey', 'updated-by-another-tab');
+
+    // Tab A rejects with 401
+    rejectFetch(Object.assign(new Error('Unauthorized'), { status: 401 }));
+
+    const result = await restorePromise;
+    expect(result).toBe(false);
+
+    // Standalone key must remain untouched because storage changed during in-flight request
+    expect(storage.getItem('managementKey')).toBe('updated-by-another-tab');
+    expect(storage.getItem('isLoggedIn')).toBe('true');
+  });
 });
 

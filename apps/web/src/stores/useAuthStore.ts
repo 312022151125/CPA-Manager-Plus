@@ -54,11 +54,51 @@ let restoreSessionPromise: Promise<RestoreSessionResult> | null = null;
 
 const LEGACY_AUTH_KEYS = ['apiBase', 'apiUrl', 'managementKey'] as const;
 
+type PendingLegacyAuthSnapshot = {
+  auth: string | null;
+  apiBase: string | null;
+  apiUrl: string | null;
+  managementKey: string | null;
+};
+
 /**
  * 认证持久化写门控：当存在未经验证的 v1 混淆数据时，延迟/阻止写入 localStorage，
  * 防止因 User-Agent 变动导致错误解密出的 credential 被提前覆写固化为 v2。
  */
 let deferAuthPersistence = false;
+let pendingLegacyAuthSnapshot: PendingLegacyAuthSnapshot | null = null;
+
+function captureLegacyAuthSnapshot(): PendingLegacyAuthSnapshot {
+  try {
+    return {
+      auth: localStorage.getItem(STORAGE_KEY_AUTH),
+      apiBase: localStorage.getItem('apiBase'),
+      apiUrl: localStorage.getItem('apiUrl'),
+      managementKey: localStorage.getItem('managementKey'),
+    };
+  } catch {
+    return {
+      auth: null,
+      apiBase: null,
+      apiUrl: null,
+      managementKey: null,
+    };
+  }
+}
+
+function legacyAuthSnapshotMatches(snapshot: PendingLegacyAuthSnapshot | null): boolean {
+  if (!snapshot) return false;
+  try {
+    return (
+      localStorage.getItem(STORAGE_KEY_AUTH) === snapshot.auth &&
+      localStorage.getItem('apiBase') === snapshot.apiBase &&
+      localStorage.getItem('apiUrl') === snapshot.apiUrl &&
+      localStorage.getItem('managementKey') === snapshot.managementKey
+    );
+  } catch {
+    return false;
+  }
+}
 
 function isV1StoredValue(key: string): boolean {
   try {
@@ -133,9 +173,12 @@ export const useAuthStore = create<AuthStoreState>()(
         restoreSessionPromise = (async () => {
           if (hasPendingV1AuthStorage()) {
             deferAuthPersistence = true;
+            pendingLegacyAuthSnapshot = captureLegacyAuthSnapshot();
+          } else {
+            deferAuthPersistence = false;
+            pendingLegacyAuthSnapshot = null;
+            obfuscatedStorage.migratePlaintextKeys(['apiBase', 'apiUrl', 'managementKey']);
           }
-
-          obfuscatedStorage.migratePlaintextKeys(['apiBase', 'apiUrl', 'managementKey']);
 
           const wasLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
           const legacyBase =
@@ -207,19 +250,30 @@ export const useAuthStore = create<AuthStoreState>()(
                     : undefined;
 
               if (status === 401) {
-                deferAuthPersistence = false;
-                clearLegacyAuthKeys();
-                try {
-                  localStorage.removeItem('isLoggedIn');
-                } catch {
-                  // ignore
+                if (legacyAuthSnapshotMatches(pendingLegacyAuthSnapshot)) {
+                  pendingLegacyAuthSnapshot = null;
+                  deferAuthPersistence = false;
+                  clearLegacyAuthKeys();
+                  try {
+                    localStorage.removeItem('isLoggedIn');
+                  } catch {
+                    // ignore
+                  }
+                  set({
+                    isAuthenticated: false,
+                    managementKey: '',
+                    rememberPassword: false,
+                    connectionStatus: 'disconnected',
+                  });
+                } else {
+                  // 请求期间 shared storage 已被其他上下文更新（如另一个标签页成功登录并写入 v2），
+                  // 当前 401 属于已失效的旧请求结果，不得破坏共享存储中的最新状态。
+                  // 保持 deferAuthPersistence = true 以阻断对 storage 的覆盖写。
+                  set({
+                    isAuthenticated: false,
+                    connectionStatus: 'disconnected',
+                  });
                 }
-                set({
-                  isAuthenticated: false,
-                  managementKey: '',
-                  rememberPassword: false,
-                  connectionStatus: 'disconnected',
-                });
               }
 
               return false;
@@ -244,6 +298,7 @@ export const useAuthStore = create<AuthStoreState>()(
         const quotaCacheScope = sha256Hex(`${apiBase}\u0000${managementKey}`);
 
         const markAuthenticated = (result: LoginResult = {}) => {
+          pendingLegacyAuthSnapshot = null;
           deferAuthPersistence = false;
           clearLegacyAuthKeys();
 
@@ -325,6 +380,7 @@ export const useAuthStore = create<AuthStoreState>()(
 
       // 登出
       logout: () => {
+        pendingLegacyAuthSnapshot = null;
         deferAuthPersistence = false;
         clearLegacyAuthKeys();
         restoreSessionPromise = null;
@@ -413,6 +469,9 @@ export const useAuthStore = create<AuthStoreState>()(
         getItem: (name) => {
           if (isV1StoredValue(name)) {
             deferAuthPersistence = true;
+            if (!pendingLegacyAuthSnapshot) {
+              pendingLegacyAuthSnapshot = captureLegacyAuthSnapshot();
+            }
           }
           const data = obfuscatedStorage.getItem<AuthStoreState>(name);
           return data ? JSON.stringify(data) : null;
