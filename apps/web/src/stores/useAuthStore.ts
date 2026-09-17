@@ -23,6 +23,7 @@ import { useQuotaStore } from './useQuotaStore';
 import { useUsageServiceStore } from './useUsageServiceStore';
 import { detectApiBaseFromLocation, normalizeApiBase } from '@/utils/connection';
 import { sha256Hex } from '@/utils/apiKeyHash';
+import { getObfuscationVersion } from '@/utils/encryption';
 
 interface AuthStoreState extends AuthState {
   sessionMode: AuthSessionMode | '';
@@ -50,6 +51,40 @@ interface RestoreSessionOptions {
 }
 
 let restoreSessionPromise: Promise<RestoreSessionResult> | null = null;
+
+const LEGACY_AUTH_KEYS = ['apiBase', 'apiUrl', 'managementKey'] as const;
+
+/**
+ * 认证持久化写门控：当存在未经验证的 v1 混淆数据时，延迟/阻止写入 localStorage，
+ * 防止因 User-Agent 变动导致错误解密出的 credential 被提前覆写固化为 v2。
+ */
+let deferAuthPersistence = false;
+
+function isV1StoredValue(key: string): boolean {
+  try {
+    const raw = localStorage.getItem(key);
+    return getObfuscationVersion(raw || '') === 'v1';
+  } catch {
+    return false;
+  }
+}
+
+function hasPendingV1AuthStorage(): boolean {
+  if (isV1StoredValue(STORAGE_KEY_AUTH)) {
+    return true;
+  }
+  return LEGACY_AUTH_KEYS.some((key) => isV1StoredValue(key));
+}
+
+function clearLegacyAuthKeys(): void {
+  LEGACY_AUTH_KEYS.forEach((key) => {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // ignore storage access errors
+    }
+  });
+}
 
 const sessionMatchesExpectedRuntime = ({
   expectedMode,
@@ -96,6 +131,10 @@ export const useAuthStore = create<AuthStoreState>()(
         if (restoreSessionPromise) return restoreSessionPromise;
 
         restoreSessionPromise = (async () => {
+          if (hasPendingV1AuthStorage()) {
+            deferAuthPersistence = true;
+          }
+
           obfuscatedStorage.migratePlaintextKeys(['apiBase', 'apiUrl', 'managementKey']);
 
           const wasLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
@@ -159,6 +198,30 @@ export const useAuthStore = create<AuthStoreState>()(
               return result.recoveryMode ? result : {};
             } catch (error) {
               console.warn('Auto login failed:', error);
+
+              const status =
+                error && typeof error === 'object' && 'status' in error && typeof (error as { status: unknown }).status === 'number'
+                  ? (error as { status: number }).status
+                  : error && typeof error === 'object' && 'statusCode' in error && typeof (error as { statusCode: unknown }).statusCode === 'number'
+                    ? (error as { statusCode: number }).statusCode
+                    : undefined;
+
+              if (status === 401) {
+                deferAuthPersistence = false;
+                clearLegacyAuthKeys();
+                try {
+                  localStorage.removeItem('isLoggedIn');
+                } catch {
+                  // ignore
+                }
+                set({
+                  isAuthenticated: false,
+                  managementKey: '',
+                  rememberPassword: false,
+                  connectionStatus: 'disconnected',
+                });
+              }
+
               return false;
             }
           }
@@ -181,6 +244,9 @@ export const useAuthStore = create<AuthStoreState>()(
         const quotaCacheScope = sha256Hex(`${apiBase}\u0000${managementKey}`);
 
         const markAuthenticated = (result: LoginResult = {}) => {
+          deferAuthPersistence = false;
+          clearLegacyAuthKeys();
+
           useQuotaStore.getState().activateQuotaCacheScope(quotaCacheScope);
           apiClient.setConfig({ apiBase, managementKey });
           set({
@@ -259,6 +325,8 @@ export const useAuthStore = create<AuthStoreState>()(
 
       // 登出
       logout: () => {
+        deferAuthPersistence = false;
+        clearLegacyAuthKeys();
         restoreSessionPromise = null;
         useConfigStore.getState().clearCache();
         useModelsStore.getState().clearCache();
@@ -343,10 +411,16 @@ export const useAuthStore = create<AuthStoreState>()(
       name: STORAGE_KEY_AUTH,
       storage: createJSONStorage(() => ({
         getItem: (name) => {
+          if (isV1StoredValue(name)) {
+            deferAuthPersistence = true;
+          }
           const data = obfuscatedStorage.getItem<AuthStoreState>(name);
           return data ? JSON.stringify(data) : null;
         },
         setItem: (name, value) => {
+          if (deferAuthPersistence) {
+            return;
+          }
           obfuscatedStorage.setItem(name, JSON.parse(value));
         },
         removeItem: (name) => {
@@ -367,7 +441,7 @@ export const useAuthStore = create<AuthStoreState>()(
 );
 
 // 监听全局未授权事件
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('unauthorized', () => {
     useAuthStore.getState().logout();
   });

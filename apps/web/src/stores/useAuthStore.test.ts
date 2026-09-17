@@ -65,6 +65,12 @@ vi.mock('@/services/api/usageService', async () => {
   };
 });
 
+const createStubWindow = (host = 'cpa.local:8317') => ({
+  location: { host },
+  addEventListener: vi.fn(),
+  removeEventListener: vi.fn(),
+});
+
 describe('useAuthStore logout', () => {
   let storage: StorageLike;
 
@@ -77,6 +83,10 @@ describe('useAuthStore logout', () => {
     usageServiceGetManagerConfigMock.mockReset();
     storage = createMemoryStorage();
     vi.stubGlobal('localStorage', storage);
+    vi.stubGlobal('window', createStubWindow('cpa.local:8317'));
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+    });
   });
 
   afterEach(() => {
@@ -143,6 +153,10 @@ describe('useAuthStore manager embedded login recovery', () => {
     usageServiceGetManagerConfigMock.mockReset();
     storage = createMemoryStorage();
     vi.stubGlobal('localStorage', storage);
+    vi.stubGlobal('window', createStubWindow('manager.local:18317'));
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+    });
   });
 
   afterEach(() => {
@@ -237,3 +251,248 @@ describe('useAuthStore manager embedded login recovery', () => {
     });
   });
 });
+
+describe('useAuthStore v1 obfuscation persistence gate and v2 migration', () => {
+  let storage: StorageLike;
+  const TEST_HOST = 'cpa.local:8317';
+  const TEST_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
+
+  const createV1Blob = (host: string, ua: string, payload: unknown): string => {
+    const encoder = new TextEncoder();
+    const SECRET_SALT = 'cli-proxy-api-webui::secure-storage';
+    const keyBytes = encoder.encode(`${SECRET_SALT}|${host}|${ua}`);
+    const data = encoder.encode(JSON.stringify(payload));
+    const encrypted = new Uint8Array(data.length);
+    for (let i = 0; i < data.length; i++) {
+      encrypted[i] = data[i] ^ keyBytes[i % keyBytes.length];
+    }
+    let binary = '';
+    for (let i = 0; i < encrypted.length; i++) {
+      binary += String.fromCharCode(encrypted[i]);
+    }
+    return 'enc::v1::' + btoa(binary);
+  };
+
+  const createV1AuthState = (managementKey = 'correct-management-key') => ({
+    state: {
+      apiBase: 'http://cpa.local:8317',
+      managementKey,
+      rememberPassword: true,
+      serverVersion: null,
+      serverBuildDate: null,
+      sessionMode: '',
+      sessionPanelBase: '',
+    },
+    version: 0,
+  });
+
+  beforeEach(() => {
+    vi.resetModules();
+    apiClientSetConfig.mockClear();
+    fetchConfigMock.mockReset();
+    clearConfigCacheMock.mockClear();
+    clearModelsCacheMock.mockClear();
+    usageServiceGetManagerConfigMock.mockReset();
+    storage = createMemoryStorage();
+    vi.stubGlobal('localStorage', storage);
+    vi.stubGlobal('window', createStubWindow(TEST_HOST));
+    vi.stubGlobal('navigator', {
+      userAgent: TEST_UA,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('1. seamlessly restores and migrates valid v1 auth to v2 on successful server authentication', async () => {
+    fetchConfigMock.mockResolvedValue({ models: [] });
+
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, createV1AuthState('correct-key-888'));
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+    // Pre-populate standalone legacy keys to test cleanup
+    storage.setItem('apiBase', 'http://cpa.local:8317');
+    storage.setItem('apiUrl', 'http://cpa.local:8317');
+    storage.setItem('managementKey', 'legacy-key-to-clean');
+
+    const { useAuthStore } = await import('./useAuthStore');
+
+    const result = await useAuthStore.getState().restoreSession();
+    expect(result).not.toBe(false);
+
+    expect(useAuthStore.getState()).toMatchObject({
+      isAuthenticated: true,
+      apiBase: 'http://cpa.local:8317',
+      managementKey: 'correct-key-888',
+      rememberPassword: true,
+      connectionStatus: 'connected',
+    });
+
+    // Successfully migrated to enc::v2::
+    const finalStoredAuth = storage.getItem('cli-proxy-auth');
+    expect(finalStoredAuth).toBeTruthy();
+    expect(finalStoredAuth!.startsWith('enc::v2::')).toBe(true);
+
+    // Standalone legacy keys must be cleaned up
+    expect(storage.getItem('apiBase')).toBeNull();
+    expect(storage.getItem('apiUrl')).toBeNull();
+    expect(storage.getItem('managementKey')).toBeNull();
+    expect(storage.getItem('isLoggedIn')).toBe('true');
+  });
+
+  it('2. preserves raw v1 auth byte-for-byte during transient network failures', async () => {
+    fetchConfigMock.mockRejectedValue(new Error('NetworkError: Failed to fetch'));
+
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, createV1AuthState('correct-key-888'));
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+
+    const { useAuthStore } = await import('./useAuthStore');
+
+    const result = await useAuthStore.getState().restoreSession();
+    expect(result).toBe(false);
+
+    // Raw v1 ciphertext MUST remain completely untouched byte-for-byte
+    const rawAfter = storage.getItem('cli-proxy-auth');
+    expect(rawAfter).toBe(rawV1);
+    expect(storage.getItem('isLoggedIn')).toBe('true');
+  });
+
+  it('3. preserves raw v1 auth on 5xx server errors', async () => {
+    const serverError = Object.assign(new Error('Server Error'), { status: 500 });
+    fetchConfigMock.mockRejectedValue(serverError);
+
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, createV1AuthState('correct-key-888'));
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+
+    const { useAuthStore } = await import('./useAuthStore');
+
+    const result = await useAuthStore.getState().restoreSession();
+    expect(result).toBe(false);
+
+    expect(storage.getItem('cli-proxy-auth')).toBe(rawV1);
+    expect(storage.getItem('isLoggedIn')).toBe('true');
+  });
+
+  it('4. preserves raw v1 auth on 403 Forbidden without deleting or migrating it', async () => {
+    const forbiddenError = Object.assign(new Error('Forbidden'), { status: 403 });
+    fetchConfigMock.mockRejectedValue(forbiddenError);
+
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, createV1AuthState('correct-key-888'));
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+
+    const { useAuthStore } = await import('./useAuthStore');
+
+    const result = await useAuthStore.getState().restoreSession();
+    expect(result).toBe(false);
+
+    // 403 does not prove credential is invalid, must keep v1 untouched
+    expect(storage.getItem('cli-proxy-auth')).toBe(rawV1);
+  });
+
+  it('5. clears remembered credentials and stops auto-login on definitive 401 Unauthorized', async () => {
+    const unauthorizedError = Object.assign(new Error('Unauthorized'), { status: 401 });
+    fetchConfigMock.mockRejectedValue(unauthorizedError);
+
+    const rawV1 = createV1Blob(TEST_HOST, TEST_UA, createV1AuthState('bad-stale-key'));
+    storage.setItem('cli-proxy-auth', rawV1);
+    storage.setItem('isLoggedIn', 'true');
+    storage.setItem('managementKey', 'legacy-stale-key');
+
+    const { useAuthStore } = await import('./useAuthStore');
+
+    const result = await useAuthStore.getState().restoreSession();
+    expect(result).toBe(false);
+
+    // Must clear remembered credential and isLoggedIn
+    expect(storage.getItem('isLoggedIn')).toBeNull();
+    expect(storage.getItem('managementKey')).toBeNull();
+    expect(useAuthStore.getState().managementKey).toBe('');
+    expect(useAuthStore.getState().rememberPassword).toBe(false);
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+
+    // Future restoreSession must not attempt to auto-login the stale key
+    fetchConfigMock.mockClear();
+    vi.resetModules();
+    const { useAuthStore: reloadedAuthStore } = await import('./useAuthStore');
+    const secondResult = await reloadedAuthStore.getState().restoreSession();
+    expect(secondResult).toBe(false);
+    expect(fetchConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('6. recovers from standalone legacy managementKey in v1 format and migrates to v2', async () => {
+    fetchConfigMock.mockResolvedValue({ models: [] });
+
+    // No cli-proxy-auth, only legacy standalone keys
+    const rawLegacyKeyV1 = createV1Blob(TEST_HOST, TEST_UA, 'standalone-legacy-secret');
+    storage.setItem('managementKey', rawLegacyKeyV1);
+    storage.setItem('apiBase', 'http://cpa.local:8317');
+    storage.setItem('isLoggedIn', 'true');
+
+    const { useAuthStore } = await import('./useAuthStore');
+
+    const result = await useAuthStore.getState().restoreSession();
+    expect(result).not.toBe(false);
+
+    expect(useAuthStore.getState().managementKey).toBe('standalone-legacy-secret');
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+
+    // Written to modern cli-proxy-auth with enc::v2::
+    const finalStoredAuth = storage.getItem('cli-proxy-auth');
+    expect(finalStoredAuth).toBeTruthy();
+    expect(finalStoredAuth!.startsWith('enc::v2::')).toBe(true);
+
+    // Standalone key removed
+    expect(storage.getItem('managementKey')).toBeNull();
+  });
+
+  it('7. does not persist managementKey when rememberPassword is false', async () => {
+    fetchConfigMock.mockResolvedValue({ models: [] });
+
+    const { useAuthStore } = await import('./useAuthStore');
+    const { obfuscatedStorage } = await import('@/services/storage/secureStorage');
+
+    await useAuthStore.getState().login({
+      apiBase: 'http://cpa.local:8317',
+      managementKey: 'session-only-secret',
+      rememberPassword: false,
+    });
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().managementKey).toBe('session-only-secret');
+    expect(storage.getItem('isLoggedIn')).toBeNull();
+
+    // Check raw persisted state in storage
+    const persisted = obfuscatedStorage.getItem<{ state?: { managementKey?: string } }>(
+      'cli-proxy-auth'
+    );
+    expect(persisted?.state?.managementKey).toBeUndefined();
+  });
+
+  it('8. logout cleans up standalone legacy credentials and prevents revival', async () => {
+    storage.setItem('managementKey', 'standalone-secret');
+    storage.setItem('apiBase', 'http://cpa.local:8317');
+    storage.setItem('apiUrl', 'http://cpa.local:8317');
+    storage.setItem('isLoggedIn', 'true');
+
+    const { useAuthStore } = await import('./useAuthStore');
+
+    useAuthStore.getState().logout();
+
+    expect(storage.getItem('managementKey')).toBeNull();
+    expect(storage.getItem('apiBase')).toBeNull();
+    expect(storage.getItem('apiUrl')).toBeNull();
+    expect(storage.getItem('isLoggedIn')).toBeNull();
+
+    // Subsequent restoreSession must not resurrect from legacy keys
+    fetchConfigMock.mockClear();
+    const restoreResult = await useAuthStore.getState().restoreSession();
+    expect(restoreResult).toBe(false);
+    expect(fetchConfigMock).not.toHaveBeenCalled();
+  });
+});
+
