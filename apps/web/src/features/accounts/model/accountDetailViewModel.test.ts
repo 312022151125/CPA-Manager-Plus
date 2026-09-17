@@ -2741,52 +2741,143 @@ describe('accountDetailViewModel', () => {
     });
   });
 
-  it('attaches Devin plan metadata to quota view model when available', () => {
+  it('keeps Devin plan metadata on identity presentation without attaching devinPlan to quota', () => {
     const row = makeRow({
       provider: 'devin',
-      raw: { name: 'devin.json', type: 'devin', authIndex: '0' },
+      planType: 'Pro',
+      raw: { name: 'devin.json', type: 'devin', authIndex: '0', plan_type: 'Pro' },
     });
-    const viewModel = buildAccountDetailViewModel(row, {
-      devinQuota: {
-        status: 'success',
-        windows: [],
-        observedAtMs: 1726000000000,
-        plan: 'Team',
-        planStartMs: 1725000000000,
-        planEndMs: 1727000000000,
-      },
-    });
+    const viewModel = buildAccountDetailViewModel(row);
 
-    expect(viewModel.quota.devinPlan).toEqual({
-      plan: 'Team',
-      planStartMs: 1725000000000,
-      planEndMs: 1727000000000,
+    expect(viewModel.identity.planType).toBe('Pro');
+    expect(viewModel.identity.planPresentation).toMatchObject({
+      rawPlanType: 'Pro',
+      fullLabel: 'Pro',
     });
+    expect('devinPlan' in viewModel.quota).toBe(false);
   });
 
-  it('preserves Devin plan metadata on transient refresh error when plan exists', () => {
+  it('populates current and previous usage and generates forecast for Devin fixed daily quota', () => {
     const row = makeRow({
+      selectionKey: 'devin.json\x00d-1',
       provider: 'devin',
-      raw: { name: 'devin.json', type: 'devin', authIndex: '0' },
+      authIndex: 'd-1',
     });
-    const viewModel = buildAccountDetailViewModel(row, {
-      devinQuota: {
-        status: 'error',
-        error: 'temporary failure',
-        errorStatus: 502,
-        failedAtMs: 1726000100000,
-        windows: [],
-        observedAtMs: 1726000000000,
-        plan: 'Pro',
-        planStartMs: 1725000000000,
-        planEndMs: 1727000000000,
-      },
+    const nowMs = 1_780_050_000_000;
+    const currentStartMs = 1_780_000_000_000;
+    const currentEndMs = currentStartMs + 86400 * 1000;
+    const previousStartMs = currentStartMs - 86400 * 1000;
+    const previousEndMs = currentStartMs;
+    const modelScope = { kind: 'all' as const, complete: true };
+
+    const currentKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'devin:daily',
+      'current',
+      modelScope
+    );
+    const previousKey = accountWindowUsageRequestKey(
+      row.selectionKey,
+      'devin:daily',
+      'previous',
+      modelScope
+    );
+
+    const currentUsage = makeWindowUsage({
+      row_key: row.selectionKey,
+      window_key: 'devin:daily',
+      from_ms: currentStartMs,
+      to_ms: nowMs,
+      matched: true,
+      total_requests: 50,
+      total_tokens: 500_000,
+      total_cost: 5.0,
+      last_seen_ms: nowMs - 1000,
+      sync_status: 'ready',
+      scope_match_status: 'complete',
+    });
+    const previousUsage = makeWindowUsage({
+      row_key: row.selectionKey,
+      window_key: 'devin:daily',
+      from_ms: previousStartMs,
+      to_ms: previousEndMs,
+      matched: true,
+      total_requests: 120,
+      total_tokens: 1_200_000,
+      total_cost: 12.0,
+      last_seen_ms: previousEndMs - 1000,
+      sync_status: 'ready',
+      scope_match_status: 'complete',
     });
 
-    expect(viewModel.quota.devinPlan).toEqual({
-      plan: 'Pro',
-      planStartMs: 1725000000000,
-      planEndMs: 1727000000000,
+    const windowUsageByKey = new Map<string, MonitoringAccountWindowUsageItem>([
+      [currentKey, currentUsage],
+      [previousKey, previousUsage],
+    ]);
+
+    const viewModel = buildAccountDetailViewModel(row, {
+      quotaWindows: [
+        {
+          key: 'devin:daily',
+          providerWindowId: 'devin:daily',
+          label: 'Daily limit',
+          kind: 'daily',
+          remainingPercent: 80,
+          usedPercent: 20,
+          resetLabel: 'tomorrow',
+          resetAtMs: currentEndMs,
+          resetAccuracy: 'exact',
+          observedAtMs: nowMs,
+          quotaProgressObservedAtMs: nowMs,
+          limitWindowSeconds: 86400,
+          windowMode: 'fixed',
+          cycleStartMs: currentStartMs,
+          cycleEndMs: currentEndMs,
+          modelScope,
+          currentCycle: {
+            id: 2,
+            activationId: 1,
+            state: 'active',
+            scheduledStartMs: currentStartMs,
+            scheduledEndMs: currentEndMs,
+            actualStartMs: currentStartMs,
+            actualEndMs: null,
+            durationSeconds: 86400,
+            boundaryAccuracy: 'exact',
+            endReason: '',
+            parentCycleId: null,
+            forecastEligible: true,
+          },
+          previousCycle: {
+            id: 1,
+            activationId: 1,
+            state: 'closed',
+            scheduledStartMs: previousStartMs,
+            scheduledEndMs: previousEndMs,
+            actualStartMs: previousStartMs,
+            actualEndMs: previousEndMs,
+            durationSeconds: 86400,
+            boundaryAccuracy: 'exact',
+            endReason: 'scheduled',
+            parentCycleId: null,
+            forecastEligible: true,
+          },
+        },
+      ],
+      windowUsageByKey,
+    });
+
+    const window = viewModel.quota.windows[0];
+    expect(window.currentUsage?.matched).toBe(true);
+    expect(window.previousUsage?.matched).toBe(true);
+    expect(window.previousPeriod).toBe('previous');
+    expect(window.forecast).not.toBeNull();
+    expect(window.forecast?.basis).toBe('quota');
+    expect(window.forecast).toMatchObject({
+      basis: 'quota',
+      requests: 250,
+      tokens: 2_500_000,
+      cost: 25.0,
     });
   });
 });
