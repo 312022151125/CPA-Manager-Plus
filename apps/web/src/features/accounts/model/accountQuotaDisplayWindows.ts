@@ -883,7 +883,6 @@ const buildDevinQuotaDisplayWindows = (
       limitWindowSeconds: window.periodHours * 3600,
       source: 'devin',
       modelScope: { kind: 'all', complete: true },
-      windowMode: 'unknown',
       observedAtMs: quota.observedAtMs ?? quota.fetchedAtMs ?? null,
       nowMs: options.nowMs,
     });

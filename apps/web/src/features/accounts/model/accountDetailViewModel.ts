@@ -1,5 +1,5 @@
 import type { TFunction } from 'i18next';
-import type { CodexQuotaState, DevinQuotaState, QuotaResetAccuracy, XaiQuotaState } from '@/types';
+import type { CodexQuotaState, QuotaResetAccuracy, XaiQuotaState } from '@/types';
 import { getSortedCodexResetCreditExpiries } from '@/components/quota/quotaConfigs';
 import type {
   AccountActionCandidate,
@@ -323,11 +323,6 @@ export interface AccountDetailViewModel {
     cooldown: QuotaCooldownInfo | null;
     resetCreditsAvailableCount: number | null;
     resetCreditExpiries: AccountDetailResetCreditExpiry[];
-    devinPlan?: {
-      plan: string;
-      planStartMs: number | null;
-      planEndMs: number | null;
-    } | null;
   };
   auth: {
     fields: AccountDetailField[];
@@ -358,7 +353,6 @@ export interface BuildAccountDetailViewModelOptions {
   history?: MonitoringAccountHistoryItem | null;
   valueRow?: UsageValueRow | null;
   codexQuota?: CodexQuotaState | null;
-  devinQuota?: DevinQuotaState | null;
   xaiQuota?: XaiQuotaState | null;
   diagnosticsSummary?: MonitoringAnalyticsSummary | null;
   diagnosticsRecentFailure?: MonitoringAnalyticsRecentFailure | null;
@@ -1496,14 +1490,6 @@ export const buildAccountDetailViewModel = (
       resetCreditExpiries: getSortedCodexResetCreditExpiries(
         options.codexQuota?.rateLimitResetCredits
       ).map((item) => ({ id: item.id, expiresAtMs: item.expiresAtMs })),
-      devinPlan:
-        row.provider === 'devin' && options.devinQuota?.plan
-          ? {
-              plan: options.devinQuota.plan,
-              planStartMs: options.devinQuota.planStartMs,
-              planEndMs: options.devinQuota.planEndMs,
-            }
-          : null,
     },
     auth: {
       fields: buildAuthFields(row),
