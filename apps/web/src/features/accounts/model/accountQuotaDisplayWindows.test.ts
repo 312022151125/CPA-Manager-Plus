@@ -686,6 +686,8 @@ describe('accountQuotaDisplayWindows', () => {
   });
 
   it('builds Devin daily and weekly display windows with exact reset and clamp percent', () => {
+    const dailyResetAtMs = Date.parse('2026-09-15T12:00:00Z');
+    const weeklyResetAtMs = Date.parse('2026-09-22T12:00:00Z');
     const stores = {
       ...emptyStores(),
       devinQuota: {
@@ -699,13 +701,13 @@ describe('accountQuotaDisplayWindows', () => {
             {
               id: 'daily',
               remainingPercent: 0,
-              resetAtMs: Date.parse('2026-09-15T12:00:00Z'),
+              resetAtMs: dailyResetAtMs,
               periodHours: 24,
             },
             {
               id: 'weekly',
               remainingPercent: 75,
-              resetAtMs: Date.parse('2026-09-22T12:00:00Z'),
+              resetAtMs: weeklyResetAtMs,
               periodHours: 168,
             },
           ],
@@ -731,12 +733,17 @@ describe('accountQuotaDisplayWindows', () => {
       kind: 'daily',
       remainingPercent: 0,
       usedPercent: 100,
-      resetAtMs: Date.parse('2026-09-15T12:00:00Z'),
+      resetAtMs: dailyResetAtMs,
       resetAccuracy: 'exact',
       limitWindowSeconds: 24 * 3600,
       source: 'devin',
       modelScope: { kind: 'all', complete: true },
+      windowMode: 'fixed',
+      cycleStartMs: dailyResetAtMs - 24 * 3600 * 1000,
+      cycleEndMs: dailyResetAtMs,
     });
+    expect(isIntervalAccountQuotaWindow(windows[0])).toBe(true);
+    expect(isStandardAccountQuotaListWindow(windows[0])).toBe(true);
     expect(getAccountQuotaSemanticGroup(windows[0])).toBe('standard');
 
     expect(windows[1]).toMatchObject({
@@ -745,13 +752,63 @@ describe('accountQuotaDisplayWindows', () => {
       kind: 'weekly',
       remainingPercent: 75,
       usedPercent: 25,
-      resetAtMs: Date.parse('2026-09-22T12:00:00Z'),
+      resetAtMs: weeklyResetAtMs,
       resetAccuracy: 'exact',
       limitWindowSeconds: 168 * 3600,
       source: 'devin',
       modelScope: { kind: 'all', complete: true },
+      windowMode: 'fixed',
+      cycleStartMs: weeklyResetAtMs - 168 * 3600 * 1000,
+      cycleEndMs: weeklyResetAtMs,
     });
+    expect(isIntervalAccountQuotaWindow(windows[1])).toBe(true);
+    expect(isStandardAccountQuotaListWindow(windows[1])).toBe(true);
     expect(getAccountQuotaSemanticGroup(windows[1])).toBe('standard');
+  });
+
+  it('keeps Devin windowMode unknown without cycle boundaries when resetAtMs is missing or invalid', () => {
+    const stores = {
+      ...emptyStores(),
+      devinQuota: {
+        'devin.json::d-1': {
+          status: 'success',
+          authFileKey: 'devin.json::d-1',
+          authFileName: 'devin.json',
+          authIndex: 'd-1',
+          authFileIdentityVerified: true,
+          windows: [
+            {
+              id: 'daily',
+              remainingPercent: 50,
+              resetAtMs: null,
+              periodHours: 24,
+            },
+          ],
+          plan: 'Pro',
+          planStartMs: null,
+          planEndMs: null,
+          observedAtMs: Date.parse('2026-09-15T10:00:00Z'),
+        },
+      },
+    } satisfies AccountQuotaStores;
+    const row = buildRow({ name: 'devin.json', type: 'devin', authIndex: 'd-1' }, stores);
+
+    const windows = buildAccountQuotaDisplayWindows(row, {
+      stores,
+      translateQuotaWindowLabel,
+      t,
+    });
+
+    expect(windows).toHaveLength(1);
+    expect(windows[0]).toMatchObject({
+      key: 'devin:daily',
+      kind: 'daily',
+      windowMode: 'unknown',
+      cycleStartMs: null,
+      cycleEndMs: null,
+    });
+    expect(isIntervalAccountQuotaWindow(windows[0])).toBe(false);
+    expect(isStandardAccountQuotaListWindow(windows[0])).toBe(false);
   });
 
   it('preserves Devin daily and weekly windows on transient refresh error when previous windows exist', () => {

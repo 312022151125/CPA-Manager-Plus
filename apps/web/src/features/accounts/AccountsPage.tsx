@@ -9520,10 +9520,6 @@ export function AccountsPage() {
       history: accountHistoryByRowKey.get(selectedRow.selectionKey) ?? null,
       valueRow,
       codexQuota: selectedCodexQuota,
-      devinQuota:
-        selectedRow.provider === DEVIN_CONFIG.type
-          ? getCredentialScopedQuotaState(devinQuota, selectedRow.raw)
-          : undefined,
       xaiQuota:
         selectedRow.provider === XAI_CONFIG.type
           ? getCredentialScopedQuotaState(xaiQuota, selectedRow.raw)
