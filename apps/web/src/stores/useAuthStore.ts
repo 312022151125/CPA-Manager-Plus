@@ -321,7 +321,10 @@ export const useAuthStore = create<AuthStoreState>()(
         );
         const quotaCacheScope = sha256Hex(`${apiBase}\u0000${managementKey}`);
 
-        const markAuthenticated = (result: LoginResult = {}) => {
+        const markAuthenticated = (
+          result: LoginResult = {},
+          onAccepted?: () => void
+        ) => {
           if (pendingLegacyRestoreInFlight) {
             if (
               pendingLegacyAuthSnapshot &&
@@ -330,18 +333,20 @@ export const useAuthStore = create<AuthStoreState>()(
               // 自动恢复请求期间 shared storage 已被其他上下文更新，当前旧 auto-restore 成功结果已失效，
               // 不得向共享存储提交认证结果或清除 legacy keys。
               // 保持 deferAuthPersistence = true 阻断覆盖写。
-              useUsageServiceStore.getState().clearUsageServiceConfig();
+              // 注意：不得调用 clearUsageServiceConfig()，stale transaction 严禁修改任何 shared persistent store。
               set({
                 isAuthenticated: false,
                 connectionStatus: 'disconnected',
               });
-              return { stale: true } as LoginResult & { stale?: boolean };
+              return { ...result, stale: true } as LoginResult & { stale?: boolean };
             }
           }
 
           pendingLegacyAuthSnapshot = null;
           deferAuthPersistence = false;
           clearLegacyAuthKeys();
+
+          onAccepted?.();
 
           useQuotaStore.getState().activateQuotaCacheScope(quotaCacheScope);
           apiClient.setConfig({ apiBase, managementKey });
@@ -387,18 +392,22 @@ export const useAuthStore = create<AuthStoreState>()(
               throw error;
             }
             await usageServiceApi.getManagerConfig(apiBase, managementKey);
-            useConfigStore.getState().clearCache();
-            useUsageServiceStore.getState().setUsageServiceConfig(
-              {
-                enabled: true,
-                serviceBase: apiBase,
-              },
-              {
-                panelBase: sessionPanelBase || apiBase,
-                panelHostMode: 'manager_embedded',
+            return markAuthenticated(
+              { recoveryMode: 'manager_config' },
+              () => {
+                useConfigStore.getState().clearCache();
+                useUsageServiceStore.getState().setUsageServiceConfig(
+                  {
+                    enabled: true,
+                    serviceBase: apiBase,
+                  },
+                  {
+                    panelBase: sessionPanelBase || apiBase,
+                    panelHostMode: 'manager_embedded',
+                  }
+                );
               }
             );
-            return markAuthenticated({ recoveryMode: 'manager_config' });
           }
 
           // 登录成功

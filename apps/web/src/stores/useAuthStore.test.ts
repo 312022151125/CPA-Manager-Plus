@@ -874,6 +874,7 @@ describe('useAuthStore v1 obfuscation persistence gate and v2 migration', () => 
     expect(usageServiceGetManagerConfigMock).toHaveBeenCalled();
 
     // While fallback is in-flight, another tab logs in and writes newer v2
+    const { obfuscatedStorage } = await import('@/services/storage/secureStorage');
     const newerV2Payload = {
       state: {
         apiBase: 'http://manager.local:18317',
@@ -890,6 +891,18 @@ describe('useAuthStore v1 obfuscation persistence gate and v2 migration', () => 
     storage.setItem('cli-proxy-auth', newerRawV2);
     storage.setItem('isLoggedIn', 'true');
 
+    const newerUsageServiceState = {
+      state: {
+        enabled: true,
+        serviceBase: 'http://new-manager.local:18317',
+        panelBase: 'http://new-manager.local:18317',
+        panelHostMode: 'manager_embedded',
+      },
+      version: 0,
+    };
+    obfuscatedStorage.setItem('cli-proxy-usage-service', newerUsageServiceState);
+    const newerUsageServiceRaw = storage.getItem('cli-proxy-usage-service');
+
     // Fallback succeeds
     resolveManagerConfig({
       config: {
@@ -903,9 +916,10 @@ describe('useAuthStore v1 obfuscation persistence gate and v2 migration', () => 
     const result = await restorePromise;
     expect(result).toBe(false);
 
-    // Stale success MUST NOT overwrite Tab B newer v2
+    // Stale success MUST NOT overwrite Tab B newer v2 nor its usage-service config
     expect(storage.getItem('cli-proxy-auth')).toBe(newerRawV2);
     expect(storage.getItem('isLoggedIn')).toBe('true');
+    expect(storage.getItem('cli-proxy-usage-service')).toBe(newerUsageServiceRaw);
   });
 
   it('17. allows manual login to commit and overwrite even if stale legacy snapshot existed', async () => {
