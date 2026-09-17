@@ -6308,15 +6308,15 @@ exit 22
     }
   });
 
-  it('fails closed when systemd specifies custom USAGE_DB_PATH that does not exist', () => {
+  it('fails closed when systemd and run.sh specify matching custom USAGE_DB_PATH that does not exist', () => {
     const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
     const customDbPath = path.join(installDir, 'custom-missing.sqlite');
     const legacy = writeLegacyNativeInstall(installDir, {
       configDataDir: './data',
       omitConfigDataKeyPath: true,
+      runEnvironment: `export USAGE_DB_PATH=${customDbPath}\n`,
       serviceEnvironment: `Environment="USAGE_DB_PATH=${customDbPath}"\n`,
     });
-    rmSync(legacy.runPath);
 
     try {
       const result = spawnSync('bash', [installerPath], {
@@ -6337,6 +6337,35 @@ exit 22
       expect(result.status).toBe(1);
       expect(combinedOutput(result)).not.toContain('Detected a legacy native Manager data layout');
       expect(combinedOutput(result)).toContain('Manager database is missing or is not a regular file');
+    } finally {
+      rmSync(installDir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats installation without run.sh as partial instead of native-managed even if service file exists', () => {
+    const installDir = mkdtempSync(path.join(os.tmpdir(), 'cpamp-installer-'));
+    const legacy = writeLegacyNativeInstall(installDir);
+    rmSync(legacy.runPath);
+
+    try {
+      const result = spawnSync('bash', [installerPath], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CPAMP_DRY_RUN: '0',
+          CPAMP_NON_INTERACTIVE: '1',
+          CPAMP_CONFIRM: '1',
+          CPAMP_LANG: 'en-US',
+          CPAMP_OPERATION: 'upgrade',
+          CPAMP_VERSION: 'vnext',
+          CPAMP_INSTALL_DIR: installDir,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(combinedOutput(result)).not.toContain('Upgrading existing native deployment');
+      expect(combinedOutput(result)).toContain('Set CPAMP_OPERATION=regenerate to rebuild its config');
     } finally {
       rmSync(installDir, { recursive: true, force: true });
     }
