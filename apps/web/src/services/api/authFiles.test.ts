@@ -273,6 +273,54 @@ describe('authFilesApi list normalization', () => {
     });
   });
 
+  it('scopes credential lookups and filters full responses from older CPA builds', async () => {
+    mocks.get.mockResolvedValue({
+      files: [
+        {
+          name: 'shared.json',
+          id: 'runtime-1',
+          auth_index: 'auth-1',
+          type: 'codex',
+        },
+        {
+          name: 'shared.json',
+          id: 'runtime-2',
+          auth_index: 'auth-2',
+          type: 'codex',
+        },
+        {
+          name: 'unrelated.json',
+          id: 'runtime-3',
+          auth_index: 'auth-2',
+          type: 'codex',
+        },
+      ],
+    });
+    const requestScope = {
+      apiBase: 'http://old-cpa.local:8317',
+      managementKey: 'old-cpa-key',
+    };
+
+    const result = await authFilesApi.lookup(
+      { name: 'shared.json', authIndex: 'auth-2' },
+      requestScope
+    );
+
+    expect(mocks.get).toHaveBeenCalledWith('/auth-files', {
+      baseURL: 'http://old-cpa.local:8317/v0/management',
+      headers: { Authorization: 'Bearer old-cpa-key' },
+      cpampScopedRequest: true,
+      params: { name: 'shared.json', auth_index: 'auth-2' },
+    });
+    expect(result).toEqual([
+      expect.objectContaining({
+        name: 'shared.json',
+        id: 'runtime-2',
+        auth_index: 'auth-2',
+      }),
+    ]);
+  });
+
   it('preserves same-name auth file rows when authIndex differs', async () => {
     mocks.get.mockResolvedValue({
       files: [

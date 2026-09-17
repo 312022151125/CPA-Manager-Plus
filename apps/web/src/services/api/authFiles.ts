@@ -9,8 +9,10 @@ import {
   readAuthFileStatusAccountId,
   readAuthFileStatusAccountIdInvalid,
   readAuthFileStatusAccountSnapshot,
+  readAuthFileStatusAuthIndex,
   readAuthFileStatusCodexMember,
   readAuthFileStatusCodexMemberInvalid,
+  readAuthFileStatusPhysicalName,
   readAuthFileStatusProvider,
   readAuthFileStatusRuntimeId,
   normalizeCodexMemberSnapshot,
@@ -33,6 +35,7 @@ export type AuthFileStatusTarget = {
   accountSnapshot?: string | null;
 };
 export type AuthFileDeleteIdentityTarget = AuthFileStatusTarget;
+export type AuthFileLookupTarget = Pick<AuthFileStatusTarget, 'name' | 'authIndex'>;
 export type AuthFilePluginSourceFallbackVerifier = () => Promise<void>;
 export type AuthFileStatusPluginSourceFallbackVerifier = () => Promise<AuthFileStatusTarget[]>;
 type AuthFileEntry = AuthFilesResponse['files'][number];
@@ -564,6 +567,27 @@ const dedupeAuthFilesResponse = (payload: AuthFilesResponse): AuthFilesResponse 
     files: normalizedFiles,
     total: normalizedFiles.length,
   };
+};
+
+const filterAuthFileLookupResponse = (
+  files: AuthFileItem[],
+  target: AuthFileLookupTarget
+): AuthFileItem[] => {
+  const name = String(target.name ?? '').trim();
+  const authIndex =
+    target.authIndex === undefined || target.authIndex === null
+      ? ''
+      : String(target.authIndex).trim();
+  if (!name) return [];
+  return files.filter((file) => {
+    if (
+      readAuthFileStatusRuntimeId(file) !== name &&
+      readAuthFileStatusPhysicalName(file) !== name
+    ) {
+      return false;
+    }
+    return !authIndex || readAuthFileStatusAuthIndex(file) === authIndex;
+  });
 };
 
 const parseAuthFileJsonObject = (rawText: string): Record<string, unknown> => {
@@ -1145,6 +1169,32 @@ export const authFilesApi = {
         )
       : await apiClient.get<AuthFilesResponse>('/auth-files');
     return dedupeAuthFilesResponse(response);
+  },
+
+  lookup: async (
+    target: AuthFileLookupTarget,
+    requestScope?: AuthFilesApiRequestScope
+  ): Promise<AuthFileItem[]> => {
+    const name = String(target.name ?? '').trim();
+    if (!name) return [];
+    const authIndex =
+      target.authIndex === undefined || target.authIndex === null
+        ? ''
+        : String(target.authIndex).trim();
+    const config = {
+      ...(requestScope ? createScopedApiRequestConfig(requestScope) : {}),
+      params: {
+        name,
+        ...(authIndex ? { auth_index: authIndex } : {}),
+      },
+    };
+    const response = await apiClient.get<AuthFilesResponse>('/auth-files', config);
+    // Older CPA builds may ignore lookup parameters. Always filter the response
+    // locally so a caller cannot mistake a full inventory for a scoped result.
+    return filterAuthFileLookupResponse(dedupeAuthFilesResponse(response).files, {
+      name,
+      ...(authIndex ? { authIndex } : {}),
+    });
   },
 
   setStatus: (
