@@ -115,6 +115,7 @@ export type UseAuthFilesDataResult = {
     fields: AuthFileFieldsPatch
   ) => Promise<AuthFilesBatchPatchResult | null>;
   batchDelete: (targets: AuthFileItem[], options?: AuthFilesBatchDeleteOptions) => void;
+  reconcileAuthFileSource: (physicalName: string) => Promise<void>;
 };
 
 type AuthFilePreparationFailure = {
@@ -2156,6 +2157,33 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     ]
   );
 
+  const reconcileAuthFileSource = useCallback(
+    async (physicalName: string): Promise<void> => {
+      const trimmedName = physicalName.trim();
+      if (!trimmedName) return;
+
+      const generation = authFilesOperationGenerationRef.current;
+      const lookupFiles = (target: AuthFileLookupTarget) =>
+        requestScope ? authFilesApi.lookup(target, requestScope) : authFilesApi.lookup(target);
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const revision = filesRevisionRef.current;
+        const sourceFiles = await lookupFiles({ name: trimmedName });
+        if (authFilesOperationGenerationRef.current !== generation) return;
+        if (filesRevisionRef.current === revision) {
+          commitFiles((previousFiles) =>
+            replaceAuthFileSourceSnapshot(previousFiles, trimmedName, sourceFiles)
+          );
+          return;
+        }
+      }
+
+      if (authFilesOperationGenerationRef.current !== generation) return;
+      throw new Error(t('notification.refresh_failed'));
+    },
+    [commitFiles, requestScope, t]
+  );
+
   return {
     files,
     selectedFiles,
@@ -2184,5 +2212,6 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
     batchSetStatus,
     batchPatchFields,
     batchDelete,
+    reconcileAuthFileSource,
   };
 }

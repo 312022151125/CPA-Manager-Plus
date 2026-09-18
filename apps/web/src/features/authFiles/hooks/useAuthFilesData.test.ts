@@ -5368,4 +5368,227 @@ describe('useAuthFilesData batchPatchFields', () => {
     ]);
     hook.unmount();
   });
+
+  describe('useAuthFilesData reconcileAuthFileSource', () => {
+    it('preserves unrelated files, replaces target source, and performs no full-list reads', async () => {
+      const unrelated = { ...targetFile, id: 'runtime-unrelated', name: 'unrelated.json' };
+      const oldTarget = { ...targetFile, id: 'runtime-target', name: 'target.json', note: 'old' };
+      const updatedTarget = { ...oldTarget, note: 'updated' };
+      mocks.list.mockResolvedValueOnce({ files: [unrelated, oldTarget] });
+      mockAuthFileLookup([unrelated, updatedTarget]);
+      const hook = mountUseAuthFilesData();
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+      });
+      mocks.list.mockClear();
+      mocks.lookup.mockClear();
+
+      await act(async () => {
+        await hook.getCurrent().reconcileAuthFileSource('target.json');
+      });
+
+      expect(mocks.list).not.toHaveBeenCalled();
+      expect(mocks.lookup).toHaveBeenCalledWith({ name: 'target.json' });
+      expect(hook.getCurrent().files).toEqual([unrelated, updatedTarget]);
+      hook.unmount();
+    });
+
+    it('replaces all members of a shared source without updating only a single row', async () => {
+      const unrelated = { ...targetFile, id: 'runtime-unrelated', name: 'unrelated.json' };
+      const shared1 = {
+        ...targetFile,
+        id: 'runtime-shared-1',
+        name: 'shared.json',
+        auth_index: 'auth-1',
+        note: 'old-1',
+      };
+      const shared2 = {
+        ...targetFile,
+        id: 'runtime-shared-2',
+        name: 'shared.json',
+        auth_index: 'auth-2',
+        note: 'old-2',
+      };
+      const updated1 = { ...shared1, note: 'new-1' };
+      const updated2 = { ...shared2, note: 'new-2' };
+      mocks.list.mockResolvedValueOnce({ files: [unrelated, shared1, shared2] });
+      mockAuthFileLookup([unrelated, updated1, updated2]);
+      const hook = mountUseAuthFilesData();
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+      });
+      mocks.list.mockClear();
+
+      await act(async () => {
+        await hook.getCurrent().reconcileAuthFileSource('shared.json');
+      });
+
+      expect(mocks.list).not.toHaveBeenCalled();
+      expect(hook.getCurrent().files).toEqual([unrelated, updated1, updated2]);
+      hook.unmount();
+    });
+
+    it('retries same source once and avoids overwriting newer local state when revision changes', async () => {
+      const firstRead = createDeferred<AuthFileItem[]>();
+      const secondRead = createDeferred<AuthFileItem[]>();
+      const initialFile = { ...targetFile, name: 'target.json', note: 'initial' };
+      const newerFile = { ...targetFile, name: 'target.json', note: 'newer' };
+      const reconciledFile = { ...targetFile, name: 'target.json', note: 'reconciled' };
+      mocks.list
+        .mockResolvedValueOnce({ files: [initialFile] })
+        .mockResolvedValueOnce({ files: [newerFile] });
+      mocks.lookup
+        .mockReturnValueOnce(firstRead.promise)
+        .mockReturnValueOnce(secondRead.promise);
+      const hook = mountUseAuthFilesData();
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+      });
+
+      let reconcilePromise!: Promise<void>;
+      act(() => {
+        reconcilePromise = hook.getCurrent().reconcileAuthFileSource('target.json');
+      });
+
+      // Concurrent files reload modifies filesRevision
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+      });
+
+      // First read returns with stale data, should trigger retry
+      await act(async () => {
+        firstRead.resolve([initialFile]);
+        await Promise.resolve();
+      });
+
+      // Second read returns with reconciled data
+      await act(async () => {
+        secondRead.resolve([reconciledFile]);
+        await reconcilePromise;
+      });
+
+      expect(hook.getCurrent().files).toEqual([reconciledFile]);
+      expect(mocks.lookup).toHaveBeenCalledTimes(2);
+      hook.unmount();
+    });
+
+    it('preserves newer local state and reports reconciliation failure when second read is still stale', async () => {
+      const firstRead = createDeferred<AuthFileItem[]>();
+      const secondRead = createDeferred<AuthFileItem[]>();
+      const initialFile = { ...targetFile, name: 'target.json', note: 'initial' };
+      const newerFile = { ...targetFile, name: 'target.json', note: 'newer' };
+      const latestFile = { ...targetFile, name: 'target.json', note: 'latest' };
+      mocks.list
+        .mockResolvedValueOnce({ files: [initialFile] })
+        .mockResolvedValueOnce({ files: [newerFile] })
+        .mockResolvedValueOnce({ files: [latestFile] });
+      mocks.lookup
+        .mockReturnValueOnce(firstRead.promise)
+        .mockReturnValueOnce(secondRead.promise);
+      const hook = mountUseAuthFilesData();
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+      });
+
+      let reconcilePromise!: Promise<void>;
+      act(() => {
+        reconcilePromise = hook.getCurrent().reconcileAuthFileSource('target.json');
+      });
+
+      // First concurrent update
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+      });
+
+      // First read resolves
+      await act(async () => {
+        firstRead.resolve([{ ...initialFile, note: 'stale-1' }]);
+        await Promise.resolve();
+      });
+
+      // Second concurrent update before second read finishes
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+      });
+
+      let capturedError: unknown;
+      await act(async () => {
+        secondRead.resolve([{ ...initialFile, note: 'stale-2' }]);
+        try {
+          await reconcilePromise;
+        } catch (err) {
+          capturedError = err;
+        }
+      });
+
+      expect(capturedError).toBeDefined();
+      expect(hook.getCurrent().files).toEqual([latestFile]);
+      expect(mocks.lookup).toHaveBeenCalledTimes(2);
+      hook.unmount();
+    });
+
+    it('does not modify new connection files when an old connection lookup finishes late', async () => {
+      const oldLookup = createDeferred<AuthFileItem[]>();
+      const oldFile = { ...targetFile, name: 'target.json', account: 'old@example.com' };
+      const newFile = { ...targetFile, name: 'target.json', account: 'new@example.com' };
+      mocks.list
+        .mockResolvedValueOnce({ files: [oldFile] })
+        .mockResolvedValueOnce({ files: [newFile] });
+      mocks.lookup.mockReturnValueOnce(oldLookup.promise);
+
+      const hook = mountUseAuthFilesData('connection-a');
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+      });
+
+      let oldReconcilePromise!: Promise<void>;
+      act(() => {
+        oldReconcilePromise = hook.getCurrent().reconcileAuthFileSource('target.json');
+      });
+
+      // Switch to connection-b
+      hook.rerender('connection-b');
+      mockAuthFileLookup([newFile]);
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+      });
+
+      expect(hook.getCurrent().files).toEqual([newFile]);
+
+      // Old connection lookup returns
+      await act(async () => {
+        oldLookup.resolve([{ ...oldFile, note: 'reconciled-old' }]);
+        await oldReconcilePromise;
+      });
+
+      expect(hook.getCurrent().files).toEqual([newFile]);
+      hook.unmount();
+    });
+
+    it('propagates lookup errors to caller without performing a full list reload', async () => {
+      const initialFile = { ...targetFile, name: 'target.json' };
+      mocks.list.mockResolvedValueOnce({ files: [initialFile] });
+      mocks.lookup.mockRejectedValueOnce(new Error('lookup failed'));
+      const hook = mountUseAuthFilesData();
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+      });
+      mocks.list.mockClear();
+
+      let capturedError: unknown;
+      await act(async () => {
+        try {
+          await hook.getCurrent().reconcileAuthFileSource('target.json');
+        } catch (err) {
+          capturedError = err;
+        }
+      });
+
+      expect(capturedError).toBeInstanceOf(Error);
+      expect((capturedError as Error).message).toBe('lookup failed');
+      expect(mocks.list).not.toHaveBeenCalled();
+      expect(hook.getCurrent().files).toEqual([initialFile]);
+      hook.unmount();
+    });
+  });
 });
