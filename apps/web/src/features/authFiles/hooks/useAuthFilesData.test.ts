@@ -2,6 +2,12 @@ import { act, createElement, useLayoutEffect } from 'react';
 import { create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthFileItem } from '@/types';
+import type { AuthFileLookupTarget } from '@/services/api';
+import {
+  readAuthFileStatusAuthIndex,
+  readAuthFileStatusPhysicalName,
+  readAuthFileStatusRuntimeId,
+} from '@/utils/authFileStatusMutation';
 
 const { mocks } = vi.hoisted(() => {
   return {
@@ -127,6 +133,17 @@ const createDeferred = <T>() => {
     reject = nextReject;
   });
   return { promise, resolve, reject };
+};
+
+const mockAuthFileLookup = (files: AuthFileItem[]) => {
+  mocks.lookup.mockImplementation(async ({ name, authIndex }: AuthFileLookupTarget) =>
+    files.filter(
+      (file) =>
+        (readAuthFileStatusPhysicalName(file) === name ||
+          readAuthFileStatusRuntimeId(file) === name) &&
+        (authIndex === undefined || readAuthFileStatusAuthIndex(file) === String(authIndex))
+    )
+  );
 };
 
 const mountUseAuthFilesData = (
@@ -1887,15 +1904,19 @@ describe('useAuthFilesData status targeting', () => {
       },
     ] as AuthFileItem[];
     mocks.list.mockResolvedValue({ files });
-    mocks.setStatus.mockResolvedValue({ status: 'ok', disabled: true });
+    mockAuthFileLookup(files);
+    mocks.setStatus.mockImplementation(async () => {
+      mockAuthFileLookup(files.map((file) => ({ ...file, disabled: true })));
+      return { status: 'ok', disabled: true };
+    });
     const hook = mountUseAuthFilesData();
 
     await act(async () => {
       await hook.getCurrent().loadFiles();
     });
 
-    const pendingList = createDeferred<{ files: AuthFileItem[] }>();
-    mocks.list.mockReturnValueOnce(pendingList.promise);
+    const pendingLookup = createDeferred<AuthFileItem[]>();
+    mocks.lookup.mockReturnValueOnce(pendingLookup.promise);
     let batchPromise!: Promise<void>;
     act(() => {
       batchPromise = hook.getCurrent().batchSetStatus(
@@ -1911,17 +1932,19 @@ describe('useAuthFilesData status targeting', () => {
       );
     });
 
-    expect(mocks.list).toHaveBeenCalledTimes(2);
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.lookup).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(files[0])], false);
     });
 
-    expect(mocks.list).toHaveBeenCalledTimes(2);
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.lookup).toHaveBeenCalledTimes(1);
     expect(mocks.setStatus).not.toHaveBeenCalled();
 
     await act(async () => {
-      pendingList.resolve({ files });
+      pendingLookup.resolve(files);
       await batchPromise;
     });
 
@@ -1952,21 +1975,26 @@ describe('useAuthFilesData status targeting', () => {
       },
     ] as AuthFileItem[];
     mocks.list.mockResolvedValue({ files });
-    mocks.setStatus.mockResolvedValue({ status: 'ok', disabled: true });
+    mockAuthFileLookup(files);
+    mocks.setStatus.mockImplementation(async () => {
+      mockAuthFileLookup(files.map((file) => ({ ...file, disabled: true })));
+      return { status: 'ok', disabled: true };
+    });
     const hook = mountUseAuthFilesData();
 
     await act(async () => {
       await hook.getCurrent().loadFiles();
     });
 
-    const pendingList = createDeferred<{ files: AuthFileItem[] }>();
-    mocks.list.mockReturnValueOnce(pendingList.promise);
+    const pendingLookup = createDeferred<AuthFileItem[]>();
+    mocks.lookup.mockReturnValueOnce(pendingLookup.promise);
     let singlePromise!: Promise<void>;
     act(() => {
       singlePromise = hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(files[0])], false);
     });
 
-    expect(mocks.list).toHaveBeenCalledTimes(2);
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.lookup).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       await hook.getCurrent().batchSetStatus(
@@ -1982,12 +2010,13 @@ describe('useAuthFilesData status targeting', () => {
       );
     });
 
-    expect(mocks.list).toHaveBeenCalledTimes(2);
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.lookup).toHaveBeenCalledTimes(2);
     expect(mocks.setStatus).not.toHaveBeenCalled();
     expect(hook.getCurrent().batchStatusUpdating).toBe(true);
 
     await act(async () => {
-      pendingList.resolve({ files });
+      pendingLookup.resolve(files);
       await singlePromise;
     });
 
@@ -2023,9 +2052,8 @@ describe('useAuthFilesData status targeting', () => {
     const newStatus = createDeferred<{ status: string; disabled: boolean }>();
     mocks.list
       .mockResolvedValueOnce({ files: [oldFile] })
-      .mockResolvedValueOnce({ files: [oldFile] })
-      .mockResolvedValueOnce({ files: [newFile] })
       .mockResolvedValueOnce({ files: [newFile] });
+    mockAuthFileLookup([oldFile]);
     mocks.setStatus.mockReturnValueOnce(oldStatus.promise).mockReturnValueOnce(newStatus.promise);
     const hook = mountUseAuthFilesData('connection-a');
     let oldPromise!: Promise<void>;
@@ -2039,6 +2067,7 @@ describe('useAuthFilesData status targeting', () => {
     expect(mocks.setStatus).toHaveBeenCalledTimes(1);
 
     hook.rerender('connection-b');
+    mockAuthFileLookup([newFile]);
     await act(async () => {
       await hook.getCurrent().loadFiles();
       newPromise = hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(newFile)], true);
@@ -2079,9 +2108,8 @@ describe('useAuthFilesData status targeting', () => {
     const newStatus = createDeferred<{ status: string; disabled: boolean }>();
     mocks.list
       .mockResolvedValueOnce({ files: [oldFile] })
-      .mockResolvedValueOnce({ files: [oldFile] })
-      .mockResolvedValueOnce({ files: [newFile] })
       .mockResolvedValueOnce({ files: [newFile] });
+    mockAuthFileLookup([oldFile]);
     mocks.setStatus.mockReturnValueOnce(oldStatus.promise).mockReturnValueOnce(newStatus.promise);
     const hook = mountUseAuthFilesData('connection-a');
     const oldTarget = {
@@ -2103,6 +2131,7 @@ describe('useAuthFilesData status targeting', () => {
     expect(mocks.setStatus).toHaveBeenCalledTimes(1);
 
     hook.rerender('connection-b');
+    mockAuthFileLookup([newFile]);
     await act(async () => {
       await hook.getCurrent().loadFiles();
       newPromise = hook.getCurrent().batchSetStatus([newTarget], true);
@@ -2142,8 +2171,8 @@ describe('useAuthFilesData status targeting', () => {
     const status = createDeferred<{ status: string; disabled: boolean }>();
     mocks.list
       .mockResolvedValueOnce({ files: [initialFile] })
-      .mockResolvedValueOnce({ files: [initialFile] })
       .mockResolvedValueOnce({ files: [refreshedFile] });
+    mockAuthFileLookup([initialFile]);
     mocks.setStatus.mockReturnValueOnce(status.promise);
     const hook = mountUseAuthFilesData('connection-a');
     let mutationPromise!: Promise<void>;
@@ -2161,10 +2190,13 @@ describe('useAuthFilesData status targeting', () => {
     expect(hook.getCurrent().files).toEqual([refreshedFile]);
 
     await act(async () => {
+      mockAuthFileLookup([refreshedFile]);
       status.reject(new Error('status failed'));
       await mutationPromise;
     });
     expect(hook.getCurrent().files).toEqual([refreshedFile]);
+    expect(mocks.lookup).toHaveBeenCalledTimes(3);
+    expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'single.json' });
     hook.unmount();
   });
 
@@ -2181,8 +2213,8 @@ describe('useAuthFilesData status targeting', () => {
     const status = createDeferred<{ status: string; disabled: boolean }>();
     mocks.list
       .mockResolvedValueOnce({ files: [initialFile] })
-      .mockResolvedValueOnce({ files: [initialFile] })
       .mockResolvedValueOnce({ files: [refreshedFile] });
+    mockAuthFileLookup([initialFile]);
     mocks.setStatus.mockReturnValueOnce(status.promise);
     const hook = mountUseAuthFilesData('connection-a');
     let mutationPromise!: Promise<void>;
@@ -2209,10 +2241,13 @@ describe('useAuthFilesData status targeting', () => {
     expect(hook.getCurrent().files).toEqual([refreshedFile]);
 
     await act(async () => {
+      mockAuthFileLookup([refreshedFile]);
       status.reject(new Error('status failed'));
       await mutationPromise;
     });
     expect(hook.getCurrent().files).toEqual([refreshedFile]);
+    expect(mocks.lookup).toHaveBeenCalledTimes(3);
+    expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'single.json' });
     expect(hook.getCurrent().batchStatusUpdating).toBe(false);
     hook.unmount();
   });
@@ -2233,8 +2268,8 @@ describe('useAuthFilesData status targeting', () => {
     const status = createDeferred<{ status: string; disabled: boolean }>();
     mocks.list
       .mockResolvedValueOnce({ files: [initialFile] })
-      .mockResolvedValueOnce({ files: [initialFile] })
       .mockResolvedValueOnce({ files: [replacementFile] });
+    mockAuthFileLookup([initialFile]);
     mocks.setStatus.mockReturnValueOnce(status.promise);
     const hook = mountUseAuthFilesData('connection-a');
     let mutationPromise!: Promise<void>;
@@ -2251,6 +2286,7 @@ describe('useAuthFilesData status targeting', () => {
     });
 
     await act(async () => {
+      mockAuthFileLookup([replacementFile]);
       status.resolve({ status: 'ok', disabled: true });
       await mutationPromise;
     });
@@ -2274,8 +2310,8 @@ describe('useAuthFilesData status targeting', () => {
     const status = createDeferred<{ status: string; disabled: boolean }>();
     mocks.list
       .mockResolvedValueOnce({ files: [initialFile] })
-      .mockResolvedValueOnce({ files: [initialFile] })
       .mockResolvedValueOnce({ files: [replacementFile] });
+    mockAuthFileLookup([initialFile]);
     mocks.setStatus.mockReturnValueOnce(status.promise);
     const hook = mountUseAuthFilesData('connection-a');
     let mutationPromise!: Promise<void>;
@@ -2301,6 +2337,7 @@ describe('useAuthFilesData status targeting', () => {
     });
 
     await act(async () => {
+      mockAuthFileLookup([replacementFile]);
       status.resolve({ status: 'ok', disabled: true });
       await mutationPromise;
     });
@@ -2329,7 +2366,11 @@ describe('useAuthFilesData status targeting', () => {
       },
     ] as AuthFileItem[];
     mocks.list.mockResolvedValue({ files });
-    mocks.setStatus.mockResolvedValue({ status: 'ok', disabled: true });
+    mockAuthFileLookup(files);
+    mocks.setStatus.mockImplementation(async () => {
+      mockAuthFileLookup([{ ...files[0], disabled: true }, files[1]]);
+      return { status: 'ok', disabled: true };
+    });
     const onCredentialMutation = vi.fn();
     const hook = mountUseAuthFilesData(undefined, undefined, onCredentialMutation);
 
@@ -2360,6 +2401,7 @@ describe('useAuthFilesData status targeting', () => {
       kind: 'status-changed',
       selectionKeys: ['shared.json\u0000auth-1'],
     });
+    expect(mocks.list).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
 
@@ -2393,6 +2435,7 @@ describe('useAuthFilesData status targeting', () => {
       });
     });
     mocks.list.mockResolvedValue({ files });
+    mockAuthFileLookup(files);
     mocks.setStatus.mockImplementation(
       async (_target: unknown, _disabled: unknown, verifyFallback?: () => Promise<void>) => {
         if (!verifyFallback) throw new Error('missing plugin source fallback verifier');
@@ -2423,7 +2466,9 @@ describe('useAuthFilesData status targeting', () => {
       true,
       expect.any(Function)
     );
-    expect(mocks.list).toHaveBeenCalledTimes(3);
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.lookup).toHaveBeenCalledTimes(5);
+    expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'shared.json' });
     expect(hook.getCurrent().files.map((file) => file.disabled)).toEqual([false, false]);
     expect(
       getCodexInspectionOwnedDisableIdentityKeys('scope-plugin-source-status', [
@@ -2448,11 +2493,13 @@ describe('useAuthFilesData status targeting', () => {
       disabled: false,
     } as AuthFileItem;
     mocks.list.mockResolvedValue({ files: [file] });
+    mockAuthFileLookup([file]);
     let verifiedSourceIdentities: unknown;
     mocks.setStatus.mockImplementation(
       async (_target: unknown, _disabled: unknown, verifyFallback?: () => Promise<void>) => {
         if (!verifyFallback) throw new Error('missing plugin source fallback verifier');
         verifiedSourceIdentities = await verifyFallback();
+        mockAuthFileLookup([{ ...file, disabled: true, status: 'disabled by source' }]);
         return {
           status: 'ok',
           disabled: true,
@@ -2488,10 +2535,20 @@ describe('useAuthFilesData status targeting', () => {
         accountSnapshot: 'single@example.com',
       },
     ]);
+    expect(hook.getCurrent().files[0].status).toBe('disabled by source');
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.lookup).toHaveBeenCalledTimes(5);
     hook.unmount();
   });
 
-  it.each(['member-added', 'identity-changed', 'selector-collision'] as const)(
+  it.each([
+    'member-added',
+    'member-removed',
+    'identity-changed',
+    'selector-collision',
+    'runtime-collision',
+    'runtime-id-changed',
+  ] as const)(
     'fails closed when plugin source fallback verification detects %s',
     async (scenario) => {
       const files = [
@@ -2517,27 +2574,32 @@ describe('useAuthFilesData status targeting', () => {
                 disabled: false,
               },
             ] as AuthFileItem[])
-          : scenario === 'identity-changed'
-            ? ([{ ...files[0], account: 'replacement@example.com' }] as AuthFileItem[])
-            : ([
-                ...files,
-                {
-                  id: 'shared.json',
-                  name: 'other.json',
-                  type: 'codex',
-                  auth_index: 'auth-other',
-                  account: 'other@example.com',
-                  disabled: false,
-                },
-              ] as AuthFileItem[]);
-      mocks.list
-        .mockResolvedValueOnce({ files })
-        .mockResolvedValueOnce({ files })
-        .mockResolvedValueOnce({ files: freshFiles });
+          : scenario === 'member-removed'
+            ? []
+            : scenario === 'identity-changed'
+              ? [{ ...files[0], account: 'replacement@example.com' }]
+              : scenario === 'runtime-id-changed'
+                ? [{ ...files[0], id: 'runtime-new' }]
+                : ([
+                    ...files,
+                    {
+                      id: scenario === 'runtime-collision' ? files[0].id : 'shared.json',
+                      name: 'other.json',
+                      type: 'codex',
+                      auth_index: 'auth-other',
+                      account: 'other@example.com',
+                      disabled: false,
+                    },
+                  ] as AuthFileItem[]);
+      mocks.list.mockResolvedValueOnce({ files });
+      mockAuthFileLookup(files);
+      const fallbackMutation = vi.fn();
       mocks.setStatus.mockImplementation(
         async (_target: unknown, _disabled: unknown, verifyFallback?: () => Promise<void>) => {
           if (!verifyFallback) throw new Error('missing plugin source fallback verifier');
+          mockAuthFileLookup(freshFiles);
           await verifyFallback();
+          fallbackMutation();
           return {
             status: 'ok',
             disabled: true,
@@ -2564,9 +2626,14 @@ describe('useAuthFilesData status targeting', () => {
         true,
         expect.any(Function)
       );
-      expect(mocks.list).toHaveBeenCalledTimes(3);
-      expect(hook.getCurrent().files.map((file) => file.disabled)).toEqual([false]);
-      expect(mocks.showNotification).toHaveBeenCalledWith(
+      expect(mocks.list).toHaveBeenCalledTimes(1);
+      expect(mocks.lookup).toHaveBeenCalledTimes(scenario === 'runtime-id-changed' ? 6 : 5);
+      expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'shared.json' });
+      expect(fallbackMutation).not.toHaveBeenCalled();
+      expect(hook.getCurrent().files).toEqual(
+        freshFiles.filter((file) => readAuthFileStatusPhysicalName(file) === 'shared.json')
+      );
+      expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
         'auth_files.batch_status_partial',
         'warning'
       );
@@ -2593,6 +2660,7 @@ describe('useAuthFilesData status targeting', () => {
       },
     ] as AuthFileItem[];
     mocks.list.mockResolvedValue({ files });
+    mockAuthFileLookup(files);
     const hook = mountUseAuthFilesData();
 
     await act(async () => {
@@ -2606,6 +2674,7 @@ describe('useAuthFilesData status targeting', () => {
       'auth_files.batch_status_needs_review:0/0/1',
       'warning'
     );
+    expect(mocks.list).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
 
@@ -2630,9 +2699,8 @@ describe('useAuthFilesData status targeting', () => {
         disabled: false,
       },
     ] as AuthFileItem[];
-    mocks.list
-      .mockResolvedValueOnce({ files: initialFiles })
-      .mockResolvedValueOnce({ files: refreshedFiles });
+    mocks.list.mockResolvedValueOnce({ files: initialFiles });
+    mockAuthFileLookup(refreshedFiles);
     const hook = mountUseAuthFilesData();
 
     await act(async () => {
@@ -2646,6 +2714,7 @@ describe('useAuthFilesData status targeting', () => {
       'auth_files.batch_status_partial',
       'warning'
     );
+    expect(mocks.list).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
 
@@ -2666,9 +2735,8 @@ describe('useAuthFilesData status targeting', () => {
         account: 'replacement@example.com',
       },
     ] as AuthFileItem[];
-    mocks.list
-      .mockResolvedValueOnce({ files: initialFiles })
-      .mockResolvedValueOnce({ files: refreshedFiles });
+    mocks.list.mockResolvedValueOnce({ files: initialFiles });
+    mockAuthFileLookup(refreshedFiles);
     const hook = mountUseAuthFilesData();
 
     await act(async () => {
@@ -2682,6 +2750,7 @@ describe('useAuthFilesData status targeting', () => {
       'auth_files.batch_status_partial',
       'warning'
     );
+    expect(mocks.list).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
 
@@ -2704,6 +2773,14 @@ describe('useAuthFilesData status targeting', () => {
         account: 'child@example.com',
         disabled: false,
       },
+      {
+        id: 'runtime-shared-3',
+        name: 'shared.json',
+        type: 'codex',
+        auth_index: 'auth-3',
+        account: 'second-child@example.com',
+        disabled: false,
+      },
     ] as AuthFileItem[];
     files.forEach((file) => {
       recordCodexInspectionDisableOwnership('scope-source-status', {
@@ -2715,7 +2792,11 @@ describe('useAuthFilesData status targeting', () => {
       });
     });
     mocks.list.mockResolvedValue({ files });
-    mocks.setStatus.mockResolvedValue({ status: 'ok', disabled: true });
+    mockAuthFileLookup(files);
+    mocks.setStatus.mockImplementation(async () => {
+      mockAuthFileLookup(files.map((file) => ({ ...file, disabled: true })));
+      return { status: 'ok', disabled: true };
+    });
     const hook = mountUseAuthFilesData('scope-source-status');
 
     await act(async () => {
@@ -2748,15 +2829,24 @@ describe('useAuthFilesData status targeting', () => {
           provider: 'codex',
           accountSnapshot: 'child@example.com',
         },
+        {
+          name: 'shared.json',
+          runtimeId: 'runtime-shared-3',
+          authIndex: 'auth-3',
+          provider: 'codex',
+          accountSnapshot: 'second-child@example.com',
+        },
       ]
     );
-    expect(hook.getCurrent().files.map((file) => file.disabled)).toEqual([true, true]);
+    expect(hook.getCurrent().files.map((file) => file.disabled)).toEqual([true, true, true]);
     expect(
       getCodexInspectionOwnedDisableIdentityKeys('scope-source-status', [
         { ...files[0], disabled: true },
         { ...files[1], disabled: true },
+        { ...files[2], disabled: true },
       ])
     ).toEqual(new Set());
+    expect(mocks.list).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
 
@@ -2780,6 +2870,7 @@ describe('useAuthFilesData status targeting', () => {
       },
     ] as AuthFileItem[];
     mocks.list.mockResolvedValue({ files });
+    mockAuthFileLookup(files);
     const hook = mountUseAuthFilesData();
 
     await act(async () => {
@@ -2793,6 +2884,7 @@ describe('useAuthFilesData status targeting', () => {
       'auth_files.batch_status_needs_review:0/0/1',
       'warning'
     );
+    expect(mocks.list).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
 
@@ -2826,9 +2918,8 @@ describe('useAuthFilesData status targeting', () => {
       },
       initialFiles[1],
     ] as AuthFileItem[];
-    mocks.list
-      .mockResolvedValueOnce({ files: initialFiles })
-      .mockResolvedValueOnce({ files: refreshedFiles });
+    mocks.list.mockResolvedValueOnce({ files: initialFiles });
+    mockAuthFileLookup(refreshedFiles);
     const hook = mountUseAuthFilesData();
 
     await act(async () => {
@@ -2837,7 +2928,7 @@ describe('useAuthFilesData status targeting', () => {
     });
 
     expect(mocks.setStatus).not.toHaveBeenCalled();
-    expect(mocks.list).toHaveBeenCalledTimes(2);
+    expect(mocks.list).toHaveBeenCalledTimes(1);
     expect(hook.getCurrent().files).toEqual(refreshedFiles);
     expect(mocks.showNotification).toHaveBeenCalledWith(
       'auth_files.batch_status_partial',
@@ -2863,9 +2954,8 @@ describe('useAuthFilesData status targeting', () => {
         account: 'replacement@example.com',
       },
     ] as AuthFileItem[];
-    mocks.list
-      .mockResolvedValueOnce({ files: initialFiles })
-      .mockResolvedValueOnce({ files: refreshedFiles });
+    mocks.list.mockResolvedValueOnce({ files: initialFiles });
+    mockAuthFileLookup(refreshedFiles);
     const hook = mountUseAuthFilesData();
 
     await act(async () => {
@@ -2889,6 +2979,7 @@ describe('useAuthFilesData status targeting', () => {
       'auth_files.batch_status_partial',
       'warning'
     );
+    expect(mocks.list).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
 
@@ -2975,6 +3066,7 @@ describe('useAuthFilesData status targeting', () => {
       kind: 'status-changed',
       selectionKeys: ['shared.json\u0000auth-1', 'shared.json\u0000auth-2'],
     });
+    expect(mocks.lookup).not.toHaveBeenCalled();
     hook.unmount();
   });
 
@@ -2998,6 +3090,7 @@ describe('useAuthFilesData status targeting', () => {
       },
     ] as AuthFileItem[];
     mocks.list.mockResolvedValue({ files });
+    mockAuthFileLookup(files);
     mocks.setStatus.mockImplementation(
       async (_target: unknown, _disabled: unknown, verifyFallback?: () => Promise<void>) => {
         if (!verifyFallback) throw new Error('missing plugin source fallback verifier');
@@ -3033,6 +3126,9 @@ describe('useAuthFilesData status targeting', () => {
       'auth_files.batch_status_partial',
       'warning'
     );
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.lookup).toHaveBeenCalledTimes(5);
+    expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'shared.json' });
     hook.unmount();
   });
 
@@ -3106,6 +3202,7 @@ describe('useAuthFilesData status targeting', () => {
         { ...files[1], disabled: true },
       ])
     ).toEqual(new Set());
+    expect(mocks.lookup).not.toHaveBeenCalled();
     hook.unmount();
   });
 
@@ -3194,6 +3291,7 @@ describe('useAuthFilesData status targeting', () => {
       'auth_files.batch_status_partial',
       'warning'
     );
+    expect(mocks.lookup).not.toHaveBeenCalled();
     hook.unmount();
   });
 
@@ -3316,6 +3414,7 @@ describe('useAuthFilesData status targeting', () => {
       { ...files[1], disabled: true },
     ]);
     expect(ownedKeys).toEqual(new Set());
+    expect(mocks.lookup).not.toHaveBeenCalled();
     hook.unmount();
   });
 
@@ -3359,6 +3458,606 @@ describe('useAuthFilesData status targeting', () => {
     expect(mocks.setStatus).not.toHaveBeenCalled();
     expect(mocks.showNotification).toHaveBeenCalledWith(
       'auth_files.batch_status_needs_review:0/0/2',
+      'warning'
+    );
+    expect(mocks.lookup).not.toHaveBeenCalled();
+    hook.unmount();
+  });
+});
+
+describe('useAuthFilesData scoped status snapshots', () => {
+  const targetFile: AuthFileItem = {
+    name: 'target.json',
+    id: 'runtime-target',
+    auth_index: 'auth-target',
+    type: 'codex',
+    account_id: 'workspace-target',
+    account: 'target@example.com',
+    disabled: false,
+  };
+  const unrelatedFile: AuthFileItem = {
+    name: 'unrelated.json',
+    id: 'runtime-unrelated',
+    auth_index: 'auth-unrelated',
+    type: 'codex',
+    account: 'unrelated@example.com',
+    disabled: false,
+  };
+
+  it.each([true, false])(
+    'reconciles only the server source after setting enabled=%s',
+    async (enabled) => {
+      const initialFile = { ...targetFile, disabled: enabled };
+      const readBack = {
+        ...initialFile,
+        disabled: !enabled,
+        status: 'server status',
+        note: 'fresh',
+      };
+      const requestScope = { apiBase: 'http://cpa-a.local:8317', managementKey: 'test-key' };
+      const onCredentialMutation = vi.fn();
+      mocks.list.mockResolvedValue({ files: [unrelatedFile, initialFile] });
+      mockAuthFileLookup([unrelatedFile, initialFile]);
+      mocks.setStatus.mockImplementation(async () => {
+        mockAuthFileLookup([unrelatedFile, readBack]);
+        return { status: 'ok', disabled: !enabled, mutationScope: 'credential' };
+      });
+      const hook = mountUseAuthFilesData(
+        'connection-a',
+        undefined,
+        onCredentialMutation,
+        requestScope
+      );
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+      });
+      mocks.list.mockClear();
+
+      await act(async () => {
+        await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(initialFile)], enabled);
+      });
+
+      expect(mocks.list).not.toHaveBeenCalled();
+      expect(mocks.lookup.mock.calls).toEqual([
+        [{ name: 'target.json' }, requestScope],
+        [{ name: 'runtime-target' }, requestScope],
+        [{ name: 'target.json' }, requestScope],
+      ]);
+      expect(mocks.setStatus).toHaveBeenCalledExactlyOnceWith(
+        getAuthFilePatchTarget(initialFile),
+        !enabled,
+        expect.any(Function),
+        requestScope
+      );
+      expect(hook.getCurrent().files).toEqual([unrelatedFile, readBack]);
+      expect(onCredentialMutation).toHaveBeenCalledExactlyOnceWith({
+        kind: 'status-changed',
+        selectionKeys: ['target.json\u0000auth-target'],
+      });
+      expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
+        'auth_files.batch_status_success:1',
+        'success'
+      );
+      expect(hook.getCurrent().batchStatusUpdating).toBe(false);
+      hook.unmount();
+    }
+  );
+
+  it('preserves fresh siblings that were absent from the page snapshot', async () => {
+    const sibling = {
+      ...targetFile,
+      id: 'runtime-sibling',
+      auth_index: 'auth-sibling',
+      account: 'sibling@example.com',
+    };
+    const readBack = [
+      { ...targetFile, disabled: true },
+      { ...sibling, note: 'server sibling' },
+    ];
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([targetFile, sibling]);
+    mocks.setStatus.mockImplementation(async () => {
+      mockAuthFileLookup(readBack);
+      return { status: 'ok', disabled: true, mutationScope: 'credential' };
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    await act(async () => {
+      await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.setStatus).toHaveBeenCalledExactlyOnceWith(
+      getAuthFilePatchTarget(targetFile),
+      true,
+      expect.any(Function)
+    );
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, ...readBack]);
+    hook.unmount();
+  });
+
+  it('blocks a child when fresh source membership introduces a source row', async () => {
+    const source = {
+      ...targetFile,
+      id: 'target.json',
+      auth_index: 'source',
+      account: 'source@example.com',
+    };
+    mocks.list.mockResolvedValue({ files: [targetFile] });
+    mockAuthFileLookup([source, targetFile]);
+    const hook = mountUseAuthFilesData();
+
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+    });
+
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.setStatus).not.toHaveBeenCalled();
+    expect(mocks.lookup.mock.calls).toEqual([
+      [{ name: 'target.json' }],
+      [{ name: 'runtime-target' }],
+    ]);
+    expect(hook.getCurrent().files).toEqual([source, targetFile]);
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.batch_status_needs_review:0/0/1',
+      'warning'
+    );
+    hook.unmount();
+  });
+
+  it.each([
+    { id: 'target.json', runtimeId: 'runtime-target' },
+    { id: 'runtime-target', runtimeId: 'runtime-target' },
+    { id: 'runtime-target', runtimeId: null },
+  ])('rejects cross-source selector collisions: %j', async ({ id, runtimeId }) => {
+    const collision = { ...unrelatedFile, name: 'collision.json', id };
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([targetFile, collision]);
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    await act(async () => {
+      await hook
+        .getCurrent()
+        .batchSetStatus([{ ...getAuthFilePatchTarget(targetFile), runtimeId }], false);
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.setStatus).not.toHaveBeenCalled();
+    expect(mocks.lookup).toHaveBeenCalledWith({ name: 'target.json' });
+    expect(mocks.lookup).toHaveBeenCalledWith({ name: 'runtime-target' });
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, targetFile]);
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.batch_status_needs_review:0/0/1',
+      'warning'
+    );
+    hook.unmount();
+  });
+
+  it('rejects a changed account ID even when source, runtime and auth index still match', async () => {
+    const replacement = { ...targetFile, account_id: 'replacement-workspace' };
+    mocks.list.mockResolvedValue({ files: [targetFile] });
+    mockAuthFileLookup([replacement]);
+    const hook = mountUseAuthFilesData();
+
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+    });
+
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.setStatus).not.toHaveBeenCalled();
+    expect(hook.getCurrent().files).toEqual([replacement]);
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.batch_status_partial',
+      'warning'
+    );
+    hook.unmount();
+  });
+
+  it('reconciles server state after a status response is lost without reclassifying the failure', async () => {
+    const readBack = {
+      ...targetFile,
+      disabled: true,
+      status: 'disabled on server',
+      note: 'server-only metadata',
+    };
+    const onCredentialMutation = vi.fn();
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([targetFile]);
+    mocks.setStatus.mockImplementation(async () => {
+      mockAuthFileLookup([readBack]);
+      throw new Error('response lost');
+    });
+    const hook = mountUseAuthFilesData('connection-a', undefined, onCredentialMutation);
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    await act(async () => {
+      await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.setStatus).toHaveBeenCalledExactlyOnceWith(
+      getAuthFilePatchTarget(targetFile),
+      true,
+      expect.any(Function)
+    );
+    await expect(mocks.setStatus.mock.results[0].value).rejects.toThrow('response lost');
+    expect(mocks.lookup.mock.calls).toEqual([
+      [{ name: 'target.json' }],
+      [{ name: 'runtime-target' }],
+      [{ name: 'target.json' }],
+    ]);
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, readBack]);
+    expect(onCredentialMutation).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
+      'auth_files.batch_status_partial',
+      'warning'
+    );
+    expect(hook.getCurrent().batchStatusUpdating).toBe(false);
+    hook.unmount();
+  });
+
+  it('preserves local state and both warnings when a status response is lost and read-back fails', async () => {
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([targetFile]);
+    mocks.setStatus.mockImplementation(async () => {
+      mocks.lookup.mockRejectedValue(new Error('source read-back failed'));
+      throw new Error('response lost');
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    await act(async () => {
+      await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.setStatus).toHaveBeenCalledExactlyOnceWith(
+      getAuthFilePatchTarget(targetFile),
+      true,
+      expect.any(Function)
+    );
+    await expect(mocks.setStatus.mock.results[0].value).rejects.toThrow('response lost');
+    expect(mocks.lookup.mock.calls).toEqual([
+      [{ name: 'target.json' }],
+      [{ name: 'runtime-target' }],
+      [{ name: 'target.json' }],
+    ]);
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, targetFile]);
+    expect(mocks.showNotification.mock.calls).toEqual([
+      ['auth_files.batch_status_partial', 'warning'],
+      ['notification.refresh_failed: source read-back failed', 'warning'],
+    ]);
+    expect(hook.getCurrent().batchStatusUpdating).toBe(false);
+    hook.unmount();
+  });
+
+  it('retains confirmed success and warns when the source read-back fails', async () => {
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([targetFile]);
+    mocks.setStatus.mockImplementation(async () => {
+      mocks.lookup.mockRejectedValue(new Error('source read-back failed'));
+      return { status: 'ok', disabled: true, mutationScope: 'credential' };
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    await act(async () => {
+      await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'target.json' });
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, { ...targetFile, disabled: true }]);
+    expect(mocks.showNotification.mock.calls).toEqual([
+      ['auth_files.batch_status_success:1', 'success'],
+      ['notification.refresh_failed: source read-back failed', 'warning'],
+    ]);
+    expect(hook.getCurrent().batchStatusUpdating).toBe(false);
+    hook.unmount();
+  });
+
+  it('holds the original pending lock until scoped read-back completes', async () => {
+    const readBack = createDeferred<AuthFileItem[]>();
+    mocks.list.mockResolvedValue({ files: [targetFile] });
+    mockAuthFileLookup([targetFile]);
+    mocks.setStatus.mockImplementation(async () => {
+      mocks.lookup.mockReturnValueOnce(readBack.promise);
+      return { status: 'ok', disabled: true, mutationScope: 'credential' };
+    });
+    const hook = mountUseAuthFilesData();
+    let mutation!: Promise<void>;
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      mutation = hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+    });
+    expect(mocks.lookup).toHaveBeenCalledTimes(3);
+    expect(hook.getCurrent().files[0].disabled).toBe(true);
+    expect(hook.getCurrent().batchStatusUpdating).toBe(true);
+
+    await act(async () => {
+      await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], true);
+    });
+
+    expect(mocks.setStatus).toHaveBeenCalledTimes(1);
+    expect(mocks.lookup).toHaveBeenCalledTimes(3);
+    expect(hook.getCurrent().batchStatusUpdating).toBe(true);
+    await act(async () => {
+      readBack.resolve([{ ...targetFile, disabled: true, note: 'read-back' }]);
+      await mutation;
+    });
+    expect(hook.getCurrent().files[0].note).toBe('read-back');
+    expect(hook.getCurrent().batchStatusUpdating).toBe(false);
+    hook.unmount();
+  });
+
+  it('rereads the source once instead of overwriting a newer revision with a stale read-back', async () => {
+    const readBack = createDeferred<AuthFileItem[]>();
+    const newerFile = { ...targetFile, note: 'newer status mutation', disabled: false };
+    mocks.list
+      .mockResolvedValueOnce({ files: [targetFile] })
+      .mockResolvedValueOnce({ files: [newerFile] });
+    mockAuthFileLookup([targetFile]);
+    mocks.setStatus.mockImplementation(async () => {
+      mocks.lookup.mockReturnValueOnce(readBack.promise);
+      return { status: 'ok', disabled: true, mutationScope: 'credential' };
+    });
+    const hook = mountUseAuthFilesData();
+    let mutation!: Promise<void>;
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      mutation = hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+    });
+    expect(mocks.lookup).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mockAuthFileLookup([newerFile]);
+
+    await act(async () => {
+      readBack.resolve([{ ...targetFile, disabled: true }]);
+      await mutation;
+    });
+
+    expect(mocks.lookup).toHaveBeenCalledTimes(4);
+    expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'target.json' });
+    expect(hook.getCurrent().files).toEqual([newerFile]);
+    expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
+      'auth_files.batch_status_success:1',
+      'success'
+    );
+    hook.unmount();
+  });
+
+  it('keeps the newest revision and warns if the one allowed retry is also stale', async () => {
+    const firstRead = createDeferred<AuthFileItem[]>();
+    const retryRead = createDeferred<AuthFileItem[]>();
+    const newerFile = { ...targetFile, note: 'newer' };
+    const latestFile = { ...targetFile, note: 'latest' };
+    mocks.list
+      .mockResolvedValueOnce({ files: [targetFile] })
+      .mockResolvedValueOnce({ files: [newerFile] })
+      .mockResolvedValueOnce({ files: [latestFile] });
+    mockAuthFileLookup([targetFile]);
+    mocks.setStatus.mockImplementation(async () => {
+      mocks.lookup.mockReturnValueOnce(firstRead.promise).mockReturnValueOnce(retryRead.promise);
+      return { status: 'ok', disabled: true, mutationScope: 'credential' };
+    });
+    const hook = mountUseAuthFilesData();
+    let mutation!: Promise<void>;
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      mutation = hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+    });
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      firstRead.resolve([{ ...targetFile, disabled: true }]);
+    });
+    expect(mocks.lookup).toHaveBeenCalledTimes(4);
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      retryRead.resolve([newerFile]);
+      await mutation;
+    });
+
+    expect(mocks.lookup).toHaveBeenCalledTimes(4);
+    expect(hook.getCurrent().files).toEqual([latestFile]);
+    expect(mocks.showNotification.mock.calls).toEqual([
+      ['auth_files.batch_status_success:1', 'success'],
+      ['notification.refresh_failed', 'warning'],
+    ]);
+    expect(hook.getCurrent().batchStatusUpdating).toBe(false);
+    hook.unmount();
+  });
+
+  it.each([
+    ['preflight', false],
+    ['preflight', true],
+    ['fallback', false],
+    ['fallback', true],
+    ['read-back', false],
+    ['read-back', true],
+  ] as const)(
+    'ignores an old connection %s lookup (reject=%s) while the new mutation is pending',
+    async (phase, reject) => {
+      const oldRead = createDeferred<AuthFileItem[]>();
+      const newStatus = createDeferred<{ status: string; disabled: boolean }>();
+      const newFile = { ...targetFile, account: 'connection-b@example.com', disabled: true };
+      let onNewConnection = false;
+      const fallbackMutation = vi.fn();
+      mocks.list
+        .mockResolvedValueOnce({ files: [targetFile] })
+        .mockResolvedValueOnce({ files: [newFile] });
+      mockAuthFileLookup([targetFile]);
+      if (phase === 'preflight') mocks.lookup.mockReturnValueOnce(oldRead.promise);
+      mocks.setStatus.mockImplementation(
+        async (_target, _disabled, verifyFallback?: () => Promise<unknown>) => {
+          if (onNewConnection) return newStatus.promise;
+          mocks.lookup.mockReturnValueOnce(oldRead.promise);
+          if (phase === 'fallback') {
+            await verifyFallback!();
+            fallbackMutation();
+          }
+          return { status: 'ok', disabled: true, mutationScope: 'credential' };
+        }
+      );
+      const hook = mountUseAuthFilesData('connection-a');
+      let oldMutation!: Promise<void>;
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+        oldMutation = hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+      });
+      expect(mocks.lookup).toHaveBeenCalledTimes(
+        phase === 'preflight' ? 2 : phase === 'fallback' ? 4 : 3
+      );
+
+      hook.rerender('connection-b');
+      onNewConnection = true;
+      mockAuthFileLookup([newFile]);
+      mocks.showNotification.mockClear();
+      let newMutation!: Promise<void>;
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+        newMutation = hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(newFile)], true);
+      });
+      expect(hook.getCurrent().batchStatusUpdating).toBe(true);
+
+      await act(async () => {
+        if (reject) oldRead.reject(new Error('old connection failed'));
+        else oldRead.resolve([targetFile]);
+        await oldMutation;
+      });
+
+      expect(hook.getCurrent().files).toEqual([newFile]);
+      expect(hook.getCurrent().batchStatusUpdating).toBe(true);
+      expect(mocks.showNotification).not.toHaveBeenCalled();
+      expect(fallbackMutation).not.toHaveBeenCalled();
+      expect(mocks.setStatus).toHaveBeenCalledTimes(phase === 'preflight' ? 1 : 2);
+      await act(async () => {
+        mockAuthFileLookup([{ ...newFile, disabled: false }]);
+        newStatus.resolve({ status: 'ok', disabled: false });
+        await newMutation;
+      });
+      expect(hook.getCurrent().files).toEqual([{ ...newFile, disabled: false }]);
+      expect(hook.getCurrent().batchStatusUpdating).toBe(false);
+      expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
+        'auth_files.batch_status_success:1',
+        'success'
+      );
+      hook.unmount();
+    }
+  );
+
+  it.each(['source', 'identity'])(
+    'does not mutate when the scoped %s preflight fails',
+    async (scope) => {
+      mocks.list.mockResolvedValue({ files: [targetFile] });
+      mocks.lookup.mockImplementation(async ({ name }: AuthFileLookupTarget) => {
+        if (name === (scope === 'source' ? 'target.json' : 'runtime-target')) {
+          throw new Error('lookup failed');
+        }
+        return [targetFile];
+      });
+      const hook = mountUseAuthFilesData();
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+        await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+      });
+
+      expect(mocks.list).toHaveBeenCalledTimes(1);
+      expect(mocks.setStatus).not.toHaveBeenCalled();
+      expect(mocks.lookup.mock.calls).toEqual([
+        [{ name: 'target.json' }],
+        [{ name: 'runtime-target' }],
+      ]);
+      expect(hook.getCurrent().files).toEqual([targetFile]);
+      expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
+        'notification.update_failed: lookup failed',
+        'error'
+      );
+      expect(hook.getCurrent().batchStatusUpdating).toBe(false);
+      hook.unmount();
+    }
+  );
+
+  it('uses the scoped path when normalization deduplicates repeated targets', async () => {
+    mocks.list.mockResolvedValue({ files: [targetFile] });
+    mockAuthFileLookup([targetFile]);
+    mocks.setStatus.mockImplementation(async () => {
+      mockAuthFileLookup([{ ...targetFile, disabled: true }]);
+      return { status: 'ok', disabled: true, mutationScope: 'credential' };
+    });
+    const hook = mountUseAuthFilesData();
+    const target = getAuthFilePatchTarget(targetFile);
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      await hook.getCurrent().batchSetStatus([target, target], false);
+    });
+
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(mocks.lookup).toHaveBeenCalledTimes(3);
+    expect(mocks.setStatus).toHaveBeenCalledTimes(1);
+    expect(hook.getCurrent().files[0].disabled).toBe(true);
+    expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
+      'auth_files.batch_status_success:1',
+      'success'
+    );
+    hook.unmount();
+  });
+
+  it('keeps multi-target full-list collision checks and only mutates the safe target', async () => {
+    const collision = { ...targetFile, name: 'collision.json', id: 'target.json' };
+    mocks.list
+      .mockResolvedValueOnce({ files: [targetFile, unrelatedFile] })
+      .mockResolvedValueOnce({ files: [targetFile, unrelatedFile, collision] });
+    mocks.setStatus.mockResolvedValue({
+      status: 'ok',
+      disabled: true,
+      mutationScope: 'credential',
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      await hook
+        .getCurrent()
+        .batchSetStatus(
+          [getAuthFilePatchTarget(targetFile), getAuthFilePatchTarget(unrelatedFile)],
+          false
+        );
+    });
+
+    expect(mocks.list).toHaveBeenCalledTimes(2);
+    expect(mocks.lookup).not.toHaveBeenCalled();
+    expect(mocks.setStatus).toHaveBeenCalledExactlyOnceWith(
+      getAuthFilePatchTarget(unrelatedFile),
+      true,
+      expect.any(Function)
+    );
+    expect(hook.getCurrent().files).toEqual([
+      targetFile,
+      { ...unrelatedFile, disabled: true },
+      collision,
+    ]);
+    expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
+      'auth_files.batch_status_needs_review:1/0/1',
       'warning'
     );
     hook.unmount();

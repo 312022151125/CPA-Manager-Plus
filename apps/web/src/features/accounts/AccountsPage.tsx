@@ -7099,7 +7099,7 @@ export function AccountsPage() {
       setStatusUpdating(true);
       try {
         await batchSetStatus(patchTargets, enabled);
-        await loadFiles();
+        if (patchTargets.length > 1) await loadFiles();
         deselectAll();
       } finally {
         setStatusUpdating(false);
