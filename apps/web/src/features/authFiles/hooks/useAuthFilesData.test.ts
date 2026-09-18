@@ -2190,10 +2190,13 @@ describe('useAuthFilesData status targeting', () => {
     expect(hook.getCurrent().files).toEqual([refreshedFile]);
 
     await act(async () => {
+      mockAuthFileLookup([refreshedFile]);
       status.reject(new Error('status failed'));
       await mutationPromise;
     });
     expect(hook.getCurrent().files).toEqual([refreshedFile]);
+    expect(mocks.lookup).toHaveBeenCalledTimes(3);
+    expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'single.json' });
     hook.unmount();
   });
 
@@ -2238,10 +2241,13 @@ describe('useAuthFilesData status targeting', () => {
     expect(hook.getCurrent().files).toEqual([refreshedFile]);
 
     await act(async () => {
+      mockAuthFileLookup([refreshedFile]);
       status.reject(new Error('status failed'));
       await mutationPromise;
     });
     expect(hook.getCurrent().files).toEqual([refreshedFile]);
+    expect(mocks.lookup).toHaveBeenCalledTimes(3);
+    expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'single.json' });
     expect(hook.getCurrent().batchStatusUpdating).toBe(false);
     hook.unmount();
   });
@@ -2461,7 +2467,8 @@ describe('useAuthFilesData status targeting', () => {
       expect.any(Function)
     );
     expect(mocks.list).toHaveBeenCalledTimes(1);
-    expect(mocks.lookup).toHaveBeenCalledTimes(4);
+    expect(mocks.lookup).toHaveBeenCalledTimes(5);
+    expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'shared.json' });
     expect(hook.getCurrent().files.map((file) => file.disabled)).toEqual([false, false]);
     expect(
       getCodexInspectionOwnedDisableIdentityKeys('scope-plugin-source-status', [
@@ -2620,10 +2627,13 @@ describe('useAuthFilesData status targeting', () => {
         expect.any(Function)
       );
       expect(mocks.list).toHaveBeenCalledTimes(1);
-      expect(mocks.lookup).toHaveBeenCalledTimes(scenario === 'runtime-id-changed' ? 5 : 4);
+      expect(mocks.lookup).toHaveBeenCalledTimes(scenario === 'runtime-id-changed' ? 6 : 5);
+      expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'shared.json' });
       expect(fallbackMutation).not.toHaveBeenCalled();
-      expect(hook.getCurrent().files.map((file) => file.disabled)).toEqual([false]);
-      expect(mocks.showNotification).toHaveBeenCalledWith(
+      expect(hook.getCurrent().files).toEqual(
+        freshFiles.filter((file) => readAuthFileStatusPhysicalName(file) === 'shared.json')
+      );
+      expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
         'auth_files.batch_status_partial',
         'warning'
       );
@@ -3117,7 +3127,8 @@ describe('useAuthFilesData status targeting', () => {
       'warning'
     );
     expect(mocks.list).toHaveBeenCalledTimes(1);
-    expect(mocks.lookup).toHaveBeenCalledTimes(4);
+    expect(mocks.lookup).toHaveBeenCalledTimes(5);
+    expect(mocks.lookup).toHaveBeenLastCalledWith({ name: 'shared.json' });
     hook.unmount();
   });
 
@@ -3587,6 +3598,10 @@ describe('useAuthFilesData scoped status snapshots', () => {
 
     expect(mocks.list).toHaveBeenCalledTimes(1);
     expect(mocks.setStatus).not.toHaveBeenCalled();
+    expect(mocks.lookup.mock.calls).toEqual([
+      [{ name: 'target.json' }],
+      [{ name: 'runtime-target' }],
+    ]);
     expect(hook.getCurrent().files).toEqual([source, targetFile]);
     expect(mocks.showNotification).toHaveBeenCalledWith(
       'auth_files.batch_status_needs_review:0/0/1',
@@ -3645,6 +3660,90 @@ describe('useAuthFilesData scoped status snapshots', () => {
       'auth_files.batch_status_partial',
       'warning'
     );
+    hook.unmount();
+  });
+
+  it('reconciles server state after a status response is lost without reclassifying the failure', async () => {
+    const readBack = {
+      ...targetFile,
+      disabled: true,
+      status: 'disabled on server',
+      note: 'server-only metadata',
+    };
+    const onCredentialMutation = vi.fn();
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([targetFile]);
+    mocks.setStatus.mockImplementation(async () => {
+      mockAuthFileLookup([readBack]);
+      throw new Error('response lost');
+    });
+    const hook = mountUseAuthFilesData('connection-a', undefined, onCredentialMutation);
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    await act(async () => {
+      await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.setStatus).toHaveBeenCalledExactlyOnceWith(
+      getAuthFilePatchTarget(targetFile),
+      true,
+      expect.any(Function)
+    );
+    await expect(mocks.setStatus.mock.results[0].value).rejects.toThrow('response lost');
+    expect(mocks.lookup.mock.calls).toEqual([
+      [{ name: 'target.json' }],
+      [{ name: 'runtime-target' }],
+      [{ name: 'target.json' }],
+    ]);
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, readBack]);
+    expect(onCredentialMutation).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
+      'auth_files.batch_status_partial',
+      'warning'
+    );
+    expect(hook.getCurrent().batchStatusUpdating).toBe(false);
+    hook.unmount();
+  });
+
+  it('preserves local state and both warnings when a status response is lost and read-back fails', async () => {
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([targetFile]);
+    mocks.setStatus.mockImplementation(async () => {
+      mocks.lookup.mockRejectedValue(new Error('source read-back failed'));
+      throw new Error('response lost');
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    await act(async () => {
+      await hook.getCurrent().batchSetStatus([getAuthFilePatchTarget(targetFile)], false);
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.setStatus).toHaveBeenCalledExactlyOnceWith(
+      getAuthFilePatchTarget(targetFile),
+      true,
+      expect.any(Function)
+    );
+    await expect(mocks.setStatus.mock.results[0].value).rejects.toThrow('response lost');
+    expect(mocks.lookup.mock.calls).toEqual([
+      [{ name: 'target.json' }],
+      [{ name: 'runtime-target' }],
+      [{ name: 'target.json' }],
+    ]);
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, targetFile]);
+    expect(mocks.showNotification.mock.calls).toEqual([
+      ['auth_files.batch_status_partial', 'warning'],
+      ['notification.refresh_failed: source read-back failed', 'warning'],
+    ]);
+    expect(hook.getCurrent().batchStatusUpdating).toBe(false);
     hook.unmount();
   });
 
@@ -3885,6 +3984,10 @@ describe('useAuthFilesData scoped status snapshots', () => {
 
       expect(mocks.list).toHaveBeenCalledTimes(1);
       expect(mocks.setStatus).not.toHaveBeenCalled();
+      expect(mocks.lookup.mock.calls).toEqual([
+        [{ name: 'target.json' }],
+        [{ name: 'runtime-target' }],
+      ]);
       expect(hook.getCurrent().files).toEqual([targetFile]);
       expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
         'notification.update_failed: lookup failed',

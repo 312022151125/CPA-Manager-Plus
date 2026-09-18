@@ -1783,7 +1783,8 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           );
         }
 
-        if (singleTarget && confirmedUpdates.length > 0) {
+        // CPA may apply a mutation even when the client loses its response.
+        if (singleTarget && results.length > 0) {
           try {
             // Keep status locks through read-back. Other refreshes can still
             // replace files, so discard stale reads and retry at most once.
