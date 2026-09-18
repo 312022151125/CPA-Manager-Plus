@@ -4526,6 +4526,29 @@ describe('useAuthFilesData handleCredentialRefresh', () => {
 });
 
 describe('useAuthFilesData batchPatchFields', () => {
+  const targetFile: AuthFileItem = {
+    name: 'target.json',
+    id: 'runtime-target',
+    auth_index: 'auth-target',
+    type: 'codex',
+    account_id: 'workspace-target',
+    account: 'target@example.com',
+    priority: 1,
+    note: '',
+    websockets: true,
+  };
+  const unrelatedFile: AuthFileItem = {
+    name: 'unrelated.json',
+    id: 'runtime-unrelated',
+    auth_index: 'auth-unrelated',
+    type: 'codex',
+    account_id: 'workspace-unrelated',
+    account: 'unrelated@example.com',
+    priority: 1,
+    note: '',
+    websockets: true,
+  };
+
   it('does not let old connection cleanup clear a new batch-fields operation', async () => {
     const oldFile = {
       id: 'runtime-shared',
@@ -4541,6 +4564,7 @@ describe('useAuthFilesData batchPatchFields', () => {
       .mockResolvedValueOnce({ files: [oldFile] })
       .mockResolvedValueOnce({ files: [newFile] })
       .mockResolvedValueOnce({ files: [newFile] });
+    mockAuthFileLookup([oldFile]);
     mocks.patchFieldsWithPluginSourceFallback
       .mockReturnValueOnce(oldPatch.promise)
       .mockReturnValueOnce(newPatch.promise);
@@ -4567,6 +4591,7 @@ describe('useAuthFilesData batchPatchFields', () => {
 
     hook.rerender('connection-b');
     expect(hook.getCurrent().batchFieldsUpdating).toBe(false);
+    mockAuthFileLookup([newFile]);
     await act(async () => {
       newPromise = hook.getCurrent().batchPatchFields(
         [
@@ -4710,6 +4735,7 @@ describe('useAuthFilesData batchPatchFields', () => {
       account: 'single@example.com',
     } as AuthFileItem;
     mocks.list.mockResolvedValue({ files: [file] });
+    mockAuthFileLookup([file]);
     const hook = mountUseAuthFilesData();
 
     let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
@@ -4727,6 +4753,7 @@ describe('useAuthFilesData batchPatchFields', () => {
       );
     });
 
+    expect(mocks.list).not.toHaveBeenCalled();
     expect(mocks.patchFieldsWithPluginSourceFallback).toHaveBeenCalledWith(
       {
         name: 'single-codex.json',
@@ -4751,17 +4778,15 @@ describe('useAuthFilesData batchPatchFields', () => {
   });
 
   it('rejects a same-locator replacement before patching fields', async () => {
-    mocks.list.mockResolvedValue({
-      files: [
-        {
-          id: 'runtime-auth-1',
-          name: 'same.json',
-          authIndex: 'auth-1',
-          type: 'codex',
-          account_id: 'replacement-account',
-        },
-      ],
-    });
+    const replacement = {
+      id: 'runtime-auth-1',
+      name: 'same.json',
+      authIndex: 'auth-1',
+      type: 'codex',
+      account_id: 'replacement-account',
+    } as AuthFileItem;
+    mocks.list.mockResolvedValue({ files: [replacement] });
+    mockAuthFileLookup([replacement]);
     const hook = mountUseAuthFilesData();
 
     let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
@@ -4780,6 +4805,7 @@ describe('useAuthFilesData batchPatchFields', () => {
       );
     });
 
+    expect(mocks.list).not.toHaveBeenCalled();
     expect(mocks.patchFields).not.toHaveBeenCalled();
     expect(mocks.patchFieldsForAuthIndexes).not.toHaveBeenCalled();
     expect(result).toEqual({ success: 0, failed: 1, failedNames: ['same.json'] });
@@ -4802,6 +4828,7 @@ describe('useAuthFilesData batchPatchFields', () => {
       },
     ] as AuthFileItem[];
     mocks.list.mockResolvedValue({ files });
+    mockAuthFileLookup(files);
     const hook = mountUseAuthFilesData();
 
     let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
@@ -4819,9 +4846,526 @@ describe('useAuthFilesData batchPatchFields', () => {
       );
     });
 
+    expect(mocks.list).not.toHaveBeenCalled();
     expect(mocks.patchFields).not.toHaveBeenCalled();
     expect(mocks.patchFieldsForAuthIndexes).not.toHaveBeenCalled();
     expect(result).toEqual({ success: 0, failed: 1, failedNames: ['shared.json'] });
+    hook.unmount();
+  });
+
+  it('scopes single priority mutation without full-list reads or global reloads', async () => {
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([unrelatedFile, targetFile]);
+    mocks.patchFieldsWithPluginSourceFallback.mockImplementation(async () => {
+      mockAuthFileLookup([unrelatedFile, { ...targetFile, priority: 10 }]);
+      return { status: 'ok' };
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
+    await act(async () => {
+      result = await hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(targetFile)],
+        { priority: 10 }
+      );
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.lookup.mock.calls).toEqual([
+      [{ name: 'target.json' }],
+      [{ name: 'runtime-target' }],
+      [{ name: 'target.json' }],
+    ]);
+    expect(mocks.patchFieldsWithPluginSourceFallback).toHaveBeenCalledExactlyOnceWith(
+      getAuthFilePatchTarget(targetFile),
+      { priority: 10 },
+      [getAuthFilePatchTarget(targetFile)]
+    );
+    expect(result).toEqual({ success: 1, failed: 0, failedNames: [] });
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, { ...targetFile, priority: 10 }]);
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.batch_fields_success',
+      'success'
+    );
+    hook.unmount();
+  });
+
+  it('scopes single note mutation using the same optimized path', async () => {
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([unrelatedFile, targetFile]);
+    mocks.patchFieldsWithPluginSourceFallback.mockImplementation(async () => {
+      mockAuthFileLookup([unrelatedFile, { ...targetFile, note: 'hello' }]);
+      return { status: 'ok' };
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
+    await act(async () => {
+      result = await hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(targetFile)],
+        { note: 'hello' }
+      );
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.lookup.mock.calls).toEqual([
+      [{ name: 'target.json' }],
+      [{ name: 'runtime-target' }],
+      [{ name: 'target.json' }],
+    ]);
+    expect(result).toEqual({ success: 1, failed: 0, failedNames: [] });
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, { ...targetFile, note: 'hello' }]);
+    hook.unmount();
+  });
+
+  it('scopes single websockets mutation and adopts authoritative read-back state', async () => {
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([unrelatedFile, targetFile]);
+    mocks.patchFieldsWithPluginSourceFallback.mockImplementation(async () => {
+      mockAuthFileLookup([unrelatedFile, { ...targetFile, websockets: false }]);
+      return { status: 'ok' };
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
+    await act(async () => {
+      result = await hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(targetFile)],
+        { websockets: false }
+      );
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: 1, failed: 0, failedNames: [] });
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, { ...targetFile, websockets: false }]);
+    hook.unmount();
+  });
+
+  it('adopts server-normalized field values instead of optimistic requested values', async () => {
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([unrelatedFile, targetFile]);
+    mocks.patchFieldsWithPluginSourceFallback.mockImplementation(async () => {
+      mockAuthFileLookup([unrelatedFile, { ...targetFile, priority: 5 }]);
+      return { status: 'ok' };
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
+    await act(async () => {
+      result = await hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(targetFile)],
+        { priority: 10 }
+      );
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: 1, failed: 0, failedNames: [] });
+    expect(hook.getCurrent().files.find((f) => f.name === targetFile.name)?.priority).toBe(5);
+    hook.unmount();
+  });
+
+  it('preserves shared source siblings and uses patchFieldsForAuthIndexes for single-target shared mutations', async () => {
+    const sharedFile1: AuthFileItem = {
+      name: 'shared.json',
+      id: 'runtime-auth-1',
+      auth_index: 'auth-1',
+      type: 'codex',
+      account_id: 'account-1',
+      priority: 1,
+    };
+    const sharedFile2: AuthFileItem = {
+      name: 'shared.json',
+      id: 'runtime-auth-2',
+      auth_index: 'auth-2',
+      type: 'codex',
+      account_id: 'account-2',
+      priority: 1,
+    };
+    const readBackFile1 = { ...sharedFile1, priority: 10 };
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, sharedFile1, sharedFile2] });
+    mockAuthFileLookup([unrelatedFile, sharedFile1, sharedFile2]);
+    mocks.patchFieldsForAuthIndexes.mockImplementation(async () => {
+      mockAuthFileLookup([unrelatedFile, readBackFile1, sharedFile2]);
+      return { status: 'ok' };
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
+    await act(async () => {
+      result = await hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(sharedFile1)],
+        { priority: 10 }
+      );
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.patchFieldsForAuthIndexes).toHaveBeenCalledExactlyOnceWith(
+      'shared.json',
+      [getAuthFilePatchTarget(sharedFile1)],
+      [getAuthFilePatchTarget(sharedFile1), getAuthFilePatchTarget(sharedFile2)],
+      { priority: 10 }
+    );
+    expect(mocks.patchFieldsWithPluginSourceFallback).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: 1, failed: 0, failedNames: [] });
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, readBackFile1, sharedFile2]);
+    hook.unmount();
+  });
+
+  it('rejects cross-source runtime collisions without sending field mutations', async () => {
+    const collision: AuthFileItem = {
+      name: 'collision.json',
+      id: 'runtime-target',
+      type: 'codex',
+      account: 'collision@example.com',
+    };
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([unrelatedFile, targetFile, collision]);
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
+    await act(async () => {
+      result = await hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(targetFile)],
+        { priority: 10 }
+      );
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.patchFieldsWithPluginSourceFallback).not.toHaveBeenCalled();
+    expect(mocks.patchFieldsForAuthIndexes).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: 0, failed: 1, failedNames: [targetFile.name] });
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, targetFile]);
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.batch_fields_partial',
+      'warning'
+    );
+    hook.unmount();
+  });
+
+  it('reconciles server state after a field patch response is lost without reclassifying failure', async () => {
+    const initialTarget = { ...targetFile, priority: 1 };
+    const readBack = { ...targetFile, priority: 7, note: 'server metadata' };
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, initialTarget] });
+    mockAuthFileLookup([unrelatedFile, initialTarget]);
+    mocks.patchFieldsWithPluginSourceFallback.mockImplementation(async () => {
+      mockAuthFileLookup([unrelatedFile, readBack]);
+      throw new Error('response lost');
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
+    await act(async () => {
+      result = await hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(initialTarget)],
+        { priority: 7 }
+      );
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.patchFieldsWithPluginSourceFallback).toHaveBeenCalledExactlyOnceWith(
+      getAuthFilePatchTarget(initialTarget),
+      { priority: 7 },
+      [getAuthFilePatchTarget(initialTarget)]
+    );
+    expect(result).toEqual({ success: 0, failed: 1, failedNames: [initialTarget.name] });
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, readBack]);
+    expect(mocks.showNotification).toHaveBeenCalledExactlyOnceWith(
+      'auth_files.batch_fields_partial',
+      'warning'
+    );
+    expect(hook.getCurrent().batchFieldsUpdating).toBe(false);
+    hook.unmount();
+  });
+
+  it('preserves local state and warns when field patch is rejected and read-back fails', async () => {
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([unrelatedFile, targetFile]);
+    mocks.patchFieldsWithPluginSourceFallback.mockImplementation(async () => {
+      mocks.lookup.mockRejectedValue(new Error('source read-back failed'));
+      throw new Error('patch rejected');
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
+    await act(async () => {
+      result = await hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(targetFile)],
+        { priority: 10 }
+      );
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: 0, failed: 1, failedNames: [targetFile.name] });
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, targetFile]);
+    expect(mocks.showNotification.mock.calls).toEqual([
+      ['auth_files.batch_fields_partial', 'warning'],
+      ['notification.refresh_failed: source read-back failed', 'warning'],
+    ]);
+    expect(hook.getCurrent().batchFieldsUpdating).toBe(false);
+    hook.unmount();
+  });
+
+  it('retains confirmed success and warns when read-back fails after successful field patch', async () => {
+    mocks.list.mockResolvedValue({ files: [unrelatedFile, targetFile] });
+    mockAuthFileLookup([unrelatedFile, targetFile]);
+    mocks.patchFieldsWithPluginSourceFallback.mockImplementation(async () => {
+      mocks.lookup.mockRejectedValue(new Error('source read-back failed'));
+      return { status: 'ok' };
+    });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
+    await act(async () => {
+      result = await hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(targetFile)],
+        { priority: 10 }
+      );
+    });
+
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: 1, failed: 0, failedNames: [] });
+    expect(hook.getCurrent().files).toEqual([unrelatedFile, targetFile]);
+    expect(mocks.showNotification.mock.calls).toEqual([
+      ['auth_files.batch_fields_success', 'success'],
+      ['notification.refresh_failed: source read-back failed', 'warning'],
+    ]);
+    expect(hook.getCurrent().batchFieldsUpdating).toBe(false);
+    hook.unmount();
+  });
+
+  it('rereads the source once instead of overwriting a newer revision with a stale read-back', async () => {
+    const readBack = createDeferred<AuthFileItem[]>();
+    const newerFile = { ...targetFile, note: 'newer edit', priority: 2 };
+    mocks.list
+      .mockResolvedValueOnce({ files: [targetFile] })
+      .mockResolvedValueOnce({ files: [newerFile] });
+    mockAuthFileLookup([targetFile]);
+    mocks.patchFieldsWithPluginSourceFallback.mockImplementation(async () => {
+      mocks.lookup.mockReturnValueOnce(readBack.promise);
+      return { status: 'ok' };
+    });
+    const hook = mountUseAuthFilesData();
+    let mutationPromise!: Promise<unknown>;
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      mutationPromise = hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(targetFile)],
+        { priority: 10 }
+      );
+    });
+
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mockAuthFileLookup([newerFile]);
+
+    await act(async () => {
+      readBack.resolve([{ ...targetFile, priority: 10 }]);
+      await mutationPromise;
+    });
+
+    expect(hook.getCurrent().files).toEqual([newerFile]);
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.batch_fields_success',
+      'success'
+    );
+    hook.unmount();
+  });
+
+  it('keeps the newest revision and warns if the one allowed read-back retry is also stale', async () => {
+    const firstRead = createDeferred<AuthFileItem[]>();
+    const secondRead = createDeferred<AuthFileItem[]>();
+    const newerFile = { ...targetFile, note: 'newer' };
+    const latestFile = { ...targetFile, note: 'latest' };
+    mocks.list
+      .mockResolvedValueOnce({ files: [targetFile] })
+      .mockResolvedValueOnce({ files: [newerFile] })
+      .mockResolvedValueOnce({ files: [latestFile] });
+    mockAuthFileLookup([targetFile]);
+    mocks.patchFieldsWithPluginSourceFallback.mockImplementation(async () => {
+      mocks.lookup
+        .mockReturnValueOnce(firstRead.promise)
+        .mockReturnValueOnce(secondRead.promise);
+      return { status: 'ok' };
+    });
+    const hook = mountUseAuthFilesData();
+    let mutationPromise!: Promise<unknown>;
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+      mutationPromise = hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(targetFile)],
+        { priority: 10 }
+      );
+    });
+
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    await act(async () => {
+      firstRead.resolve([{ ...targetFile, priority: 10 }]);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    await act(async () => {
+      secondRead.resolve([{ ...targetFile, priority: 10 }]);
+      await mutationPromise;
+    });
+
+    expect(hook.getCurrent().files).toEqual([latestFile]);
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'notification.refresh_failed',
+      'warning'
+    );
+    hook.unmount();
+  });
+
+  it.each([
+    ['mutation-fulfilled', false],
+    ['mutation-rejected', true],
+    ['readback-fulfilled', false],
+    ['readback-rejected', true],
+  ] as const)(
+    'ignores late old connection responses during %s (reject=%s)',
+    async (scenario, reject) => {
+      const oldDeferred = createDeferred<unknown>();
+      const newPatch = createDeferred<unknown>();
+      const newFile = { ...targetFile, account: 'connection-b@example.com' };
+      let onNewConnection = false;
+      mocks.list
+        .mockResolvedValueOnce({ files: [targetFile] })
+        .mockResolvedValueOnce({ files: [newFile] });
+      mockAuthFileLookup([targetFile]);
+
+      mocks.patchFieldsWithPluginSourceFallback.mockImplementation(async () => {
+        if (onNewConnection) return newPatch.promise;
+        if (scenario === 'mutation-fulfilled' || scenario === 'mutation-rejected') {
+          return oldDeferred.promise;
+        }
+        mocks.lookup.mockReturnValueOnce(oldDeferred.promise as Promise<AuthFileItem[]>);
+        return { status: 'ok' };
+      });
+
+      const hook = mountUseAuthFilesData('connection-a');
+      let oldPromise!: ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>;
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+        oldPromise = hook.getCurrent().batchPatchFields(
+          [getAuthFilePatchTarget(targetFile)],
+          { priority: 1 }
+        );
+      });
+
+      hook.rerender('connection-b');
+      onNewConnection = true;
+      mockAuthFileLookup([newFile]);
+      mocks.showNotification.mockClear();
+
+      let newPromise!: ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>;
+      await act(async () => {
+        await hook.getCurrent().loadFiles();
+        newPromise = hook.getCurrent().batchPatchFields(
+          [getAuthFilePatchTarget(newFile)],
+          { priority: 2 }
+        );
+      });
+      expect(hook.getCurrent().batchFieldsUpdating).toBe(true);
+
+      await act(async () => {
+        if (reject) oldDeferred.reject(new Error('old connection failed'));
+        else if (scenario.startsWith('readback')) oldDeferred.resolve([targetFile]);
+        else oldDeferred.resolve({ status: 'ok' });
+        await oldPromise;
+      });
+
+      expect(hook.getCurrent().files).toEqual([newFile]);
+      expect(hook.getCurrent().batchFieldsUpdating).toBe(true);
+      expect(mocks.showNotification).not.toHaveBeenCalled();
+
+      await act(async () => {
+        mockAuthFileLookup([{ ...newFile, priority: 2 }]);
+        newPatch.resolve({ status: 'ok' });
+        await newPromise;
+      });
+
+      expect(hook.getCurrent().files).toEqual([{ ...newFile, priority: 2 }]);
+      expect(hook.getCurrent().batchFieldsUpdating).toBe(false);
+      expect(mocks.showNotification).toHaveBeenCalledWith(
+        'auth_files.batch_fields_success',
+        'success'
+      );
+      hook.unmount();
+    }
+  );
+
+  it('keeps multi-target field mutations on full-list inventory and reloads on success', async () => {
+    const file1 = { ...targetFile, id: 'runtime-1', name: 'target1.json' };
+    const file2 = { ...targetFile, id: 'runtime-2', name: 'target2.json' };
+    mocks.list
+      .mockResolvedValueOnce({ files: [file1, file2] })
+      .mockResolvedValueOnce({ files: [file1, file2] })
+      .mockResolvedValueOnce({ files: [{ ...file1, priority: 10 }, { ...file2, priority: 10 }] });
+    mocks.patchFieldsWithPluginSourceFallback.mockResolvedValue({ status: 'ok' });
+    const hook = mountUseAuthFilesData();
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+    mocks.list.mockClear();
+    mocks.lookup.mockClear();
+
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
+    await act(async () => {
+      result = await hook.getCurrent().batchPatchFields(
+        [getAuthFilePatchTarget(file1), getAuthFilePatchTarget(file2)],
+        { priority: 10 }
+      );
+    });
+
+    expect(mocks.lookup).not.toHaveBeenCalled();
+    expect(mocks.list).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ success: 2, failed: 0, failedNames: [] });
+    expect(hook.getCurrent().files).toEqual([
+      { ...file1, priority: 10 },
+      { ...file2, priority: 10 },
+    ]);
     hook.unmount();
   });
 });

@@ -1853,16 +1853,32 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
       if (normalizedTargets.length === 0) return null;
       if (Object.keys(fields).length === 0) return null;
 
+      const singleTarget = normalizedTargets.length === 1 ? normalizedTargets[0] : null;
+
       batchFieldsPendingRef.current = generation;
       setBatchFieldsUpdating(true);
 
       try {
-        const response = requestScope
-          ? await authFilesApi.list(requestScope)
-          : await authFilesApi.list();
+        const lookupFiles = (target: AuthFileLookupTarget) =>
+          requestScope ? authFilesApi.lookup(target, requestScope) : authFilesApi.lookup(target);
+
+        let currentFiles: AuthFileItem[];
+        if (singleTarget) {
+          currentFiles = await lookupAuthFileMutationSnapshot(singleTarget, lookupFiles);
+        } else {
+          const response = requestScope
+            ? await authFilesApi.list(requestScope)
+            : await authFilesApi.list();
+          currentFiles = Array.isArray(response.files) ? response.files : [];
+        }
         if (authFilesOperationGenerationRef.current !== generation) return null;
-        const currentFiles = Array.isArray(response.files) ? response.files : [];
-        if (filesRevisionRef.current === filesRevision) commitFiles(currentFiles);
+        if (filesRevisionRef.current === filesRevision) {
+          commitFiles((previousFiles) =>
+            singleTarget
+              ? replaceAuthFileSourceSnapshot(previousFiles, singleTarget.name, currentFiles)
+              : currentFiles
+          );
+        }
 
         let success = 0;
         let failed = 0;
@@ -1950,15 +1966,17 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           failedNames.add(group.name);
         });
 
-        if (success > 0) {
-          try {
-            await loadFiles({ throwOnError: true });
-            if (authFilesOperationGenerationRef.current !== generation) return null;
-          } catch (err: unknown) {
-            if (authFilesOperationGenerationRef.current !== generation) return null;
-            const errorMessage =
-              err instanceof Error ? err.message : t('notification.refresh_failed');
-            showNotification(`${t('notification.refresh_failed')}: ${errorMessage}`, 'warning');
+        if (!singleTarget) {
+          if (success > 0) {
+            try {
+              await loadFiles({ throwOnError: true });
+              if (authFilesOperationGenerationRef.current !== generation) return null;
+            } catch (err: unknown) {
+              if (authFilesOperationGenerationRef.current !== generation) return null;
+              const errorMessage =
+                err instanceof Error ? err.message : t('notification.refresh_failed');
+              showNotification(`${t('notification.refresh_failed')}: ${errorMessage}`, 'warning');
+            }
           }
         }
 
@@ -1966,6 +1984,29 @@ export function useAuthFilesData(options: UseAuthFilesDataOptions = {}): UseAuth
           showNotification(t('auth_files.batch_fields_success', { count: success }), 'success');
         } else {
           showNotification(t('auth_files.batch_fields_partial', { success, failed }), 'warning');
+        }
+
+        // CPA may apply a mutation even when the client loses its response.
+        if (singleTarget && results.length > 0) {
+          try {
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+              const revision = filesRevisionRef.current;
+              const sourceFiles = await lookupFiles({ name: singleTarget.name });
+              if (authFilesOperationGenerationRef.current !== generation) return null;
+              if (filesRevisionRef.current === revision) {
+                commitFiles((previousFiles) =>
+                  replaceAuthFileSourceSnapshot(previousFiles, singleTarget.name, sourceFiles)
+                );
+                break;
+              }
+              if (attempt === 1) showNotification(t('notification.refresh_failed'), 'warning');
+            }
+          } catch (err: unknown) {
+            if (authFilesOperationGenerationRef.current !== generation) return null;
+            const errorMessage =
+              err instanceof Error ? err.message : t('notification.refresh_failed');
+            showNotification(`${t('notification.refresh_failed')}: ${errorMessage}`, 'warning');
+          }
         }
 
         deselectAll();
