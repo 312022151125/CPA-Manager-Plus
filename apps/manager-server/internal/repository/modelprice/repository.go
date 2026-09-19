@@ -174,7 +174,7 @@ func (r *repository) LoadAllTx(ctx context.Context, tx *sql.Tx) (map[string]mode
 	for serviceTierRows.Next() {
 		var modelID string
 		var tier model.ModelPriceServiceTier
-		var promptConfigured, completionConfigured, cacheConfigured, cacheReadConfigured, cacheCreationConfigured int
+		var promptConfigured, completionConfigured, cacheConfigured, cacheReadConfigured, cacheCreationConfigured configuredFlag
 		if err := serviceTierRows.Scan(
 			&modelID,
 			&tier.Mode,
