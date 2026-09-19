@@ -856,3 +856,67 @@ func streamTestEvent(hash string, timestampMS int64, endpoint, model string) usa
 		CreatedAtMS:  timestampMS,
 	}
 }
+
+func TestWriteExportJSONLAndCompatibleUsagePreserveRequestMetadata(t *testing.T) {
+	db, err := sqliterepo.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	repo := New(db)
+
+	gen := true
+	stream := false
+	event := streamTestEvent("stream-meta-test", 100, "POST /v1/chat/completions", "gpt-4o")
+	event.ResponseModel = "gpt-4o-mini"
+	event.SessionID = "sess-export-1"
+	event.ParentSessionID = "parent-export-1"
+	event.AccessTokenSHA256 = "sha256-export-hash"
+	event.Generate = &gen
+	event.Stream = &stream
+
+	if _, err := repo.InsertBatch(context.Background(), []usage.Event{event}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+
+	// 1. Verify JSONL export stream
+	var jsonlBuf bytes.Buffer
+	if err := repo.WriteExportJSONL(context.Background(), &jsonlBuf, 10); err != nil {
+		t.Fatalf("write export JSONL: %v", err)
+	}
+	var exported usage.Event
+	if err := json.Unmarshal(bytes.TrimSpace(jsonlBuf.Bytes()), &exported); err != nil {
+		t.Fatalf("unmarshal exported JSONL: %v", err)
+	}
+	if exported.ResponseModel != event.ResponseModel ||
+		exported.SessionID != event.SessionID ||
+		exported.ParentSessionID != event.ParentSessionID ||
+		exported.AccessTokenSHA256 != event.AccessTokenSHA256 ||
+		exported.Generate == nil || *exported.Generate != true ||
+		exported.Stream == nil || *exported.Stream != false {
+		t.Fatalf("exported JSONL metadata mismatch: %+v", exported)
+	}
+
+	// 2. Verify compatible usage stream
+	var compBuf bytes.Buffer
+	if err := repo.WriteCompatibleUsage(context.Background(), &compBuf, 10); err != nil {
+		t.Fatalf("write compatible usage: %v", err)
+	}
+	var compPayload usage.Payload
+	if err := json.Unmarshal(compBuf.Bytes(), &compPayload); err != nil {
+		t.Fatalf("unmarshal compatible payload: %v", err)
+	}
+	details := compPayload.APIs[event.Endpoint].Models[event.Model].Details
+	if len(details) != 1 {
+		t.Fatalf("compatible details count = %d", len(details))
+	}
+	compDetail := details[0]
+	if compDetail.ResponseModel != event.ResponseModel ||
+		compDetail.SessionID != event.SessionID ||
+		compDetail.ParentSessionID != event.ParentSessionID ||
+		compDetail.AccessTokenSHA256 != event.AccessTokenSHA256 ||
+		compDetail.Generate == nil || *compDetail.Generate != true ||
+		compDetail.Stream == nil || *compDetail.Stream != false {
+		t.Fatalf("compatible detail metadata mismatch: %+v", compDetail)
+	}
+}

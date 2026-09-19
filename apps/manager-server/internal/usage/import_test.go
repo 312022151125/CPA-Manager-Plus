@@ -1122,3 +1122,55 @@ func TestCompatiblePayloadPrefersExplicitRequestedModelForAudit(t *testing.T) {
 		t.Fatalf("requested model = %q, want %q", detail.RequestedModel, original.RequestedModel)
 	}
 }
+
+func TestParseImportPayloadRoundTripsRequestMetadataFields(t *testing.T) {
+	gen := true
+	stream := false
+	original := Event{
+		Timestamp:          "2026-08-12T10:00:00Z",
+		TimestampMS:        1_755_000_000_000,
+		Endpoint:           "POST /v1/chat/completions",
+		Model:              "gpt-4o",
+		RequestedModel:     "gpt-4o",
+		ResolvedModel:      "gpt-4o-2024-08-06",
+		ResponseModel:      "gpt-4o-mini",
+		SessionID:          "session-xyz",
+		ParentSessionID:    "parent-session-abc",
+		AccessTokenSHA256:  "sha256-token-12345",
+		Generate:           &gen,
+		Stream:             &stream,
+		TotalTokens:        1,
+	}
+
+	payload, err := json.Marshal(BuildPayload([]Event{original}))
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	result, err := ParseImportPayload(payload)
+	if err != nil {
+		t.Fatalf("parse import payload: %v", err)
+	}
+	if len(result.Events) != 1 {
+		t.Fatalf("imported events = %d, want 1", len(result.Events))
+	}
+	imported := result.Events[0]
+	if imported.ResponseModel != original.ResponseModel {
+		t.Errorf("ResponseModel = %q, want %q", imported.ResponseModel, original.ResponseModel)
+	}
+	if imported.SessionID != original.SessionID {
+		t.Errorf("SessionID = %q, want %q", imported.SessionID, original.SessionID)
+	}
+	if imported.ParentSessionID != original.ParentSessionID {
+		t.Errorf("ParentSessionID = %q, want %q", imported.ParentSessionID, original.ParentSessionID)
+	}
+	if imported.AccessTokenSHA256 != original.AccessTokenSHA256 {
+		t.Errorf("AccessTokenSHA256 = %q, want %q", imported.AccessTokenSHA256, original.AccessTokenSHA256)
+	}
+	if imported.Generate == nil || *imported.Generate != true {
+		t.Errorf("Generate = %v, want true", imported.Generate)
+	}
+	if imported.Stream == nil || *imported.Stream != false {
+		t.Errorf("Stream = %v, want false", imported.Stream)
+	}
+}

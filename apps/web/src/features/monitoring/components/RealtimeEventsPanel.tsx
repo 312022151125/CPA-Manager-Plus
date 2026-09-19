@@ -1119,9 +1119,13 @@ export function RealtimeEventsPanel({
             {pagination.pageItems.map((row) => {
               const sourceDisplay = buildRealtimeSourceDisplay(row, t, accountDisplayMode);
               const apiKeyDisplay = buildRealtimeApiKeyDisplay(row, t);
-              const requestedModel = row.requestedModel?.trim() || row.model;
+              const requestedModel = row.requestedModel?.trim() || row.model || '—';
               const resolvedModel = row.resolvedModel?.trim() || '';
+              const responseModel = row.responseModel?.trim() || '';
               const showResolvedModel = Boolean(resolvedModel && resolvedModel !== requestedModel);
+              const hasResponseModelMismatch = Boolean(
+                responseModel && resolvedModel && responseModel !== resolvedModel
+              );
               const reasoningEffort = formatOptionalText(row.reasoningEffort);
               const serviceTier = formatOptionalText(row.serviceTier);
               const requestServiceTier = formatOptionalText(row.requestServiceTier);
@@ -1169,7 +1173,13 @@ export function RealtimeEventsPanel({
                   <td>
                     <div
                       className={`${styles.primaryCell} ${styles.realtimeModelCell}`}
-                      title={[requestedModel, showResolvedModel ? resolvedModel : '']
+                      title={[
+                        requestedModel,
+                        showResolvedModel ? resolvedModel : '',
+                        hasResponseModelMismatch
+                          ? `${responseModel} (${t('monitoring.model_mismatch')})`
+                          : '',
+                      ]
                         .filter(Boolean)
                         .join('\n')}
                     >
@@ -1177,9 +1187,19 @@ export function RealtimeEventsPanel({
                         {requestedModel}
                       </span>
                       {showResolvedModel ? (
-                        <small className={`${styles.monoCell} ${styles.realtimeModelText}`}>
-                          {resolvedModel}
+                        <small className={`${styles.monoCell} ${styles.realtimeModelRoutedText}`}>
+                          {`→ ${resolvedModel}`}
                         </small>
+                      ) : null}
+                      {hasResponseModelMismatch ? (
+                        <div className={styles.realtimeModelResponseLine}>
+                          <small className={`${styles.monoCell} ${styles.realtimeModelResponseText}`}>
+                            {`↳ ${responseModel}`}
+                          </small>
+                          <span className={styles.realtimeModelMismatchBadge}>
+                            {t('monitoring.model_mismatch')}
+                          </span>
+                        </div>
                       ) : null}
                     </div>
                   </td>

@@ -29,7 +29,18 @@ export const buildRealtimeSourceDisplay = (
     | 'source'
     | 'sourceMasked'
   > &
-    Partial<Pick<MonitoringEventRow, 'clientIp' | 'userAgent' | 'xForwardedFor'>>,
+    Partial<
+      Pick<
+        MonitoringEventRow,
+        | 'clientIp'
+        | 'userAgent'
+        | 'xForwardedFor'
+        | 'sessionId'
+        | 'parentSessionId'
+        | 'generate'
+        | 'stream'
+      >
+    >,
   t: TFunction,
   accountDisplayMode: AccountDisplayMode = 'masked'
 ) => {
@@ -93,6 +104,10 @@ export const buildRealtimeSourceDisplay = (
   const clientIp = row.clientIp?.trim() || '';
   const xForwardedFor = row.xForwardedFor?.trim() || '';
   const userAgent = row.userAgent?.trim() || '';
+  const sessionId = row.sessionId?.trim() || '';
+  const parentSessionId = row.parentSessionId?.trim() || '';
+  const generateText = typeof row.generate === 'boolean' ? (row.generate ? 'Yes' : 'No') : '';
+  const streamText = typeof row.stream === 'boolean' ? (row.stream ? 'Yes' : 'No') : '';
   const requestMetadata =
     accountDisplayMode === 'full'
       ? [
@@ -104,6 +119,18 @@ export const buildRealtimeSourceDisplay = (
             : '',
           hasReadableRealtimeValue(userAgent)
             ? `${t('monitoring.user_agent')}: ${userAgent}`
+            : '',
+          hasReadableRealtimeValue(sessionId)
+            ? `Session: ${sessionId}`
+            : '',
+          hasReadableRealtimeValue(parentSessionId)
+            ? `Parent Session: ${parentSessionId}`
+            : '',
+          hasReadableRealtimeValue(generateText)
+            ? `Generate: ${generateText}`
+            : '',
+          hasReadableRealtimeValue(streamText)
+            ? `Stream: ${streamText}`
             : '',
         ]
       : [];

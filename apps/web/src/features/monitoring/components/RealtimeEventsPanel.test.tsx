@@ -81,6 +81,10 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.this_call_cost': 'Cost',
     'monitoring.this_call_usage': 'Usage',
     'monitoring.ttft_short': 'TTFT',
+    'monitoring.model_mismatch': '模型不一致',
+    'monitoring.requested_model': '请求模型',
+    'monitoring.resolved_model': '路由模型',
+    'monitoring.response_model': '响应模型',
   };
   let message = messages[key] ?? key;
   if (options) {
@@ -423,7 +427,7 @@ describe('RealtimeEventsPanel', () => {
       'title="deepseek-v4-flash(max)\nresolved-deepseek-v4-flash"'
     );
     expect(markup.indexOf('>deepseek-v4-flash(max)</span>')).toBeLessThan(
-      markup.indexOf('>resolved-deepseek-v4-flash</small>')
+      markup.indexOf('>→ resolved-deepseek-v4-flash</small>')
     );
     expect(markup).not.toContain('>deepseek-v4-flash</span>');
   });
@@ -440,7 +444,139 @@ describe('RealtimeEventsPanel', () => {
 
     expect(markup).toContain(`title="${model}"`);
     expect(markup).toContain(`>${model}</span>`);
-    expect(markup).not.toContain(`>${model}</small>`);
+    expect(markup).not.toContain('realtimeModelRoutedText');
+  });
+
+  describe('model column presentation states (Section 31)', () => {
+    it('State 1: requested model only (resolved matches requested, responseModel empty)', () => {
+      const markup = renderPanel(
+        baseRow({
+          model: 'gpt-4o',
+          requestedModel: 'gpt-4o',
+          resolvedModel: 'gpt-4o',
+        })
+      );
+      expect(markup).toContain('title="gpt-4o"');
+      expect(markup).toContain('>gpt-4o</span>');
+      expect(markup).not.toContain('realtimeModelRoutedText');
+      expect(markup).not.toContain('realtimeModelResponseLine');
+      expect(markup).not.toContain('realtimeModelMismatchBadge');
+    });
+
+    it('State 2: requested and resolved model differ, responseModel empty', () => {
+      const markup = renderPanel(
+        baseRow({
+          model: 'gpt-4o',
+          requestedModel: 'gpt-4o',
+          resolvedModel: 'gpt-4o-2024-08-06',
+        })
+      );
+      expect(markup).toContain('title="gpt-4o\ngpt-4o-2024-08-06"');
+      expect(markup).toContain('>gpt-4o</span>');
+      expect(markup).toContain('>→ gpt-4o-2024-08-06</small>');
+      expect(markup).not.toContain('realtimeModelResponseLine');
+      expect(markup).not.toContain('realtimeModelMismatchBadge');
+    });
+
+    it('State 3: all three models differ (requested != resolved != response)', () => {
+      const markup = renderPanel(
+        baseRow({
+          model: 'gpt-4o',
+          requestedModel: 'gpt-4o',
+          resolvedModel: 'gpt-4o-2024-08-06',
+          responseModel: 'gpt-4o-mini',
+        })
+      );
+      expect(markup).toContain(
+        'title="gpt-4o\ngpt-4o-2024-08-06\ngpt-4o-mini (模型不一致)"'
+      );
+      expect(markup).toContain('>gpt-4o</span>');
+      expect(markup).toContain('>→ gpt-4o-2024-08-06</small>');
+      expect(markup).toContain('>↳ gpt-4o-mini</small>');
+      expect(markup).toContain('realtimeModelMismatchBadge');
+      expect(markup).toContain('模型不一致');
+    });
+
+    it('State 4: requested == resolved, but responseModel differs (mismatch without routed line)', () => {
+      const markup = renderPanel(
+        baseRow({
+          model: 'claude-3-5-sonnet',
+          requestedModel: 'claude-3-5-sonnet',
+          resolvedModel: 'claude-3-5-sonnet',
+          responseModel: 'claude-3-haiku',
+        })
+      );
+      expect(markup).toContain(
+        'title="claude-3-5-sonnet\nclaude-3-haiku (模型不一致)"'
+      );
+      expect(markup).toContain('>claude-3-5-sonnet</span>');
+      expect(markup).not.toContain('realtimeModelRoutedText');
+      expect(markup).toContain('>↳ claude-3-haiku</small>');
+      expect(markup).toContain('realtimeModelMismatchBadge');
+    });
+
+    it('State 5: requested != resolved, but responseModel matches resolved (no mismatch)', () => {
+      const markup = renderPanel(
+        baseRow({
+          model: 'gpt-4o',
+          requestedModel: 'gpt-4o',
+          resolvedModel: 'gpt-4o-2024-08-06',
+          responseModel: 'gpt-4o-2024-08-06',
+        })
+      );
+      expect(markup).toContain('title="gpt-4o\ngpt-4o-2024-08-06"');
+      expect(markup).toContain('>gpt-4o</span>');
+      expect(markup).toContain('>→ gpt-4o-2024-08-06</small>');
+      expect(markup).not.toContain('realtimeModelResponseLine');
+      expect(markup).not.toContain('realtimeModelMismatchBadge');
+    });
+
+    it('State 6: requested == responseModel != resolved (resolved diverted, response reverted)', () => {
+      const markup = renderPanel(
+        baseRow({
+          model: 'gpt-4o',
+          requestedModel: 'gpt-4o',
+          resolvedModel: 'gpt-4o-azure',
+          responseModel: 'gpt-4o',
+        })
+      );
+      expect(markup).toContain('title="gpt-4o\ngpt-4o-azure\ngpt-4o (模型不一致)"');
+      expect(markup).toContain('>gpt-4o</span>');
+      expect(markup).toContain('>→ gpt-4o-azure</small>');
+      expect(markup).toContain('>↳ gpt-4o</small>');
+      expect(markup).toContain('realtimeModelMismatchBadge');
+    });
+
+    it('State 7: failed request orthogonal styling with model mismatch badge', () => {
+      const markup = renderPanel(
+        baseRow({
+          model: 'deepseek-chat',
+          requestedModel: 'deepseek-chat',
+          resolvedModel: 'deepseek-v3',
+          responseModel: 'deepseek-v2.5',
+          failed: true,
+        })
+      );
+      expect(markup).toContain('logRowFailed');
+      expect(markup).toContain('realtimeModelMismatchBadge');
+      expect(markup).toContain('>↳ deepseek-v2.5</small>');
+    });
+
+    it('State 8: legacy payload with missing responseModel degrades cleanly', () => {
+      const markup = renderPanel(
+        baseRow({
+          model: 'gpt-3.5-turbo',
+          requestedModel: 'gpt-3.5-turbo',
+          resolvedModel: 'gpt-3.5-turbo-0125',
+          responseModel: undefined,
+        })
+      );
+      expect(markup).toContain('title="gpt-3.5-turbo\ngpt-3.5-turbo-0125"');
+      expect(markup).toContain('>gpt-3.5-turbo</span>');
+      expect(markup).toContain('>→ gpt-3.5-turbo-0125</small>');
+      expect(markup).not.toContain('realtimeModelResponseLine');
+      expect(markup).not.toContain('realtimeModelMismatchBadge');
+    });
   });
 
   it('switches realtime source labels between masked and full display', () => {

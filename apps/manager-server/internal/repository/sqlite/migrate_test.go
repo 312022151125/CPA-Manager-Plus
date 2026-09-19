@@ -3576,7 +3576,13 @@ func TestEnsureUsageEventSnapshotColumnsOnlyMigratesSchema(t *testing.T) {
 		!columns["normalized_total_input_tokens"] ||
 		!columns["client_ip"] ||
 		!columns["x_forwarded_for"] ||
-		!columns["user_agent"] {
+		!columns["user_agent"] ||
+		!columns["response_model"] ||
+		!columns["session_id"] ||
+		!columns["parent_session_id"] ||
+		!columns["access_token_sha256"] ||
+		!columns["generate"] ||
+		!columns["stream"] {
 		t.Fatalf("usage event schema columns = %#v", columns)
 	}
 	assertTableCount(t, db, "usage_account_model_rollups", 1)
