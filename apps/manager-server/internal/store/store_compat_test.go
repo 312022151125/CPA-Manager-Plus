@@ -47,6 +47,20 @@ func TestStoreCompatModelPricesAcceptsNumericConfiguredFlagStorage(t *testing.T)
 		t.Fatalf("seed service tier REAL configured flag: %v", err)
 	}
 
+	for name, query := range map[string]string{
+		"base":         `select typeof(cache_read_configured) from model_prices where model = 'legacy-model'`,
+		"context tier": `select typeof(cache_read_configured) from model_price_context_tiers where model = 'legacy-model'`,
+		"service tier": `select typeof(cache_read_configured) from model_price_service_tiers where model = 'legacy-model'`,
+	} {
+		var storageType string
+		if err := db.db.QueryRow(query).Scan(&storageType); err != nil {
+			t.Fatalf("read %s configured flag storage type: %v", name, err)
+		}
+		if storageType != "real" {
+			t.Fatalf("%s configured flag storage type = %q, want real", name, storageType)
+		}
+	}
+
 	prices, err := db.LoadModelPrices(context.Background())
 	if err != nil {
 		t.Fatalf("load model prices with REAL configured flags: %v", err)
