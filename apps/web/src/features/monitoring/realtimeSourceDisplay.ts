@@ -106,8 +106,10 @@ export const buildRealtimeSourceDisplay = (
   const userAgent = row.userAgent?.trim() || '';
   const sessionId = row.sessionId?.trim() || '';
   const parentSessionId = row.parentSessionId?.trim() || '';
-  const generateText = typeof row.generate === 'boolean' ? (row.generate ? 'Yes' : 'No') : '';
-  const streamText = typeof row.stream === 'boolean' ? (row.stream ? 'Yes' : 'No') : '';
+  const generateText =
+    typeof row.generate === 'boolean' ? t(row.generate ? 'common.yes' : 'common.no') : '';
+  const streamText =
+    typeof row.stream === 'boolean' ? t(row.stream ? 'common.yes' : 'common.no') : '';
   const requestMetadata =
     accountDisplayMode === 'full'
       ? [
@@ -121,16 +123,16 @@ export const buildRealtimeSourceDisplay = (
             ? `${t('monitoring.user_agent')}: ${userAgent}`
             : '',
           hasReadableRealtimeValue(sessionId)
-            ? `Session: ${sessionId}`
+            ? `${t('monitoring.session_id')}: ${sessionId}`
             : '',
           hasReadableRealtimeValue(parentSessionId)
-            ? `Parent Session: ${parentSessionId}`
+            ? `${t('monitoring.parent_session_id')}: ${parentSessionId}`
             : '',
           hasReadableRealtimeValue(generateText)
-            ? `Generate: ${generateText}`
+            ? `${t('monitoring.generate')}: ${generateText}`
             : '',
           hasReadableRealtimeValue(streamText)
-            ? `Stream: ${streamText}`
+            ? `${t('monitoring.stream')}: ${streamText}`
             : '',
         ]
       : [];

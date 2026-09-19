@@ -3594,6 +3594,17 @@ func TestEnsureUsageEventSnapshotColumnsOnlyMigratesSchema(t *testing.T) {
 	if normalizedTotal.Valid {
 		t.Fatalf("schema migration unexpectedly backfilled normalized total: %d", normalizedTotal.Int64)
 	}
+	var generateCol sql.NullInt64
+	var streamCol sql.NullInt64
+	if err := db.QueryRow(`select generate, stream from usage_events where id = 1`).Scan(&generateCol, &streamCol); err != nil {
+		t.Fatalf("read migrated generate/stream columns: %v", err)
+	}
+	if generateCol.Valid {
+		t.Fatalf("legacy usage event unexpectedly backfilled generate: %d (want NULL)", generateCol.Int64)
+	}
+	if streamCol.Valid {
+		t.Fatalf("legacy usage event unexpectedly backfilled stream: %d (want NULL)", streamCol.Int64)
+	}
 }
 
 func TestEnsureModelPriceColumnsPreservesLegacyZeroBasePrices(t *testing.T) {

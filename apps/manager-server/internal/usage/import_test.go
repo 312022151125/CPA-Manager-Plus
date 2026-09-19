@@ -1174,3 +1174,55 @@ func TestParseImportPayloadRoundTripsRequestMetadataFields(t *testing.T) {
 		t.Errorf("Stream = %v, want false", imported.Stream)
 	}
 }
+
+func TestParseImportPayloadJSONLRoundTripsFalseBooleans(t *testing.T) {
+	gen := false
+	stream := false
+	original := Event{
+		Timestamp:          "2026-08-12T10:00:00Z",
+		TimestampMS:        1_755_000_000_000,
+		Endpoint:           "POST /v1/chat/completions",
+		Model:              "gpt-4o",
+		RequestedModel:     "gpt-4o",
+		ResolvedModel:      "gpt-4o-2024-08-06",
+		ResponseModel:      "gpt-4o-mini",
+		SessionID:          "sess-test-false",
+		ParentSessionID:    "parent-sess-false",
+		AccessTokenSHA256:  "sha256-test-hash",
+		Generate:           &gen,
+		Stream:             &stream,
+		TotalTokens:        1,
+	}
+
+	line, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal original event: %v", err)
+	}
+
+	result, err := ParseImportPayload(line)
+	if err != nil {
+		t.Fatalf("parse JSONL import payload: %v", err)
+	}
+	if result.Format != ImportFormatJSONL || len(result.Events) != 1 {
+		t.Fatalf("result format=%q, count=%d", result.Format, len(result.Events))
+	}
+	imported := result.Events[0]
+	if imported.Generate == nil {
+		t.Fatal("Generate is nil, want explicit false")
+	}
+	if *imported.Generate != false {
+		t.Fatalf("Generate = %v, want false", *imported.Generate)
+	}
+	if imported.Stream == nil {
+		t.Fatal("Stream is nil, want explicit false")
+	}
+	if *imported.Stream != false {
+		t.Fatalf("Stream = %v, want false", *imported.Stream)
+	}
+	if imported.ResponseModel != original.ResponseModel ||
+		imported.SessionID != original.SessionID ||
+		imported.ParentSessionID != original.ParentSessionID ||
+		imported.AccessTokenSHA256 != original.AccessTokenSHA256 {
+		t.Fatalf("imported fields mismatch: %+v", imported)
+	}
+}

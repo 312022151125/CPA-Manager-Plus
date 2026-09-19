@@ -865,36 +865,57 @@ func TestWriteExportJSONLAndCompatibleUsagePreserveRequestMetadata(t *testing.T)
 	t.Cleanup(func() { _ = db.Close() })
 	repo := New(db)
 
-	gen := true
-	stream := false
+	genFalse := false
+	streamFalse := false
 	event := streamTestEvent("stream-meta-test", 100, "POST /v1/chat/completions", "gpt-4o")
 	event.ResponseModel = "gpt-4o-mini"
 	event.SessionID = "sess-export-1"
 	event.ParentSessionID = "parent-export-1"
 	event.AccessTokenSHA256 = "sha256-export-hash"
-	event.Generate = &gen
-	event.Stream = &stream
+	event.Generate = &genFalse
+	event.Stream = &streamFalse
 
 	if _, err := repo.InsertBatch(context.Background(), []usage.Event{event}); err != nil {
 		t.Fatalf("insert event: %v", err)
 	}
 
-	// 1. Verify JSONL export stream
+	// 1. Verify JSONL export stream through real JSONL import parsing
 	var jsonlBuf bytes.Buffer
 	if err := repo.WriteExportJSONL(context.Background(), &jsonlBuf, 10); err != nil {
 		t.Fatalf("write export JSONL: %v", err)
 	}
-	var exported usage.Event
-	if err := json.Unmarshal(bytes.TrimSpace(jsonlBuf.Bytes()), &exported); err != nil {
-		t.Fatalf("unmarshal exported JSONL: %v", err)
+
+	importResult, err := usage.ParseImportPayload(jsonlBuf.Bytes())
+	if err != nil {
+		t.Fatalf("parse imported JSONL: %v", err)
 	}
-	if exported.ResponseModel != event.ResponseModel ||
-		exported.SessionID != event.SessionID ||
-		exported.ParentSessionID != event.ParentSessionID ||
-		exported.AccessTokenSHA256 != event.AccessTokenSHA256 ||
-		exported.Generate == nil || *exported.Generate != true ||
-		exported.Stream == nil || *exported.Stream != false {
-		t.Fatalf("exported JSONL metadata mismatch: %+v", exported)
+	if importResult.Format != usage.ImportFormatJSONL || len(importResult.Events) != 1 {
+		t.Fatalf("unexpected import result: format=%q, count=%d", importResult.Format, len(importResult.Events))
+	}
+	exported := importResult.Events[0]
+	if exported.ResponseModel != event.ResponseModel {
+		t.Fatalf("ResponseModel mismatch: got %q, want %q", exported.ResponseModel, event.ResponseModel)
+	}
+	if exported.SessionID != event.SessionID {
+		t.Fatalf("SessionID mismatch: got %q, want %q", exported.SessionID, event.SessionID)
+	}
+	if exported.ParentSessionID != event.ParentSessionID {
+		t.Fatalf("ParentSessionID mismatch: got %q, want %q", exported.ParentSessionID, event.ParentSessionID)
+	}
+	if exported.AccessTokenSHA256 != event.AccessTokenSHA256 {
+		t.Fatalf("AccessTokenSHA256 mismatch: got %q, want %q", exported.AccessTokenSHA256, event.AccessTokenSHA256)
+	}
+	if exported.Generate == nil {
+		t.Fatal("Generate is nil; false presence must not be dropped by omitempty or parser")
+	}
+	if *exported.Generate != false {
+		t.Fatalf("Generate = %v, want false", *exported.Generate)
+	}
+	if exported.Stream == nil {
+		t.Fatal("Stream is nil; false presence must not be dropped by omitempty or parser")
+	}
+	if *exported.Stream != false {
+		t.Fatalf("Stream = %v, want false", *exported.Stream)
 	}
 
 	// 2. Verify compatible usage stream
@@ -915,7 +936,7 @@ func TestWriteExportJSONLAndCompatibleUsagePreserveRequestMetadata(t *testing.T)
 		compDetail.SessionID != event.SessionID ||
 		compDetail.ParentSessionID != event.ParentSessionID ||
 		compDetail.AccessTokenSHA256 != event.AccessTokenSHA256 ||
-		compDetail.Generate == nil || *compDetail.Generate != true ||
+		compDetail.Generate == nil || *compDetail.Generate != false ||
 		compDetail.Stream == nil || *compDetail.Stream != false {
 		t.Fatalf("compatible detail metadata mismatch: %+v", compDetail)
 	}

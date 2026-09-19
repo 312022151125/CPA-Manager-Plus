@@ -10,8 +10,8 @@ const t = ((key: string, options?: Record<string, unknown>) => {
   const messages: Record<string, string> = {
     'common.loading': 'Loading',
     'common.copy': 'Copy',
-    'common.yes': 'Yes',
-    'common.no': 'No',
+    'common.yes': 'Yes (i18n)',
+    'common.no': 'No (i18n)',
     'monitoring.account_overview_account_display_masked': 'Masked',
     'monitoring.account_overview_account_display_full': 'Full',
     'monitoring.account_overview_show_full_accounts_hint': 'Show full accounts',
@@ -81,10 +81,14 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.this_call_cost': 'Cost',
     'monitoring.this_call_usage': 'Usage',
     'monitoring.ttft_short': 'TTFT',
-    'monitoring.model_mismatch': '模型不一致',
-    'monitoring.requested_model': '请求模型',
-    'monitoring.resolved_model': '路由模型',
-    'monitoring.response_model': '响应模型',
+    'monitoring.model_mismatch': 'Model mismatch',
+    'monitoring.requested_model': 'Requested model',
+    'monitoring.resolved_model': 'Routed model',
+    'monitoring.response_model': 'Response model',
+    'monitoring.session_id': 'Session ID (i18n)',
+    'monitoring.parent_session_id': 'Parent session ID (i18n)',
+    'monitoring.generate': 'Generate (i18n)',
+    'monitoring.stream': 'Stream (i18n)',
   };
   let message = messages[key] ?? key;
   if (options) {
@@ -408,7 +412,7 @@ describe('RealtimeEventsPanel', () => {
       'claude-opus-4-6-thinking-with-a-very-long-provider-routing-suffix-for-realtime-monitoring';
     const markup = renderPanel(baseRow({ model: longModel, resolvedModel: longModel }));
 
-    expect(markup).toContain(`title="${longModel}"`);
+    expect(markup).toContain(`title="Requested model: ${longModel}"`);
     expect(markup).toContain(longModel);
     expect(markup).toMatch(/class="[^"]*realtimeModelCell[^"]*"/);
     expect(markup).toMatch(/class="[^"]*realtimeModelText[^"]*"/);
@@ -424,7 +428,7 @@ describe('RealtimeEventsPanel', () => {
     );
 
     expect(markup).toContain(
-      'title="deepseek-v4-flash(max)\nresolved-deepseek-v4-flash"'
+      'title="Requested model: deepseek-v4-flash(max)\nRouted model: resolved-deepseek-v4-flash"'
     );
     expect(markup.indexOf('>deepseek-v4-flash(max)</span>')).toBeLessThan(
       markup.indexOf('>→ resolved-deepseek-v4-flash</small>')
@@ -442,25 +446,27 @@ describe('RealtimeEventsPanel', () => {
       })
     );
 
-    expect(markup).toContain(`title="${model}"`);
+    expect(markup).toContain(`title="Requested model: ${model}"`);
     expect(markup).toContain(`>${model}</span>`);
     expect(markup).not.toContain('realtimeModelRoutedText');
   });
 
-  describe('model column presentation states (Section 31)', () => {
-    it('State 1: requested model only (resolved matches requested, responseModel empty)', () => {
+  describe('model column presentation states (Section 31 & Case A-D)', () => {
+    it('State 1 / Case A: requested == resolved == response', () => {
       const markup = renderPanel(
         baseRow({
           model: 'gpt-4o',
           requestedModel: 'gpt-4o',
           resolvedModel: 'gpt-4o',
+          responseModel: 'gpt-4o',
         })
       );
-      expect(markup).toContain('title="gpt-4o"');
+      expect(markup).toContain('title="Requested model: gpt-4o"');
       expect(markup).toContain('>gpt-4o</span>');
       expect(markup).not.toContain('realtimeModelRoutedText');
       expect(markup).not.toContain('realtimeModelResponseLine');
       expect(markup).not.toContain('realtimeModelMismatchBadge');
+      expect(markup).not.toContain('Model mismatch');
     });
 
     it('State 2: requested and resolved model differ, responseModel empty', () => {
@@ -471,14 +477,14 @@ describe('RealtimeEventsPanel', () => {
           resolvedModel: 'gpt-4o-2024-08-06',
         })
       );
-      expect(markup).toContain('title="gpt-4o\ngpt-4o-2024-08-06"');
+      expect(markup).toContain('title="Requested model: gpt-4o\nRouted model: gpt-4o-2024-08-06"');
       expect(markup).toContain('>gpt-4o</span>');
       expect(markup).toContain('>→ gpt-4o-2024-08-06</small>');
       expect(markup).not.toContain('realtimeModelResponseLine');
       expect(markup).not.toContain('realtimeModelMismatchBadge');
     });
 
-    it('State 3: all three models differ (requested != resolved != response)', () => {
+    it('State 3 / Case C: all three models differ (requested != resolved != response)', () => {
       const markup = renderPanel(
         baseRow({
           model: 'gpt-4o',
@@ -488,13 +494,13 @@ describe('RealtimeEventsPanel', () => {
         })
       );
       expect(markup).toContain(
-        'title="gpt-4o\ngpt-4o-2024-08-06\ngpt-4o-mini (模型不一致)"'
+        'title="Requested model: gpt-4o\nRouted model: gpt-4o-2024-08-06\nResponse model: gpt-4o-mini\nModel mismatch"'
       );
       expect(markup).toContain('>gpt-4o</span>');
       expect(markup).toContain('>→ gpt-4o-2024-08-06</small>');
       expect(markup).toContain('>↳ gpt-4o-mini</small>');
       expect(markup).toContain('realtimeModelMismatchBadge');
-      expect(markup).toContain('模型不一致');
+      expect(markup).toContain('Model mismatch');
     });
 
     it('State 4: requested == resolved, but responseModel differs (mismatch without routed line)', () => {
@@ -507,7 +513,7 @@ describe('RealtimeEventsPanel', () => {
         })
       );
       expect(markup).toContain(
-        'title="claude-3-5-sonnet\nclaude-3-haiku (模型不一致)"'
+        'title="Requested model: claude-3-5-sonnet\nResponse model: claude-3-haiku\nModel mismatch"'
       );
       expect(markup).toContain('>claude-3-5-sonnet</span>');
       expect(markup).not.toContain('realtimeModelRoutedText');
@@ -515,7 +521,7 @@ describe('RealtimeEventsPanel', () => {
       expect(markup).toContain('realtimeModelMismatchBadge');
     });
 
-    it('State 5: requested != resolved, but responseModel matches resolved (no mismatch)', () => {
+    it('State 5 / Case B: requested != resolved, but responseModel matches resolved (no mismatch)', () => {
       const markup = renderPanel(
         baseRow({
           model: 'gpt-4o',
@@ -524,11 +530,12 @@ describe('RealtimeEventsPanel', () => {
           responseModel: 'gpt-4o-2024-08-06',
         })
       );
-      expect(markup).toContain('title="gpt-4o\ngpt-4o-2024-08-06"');
+      expect(markup).toContain('title="Requested model: gpt-4o\nRouted model: gpt-4o-2024-08-06"');
       expect(markup).toContain('>gpt-4o</span>');
       expect(markup).toContain('>→ gpt-4o-2024-08-06</small>');
       expect(markup).not.toContain('realtimeModelResponseLine');
       expect(markup).not.toContain('realtimeModelMismatchBadge');
+      expect(markup).not.toContain('Model mismatch');
     });
 
     it('State 6: requested == responseModel != resolved (resolved diverted, response reverted)', () => {
@@ -540,7 +547,9 @@ describe('RealtimeEventsPanel', () => {
           responseModel: 'gpt-4o',
         })
       );
-      expect(markup).toContain('title="gpt-4o\ngpt-4o-azure\ngpt-4o (模型不一致)"');
+      expect(markup).toContain(
+        'title="Requested model: gpt-4o\nRouted model: gpt-4o-azure\nResponse model: gpt-4o\nModel mismatch"'
+      );
       expect(markup).toContain('>gpt-4o</span>');
       expect(markup).toContain('>→ gpt-4o-azure</small>');
       expect(markup).toContain('>↳ gpt-4o</small>');
@@ -560,6 +569,9 @@ describe('RealtimeEventsPanel', () => {
       expect(markup).toContain('logRowFailed');
       expect(markup).toContain('realtimeModelMismatchBadge');
       expect(markup).toContain('>↳ deepseek-v2.5</small>');
+      expect(markup).toContain(
+        'title="Requested model: deepseek-chat\nRouted model: deepseek-v3\nResponse model: deepseek-v2.5\nModel mismatch"'
+      );
     });
 
     it('State 8: legacy payload with missing responseModel degrades cleanly', () => {
@@ -571,11 +583,28 @@ describe('RealtimeEventsPanel', () => {
           responseModel: undefined,
         })
       );
-      expect(markup).toContain('title="gpt-3.5-turbo\ngpt-3.5-turbo-0125"');
+      expect(markup).toContain('title="Requested model: gpt-3.5-turbo\nRouted model: gpt-3.5-turbo-0125"');
       expect(markup).toContain('>gpt-3.5-turbo</span>');
       expect(markup).toContain('>→ gpt-3.5-turbo-0125</small>');
       expect(markup).not.toContain('realtimeModelResponseLine');
       expect(markup).not.toContain('realtimeModelMismatchBadge');
+    });
+
+    it('Case D: resolved is empty and response is present (diagnostic response in tooltip, no mismatch)', () => {
+      const markup = renderPanel(
+        baseRow({
+          model: 'gpt-5.6-sol',
+          requestedModel: 'gpt-5.6-sol',
+          resolvedModel: '',
+          responseModel: 'gpt-5.6-sol',
+        })
+      );
+      expect(markup).toContain('title="Requested model: gpt-5.6-sol\nResponse model: gpt-5.6-sol"');
+      expect(markup).toContain('>gpt-5.6-sol</span>');
+      expect(markup).not.toContain('realtimeModelRoutedText');
+      expect(markup).not.toContain('realtimeModelResponseLine');
+      expect(markup).not.toContain('realtimeModelMismatchBadge');
+      expect(markup).not.toContain('Model mismatch');
     });
   });
 
@@ -642,6 +671,26 @@ describe('RealtimeEventsPanel', () => {
       'Forwarded chain (unverified): 203.0.113.5, 198.51.100.8'
     );
     expect(fullMarkup).toContain('User-Agent: test-client/1.0');
+  });
+
+  it('formats request metadata fields using i18n translation functions in full mode', () => {
+    const row = baseRow({
+      clientIp: '192.0.2.10',
+      sessionId: 'sess-98765',
+      parentSessionId: 'parent-sess-43210',
+      generate: true,
+      stream: false,
+    });
+    const maskedMarkup = renderPanel(row);
+    const fullMarkup = renderPanel(row, { accountDisplayMode: 'full' });
+
+    expect(maskedMarkup).not.toContain('sess-98765');
+    expect(maskedMarkup).not.toContain('parent-sess-43210');
+
+    expect(fullMarkup).toContain('Session ID (i18n): sess-98765');
+    expect(fullMarkup).toContain('Parent session ID (i18n): parent-sess-43210');
+    expect(fullMarkup).toContain('Generate (i18n): Yes (i18n)');
+    expect(fullMarkup).toContain('Stream (i18n): No (i18n)');
   });
 
   it('renders a ttft placeholder when ttft is missing', () => {
