@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	usageaggregaterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageaggregate"
@@ -646,23 +647,26 @@ func TestUsageCacheAccountingRejectsUnknownState(t *testing.T) {
 }
 
 type accountingFixture struct {
-	Hash             string
-	Provider         string
-	Executor         string
-	Model            string
-	RawJSON          string
-	Input            int64
-	Output           int64
-	Reasoning        int64
-	Cached           int64
-	CacheRead        int64
-	CacheCreation    int64
-	StoredMode       string
-	StoredUncached   int64
-	StoredTotalInput int64
-	StoredRead       int64
-	StoredCreation   int64
-	Total            int64
+	Hash                 string
+	Provider             string
+	Executor             string
+	AuthProviderSnapshot string
+	ResolvedModel        string
+	RequestedModel       string
+	Model                string
+	RawJSON              string
+	Input                int64
+	Output               int64
+	Reasoning            int64
+	Cached               int64
+	CacheRead            int64
+	CacheCreation        int64
+	StoredMode           string
+	StoredUncached       int64
+	StoredTotalInput     int64
+	StoredRead           int64
+	StoredCreation       int64
+	Total                int64
 }
 
 func openMigrationTestDB(t *testing.T) *sql.DB {
@@ -688,16 +692,20 @@ func insertLegacyUsageEvent(t *testing.T, db *sql.DB, hash, provider, executor, 
 func insertAccountingEvent(t *testing.T, db *sql.DB, fixture accountingFixture) {
 	t.Helper()
 	if _, err := db.Exec(`insert into usage_events (
-		event_hash, timestamp_ms, timestamp, provider, executor_type, model,
+		event_hash, timestamp_ms, timestamp, provider, executor_type, auth_provider_snapshot,
+		resolved_model, requested_model, model,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens,
 		cache_read_tokens, cache_creation_tokens, cache_input_mode,
 		normalized_uncached_input_tokens, normalized_total_input_tokens,
 		normalized_cache_read_tokens, normalized_cache_creation_tokens,
 		total_tokens, raw_json, created_at_ms
-	) values (?, 1, '1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+	) values (?, 1, '1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		fixture.Hash,
 		fixture.Provider,
 		fixture.Executor,
+		fixture.AuthProviderSnapshot,
+		fixture.ResolvedModel,
+		fixture.RequestedModel,
 		fixture.Model,
 		fixture.Input,
 		fixture.Output,
@@ -1289,3 +1297,175 @@ func TestUsageCacheAccountingSemanticsRevision18_6_DerivedRebuild(t *testing.T) 
 	assertCheckpoint(t, db, "dashboard_hourly", 0)
 	assertCount(t, db, "usage_rollup_rebuild_state", 2)
 }
+
+func TestUsageCacheAccountingSemanticsRevision18_7_ActiveStatePersistsRevisionWithoutDevinData(t *testing.T) {
+	statuses := []struct {
+		name        string
+		status      string
+		appliedRows int64
+	}{
+		{name: "running applied 0", status: StatusRunning, appliedRows: 0},
+		{name: "running applied non-zero", status: StatusRunning, appliedRows: 5},
+		{name: "pending", status: StatusPending, appliedRows: 0},
+		{name: "applying", status: StatusApplying, appliedRows: 2},
+		{name: "clearing", status: StatusClearing, appliedRows: 2},
+	}
+
+	for _, tc := range statuses {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openMigrationTestDB(t)
+
+			// 数据库中无任何 Devin cache row，只有常规 OpenAI 记录
+			insertAccountingEvent(t, db, accountingFixture{
+				Hash:             "openai-normal",
+				Provider:         "openai",
+				Executor:         "OpenAICompatExecutor",
+				Model:            "gpt-5",
+				Input:            100,
+				CacheRead:        20,
+				Cached:           20,
+				StoredMode:       "included_in_input",
+				StoredUncached:   80,
+				StoredTotalInput: 100,
+				StoredRead:       20,
+				Total:            100,
+				RawJSON:          `{"tokens":{"input_tokens":100,"cache_read_tokens":20,"total_tokens":100}}`,
+			})
+
+			// 模拟 migration 处于活跃状态，且 revision 尚未设置
+			nowMS := time.Now().UnixMilli()
+			if _, err := db.Exec(`update usage_data_migrations set
+				status = ?, last_event_id = 1, target_event_id = 10,
+				processed_rows = 5, changed_rows = 5, applied_rows = ?,
+				updated_at_ms = ?
+			where name = ?`, tc.status, tc.appliedRows, nowMS, UsageCacheAccountingMigrationName); err != nil {
+				t.Fatalf("setup active migration state: %v", err)
+			}
+			if _, err := db.Exec(`delete from settings where key = ?`, UsageCacheAccountingSemanticsRevisionKey); err != nil {
+				t.Fatalf("clear revision setting: %v", err)
+			}
+
+			repo := New(db)
+			state, err := repo.DiscoverUsageCacheAccounting(context.Background())
+			if err != nil {
+				t.Fatalf("discover migration: %v", err)
+			}
+			if state.Status != tc.status {
+				t.Fatalf("state.Status = %q, want %q", state.Status, tc.status)
+			}
+
+			// 验证 revision 确实在事务提交后持久化（不是仅在当前未提交的事务中可见）
+			assertRevision(t, db, "2")
+
+			// 再次调用 Discover，确认状态依然保持当前 active 状态，不被重置
+			state2, err := repo.DiscoverUsageCacheAccounting(context.Background())
+			if err != nil {
+				t.Fatalf("second discover: %v", err)
+			}
+			if state2.Status != tc.status {
+				t.Fatalf("second state.Status = %q, want %q", state2.Status, tc.status)
+			}
+		})
+	}
+}
+
+func TestUsageCacheAccountingSemanticsRevision18_8_HistoricalDevinPredicates(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture accountingFixture
+	}{
+		{
+			name: "provider prefix with custom suffix",
+			fixture: accountingFixture{
+				Hash:             "devin-provider-prefix",
+				Provider:         "devin/custom",
+				Executor:         "",
+				Model:            "claude-fable-5-1",
+				Input:            200,
+				CacheRead:        50,
+				Cached:           50,
+				StoredMode:       "separate_from_input",
+				StoredUncached:   200,
+				StoredTotalInput: 250,
+				StoredRead:       50,
+				Total:            200,
+				RawJSON:          `{"tokens":{"input_tokens":200,"cached_tokens":50,"cache_read_tokens":50,"total_tokens":200}}`,
+			},
+		},
+		{
+			name: "resolved model exact devin",
+			fixture: accountingFixture{
+				Hash:             "devin-model-exact",
+				Provider:         "",
+				Executor:         "",
+				ResolvedModel:    "devin",
+				Model:            "devin",
+				Input:            300,
+				CacheRead:        100,
+				Cached:           100,
+				StoredMode:       "separate_from_input",
+				StoredUncached:   300,
+				StoredTotalInput: 400,
+				StoredRead:       100,
+				Total:            300,
+				RawJSON:          `{"tokens":{"input_tokens":300,"cached_tokens":100,"cache_read_tokens":100,"total_tokens":300}}`,
+			},
+		},
+		{
+			name: "auth provider snapshot prefix",
+			fixture: accountingFixture{
+				Hash:                 "devin-auth-snapshot-prefix",
+				Provider:             "",
+				AuthProviderSnapshot: "devin/oauth",
+				Executor:             "",
+				Model:                "some-model",
+				Input:                150,
+				CacheRead:            30,
+				Cached:               30,
+				StoredMode:           "separate_from_input",
+				StoredUncached:       150,
+				StoredTotalInput:     180,
+				StoredRead:           30,
+				Total:                150,
+				RawJSON:              `{"tokens":{"input_tokens":150,"cached_tokens":30,"cache_read_tokens":30,"total_tokens":150}}`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openMigrationTestDB(t)
+			markMigrationCompleted(t, db)
+
+			// 插入该历史 Devin event
+			insertAccountingEvent(t, db, tt.fixture)
+
+			// 此时 revision 尚未设为 2
+			if _, err := db.Exec(`delete from settings where key = ?`, UsageCacheAccountingSemanticsRevisionKey); err != nil {
+				t.Fatalf("clear revision: %v", err)
+			}
+
+			repo := New(db)
+			// Discover 必须识别为 affected Devin row，并触发重新扫描（从 discovering -> pending）
+			state, err := repo.DiscoverUsageCacheAccounting(context.Background())
+			if err != nil {
+				t.Fatalf("discover: %v", err)
+			}
+			if state.Status != StatusPending || state.TargetEventID != 1 {
+				t.Fatalf("state = %#v, want pending target=1", state)
+			}
+
+			// 执行至完成
+			runUsageCacheAccountingToCompletion(t, repo, 10)
+			assertAccounting(t, db, tt.fixture.Hash, "read_included_creation_separate",
+				tt.fixture.Input-tt.fixture.CacheRead,
+				tt.fixture.Input,
+				tt.fixture.CacheRead,
+				0,
+				tt.fixture.Total,
+			)
+			assertRevision(t, db, "2")
+		})
+	}
+}
+

@@ -124,7 +124,8 @@ func (r *repository) DiscoverUsageCacheAccounting(ctx context.Context) (State, e
 	if err != nil {
 		return State{}, err
 	}
-	if err := reconcileSemanticsRevisionInTx(ctx, tx, &state); err != nil {
+	semanticsChanged, err := reconcileSemanticsRevisionInTx(ctx, tx, &state)
+	if err != nil {
 		return State{}, err
 	}
 	if state.Status == StatusFailed {
@@ -165,6 +166,11 @@ func (r *repository) DiscoverUsageCacheAccounting(ctx context.Context) (State, e
 	}
 	if state.Status == StatusPending || state.Status == StatusRunning ||
 		state.Status == StatusApplying || state.Status == StatusClearing {
+		if semanticsChanged {
+			if err := tx.Commit(); err != nil {
+				return State{}, err
+			}
+		}
 		return state, nil
 	}
 	if state.Status != StatusDiscovering {
@@ -890,18 +896,18 @@ func derivedRebuildStatus(latestEventID int64) string {
 	return "pending"
 }
 
-func reconcileSemanticsRevisionInTx(ctx context.Context, tx *sql.Tx, state *State) error {
+func reconcileSemanticsRevisionInTx(ctx context.Context, tx *sql.Tx, state *State) (bool, error) {
 	var revisionStr string
 	var currentRevision int
 	err := tx.QueryRowContext(ctx, `select value from settings where key = ?`, UsageCacheAccountingSemanticsRevisionKey).Scan(&revisionStr)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+		return false, err
 	}
 	if err == nil {
 		currentRevision, _ = strconv.Atoi(strings.TrimSpace(revisionStr))
 	}
 	if currentRevision >= CurrentUsageCacheAccountingSemanticsRevision {
-		return nil
+		return false, nil
 	}
 
 	var hasAffectedDevinRow bool
@@ -915,15 +921,20 @@ func reconcileSemanticsRevisionInTx(ctx context.Context, tx *sql.Tx, state *Stat
 		) and (
 			lower(trim(coalesce(executor_type, ''))) = 'devinexecutor'
 			or lower(trim(coalesce(provider, ''))) = 'devin'
+			or lower(trim(coalesce(provider, ''))) like 'devin/%'
 			or lower(trim(coalesce(auth_provider_snapshot, ''))) = 'devin'
+			or lower(trim(coalesce(auth_provider_snapshot, ''))) like 'devin/%'
+			or lower(trim(coalesce(resolved_model, ''))) = 'devin'
 			or lower(trim(coalesce(resolved_model, ''))) like 'devin/%'
+			or lower(trim(coalesce(requested_model, ''))) = 'devin'
 			or lower(trim(coalesce(requested_model, ''))) like 'devin/%'
+			or lower(trim(coalesce(model, ''))) = 'devin'
 			or lower(trim(coalesce(model, ''))) like 'devin/%'
 		)
 		limit 1
 	)`
 	if err := tx.QueryRowContext(ctx, query).Scan(&hasAffectedDevinRow); err != nil {
-		return err
+		return false, err
 	}
 
 	nowMS := time.Now().UnixMilli()
@@ -931,25 +942,25 @@ func reconcileSemanticsRevisionInTx(ctx context.Context, tx *sql.Tx, state *Stat
 		if _, err := tx.ExecContext(ctx, `insert into settings(key, value, updated_at_ms) values (?, ?, ?)
 			on conflict(key) do update set value = excluded.value, updated_at_ms = excluded.updated_at_ms`,
 			UsageCacheAccountingSemanticsRevisionKey, strconv.Itoa(CurrentUsageCacheAccountingSemanticsRevision), nowMS); err != nil {
-			return err
+			return false, err
 		}
-		return nil
+		return true, nil
 	}
 
 	if state.Status == StatusCompleted || (state.AppliedRows == 0 && state.Status != StatusClearing) {
 		if _, err := tx.ExecContext(ctx, `delete from usage_cache_accounting_v2_changes`); err != nil {
-			return err
+			return false, err
 		}
 		if _, err := tx.ExecContext(ctx, `update usage_data_migrations set
 			status = ?, last_event_id = 0, target_event_id = 0, processed_rows = 0, changed_rows = 0, applied_rows = 0,
 			started_at_ms = null, updated_at_ms = ?, finished_at_ms = null, last_error = null
 		where name = ?`, StatusDiscovering, nowMS, UsageCacheAccountingMigrationName); err != nil {
-			return err
+			return false, err
 		}
 		if _, err := tx.ExecContext(ctx, `insert into settings(key, value, updated_at_ms) values (?, ?, ?)
 			on conflict(key) do update set value = excluded.value, updated_at_ms = excluded.updated_at_ms`,
 			UsageCacheAccountingSemanticsRevisionKey, strconv.Itoa(CurrentUsageCacheAccountingSemanticsRevision), nowMS); err != nil {
-			return err
+			return false, err
 		}
 		state.Status = StatusDiscovering
 		state.LastEventID = 0
@@ -961,8 +972,8 @@ func reconcileSemanticsRevisionInTx(ctx context.Context, tx *sql.Tx, state *Stat
 		state.FinishedAtMS = 0
 		state.LastError = ""
 		state.UpdatedAtMS = nowMS
-		return nil
+		return true, nil
 	}
 
-	return nil
+	return false, nil
 }

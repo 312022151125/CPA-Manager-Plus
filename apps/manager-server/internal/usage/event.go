@@ -307,7 +307,7 @@ func classifyExecutorCacheInputMode(executorType string) (string, bool) {
 	if executor == "" {
 		return "", false
 	}
-	if strings.Contains(executor, "devin") {
+	if executor == "devinexecutor" {
 		return CacheInputModeReadIncludedCreationSeparate, true
 	}
 	if strings.Contains(executor, "claude") {

@@ -581,13 +581,38 @@ describe('cache input accounting semantics', () => {
 
   it.each([
     {
+      name: 'Devin executor standalone',
+      context: { executorType: 'DevinExecutor' },
+      mode: 'read_included_creation_separate',
+    },
+    {
       name: 'Devin executor beats Claude alias',
       context: { executorType: 'DevinExecutor', resolvedModel: 'claude-fable-5-1' },
       mode: 'read_included_creation_separate',
     },
     {
+      name: 'SomeDevinLikeExecutor does not match Devin, falls back to Claude',
+      context: { executorType: 'SomeDevinLikeExecutor', resolvedModel: 'claude-fable-5-1' },
+      mode: 'separate_from_input',
+    },
+    {
+      name: 'SomeDevinLikeExecutor does not match Devin, falls back to GPT-5',
+      context: { executorType: 'SomeDevinLikeExecutor', resolvedModel: 'gpt-5' },
+      mode: 'included_in_input',
+    },
+    {
       name: 'Devin provider beats Claude alias',
       context: { provider: 'devin', requestedModel: 'claude-fable-5-1' },
+      mode: 'read_included_creation_separate',
+    },
+    {
+      name: 'Devin provider prefix',
+      context: { provider: 'devin/custom' },
+      mode: 'read_included_creation_separate',
+    },
+    {
+      name: 'Devin exact model',
+      context: { resolvedModel: 'devin' },
       mode: 'read_included_creation_separate',
     },
     {

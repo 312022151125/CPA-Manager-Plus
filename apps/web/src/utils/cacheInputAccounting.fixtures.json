@@ -125,5 +125,20 @@
       "cacheRead": 50,
       "cacheCreation": 14361
     }
+  },
+  {
+    "name": "executor contains devin does not match DevinExecutor",
+    "context": {
+      "executorType": "SomeDevinLikeExecutor",
+      "resolvedModel": "claude-sonnet-4"
+    },
+    "tokens": { "input": 100, "cached": 0, "cache": 0, "read": 20, "creation": 10 },
+    "expected": {
+      "mode": "separate_from_input",
+      "uncached": 100,
+      "totalInput": 130,
+      "cacheRead": 20,
+      "cacheCreation": 10
+    }
   }
 ]

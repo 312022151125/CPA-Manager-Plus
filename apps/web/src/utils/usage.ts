@@ -484,7 +484,7 @@ const normalizeCacheIdentity = (value: unknown): string =>
 const classifyExecutorCacheInputMode = (value: unknown): CacheInputMode | undefined => {
   const executor = normalizeCacheIdentity(value);
   if (!executor) return undefined;
-  if (executor.includes('devin')) return 'read_included_creation_separate';
+  if (executor === 'devinexecutor') return 'read_included_creation_separate';
   if (executor.includes('claude')) return 'separate_from_input';
   if (
     [
