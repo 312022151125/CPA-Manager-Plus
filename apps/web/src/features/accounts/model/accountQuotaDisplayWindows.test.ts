@@ -977,6 +977,7 @@ describe('accountQuotaDisplayWindows', () => {
             periodType: 'weekly',
             usagePercent: 42,
             periodStart: '2026-07-01T00:00:00Z',
+            periodEnd: '2026-07-08T00:00:00Z',
             billingPeriodEnd: String(billingPeriodEndMs / 1000),
             productUsage: [{ product: 'Grok Code Fast', usagePercent: 37 }],
             monthlyLimitCents: 10_000,
@@ -1361,6 +1362,54 @@ describe('accountQuotaDisplayWindows', () => {
       windowMode: 'unknown',
       source: 'xai',
     });
+  });
+
+  it('creates weekly quota window for unknown plan with only periodStart metadata and does not fallback to billingPeriodEnd', () => {
+    const stores = {
+      ...emptyStores(),
+      xaiQuota: {
+        'xai.json': {
+          status: 'success',
+          billing: {
+            periodType: 'weekly',
+            usagePercent: null,
+            periodStart: '2026-09-05T00:00:00Z',
+            productUsage: [],
+            monthlyLimitCents: 0,
+            usedCents: 0,
+            includedUsedCents: 0,
+            onDemandCapCents: 0,
+            onDemandUsedCents: 0,
+            onDemandUsedPercent: null,
+            billingPeriodEnd: '2026-10-01T00:00:00Z',
+            usedPercent: null,
+          },
+        },
+      },
+    } satisfies AccountQuotaStores;
+    const row = buildRow({ name: 'xai.json', type: 'xai', planType: null }, stores);
+
+    const windows = buildAccountQuotaDisplayWindows(row, {
+      stores,
+      translateQuotaWindowLabel,
+      t,
+    });
+
+    expect(windows.map((w) => w.key)).toEqual(['credits-period']);
+    expect(windows[0]).toMatchObject({
+      key: 'credits-period',
+      kind: 'weekly',
+      usedPercent: null,
+      remainingPercent: null,
+      cycleStartMs: Date.parse('2026-09-05T00:00:00Z'),
+      cycleEndMs: null,
+      resetAtMs: null,
+      limitWindowSeconds: null,
+      windowMode: 'unknown',
+      source: 'xai',
+    });
+    expect(windows[0].resetAtMs).not.toBe(Date.parse('2026-10-01T00:00:00Z'));
+    expect(windows[0].resetLabel).toBe('-');
   });
 
   it('does not create quota windows for unknown plan with only unconfirmed financial monthly/PAYG data', () => {

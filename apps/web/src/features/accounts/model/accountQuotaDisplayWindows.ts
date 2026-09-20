@@ -679,7 +679,7 @@ const buildXaiQuotaDisplayWindows = (
     ? formatDisplayResetTime(billing.billingPeriodEnd)
     : '-';
   const billingReset = resolveAbsoluteQuotaReset(billing.billingPeriodEnd);
-  const periodResetValue = billing.periodEnd ?? billing.billingPeriodEnd;
+  const periodResetValue = billing.periodEnd;
   const periodResetLabel = periodResetValue ? formatDisplayResetTime(periodResetValue) : '-';
   const periodReset = resolveAbsoluteQuotaReset(periodResetValue);
   const periodStart = resolveAbsoluteQuotaReset(billing.periodStart);
