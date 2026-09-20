@@ -657,13 +657,21 @@ const buildXaiQuotaDisplayWindows = (
     billing.periodType === 'weekly' &&
     typeof billing.usagePercent === 'number' &&
     Number.isFinite(billing.usagePercent);
+  const hasObservedWeeklyPeriod =
+    billing.periodType === 'weekly' &&
+    Boolean(billing.periodStart || billing.periodEnd);
   const hasObservedProductUsage =
     Array.isArray(billing.productUsage) &&
     billing.productUsage.some(
       (product) => typeof product.usagePercent === 'number' && Number.isFinite(product.usagePercent)
     );
 
-  if (!confirmedBillingEntitlement && !hasObservedWeeklyUsage && !hasObservedProductUsage) {
+  if (
+    !confirmedBillingEntitlement &&
+    !hasObservedWeeklyUsage &&
+    !hasObservedWeeklyPeriod &&
+    !hasObservedProductUsage
+  ) {
     return [];
   }
 
@@ -671,7 +679,7 @@ const buildXaiQuotaDisplayWindows = (
     ? formatDisplayResetTime(billing.billingPeriodEnd)
     : '-';
   const billingReset = resolveAbsoluteQuotaReset(billing.billingPeriodEnd);
-  const periodResetValue = billing.periodEnd ?? billing.billingPeriodEnd;
+  const periodResetValue = billing.periodEnd;
   const periodResetLabel = periodResetValue ? formatDisplayResetTime(periodResetValue) : '-';
   const periodReset = resolveAbsoluteQuotaReset(periodResetValue);
   const periodStart = resolveAbsoluteQuotaReset(billing.periodStart);
@@ -689,11 +697,15 @@ const buildXaiQuotaDisplayWindows = (
     typeof billing.usedPercent === 'number' && Number.isFinite(billing.usedPercent)
       ? clampDisplayPercent(billing.usedPercent)
       : null;
-  const hasLegacyMonthlyWindow = monthlyUsedPercent !== null || billing.monthlyLimitCents !== null;
+  const hasPositiveMonthlyLimit =
+    typeof billing.monthlyLimitCents === 'number' &&
+    Number.isFinite(billing.monthlyLimitCents) &&
+    billing.monthlyLimitCents > 0;
+  const hasLegacyMonthlyWindow = monthlyUsedPercent !== null || hasPositiveMonthlyLimit;
 
   const showCreditsPeriod = confirmedBillingEntitlement
     ? billing.periodType === 'weekly' || (billing.productUsage?.length ?? 0) > 0
-    : hasObservedWeeklyUsage;
+    : hasObservedWeeklyUsage || hasObservedWeeklyPeriod;
 
   if (showCreditsPeriod) {
     windows.push(

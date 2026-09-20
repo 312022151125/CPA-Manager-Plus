@@ -14111,6 +14111,60 @@ describe('AccountsPage replacement flows', () => {
     expect(mocks.getAccountWindowUsage).not.toHaveBeenCalled();
   });
 
+  it('renders metadata-only weekly quota window for unknown-plan xAI credential in quota tab', async () => {
+    const periodStartMs = Date.parse('2026-09-05T00:00:00Z');
+    const periodEndMs = Date.parse('2026-09-12T00:00:00Z');
+    const file = {
+      name: 'xai-unknown.json',
+      type: 'xai',
+      provider: 'xai',
+      authIndex: 'xai-unknown-1',
+      account: 'xai-unknown@example.com',
+      disabled: false,
+      planType: null,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.quotaState.xaiQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      fetchedAtMs: Date.now(),
+      billing: {
+        periodType: 'weekly',
+        usagePercent: null,
+        periodStart: '2026-09-05T00:00:00Z',
+        periodEnd: '2026-09-12T00:00:00Z',
+        productUsage: [],
+        monthlyLimitCents: 0,
+        usedCents: null,
+        includedUsedCents: null,
+        onDemandCapCents: null,
+        onDemandUsedCents: null,
+        onDemandUsedPercent: null,
+        billingPeriodEnd: '2026-09-12T00:00:00Z',
+        usedPercent: null,
+      },
+    });
+
+    const renderer = await renderAccountsPage();
+    await act(async () => {
+      findDetailButtonByName(renderer, 'xai-unknown.json').props.onClick();
+    });
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    const text = treeText(renderer);
+    expect(text).not.toContain('accounts.detail_no_quota_windows');
+    expect(renderer.root.findAllByType(QuotaWindowCard)).toHaveLength(1);
+    const card = renderer.root.findByType(QuotaWindowCard);
+    expect(card.props.window.kind).toBe('weekly');
+    expect(card.props.window.usedPercent).toBeNull();
+    expect(card.props.window.remainingPercent).toBeNull();
+    expect(card.props.window.resetAtMs).toBe(periodEndMs);
+    expect(card.props.window.cycleStartMs).toBe(periodStartMs);
+    expect(card.props.window.cycleEndMs).toBe(periodEndMs);
+  });
+
   it('associates credential detail tabs with their active panel', async () => {
     const renderer = await renderAccountsPage();
 
