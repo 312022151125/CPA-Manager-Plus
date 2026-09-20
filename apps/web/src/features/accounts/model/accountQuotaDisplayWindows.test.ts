@@ -1266,7 +1266,7 @@ describe('accountQuotaDisplayWindows', () => {
     ).toEqual([]);
   });
 
-  it('does not create xAI quota windows from unknown weekly usage or monthly billing reset', () => {
+  it('creates weekly quota window for unknown plan with provider-observed weekly period metadata even when usagePercent is null', () => {
     const stores = {
       ...emptyStores(),
       xaiQuota: {
@@ -1291,7 +1291,7 @@ describe('accountQuotaDisplayWindows', () => {
         },
       },
     } satisfies AccountQuotaStores;
-    const row = buildRow({ name: 'xai.json', type: 'xai' }, stores);
+    const row = buildRow({ name: 'xai.json', type: 'xai', planType: null }, stores);
 
     const windows = buildAccountQuotaDisplayWindows(row, {
       stores,
@@ -1299,7 +1299,190 @@ describe('accountQuotaDisplayWindows', () => {
       t,
     });
 
-    expect(windows).toEqual([]);
+    expect(windows.map((w) => w.key)).toEqual(['credits-period']);
+    expect(windows[0]).toMatchObject({
+      key: 'credits-period',
+      label: 'Weekly credits',
+      kind: 'weekly',
+      remainingPercent: null,
+      usedPercent: null,
+      resetAtMs: Date.parse('2026-09-12T00:00:00Z'),
+      cycleStartMs: Date.parse('2026-09-05T00:00:00Z'),
+      cycleEndMs: Date.parse('2026-09-12T00:00:00Z'),
+      windowMode: 'fixed',
+      limitWindowSeconds: 7 * 24 * 60 * 60,
+      source: 'xai',
+    });
+    expect(windows.some((w) => w.key === 'billing')).toBe(false);
+    expect(windows.some((w) => w.key === 'pay-as-you-go')).toBe(false);
+  });
+
+  it('creates weekly quota window for unknown plan with only periodEnd metadata and unknown usage', () => {
+    const stores = {
+      ...emptyStores(),
+      xaiQuota: {
+        'xai.json': {
+          status: 'success',
+          billing: {
+            periodType: 'weekly',
+            usagePercent: null,
+            periodEnd: '2026-09-12T00:00:00Z',
+            productUsage: [],
+            monthlyLimitCents: 0,
+            usedCents: 0,
+            includedUsedCents: 0,
+            onDemandCapCents: 0,
+            onDemandUsedCents: 0,
+            onDemandUsedPercent: null,
+            billingPeriodEnd: '2026-09-12T00:00:00Z',
+            usedPercent: null,
+          },
+        },
+      },
+    } satisfies AccountQuotaStores;
+    const row = buildRow({ name: 'xai.json', type: 'xai', planType: null }, stores);
+
+    const windows = buildAccountQuotaDisplayWindows(row, {
+      stores,
+      translateQuotaWindowLabel,
+      t,
+    });
+
+    expect(windows.map((w) => w.key)).toEqual(['credits-period']);
+    expect(windows[0]).toMatchObject({
+      key: 'credits-period',
+      kind: 'weekly',
+      remainingPercent: null,
+      usedPercent: null,
+      resetAtMs: Date.parse('2026-09-12T00:00:00Z'),
+      cycleStartMs: null,
+      cycleEndMs: Date.parse('2026-09-12T00:00:00Z'),
+      limitWindowSeconds: null,
+      windowMode: 'unknown',
+      source: 'xai',
+    });
+  });
+
+  it('does not create quota windows for unknown plan with only unconfirmed financial monthly/PAYG data', () => {
+    const stores = {
+      ...emptyStores(),
+      xaiQuota: {
+        'xai.json': {
+          status: 'success',
+          billing: {
+            periodType: 'monthly',
+            usagePercent: null,
+            productUsage: [],
+            monthlyLimitCents: 10_000,
+            usedCents: 2_000,
+            includedUsedCents: 2_000,
+            onDemandCapCents: 5_000,
+            onDemandUsedCents: 2_500,
+            onDemandUsedPercent: 50,
+            billingPeriodEnd: '2026-10-01T00:00:00Z',
+            usedPercent: 20,
+          },
+        },
+      },
+    } satisfies AccountQuotaStores;
+    const row = buildRow({ name: 'xai.json', type: 'xai', planType: null }, stores);
+
+    expect(
+      buildAccountQuotaDisplayWindows(row, {
+        stores,
+        translateQuotaWindowLabel,
+        t,
+      })
+    ).toEqual([]);
+  });
+
+  it('does not create xAI quota windows for explicit Free plan with metadata-only weekly period', () => {
+    const stores = {
+      ...emptyStores(),
+      xaiQuota: {
+        'xai-free-meta.json': {
+          status: 'success',
+          billing: {
+            periodType: 'weekly',
+            usagePercent: null,
+            periodStart: '2026-09-05T00:00:00Z',
+            periodEnd: '2026-09-12T00:00:00Z',
+            productUsage: [],
+            monthlyLimitCents: 0,
+            usedCents: null,
+            includedUsedCents: null,
+            onDemandCapCents: null,
+            onDemandUsedCents: null,
+            onDemandUsedPercent: null,
+            billingPeriodEnd: '2026-09-12T00:00:00Z',
+            usedPercent: null,
+          },
+        },
+      },
+    } satisfies AccountQuotaStores;
+    const row = buildRow(
+      { name: 'xai-free-meta.json', type: 'xai', planType: 'free' },
+      stores
+    );
+
+    expect(
+      buildAccountQuotaDisplayWindows(row, {
+        stores,
+        translateQuotaWindowLabel,
+        t,
+      })
+    ).toEqual([]);
+  });
+
+  it('creates weekly quota window and ignores zero monthly limit for confirmed paid plan SuperGrok', () => {
+    const stores = {
+      ...emptyStores(),
+      xaiQuota: {
+        'xai-supergrok-zero.json': {
+          status: 'success',
+          billing: {
+            periodType: 'weekly',
+            usagePercent: null,
+            periodStart: '2026-09-05T00:00:00Z',
+            periodEnd: '2026-09-12T00:00:00Z',
+            productUsage: [],
+            monthlyLimitCents: 0,
+            usedCents: 0,
+            includedUsedCents: 0,
+            onDemandCapCents: 0,
+            onDemandUsedCents: 0,
+            onDemandUsedPercent: null,
+            billingPeriodEnd: '2026-10-01T00:00:00Z',
+            usedPercent: null,
+          },
+        },
+      },
+    } satisfies AccountQuotaStores;
+    const row = buildRow(
+      { name: 'xai-supergrok-zero.json', type: 'xai', planType: 'SuperGrok' },
+      stores
+    );
+
+    const windows = buildAccountQuotaDisplayWindows(row, {
+      stores,
+      translateQuotaWindowLabel,
+      t,
+    });
+
+    expect(windows.map((w) => w.key)).toEqual(['credits-period']);
+    expect(windows[0]).toMatchObject({
+      key: 'credits-period',
+      label: 'Weekly credits',
+      kind: 'weekly',
+      remainingPercent: null,
+      usedPercent: null,
+      cycleStartMs: Date.parse('2026-09-05T00:00:00Z'),
+      cycleEndMs: Date.parse('2026-09-12T00:00:00Z'),
+      windowMode: 'fixed',
+      limitWindowSeconds: 7 * 24 * 60 * 60,
+      source: 'xai',
+    });
+    expect(windows.some((w) => w.key === 'billing')).toBe(false);
   });
 
   it('does not create xAI quota windows for an explicit Free plan', () => {
