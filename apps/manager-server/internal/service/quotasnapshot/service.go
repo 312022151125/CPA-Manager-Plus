@@ -1151,12 +1151,24 @@ func selectWindows(
 			}
 			countSource, hasCountSource := window.FieldSources["reset_credits_available"]
 			creditsSource, hasCreditsSource := window.FieldSources["reset_credits"]
-			if window.ResetCreditsAvailable != nil && *window.ResetCreditsAvailable == 0 && hasCountSource {
-				if hasCreditsSource && countSource.ObservedAtMS > creditsSource.ObservedAtMS {
+			if window.ResetCreditsAvailable != nil &&
+				*window.ResetCreditsAvailable == 0 &&
+				hasCountSource &&
+				hasCreditsSource {
+				switch {
+				case countSource.ObservedAtMS > creditsSource.ObservedAtMS:
+					// newer zero count invalidates older detail
 					window.ResetCredits = nil
 					delete(window.FieldSources, "reset_credits")
-				} else if len(window.ResetCredits) > 0 {
-					window.ResetCredits = []ResetCredit{}
+				case countSource.ObservedAtMS == creditsSource.ObservedAtMS:
+					// same observation: zero count dominates conflicting records,
+					// but preserve explicit-empty field evidence
+					if len(window.ResetCredits) > 0 {
+						window.ResetCredits = []ResetCredit{}
+					}
+				case countSource.ObservedAtMS < creditsSource.ObservedAtMS:
+					// newer detail must not be erased by older zero count
+					// keep current ResetCredits + field source unchanged
 				}
 			}
 		}

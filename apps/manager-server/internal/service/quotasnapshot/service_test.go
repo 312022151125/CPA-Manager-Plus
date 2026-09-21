@@ -675,7 +675,7 @@ func TestResetCreditsNewerZeroCountBlocksOldDetails(t *testing.T) {
 		t.Fatalf("write T1: %v", err)
 	}
 
-	// T2: count=0, credits=[] @ 20_000
+	// T2: count=0, credits omitted (nil) @ 20_000
 	_, err = service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{{
 		Provider: "codex", Account: quotaSnapshotTestAccount(),
 		Windows: []WindowInput{{
@@ -684,7 +684,6 @@ func TestResetCreditsNewerZeroCountBlocksOldDetails(t *testing.T) {
 			ObservedAtMS: 20_000, BoundaryAccuracy: "exact",
 			CycleStartMS: &cycleStart, CycleEndMS: &cycleEnd, DurationSeconds: &duration,
 			UsedPercent: &used, ResetCreditsAvailable: &zero,
-			ResetCredits: []ResetCredit{},
 		}},
 	}}})
 	if err != nil {
@@ -704,8 +703,129 @@ func TestResetCreditsNewerZeroCountBlocksOldDetails(t *testing.T) {
 	if window.ResetCreditsAvailable == nil || *window.ResetCreditsAvailable != 0 {
 		t.Fatalf("available count = %v, want 0", window.ResetCreditsAvailable)
 	}
+	if countSource, ok := window.FieldSources["reset_credits_available"]; !ok || countSource.ObservedAtMS != 20_000 {
+		t.Fatalf("expected reset_credits_available source @ 20_000, got %#v", window.FieldSources)
+	}
 	if len(window.ResetCredits) != 0 {
 		t.Fatalf("expected 0 reset credits, got %#v", window.ResetCredits)
+	}
+	if _, ok := window.FieldSources["reset_credits"]; ok {
+		t.Fatalf("expected no reset_credits field source, got %#v", window.FieldSources)
+	}
+}
+
+func TestResetCreditsOlderZeroCountDoesNotClearNewerDetails(t *testing.T) {
+	service := newQuotaSnapshotTestService(t, 20_000)
+	cycleStart := int64(1_000)
+	cycleEnd := int64(19_001_000)
+	duration := int64(19_000)
+	zero := int64(0)
+	used := 20.0
+
+	// T1: count=0, credits omitted @ 10_000
+	_, err := service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{{
+		Provider: "codex", Account: quotaSnapshotTestAccount(),
+		Windows: []WindowInput{{
+			ProviderWindowID: "rate_limit:five_hour", WindowKind: "five_hour",
+			WindowMode: "fixed", ModelScopeKind: "all", Source: "api_query",
+			ObservedAtMS: 10_000, BoundaryAccuracy: "exact",
+			CycleStartMS: &cycleStart, CycleEndMS: &cycleEnd, DurationSeconds: &duration,
+			UsedPercent: &used, ResetCreditsAvailable: &zero,
+		}},
+	}}})
+	if err != nil {
+		t.Fatalf("write T1: %v", err)
+	}
+
+	// T2: count omitted, credits=[A] @ 20_000
+	_, err = service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{{
+		Provider: "codex", Account: quotaSnapshotTestAccount(),
+		Windows: []WindowInput{{
+			ProviderWindowID: "rate_limit:five_hour", WindowKind: "five_hour",
+			WindowMode: "fixed", ModelScopeKind: "all", Source: "api_query",
+			ObservedAtMS: 20_000, BoundaryAccuracy: "exact",
+			CycleStartMS: &cycleStart, CycleEndMS: &cycleEnd, DurationSeconds: &duration,
+			UsedPercent: &used,
+			ResetCredits: []ResetCredit{
+				{ID: "credit-a", ExpiresAtMS: 100_000},
+			},
+		}},
+	}}})
+	if err != nil {
+		t.Fatalf("write T2: %v", err)
+	}
+
+	result, err := service.Query(context.Background(), QueryRequest{
+		Accounts: []QueryAccount{{
+			RowKey: "row-1", Provider: "codex", Account: quotaSnapshotTestAccount(),
+		}},
+		NowMS: 20_000,
+	})
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	window := result.Items[0].Windows[0]
+	if window.ResetCreditsAvailable == nil || *window.ResetCreditsAvailable != 0 {
+		t.Fatalf("available count = %v, want 0", window.ResetCreditsAvailable)
+	}
+	countSource, ok := window.FieldSources["reset_credits_available"]
+	if !ok || countSource.ObservedAtMS != 10_000 {
+		t.Fatalf("expected reset_credits_available field source at 10_000, got %#v", window.FieldSources)
+	}
+	if len(window.ResetCredits) != 1 || window.ResetCredits[0].ID != "credit-a" {
+		t.Fatalf("expected newer reset credits [credit-a] preserved, got %#v", window.ResetCredits)
+	}
+	creditsSource, ok := window.FieldSources["reset_credits"]
+	if !ok || creditsSource.ObservedAtMS != 20_000 {
+		t.Fatalf("expected reset_credits field source at 20_000, got %#v", window.FieldSources)
+	}
+}
+
+func TestResetCreditsSameObservationZeroCountDominatesConflictingDetails(t *testing.T) {
+	service := newQuotaSnapshotTestService(t, 20_000)
+	cycleStart := int64(1_000)
+	cycleEnd := int64(19_001_000)
+	duration := int64(19_000)
+	zero := int64(0)
+	used := 20.0
+
+	// Single observation @ 20_000: count=0 conflicting with credits=[A]
+	_, err := service.Write(context.Background(), WriteRequest{Entries: []WriteEntry{{
+		Provider: "codex", Account: quotaSnapshotTestAccount(),
+		Windows: []WindowInput{{
+			ProviderWindowID: "rate_limit:five_hour", WindowKind: "five_hour",
+			WindowMode: "fixed", ModelScopeKind: "all", Source: "api_query",
+			ObservedAtMS: 20_000, BoundaryAccuracy: "exact",
+			CycleStartMS: &cycleStart, CycleEndMS: &cycleEnd, DurationSeconds: &duration,
+			UsedPercent: &used, ResetCreditsAvailable: &zero,
+			ResetCredits: []ResetCredit{
+				{ID: "credit-a", ExpiresAtMS: 100_000},
+			},
+		}},
+	}}})
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	result, err := service.Query(context.Background(), QueryRequest{
+		Accounts: []QueryAccount{{
+			RowKey: "row-1", Provider: "codex", Account: quotaSnapshotTestAccount(),
+		}},
+		NowMS: 20_000,
+	})
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	window := result.Items[0].Windows[0]
+	if window.ResetCreditsAvailable == nil || *window.ResetCreditsAvailable != 0 {
+		t.Fatalf("available count = %v, want 0", window.ResetCreditsAvailable)
+	}
+	if window.ResetCredits == nil || len(window.ResetCredits) != 0 {
+		t.Fatalf("expected explicit empty reset credits slice, got %#v", window.ResetCredits)
+	}
+	creditsSource, ok := window.FieldSources["reset_credits"]
+	if !ok || creditsSource.ObservedAtMS != 20_000 {
+		t.Fatalf("expected reset_credits field source at 20_000 to be preserved, got %#v", window.FieldSources)
 	}
 }
 
