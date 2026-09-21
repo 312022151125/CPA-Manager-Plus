@@ -939,7 +939,7 @@ const buildMetaQuotaDisplayWindows = (
       resetAtMs: window.resetAtMs,
       resetAccuracy: hasReset && window.resetAccuracy ? window.resetAccuracy : 'unknown',
       limitWindowSeconds: window.id === 'weekly' ? null : (window.limitWindowSeconds ?? null),
-      windowMode: 'fixed',
+      windowMode: window.id === 'weekly' ? 'unknown' : undefined,
       source: 'meta',
       modelScope: { kind: 'all', complete: true },
       observedAtMs: quota.observedAtMs ?? quota.fetchedAtMs ?? null,

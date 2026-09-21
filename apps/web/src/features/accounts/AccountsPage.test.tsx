@@ -8940,6 +8940,75 @@ describe('AccountsPage replacement flows', () => {
     expect(readText(otherGroup)).not.toContain('extra-usage');
   });
 
+  it('localizes snapshot-only Meta window and weekly quota details', async () => {
+    const file = {
+      name: 'meta-snapshot-only.json',
+      type: 'meta',
+      provider: 'meta',
+      authIndex: 'meta-snapshot-only-1',
+      account: 'meta-snapshot-only@example.com',
+      priority: 0,
+      disabled: false,
+    } as AuthFileItem;
+    mocks.files = [file];
+    const selectionKey = getAuthFileSelectionKey(file);
+    mocks.location = {
+      pathname: '/accounts',
+      search: `?account=${encodeURIComponent(selectionKey)}&tab=quota`,
+    };
+    vi.mocked(accountQuotaSnapshotApi.query).mockResolvedValue({
+      generated_at_ms: 2_000,
+      items: [
+        {
+          row_key: selectionKey,
+          account_key: selectionKey,
+          provider: 'meta',
+          windows: [
+            {
+              provider_window_id: 'meta:window',
+              window_kind: 'five_hour',
+              window_mode: 'fixed',
+              model_scope_kind: 'all',
+              source: 'api_query',
+              observed_at_ms: 2_000,
+              boundary_accuracy: 'exact',
+              used_percent: 25,
+              remaining_percent: 75,
+              stale: false,
+            },
+            {
+              provider_window_id: 'meta:weekly',
+              window_kind: 'weekly',
+              window_mode: 'unknown',
+              model_scope_kind: 'all',
+              source: 'api_query',
+              observed_at_ms: 2_000,
+              boundary_accuracy: 'exact',
+              used_percent: 40,
+              remaining_percent: 60,
+              stale: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    await flushPromises();
+    await flushPromises();
+
+    const quotaTab = renderer.root.findByType(AccountQuotaTab);
+    const quotaText = readText(quotaTab);
+    expect(quotaText).toContain('meta_quota.window');
+    expect(quotaText).not.toContain('accounts.detail_snapshot_window_five_hour');
+    expect(quotaText).toContain('meta_quota.weekly');
+    expect(quotaText).not.toContain('accounts.detail_snapshot_window_weekly');
+
+    const windows = quotaTab.props.detailView.quota.windows;
+    expect(windows.find((w: { providerWindowId: string }) => w.providerWindowId === 'meta:window')?.label).toBe('meta_quota.window');
+    expect(windows.find((w: { providerWindowId: string }) => w.providerWindowId === 'meta:weekly')?.label).toBe('meta_quota.weekly');
+  });
+
   it('keeps Kimi standard windows alongside top-level summary data', async () => {
     const file = {
       name: 'kimi-standard.json',

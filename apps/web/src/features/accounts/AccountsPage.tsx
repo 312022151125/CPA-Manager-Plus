@@ -8,6 +8,7 @@ import type {
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate, type BlockerFunction } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Button } from '@/components/ui/Button';
 import { Drawer } from '@/components/ui/Drawer';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/DropdownMenu';
@@ -1226,6 +1227,33 @@ const getFallbackWindowBarClass = (
   if (lifecycleBarOverride === 'bad') return styles.quotaBarBad;
   if (lifecycleBarOverride === 'neutral') return styles.quotaBarNeutral;
   return getWindowRemainingBarClass(remainingPercent);
+};
+
+const resolveAccountQuotaSnapshotLabel = (
+  snapshot: AccountQuotaSnapshotWindow,
+  provider: string | undefined,
+  t: TFunction
+): string => {
+  if (provider === 'claude' && snapshot.provider_window_id === 'extra-usage') {
+    return t('claude_quota.extra_usage_label');
+  }
+  if (provider === 'meta') {
+    if (snapshot.provider_window_id === 'meta:window') {
+      return t('meta_quota.window');
+    }
+    if (snapshot.provider_window_id === 'meta:weekly') {
+      return t('meta_quota.weekly');
+    }
+  }
+  const kind = snapshot.window_kind;
+  if (kind === 'rolling_24h') {
+    return t('accounts.detail_snapshot_window_rolling_24h');
+  }
+  if (kind === 'five_hour') return t('accounts.detail_snapshot_window_five_hour');
+  if (kind === 'daily') return t('accounts.detail_snapshot_window_daily');
+  if (kind === 'weekly') return t('accounts.detail_snapshot_window_weekly');
+  if (kind === 'monthly') return t('accounts.detail_snapshot_window_monthly');
+  return snapshot.provider_window_id;
 };
 
 export function AccountsPage() {
@@ -4769,20 +4797,7 @@ export function AccountsPage() {
           quotaSnapshotWindowsByRowKey.get(rowKey) ?? [],
           {
             provider,
-            getLabel: (snapshot) => {
-              if (provider === 'claude' && snapshot.provider_window_id === 'extra-usage') {
-                return t('claude_quota.extra_usage_label');
-              }
-              const kind = snapshot.window_kind;
-              if (kind === 'rolling_24h') {
-                return t('accounts.detail_snapshot_window_rolling_24h');
-              }
-              if (kind === 'five_hour') return t('accounts.detail_snapshot_window_five_hour');
-              if (kind === 'daily') return t('accounts.detail_snapshot_window_daily');
-              if (kind === 'weekly') return t('accounts.detail_snapshot_window_weekly');
-              if (kind === 'monthly') return t('accounts.detail_snapshot_window_monthly');
-              return snapshot.provider_window_id;
-            },
+            getLabel: (snapshot) => resolveAccountQuotaSnapshotLabel(snapshot, provider, t),
           }
         )
       );

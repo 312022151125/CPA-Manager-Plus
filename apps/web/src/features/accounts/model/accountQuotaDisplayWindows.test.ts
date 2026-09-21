@@ -1828,7 +1828,7 @@ describe('accountQuotaDisplayWindows', () => {
       expect(windows[1]).toMatchObject({
         key: 'meta:weekly',
         source: 'meta',
-        windowMode: 'fixed',
+        windowMode: 'unknown',
         remainingPercent: 40,
         usedPercent: 60,
         limitWindowSeconds: null,
@@ -1839,6 +1839,8 @@ describe('accountQuotaDisplayWindows', () => {
         observedAtMs,
         quotaProgressObservedAtMs: observedAtMs,
       });
+      expect(isIntervalAccountQuotaWindow(windows[1])).toBe(false);
+      expect(isIntervalAccountQuotaWindow(windows[0])).toBe(true);
     });
 
     it('handles Meta quota with unknown remaining values', () => {
