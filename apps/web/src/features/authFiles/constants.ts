@@ -161,6 +161,10 @@ export const normalizeProviderKey = (value: string) => {
   return key;
 };
 
+export const isQuotaRefreshSupportedProvider = (provider: string): boolean =>
+  QUOTA_PROVIDER_TYPES.has(normalizeProviderKey(provider) as QuotaProviderType);
+
+
 export const getEquivalentProviderKeys = (value: string): string[] => {
   const providerKey = normalizeProviderKey(value);
   if (!providerKey) return [];

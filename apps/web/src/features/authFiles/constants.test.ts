@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { AuthFileType } from '@/types';
 import { isMetaFile } from '@/utils/quota/validators';
-import { getAuthFileIcon, getTypeColor, getTypeLabel, normalizeProviderKey, QUOTA_PROVIDER_TYPES } from './constants';
+import {
+  getAuthFileIcon,
+  getTypeColor,
+  getTypeLabel,
+  isQuotaRefreshSupportedProvider,
+  normalizeProviderKey,
+  QUOTA_PROVIDER_TYPES,
+} from './constants';
 
 describe('authFiles constants - devin', () => {
   it('returns valid distinct light and dark icons for devin', () => {
@@ -77,5 +84,28 @@ describe('authFiles constants - meta', () => {
     expect(isMetaFile({ name: 'meta-test.json', provider: 'meta' })).toBe(true);
     expect(isMetaFile({ name: 'muse-test.json', type: 'muse' })).toBe(true);
     expect(isMetaFile({ name: 'codex.json', provider: 'codex' })).toBe(false);
+  });
+
+  it('correctly evaluates quota refresh eligibility via isQuotaRefreshSupportedProvider', () => {
+    // Meta / Muse is not quota-refreshable in phase 1
+    expect(isQuotaRefreshSupportedProvider('meta')).toBe(false);
+    expect(isQuotaRefreshSupportedProvider('muse')).toBe(false);
+    expect(isQuotaRefreshSupportedProvider('META')).toBe(false);
+
+    // Supported providers (including Devin)
+    expect(isQuotaRefreshSupportedProvider('devin')).toBe(true);
+    expect(isQuotaRefreshSupportedProvider('codex')).toBe(true);
+    expect(isQuotaRefreshSupportedProvider('claude')).toBe(true);
+    expect(isQuotaRefreshSupportedProvider('antigravity')).toBe(true);
+    expect(isQuotaRefreshSupportedProvider('kimi')).toBe(true);
+    expect(isQuotaRefreshSupportedProvider('xai')).toBe(true);
+    expect(isQuotaRefreshSupportedProvider('x-ai')).toBe(true);
+    expect(isQuotaRefreshSupportedProvider('grok')).toBe(true);
+
+    // Other non-quota providers
+    expect(isQuotaRefreshSupportedProvider('vertex')).toBe(false);
+    expect(isQuotaRefreshSupportedProvider('qwen')).toBe(false);
+    expect(isQuotaRefreshSupportedProvider('iflow')).toBe(false);
+    expect(isQuotaRefreshSupportedProvider('')).toBe(false);
   });
 });

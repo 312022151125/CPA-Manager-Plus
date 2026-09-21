@@ -24,15 +24,132 @@ describe('accountReauth', () => {
       oauthProvider: 'devin',
       path: '/oauth#oauth-provider-devin',
     });
-    expect(resolveAccountReauthAction({ name: 'meta.json', type: 'meta' })).toEqual({
+  });
+
+  it('routes Meta OAuth credentials to Meta OAuth reauth path', () => {
+    // snake_case auth_kind
+    expect(
+      resolveAccountReauthAction({
+        name: 'meta-oauth.json',
+        provider: 'meta',
+        auth_kind: 'oauth',
+      })
+    ).toEqual({
       kind: 'navigate',
       oauthProvider: 'meta',
       path: '/oauth#oauth-provider-meta',
     });
-    expect(resolveAccountReauthAction({ name: 'muse.json', provider: 'muse' })).toEqual({
+
+    // camelCase authKind with muse alias
+    expect(
+      resolveAccountReauthAction({
+        name: 'muse-oauth.json',
+        provider: 'muse',
+        authKind: 'oauth',
+      })
+    ).toEqual({
       kind: 'navigate',
       oauthProvider: 'meta',
       path: '/oauth#oauth-provider-meta',
+    });
+
+    // explicit token evidence fallback
+    expect(
+      resolveAccountReauthAction({
+        name: 'meta-token.json',
+        provider: 'meta',
+        access_token: 'dummy-token',
+      })
+    ).toEqual({
+      kind: 'navigate',
+      oauthProvider: 'meta',
+      path: '/oauth#oauth-provider-meta',
+    });
+  });
+
+  it('returns unsupported reauth action for Meta API-key and config credentials', () => {
+    // api_key + config_index
+    expect(
+      resolveAccountReauthAction({
+        name: 'meta-key.json',
+        provider: 'meta',
+        api_key: 'redacted-dummy-key',
+        config_index: 0,
+      })
+    ).toEqual({
+      kind: 'unsupported',
+      provider: 'meta',
+    });
+
+    // auth_kind = api_key
+    expect(
+      resolveAccountReauthAction({
+        name: 'meta-key.json',
+        provider: 'meta',
+        auth_kind: 'api_key',
+      })
+    ).toEqual({
+      kind: 'unsupported',
+      provider: 'meta',
+    });
+
+    // camelCase authKind = apikey
+    expect(
+      resolveAccountReauthAction({
+        name: 'meta-key.json',
+        provider: 'meta',
+        authKind: 'apikey',
+      })
+    ).toEqual({
+      kind: 'unsupported',
+      provider: 'meta',
+    });
+
+    // camelCase apiKey
+    expect(
+      resolveAccountReauthAction({
+        name: 'meta-key.json',
+        provider: 'meta',
+        apiKey: 'redacted-dummy-key',
+      })
+    ).toEqual({
+      kind: 'unsupported',
+      provider: 'meta',
+    });
+
+    // camelCase configIndex
+    expect(
+      resolveAccountReauthAction({
+        name: 'meta-key.json',
+        provider: 'meta',
+        configIndex: 1,
+      })
+    ).toEqual({
+      kind: 'unsupported',
+      provider: 'meta',
+    });
+
+    // source config:...
+    expect(
+      resolveAccountReauthAction({
+        name: 'meta-config.json',
+        provider: 'meta',
+        source: 'config:meta-api-key',
+      })
+    ).toEqual({
+      kind: 'unsupported',
+      provider: 'meta',
+    });
+
+    // bare meta credential without OAuth signals
+    expect(
+      resolveAccountReauthAction({
+        name: 'meta-bare.json',
+        provider: 'meta',
+      })
+    ).toEqual({
+      kind: 'unsupported',
+      provider: 'meta',
     });
   });
 

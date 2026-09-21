@@ -18346,6 +18346,82 @@ describe('AccountsPage replacement flows', () => {
       expect(detailSpy).not.toHaveBeenCalled();
     });
 
+    it('schedules only quota-supported providers and ignores Meta credentials during batch quota refresh', async () => {
+      const fileCodex = makeCodexFile('codex-batch-1.json', 'auth-b-1', 'b1@example.com');
+      const fileMeta: AuthFileItem = {
+        name: 'meta-batch.json',
+        type: 'meta',
+        provider: 'meta',
+        auth_kind: 'oauth',
+        runtimeOnly: false,
+      };
+      mocks.files = [fileCodex, fileMeta];
+      mocks.selectedFiles = new Set([getAuthFileSelectionKey(fileCodex), getAuthFileSelectionKey(fileMeta)]);
+
+      const summarySpy = vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
+      const showNotificationSpy = mocks.showNotification;
+
+      const renderer = await renderAccountsPage();
+      await flushPromises();
+
+      const batchRefreshButton = findButtonByText(renderer, 'accounts.refresh_quota');
+      await act(async () => {
+        batchRefreshButton.props.onClick();
+        await Promise.resolve();
+      });
+      await flushPromises();
+
+      expect(summarySpy).toHaveBeenCalledTimes(1);
+      expect(showNotificationSpy).toHaveBeenCalledWith(
+        'accounts.quota_refresh_success:b1@example.com',
+        'success'
+      );
+      expect(showNotificationSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('common.unknown_error'),
+        expect.anything()
+      );
+    });
+
+    it('does not render quota refresh button for Meta credentials in row actions and detail drawer', async () => {
+      const fileMeta: AuthFileItem = {
+        name: 'meta-card.json',
+        type: 'meta',
+        provider: 'meta',
+        auth_kind: 'oauth',
+        runtimeOnly: false,
+      };
+      mocks.files = [fileMeta];
+
+      const renderer = await renderAccountsPage();
+      await flushPromises();
+
+      const rowButtons = renderer.root.findAllByType(Button);
+      const rowRefreshButton = rowButtons.find(
+        (b) => typeof b.props.className === 'string' && b.props.className.includes('accountIconButtonRefresh')
+      );
+      expect(rowRefreshButton).toBeUndefined();
+
+      const batchRefreshButton = findButtonByText(renderer, 'accounts.refresh_quota');
+      expect(batchRefreshButton.props.disabled).toBe(true);
+
+      const detailButton = rowButtons.find(
+        (b) => b.props.title === 'accounts.open_detail' || b.props['aria-label'] === 'accounts.open_detail'
+      );
+      if (detailButton) {
+        await act(async () => {
+          detailButton.props.onClick();
+          await Promise.resolve();
+        });
+        await flushPromises();
+
+        const drawer = renderer.root.findByType(Drawer);
+        const drawerRefresh = drawer
+          .findAllByType(Button)
+          .find((b) => readText(b.props.children).includes('accounts.refresh_quota'));
+        expect(drawerRefresh).toBeUndefined();
+      }
+    });
+
     it('triggers account detail parity check once when open credential succeeds in batch refresh', async () => {
       const fileA = makeCodexFile('codex-open.json', 'auth-open-1', 'open@example.com');
       const fileB = makeCodexFile('codex-other.json', 'auth-other-1', 'other@example.com');
