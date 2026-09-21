@@ -33,29 +33,39 @@ export const normalizeCodexResetCreditsPayload = (
   let parsedPayload = payload;
   if (typeof payload === 'string') {
     const trimmed = payload.trim();
-    if (!trimmed) return { availableCount: null, credits: [], invalidPayload: true };
+    if (!trimmed) {
+      return { availableCount: null, credits: [], creditsObserved: false, invalidPayload: true };
+    }
     try {
       parsedPayload = JSON.parse(trimmed);
     } catch {
-      return { availableCount: null, credits: [], invalidPayload: true };
+      return { availableCount: null, credits: [], creditsObserved: false, invalidPayload: true };
     }
   }
 
   const record = asRecord(parsedPayload);
-  if (!record) return { availableCount: null, credits: [], invalidPayload: true };
+  if (!record) {
+    return { availableCount: null, credits: [], creditsObserved: false, invalidPayload: true };
+  }
 
-  const hasExpectedShape =
-    'credits' in record || 'available_count' in record || 'availableCount' in record;
-  const credits = Array.isArray(record.credits)
-    ? record.credits.map(normalizeCredit).filter((credit): credit is CodexRateLimitResetCredit =>
+  const availableCount = normalizeNumberValue(record.available_count ?? record.availableCount);
+  const rawCredits = Array.isArray(record.credits) ? record.credits : null;
+  const creditsObserved = rawCredits !== null;
+  const credits = rawCredits
+    ? rawCredits.map(normalizeCredit).filter((credit): credit is CodexRateLimitResetCredit =>
         Boolean(credit)
       )
     : [];
 
+  const hasCountObservation = availableCount !== null;
+  const hasDetailObservation = creditsObserved;
+  const invalidPayload = !hasCountObservation && !hasDetailObservation;
+
   return {
-    availableCount: normalizeNumberValue(record.available_count ?? record.availableCount),
+    availableCount,
     credits,
-    invalidPayload: !hasExpectedShape,
+    creditsObserved,
+    invalidPayload,
   };
 };
 
@@ -93,12 +103,14 @@ export const resolveCodexResetCreditsCountEvidenceAtMs = (
 
 export const resolveCodexResetCreditsObservationCount = (
   availableCount: number | null | undefined,
-  credits: readonly unknown[] | undefined
+  credits?: readonly unknown[] | null,
+  creditsObserved?: boolean
 ): number | null => {
   if (typeof availableCount === 'number' && Number.isFinite(availableCount)) {
     return availableCount;
   }
-  if (Array.isArray(credits)) {
+  const isCreditsObserved = creditsObserved !== undefined ? creditsObserved : Array.isArray(credits);
+  if (isCreditsObserved && Array.isArray(credits)) {
     return credits.length;
   }
   return null;
@@ -160,7 +172,9 @@ export const mergeCodexResetCreditsEvidence = (
   options?: { isFullDetailObservation?: boolean }
 ): CodexResetCreditsMergeResult => {
   const incomingDetailEvidence =
-    incoming.resetCreditsDetailEvidenceAtMs ?? incoming.resetCreditsEvidenceAtMs ?? null;
+    incoming.resetCreditsDetailEvidenceAtMs !== undefined
+      ? incoming.resetCreditsDetailEvidenceAtMs
+      : (incoming.resetCreditsEvidenceAtMs ?? null);
   const isFullDetail =
     options?.isFullDetailObservation ??
     (!incoming.rateLimitResetCreditsError && incomingDetailEvidence != null);

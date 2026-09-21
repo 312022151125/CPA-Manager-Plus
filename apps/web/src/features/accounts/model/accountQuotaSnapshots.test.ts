@@ -2400,6 +2400,53 @@ describe('account quota snapshots', () => {
     expect(entry.windows[0].reset_credits).not.toBeUndefined();
   });
 
+  it('omits reset_credits and writes only reset_credits_available when detail is unobserved (count=2 @ T2, detailEvidence=null, credits=[])', () => {
+    const row = {
+      selectionKey: 'codex.json\u0000auth-1',
+      authFileKey: 'codex.json::auth-1',
+      provider: 'codex',
+      fileName: 'codex.json',
+      authIndex: 'auth-1',
+      accountLabel: 'user@example.com',
+      raw: {
+        name: 'codex.json',
+        provider: 'codex',
+        type: 'codex',
+        auth_index: 'auth-1',
+        account: 'user@example.com',
+      },
+    } as unknown as AccountRow;
+
+    const t2 = 50_000;
+    const definition = makeDefinition({
+      observedAtMs: t2,
+    });
+
+    const codexQuotaCountOnly = {
+      status: 'success' as const,
+      windows: [],
+      fetchedAtMs: t2,
+      resetCreditsCountEvidenceAtMs: t2,
+      resetCreditsDetailEvidenceAtMs: null,
+      resetCreditsDetailStale: false,
+      rateLimitResetCreditsAvailableCount: 2,
+      rateLimitResetCredits: [],
+    };
+
+    const [entry] = buildAccountQuotaSnapshotWriteEntries(
+      [row],
+      new Map([[row.selectionKey, [definition]]]),
+      {
+        getCodexQuota: () => codexQuotaCountOnly,
+        nowMs: t2,
+      }
+    );
+
+    expect(entry.windows).toHaveLength(1);
+    expect(entry.windows[0].reset_credits_available).toBe(2);
+    expect(entry.windows[0].reset_credits).toBeUndefined();
+  });
+
   it('omits reset_credits when detail evidence belongs to earlier observation (Test I)', () => {
     const row = {
       selectionKey: 'codex.json\u0000auth-1',

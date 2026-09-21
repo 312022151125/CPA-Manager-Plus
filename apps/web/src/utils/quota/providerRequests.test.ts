@@ -242,6 +242,7 @@ describe('fetchCodexResetCredits', () => {
 
     expect(result.availableCount).toBeNull();
     expect(result.credits).toEqual([]);
+    expect(result.creditsObserved).toBe(false);
     expect(result.error).toBe('502 Bad Gateway');
     expect(result.resetCreditsEvidenceAtMs).toBeUndefined();
   });
@@ -250,6 +251,126 @@ describe('fetchCodexResetCredits', () => {
     await expect(
       fetchCodexResetCredits({ name: 'codex.json', type: 'codex' }, t)
     ).rejects.toThrow('codex_quota.missing_auth_index');
+  });
+
+  it('Test 7: count-only detail endpoint returns error=null, creditsObserved=false, count evidence timestamp, detail evidence null', async () => {
+    mocks.request.mockResolvedValueOnce({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: {
+        available_count: 2,
+      },
+    });
+
+    const result = await fetchCodexResetCredits(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.availableCount).toBe(2);
+    expect(result.creditsObserved).toBe(false);
+    expect(result.credits).toEqual([]);
+    expect(result.resetCreditsCountEvidenceAtMs).toBeTypeOf('number');
+    expect(result.resetCreditsDetailEvidenceAtMs).toBeNull();
+    expect(result.resetCreditsEvidenceAtMs).toBeTypeOf('number');
+  });
+
+  it('Test 8: malformed credits with valid count is accepted as count-only observation', async () => {
+    mocks.request.mockResolvedValueOnce({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: {
+        available_count: 2,
+        credits: 'bad',
+      },
+    });
+
+    const result = await fetchCodexResetCredits(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.availableCount).toBe(2);
+    expect(result.creditsObserved).toBe(false);
+    expect(result.credits).toEqual([]);
+    expect(result.resetCreditsCountEvidenceAtMs).toBeTypeOf('number');
+    expect(result.resetCreditsDetailEvidenceAtMs).toBeNull();
+  });
+
+  it('Test 9: malformed credits without valid count returns invalid payload error and no evidence', async () => {
+    mocks.request.mockResolvedValueOnce({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: {
+        credits: 'bad',
+      },
+    });
+
+    const result = await fetchCodexResetCredits(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    expect(result.error).toBe('codex_quota.reset_credits_invalid_payload');
+    expect(result.creditsObserved).toBe(false);
+    expect(result.availableCount).toBeNull();
+    expect(result.credits).toEqual([]);
+    expect(result.resetCreditsCountEvidenceAtMs).toBeUndefined();
+    expect(result.resetCreditsDetailEvidenceAtMs).toBeUndefined();
+    expect(result.resetCreditsEvidenceAtMs).toBeUndefined();
+  });
+
+  it('Test 10: explicit empty credits array provides valid detail evidence and resolves count to 0', async () => {
+    mocks.request.mockResolvedValueOnce({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: {
+        credits: [],
+      },
+    });
+
+    const result = await fetchCodexResetCredits(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.creditsObserved).toBe(true);
+    expect(result.credits).toEqual([]);
+    expect(result.resetCreditsDetailEvidenceAtMs).toBeTypeOf('number');
+    expect(result.resetCreditsCountEvidenceAtMs).toBeTypeOf('number');
+    const resolvedCount = resolveCodexResetCreditsObservationCount(
+      result.availableCount,
+      result.credits,
+      result.creditsObserved
+    );
+    expect(resolvedCount).toBe(0);
   });
 });
 

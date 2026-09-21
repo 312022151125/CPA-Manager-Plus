@@ -199,6 +199,7 @@ export interface CodexRateLimitResetCredit {
 export interface CodexResetCreditsSummary {
   availableCount: number | null;
   credits: CodexRateLimitResetCredit[];
+  creditsObserved: boolean;
   invalidPayload: boolean;
 }
 

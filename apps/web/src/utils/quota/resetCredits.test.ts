@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   normalizeCodexResetCreditsPayload,
+  resolveCodexResetCreditsObservationCount,
   resolveCodexResetCreditsCountEvidenceAtMs,
   resolveCodexResetCreditsDetailEvidenceAtMs,
   mergeCodexResetCreditsEvidence,
@@ -37,6 +38,7 @@ describe('normalizeCodexResetCreditsPayload', () => {
 
     expect(result).toEqual({
       availableCount: 2,
+      creditsObserved: true,
       invalidPayload: false,
       credits: [
         {
@@ -67,6 +69,7 @@ describe('normalizeCodexResetCreditsPayload', () => {
 
     expect(result.availableCount).toBe(1);
     expect(result.credits[0]?.id).toBe('credit-1');
+    expect(result.creditsObserved).toBe(true);
     expect(result.invalidPayload).toBe(false);
   });
 
@@ -74,14 +77,100 @@ describe('normalizeCodexResetCreditsPayload', () => {
     expect(normalizeCodexResetCreditsPayload('not-json')).toEqual({
       availableCount: null,
       credits: [],
+      creditsObserved: false,
       invalidPayload: true,
     });
 
     expect(normalizeCodexResetCreditsPayload({ unknown: true })).toEqual({
       availableCount: null,
       credits: [],
+      creditsObserved: false,
       invalidPayload: true,
     });
+  });
+
+  it('Test 1: handles explicit empty credits array as observed detail', () => {
+    const result = normalizeCodexResetCreditsPayload({ credits: [] });
+    expect(result).toEqual({
+      availableCount: null,
+      credits: [],
+      creditsObserved: true,
+      invalidPayload: false,
+    });
+  });
+
+  it('Test 2: handles count-only payload without credits array as unobserved detail', () => {
+    const result = normalizeCodexResetCreditsPayload({ available_count: 2 });
+    expect(result).toEqual({
+      availableCount: 2,
+      credits: [],
+      creditsObserved: false,
+      invalidPayload: false,
+    });
+  });
+
+  it('Test 3: marks payload with invalid credits type and missing available_count as invalid', () => {
+    const result = normalizeCodexResetCreditsPayload({ credits: 'invalid' });
+    expect(result).toEqual({
+      availableCount: null,
+      credits: [],
+      creditsObserved: false,
+      invalidPayload: true,
+    });
+  });
+
+  it('Test 4: marks payload with invalid available_count and missing credits as invalid', () => {
+    const result = normalizeCodexResetCreditsPayload({ available_count: 'invalid' });
+    expect(result).toEqual({
+      availableCount: null,
+      credits: [],
+      creditsObserved: false,
+      invalidPayload: true,
+    });
+  });
+
+  it('Test 5: preserves valid available_count even when credits field is malformed', () => {
+    const result = normalizeCodexResetCreditsPayload({
+      available_count: 2,
+      credits: 'invalid',
+    });
+    expect(result).toEqual({
+      availableCount: 2,
+      credits: [],
+      creditsObserved: false,
+      invalidPayload: false,
+    });
+  });
+
+  it('Test 6: preserves valid available_count and explicit empty credits array independently', () => {
+    const result = normalizeCodexResetCreditsPayload({
+      available_count: 2,
+      credits: [],
+    });
+    expect(result).toEqual({
+      availableCount: 2,
+      credits: [],
+      creditsObserved: true,
+      invalidPayload: false,
+    });
+  });
+});
+
+describe('resolveCodexResetCreditsObservationCount', () => {
+  const creditA = { id: 'A', status: 'available', grantedAt: '', expiresAt: '2026-10-04' };
+
+  it('verifies count resolver matrix with creditsObserved presence', () => {
+    // availableCount=2, creditsObserved=false -> count=2
+    expect(resolveCodexResetCreditsObservationCount(2, [], false)).toBe(2);
+
+    // availableCount=null, creditsObserved=true, credits=[] -> count=0
+    expect(resolveCodexResetCreditsObservationCount(null, [], true)).toBe(0);
+
+    // availableCount=null, creditsObserved=true, credits=[A] -> count=1
+    expect(resolveCodexResetCreditsObservationCount(null, [creditA], true)).toBe(1);
+
+    // availableCount=null, creditsObserved=false, normalized credits=[] -> count=null
+    expect(resolveCodexResetCreditsObservationCount(null, [], false)).toBeNull();
   });
 });
 

@@ -464,6 +464,7 @@ const resolveCodexSpendControlInfo = (payload: CodexUsagePayload) => {
 export type CodexResetCreditsData = {
   availableCount: number | null;
   credits: CodexRateLimitResetCredit[];
+  creditsObserved: boolean;
   error: string | null;
   observedAtMs?: number;
   resetCreditsEvidenceAtMs?: number | null;
@@ -501,6 +502,7 @@ export const fetchCodexResetCredits = async (
       return {
         availableCount: null,
         credits: [],
+        creditsObserved: false,
         error: getApiCallErrorMessage(result),
       };
     }
@@ -510,24 +512,32 @@ export const fetchCodexResetCredits = async (
       return {
         availableCount: null,
         credits: [],
+        creditsObserved: false,
         error: t('codex_quota.reset_credits_invalid_payload'),
       };
     }
 
     const observedAtMs = Date.now();
+    const hasCountObservation =
+      payload.availableCount !== null || payload.creditsObserved;
+    const hasDetailObservation = payload.creditsObserved;
+
     return {
       availableCount: payload.availableCount,
       credits: payload.credits,
+      creditsObserved: payload.creditsObserved,
       error: null,
       observedAtMs,
-      resetCreditsEvidenceAtMs: observedAtMs,
-      resetCreditsCountEvidenceAtMs: payload.availableCount !== null ? observedAtMs : null,
-      resetCreditsDetailEvidenceAtMs: observedAtMs,
+      resetCreditsEvidenceAtMs:
+        hasCountObservation || hasDetailObservation ? observedAtMs : null,
+      resetCreditsCountEvidenceAtMs: hasCountObservation ? observedAtMs : null,
+      resetCreditsDetailEvidenceAtMs: hasDetailObservation ? observedAtMs : null,
     };
   } catch (err: unknown) {
     return {
       availableCount: null,
       credits: [],
+      creditsObserved: false,
       error: err instanceof Error ? err.message : 'Failed to fetch Codex reset credits',
     };
   }
@@ -598,31 +608,39 @@ export const fetchCodexQuota = async (
   const summary = await fetchCodexQuotaSummary(file, t, requestScope);
   const resetCredits = await fetchCodexResetCredits(file, t, requestScope);
 
-  const hasValidResetDetail = !resetCredits.error && resetCredits.resetCreditsEvidenceAtMs != null;
+  const hasResetDetailObservation =
+    !resetCredits.error &&
+    resetCredits.creditsObserved &&
+    resetCredits.resetCreditsDetailEvidenceAtMs != null;
+
   const detailCount = resolveCodexResetCreditsObservationCount(
     resetCredits.availableCount,
-    resetCredits.credits
+    resetCredits.credits,
+    resetCredits.creditsObserved
   );
-  const rateLimitResetCreditsAvailableCount =
-    hasValidResetDetail && detailCount !== null
-      ? detailCount
-      : summary.rateLimitResetCreditsAvailableCount;
+  const hasResetCountObservation = !resetCredits.error && detailCount !== null;
+
+  const rateLimitResetCreditsAvailableCount = hasResetCountObservation
+    ? detailCount
+    : summary.rateLimitResetCreditsAvailableCount;
 
   return {
     ...summary,
     rateLimitResetCreditsAvailableCount,
-    rateLimitResetCredits: resetCredits.credits,
+    rateLimitResetCredits: hasResetDetailObservation ? resetCredits.credits : [],
     rateLimitResetCreditsError: resetCredits.error,
-    resetCreditsEvidenceAtMs: hasValidResetDetail
+    resetCreditsEvidenceAtMs: hasResetDetailObservation
       ? resetCredits.resetCreditsEvidenceAtMs
-      : summary.resetCreditsEvidenceAtMs,
-    resetCreditsCountEvidenceAtMs: hasValidResetDetail
+      : hasResetCountObservation
+        ? (resetCredits.resetCreditsCountEvidenceAtMs ?? resetCredits.observedAtMs ?? summary.resetCreditsEvidenceAtMs)
+        : summary.resetCreditsEvidenceAtMs,
+    resetCreditsCountEvidenceAtMs: hasResetCountObservation
       ? (resetCredits.resetCreditsCountEvidenceAtMs ?? resetCredits.observedAtMs ?? summary.resetCreditsCountEvidenceAtMs)
       : summary.resetCreditsCountEvidenceAtMs,
-    resetCreditsDetailEvidenceAtMs: hasValidResetDetail
+    resetCreditsDetailEvidenceAtMs: hasResetDetailObservation
       ? (resetCredits.resetCreditsDetailEvidenceAtMs ?? resetCredits.observedAtMs ?? null)
       : null,
-    resetCreditsDetailStale: hasValidResetDetail ? false : undefined,
+    resetCreditsDetailStale: hasResetDetailObservation ? false : undefined,
   };
 };
 
