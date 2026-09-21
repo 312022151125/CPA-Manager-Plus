@@ -199,8 +199,7 @@ export const mergeCodexResetCreditsFromQuotaSnapshots = (
     Number.isFinite(quota.resetCreditsCountEvidenceAtMs) &&
     quota.resetCreditsCountEvidenceAtMs > 0;
   const localCountEvidenceAtMs =
-    resolveCodexResetCreditsCountEvidenceAtMs(quota) ??
-    (quota?.fetchedAtMs ?? quota?.observedAtMs ?? 0);
+    resolveCodexResetCreditsCountEvidenceAtMs(quota) ?? 0;
 
   const hasLocalDetailEvidence =
     typeof quota?.resetCreditsDetailEvidenceAtMs === 'number' &&
@@ -208,6 +207,11 @@ export const mergeCodexResetCreditsFromQuotaSnapshots = (
     quota.resetCreditsDetailEvidenceAtMs > 0;
   const localDetailEvidenceAtMs =
     resolveCodexResetCreditsDetailEvidenceAtMs(quota) ?? 0;
+
+  const localDetailInvalidationBoundaryAtMs =
+    quota?.resetCreditsDetailStale === true
+      ? Math.max(localDetailEvidenceAtMs, localCountEvidenceAtMs)
+      : localDetailEvidenceAtMs;
 
   const usableSnapshots = snapshots.filter(
     (snapshot) =>
@@ -239,16 +243,20 @@ export const mergeCodexResetCreditsFromQuotaSnapshots = (
 
   const useSnapshotCount =
     countSnapshot !== undefined &&
-    (quota?.rateLimitResetCreditsAvailableCount === undefined && !hasLocalCountEvidence
+    ((quota?.rateLimitResetCreditsAvailableCount === undefined ||
+      quota?.rateLimitResetCreditsAvailableCount === null) &&
+    !hasLocalCountEvidence
       ? true
       : countObservedAt >= localCountEvidenceAtMs);
 
   const useSnapshotCredits =
     creditsSnapshot !== undefined &&
     !localIsZeroCountAtOrAfterSnapshot &&
-    (quota?.rateLimitResetCredits === undefined && !hasLocalDetailEvidence
-      ? true
-      : creditsObservedAt >= localDetailEvidenceAtMs);
+    (quota?.resetCreditsDetailStale === true
+      ? creditsObservedAt >= localDetailInvalidationBoundaryAtMs
+      : quota?.rateLimitResetCredits === undefined && !hasLocalDetailEvidence
+        ? true
+        : creditsObservedAt >= localDetailInvalidationBoundaryAtMs);
 
   if (!useSnapshotCount && !useSnapshotCredits) return quota;
 

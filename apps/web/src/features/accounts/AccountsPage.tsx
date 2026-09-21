@@ -329,6 +329,7 @@ import {
   type CodexResetCreditsData,
   shouldAutoFetchCodexResetCreditDetails,
   buildCodexResetCreditAutoFetchSignature,
+  resolveCodexResetCreditsObservationCount,
 } from '@/utils/quota';
 import type { AuthJsonInputType } from '@/features/authFiles/sessionAuthConverter';
 import {
@@ -5550,19 +5551,20 @@ export function AccountsPage() {
                 Date.now();
               const countEvidence =
                 data.resetCreditsCountEvidenceAtMs ?? observedAt;
+              const resolvedCount = resolveCodexResetCreditsObservationCount(
+                data.availableCount,
+                data.credits
+              );
               return {
                 ...prev,
                 [storeKey]: {
                   ...base,
-                  rateLimitResetCreditsAvailableCount:
-                    data.availableCount !== null
-                      ? data.availableCount
-                      : (base.rateLimitResetCreditsAvailableCount ?? null),
+                  rateLimitResetCreditsAvailableCount: resolvedCount,
                   rateLimitResetCredits: data.credits,
                   rateLimitResetCreditsError: null,
                   resetCreditsEvidenceAtMs: observedAt,
                   resetCreditsCountEvidenceAtMs:
-                    data.availableCount !== null
+                    resolvedCount !== null
                       ? countEvidence
                       : (base.resetCreditsCountEvidenceAtMs ?? null),
                   resetCreditsDetailEvidenceAtMs: observedAt,
@@ -8190,13 +8192,18 @@ export function AccountsPage() {
       </Button>
     ) : null;
 
+    const getAccountManualQuotaRefreshMode = (
+      targetRow: AccountRow
+    ): AccountQuotaRefreshMode =>
+      targetRow.provider === CODEX_CONFIG.type ? 'detail' : 'summary';
+
     const refreshButton = (
       <Button
         variant="secondary"
         size="sm"
         iconOnly
         className={`${styles.accountIconButton} ${styles.accountIconButtonRefresh}`}
-        onClick={() => void refreshAccountQuota(row, 'summary')}
+        onClick={() => void refreshAccountQuota(row, getAccountManualQuotaRefreshMode(row))}
         disabled={
           disableControls || quotaRefreshing || isManualQuotaRefreshing(row) || row.runtimeOnly
         }

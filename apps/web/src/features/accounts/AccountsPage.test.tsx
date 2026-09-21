@@ -6216,7 +6216,7 @@ describe('AccountsPage replacement flows', () => {
       }),
     };
     const quotaResult = createDeferred<CodexQuotaData>();
-    vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockImplementation(() => quotaResult.promise);
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockImplementation(() => quotaResult.promise);
     const renderer = await renderAccountsPage();
 
     let refreshPromise!: Promise<void>;
@@ -6339,7 +6339,7 @@ describe('AccountsPage replacement flows', () => {
     mocks.quotaState.codexQuota = buildCredentialScopedQuotaRecord(original, oldQuota);
     installCodexQuotaStoreMutationMock();
     const quotaResult = createDeferred<CodexQuotaData>();
-    vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockImplementation(() => quotaResult.promise);
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockImplementation(() => quotaResult.promise);
     const originalSelectionKey = getAuthFileSelectionKey(original);
     const replacementSelectionKey = getAuthFileSelectionKey(replacement);
     const replacementStoreKey = getQuotaCredentialStoreKey(replacement);
@@ -10616,7 +10616,7 @@ describe('AccountsPage replacement flows', () => {
       requestMonitoringAvailable: true,
       serverCodexInspectionAvailable: false,
     };
-    const quotaFetch = vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
+    const quotaFetch = vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
 
     const renderer = await renderAccountsPage();
     await flushPromises();
@@ -10643,7 +10643,7 @@ describe('AccountsPage replacement flows', () => {
     const firstQuota = createDeferred<CodexQuotaData>();
     const secondQuota = createDeferred<CodexQuotaData>();
     const quotaFetch = vi
-      .spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota')
+      .spyOn(CODEX_CONFIG, 'fetchQuota')
       .mockReturnValueOnce(firstQuota.promise)
       .mockReturnValueOnce(secondQuota.promise);
     const renderer = await renderAccountsPage();
@@ -10713,7 +10713,7 @@ describe('AccountsPage replacement flows', () => {
       disabled: true,
     } as AuthFileItem;
     mocks.files = [file];
-    const quotaFetch = vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
+    const quotaFetch = vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
 
     const renderer = await renderAccountsPage();
     const refreshButton = findAccountCardButtonByAriaLabel(
@@ -10733,7 +10733,7 @@ describe('AccountsPage replacement flows', () => {
 
   it('shows an action-level success notification for a single quota refresh', async () => {
     const file = mocks.files[0];
-    vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
     const renderer = await renderAccountsPage();
 
     await act(async () => {
@@ -10795,7 +10795,7 @@ describe('AccountsPage replacement flows', () => {
   it('masks the account name in a single quota success notification', async () => {
     mocks.location = { pathname: '/accounts', search: '?display=masked' };
     const file = mocks.files[0];
-    vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
     const renderer = await renderAccountsPage();
 
     await act(async () => {
@@ -10819,7 +10819,7 @@ describe('AccountsPage replacement flows', () => {
   it('keeps the provider error in a single quota refresh notification', async () => {
     const file = mocks.files[0];
     installCodexQuotaStoreMutationMock();
-    vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockRejectedValue(new Error('401 Unauthorized'));
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockRejectedValue(new Error('401 Unauthorized'));
     const renderer = await renderAccountsPage();
 
     await act(async () => {
@@ -10844,7 +10844,7 @@ describe('AccountsPage replacement flows', () => {
     mocks.location = { pathname: '/accounts', search: '?display=masked' };
     const file = mocks.files[0];
     installCodexQuotaStoreMutationMock();
-    vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockRejectedValue(new Error('401 Unauthorized'));
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockRejectedValue(new Error('401 Unauthorized'));
     const renderer = await renderAccountsPage();
 
     await act(async () => {
@@ -11653,7 +11653,7 @@ describe('AccountsPage replacement flows', () => {
       ],
     });
     installCodexQuotaStoreMutationMock();
-    vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockResolvedValue({
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue({
       ...makeCodexQuotaData(),
       windows: [
         {
@@ -11770,7 +11770,7 @@ describe('AccountsPage replacement flows', () => {
       ],
     });
     installCodexQuotaStoreMutationMock();
-    vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockResolvedValue({
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue({
       ...makeCodexQuotaData(),
       windows: [
         {
@@ -11882,7 +11882,7 @@ describe('AccountsPage replacement flows', () => {
       items: [makeCandidate(5, 'reauth', oldReauthAtMs), disableCandidate],
     });
     installCodexQuotaStoreMutationMock();
-    vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockResolvedValue({
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue({
       ...makeCodexQuotaData(),
       windows: [
         {
@@ -11939,7 +11939,7 @@ describe('AccountsPage replacement flows', () => {
   it('turns a manual quota 401 into a reauth state', async () => {
     const file = mocks.files[0];
     installCodexQuotaStoreMutationMock();
-    vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockRejectedValue(
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockRejectedValue(
       Object.assign(new Error('unauthorized'), { status: 401 })
     );
     const renderer = await renderAccountsPage();
@@ -11981,7 +11981,7 @@ describe('AccountsPage replacement flows', () => {
     };
     mocks.quotaState.codexQuota = { [storeKey]: previousQuota };
     const quotaResult = createDeferred<CodexQuotaData>();
-    vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockImplementation(() => quotaResult.promise);
+    vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockImplementation(() => quotaResult.promise);
     const renderer = await renderAccountsPage();
 
     let refreshPromise!: Promise<void>;
@@ -18282,11 +18282,11 @@ describe('AccountsPage replacement flows', () => {
   });
 
   describe('responsive quota presentation and split codex refresh flows', () => {
-    it('calls summary only on single row refresh for Codex', async () => {
+    it('calls full detail refresh on single row refresh for Codex', async () => {
       const file = makeCodexFile('codex-row-summary.json', 'auth-detail-1', 'detail@example.com');
       mocks.files = [file];
-      const summarySpy = vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
-      const detailSpy = vi.spyOn(CODEX_CONFIG, 'fetchQuota');
+      const detailSpy = vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
+      const summarySpy = vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota');
 
       const renderer = await renderAccountsPage();
       await flushPromises();
@@ -18301,8 +18301,8 @@ describe('AccountsPage replacement flows', () => {
       });
       await flushPromises();
 
-      expect(summarySpy).toHaveBeenCalledTimes(1);
-      expect(detailSpy).not.toHaveBeenCalled();
+      expect(detailSpy).toHaveBeenCalledTimes(1);
+      expect(summarySpy).not.toHaveBeenCalled();
     });
 
     it('calls full refresh on credential detail quota refresh for Codex (1 usage, 1 reset credits)', async () => {

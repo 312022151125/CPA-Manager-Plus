@@ -72,15 +72,36 @@ export const resolveCodexResetCreditsCountEvidenceAtMs = (
   ) {
     return quota.resetCreditsCountEvidenceAtMs;
   }
-  if (
-    typeof quota.resetCreditsEvidenceAtMs === 'number' &&
-    Number.isFinite(quota.resetCreditsEvidenceAtMs) &&
-    quota.resetCreditsEvidenceAtMs > 0
-  ) {
-    return quota.resetCreditsEvidenceAtMs;
+  const hasCount =
+    typeof quota.rateLimitResetCreditsAvailableCount === 'number' &&
+    Number.isFinite(quota.rateLimitResetCreditsAvailableCount);
+  if (hasCount) {
+    if (
+      typeof quota.resetCreditsEvidenceAtMs === 'number' &&
+      Number.isFinite(quota.resetCreditsEvidenceAtMs) &&
+      quota.resetCreditsEvidenceAtMs > 0
+    ) {
+      return quota.resetCreditsEvidenceAtMs;
+    }
+    const fallback = quota.fetchedAtMs ?? quota.observedAtMs;
+    return typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0
+      ? fallback
+      : null;
   }
-  const fallback = quota.fetchedAtMs ?? quota.observedAtMs;
-  return typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0 ? fallback : null;
+  return null;
+};
+
+export const resolveCodexResetCreditsObservationCount = (
+  availableCount: number | null | undefined,
+  credits: readonly unknown[] | undefined
+): number | null => {
+  if (typeof availableCount === 'number' && Number.isFinite(availableCount)) {
+    return availableCount;
+  }
+  if (Array.isArray(credits)) {
+    return credits.length;
+  }
+  return null;
 };
 
 export const resolveCodexResetCreditsDetailEvidenceAtMs = (
@@ -148,9 +169,10 @@ export const mergeCodexResetCreditsEvidence = (
     const observedAt =
       incomingDetailEvidence ?? incoming.observedAtMs ?? Date.now();
     const count =
-      incoming.rateLimitResetCreditsAvailableCount !== undefined
-        ? incoming.rateLimitResetCreditsAvailableCount
-        : (previousState?.rateLimitResetCreditsAvailableCount ?? null);
+      resolveCodexResetCreditsObservationCount(
+        incoming.rateLimitResetCreditsAvailableCount,
+        incoming.rateLimitResetCredits
+      ) ?? (previousState?.rateLimitResetCreditsAvailableCount ?? null);
     const countEvidence =
       incoming.resetCreditsCountEvidenceAtMs ?? incoming.resetCreditsEvidenceAtMs ?? observedAt;
     return {

@@ -86,25 +86,47 @@ describe('normalizeCodexResetCreditsPayload', () => {
 });
 
 describe('resolveCodexResetCreditsCountEvidenceAtMs and resolveCodexResetCreditsDetailEvidenceAtMs', () => {
-  it('prefers resetCreditsCountEvidenceAtMs and falls back to resetCreditsEvidenceAtMs or fetchedAtMs', () => {
+  it('prefers resetCreditsCountEvidenceAtMs and falls back to resetCreditsEvidenceAtMs or fetchedAtMs only when count is a finite number', () => {
+    // count=2 + resetCreditsCountEvidenceAtMs=100 -> 100
     expect(
       resolveCodexResetCreditsCountEvidenceAtMs({
+        rateLimitResetCreditsAvailableCount: 2,
         resetCreditsCountEvidenceAtMs: 100,
         resetCreditsEvidenceAtMs: 50,
       })
     ).toBe(100);
 
+    // count=2 + legacy resetCreditsEvidenceAtMs=90 -> 90
     expect(
       resolveCodexResetCreditsCountEvidenceAtMs({
-        resetCreditsEvidenceAtMs: 50,
+        rateLimitResetCreditsAvailableCount: 2,
+        resetCreditsEvidenceAtMs: 90,
       })
-    ).toBe(50);
+    ).toBe(90);
 
+    // count=2 + fetchedAtMs=80 -> 80
     expect(
       resolveCodexResetCreditsCountEvidenceAtMs({
-        fetchedAtMs: 25,
+        rateLimitResetCreditsAvailableCount: 2,
+        fetchedAtMs: 80,
       })
-    ).toBe(25);
+    ).toBe(80);
+
+    // count=null + fetchedAtMs=80 -> null
+    expect(
+      resolveCodexResetCreditsCountEvidenceAtMs({
+        rateLimitResetCreditsAvailableCount: null,
+        fetchedAtMs: 80,
+      })
+    ).toBeNull();
+
+    // count=undefined + observedAtMs=80 -> null
+    expect(
+      resolveCodexResetCreditsCountEvidenceAtMs({
+        rateLimitResetCreditsAvailableCount: undefined,
+        observedAtMs: 80,
+      })
+    ).toBeNull();
   });
 
   it('resolves detail evidence when resetCreditsDetailEvidenceAtMs is present', () => {
@@ -233,6 +255,33 @@ describe('mergeCodexResetCreditsEvidence', () => {
     expect(merged.rateLimitResetCredits).toEqual([creditA, creditB]);
     expect(merged.resetCreditsCountEvidenceAtMs).toBe(3000);
     expect(merged.resetCreditsDetailEvidenceAtMs).toBe(3000);
+    expect(merged.resetCreditsDetailStale).toBe(false);
+  });
+
+  it('resolves count from credits length when availableCount is missing in full detail observation', () => {
+    const previous = {
+      rateLimitResetCreditsAvailableCount: 2,
+      rateLimitResetCredits: [creditA, creditB],
+      resetCreditsDetailEvidenceAtMs: 1000,
+      resetCreditsCountEvidenceAtMs: 1000,
+      resetCreditsDetailStale: false,
+    };
+
+    const detailIncoming = {
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [creditA],
+      resetCreditsDetailEvidenceAtMs: 2500,
+      observedAtMs: 2500,
+    };
+
+    const merged = mergeCodexResetCreditsEvidence(previous, detailIncoming, {
+      isFullDetailObservation: true,
+    });
+
+    expect(merged.rateLimitResetCreditsAvailableCount).toBe(1);
+    expect(merged.rateLimitResetCredits).toEqual([creditA]);
+    expect(merged.resetCreditsCountEvidenceAtMs).toBe(2500);
+    expect(merged.resetCreditsDetailEvidenceAtMs).toBe(2500);
     expect(merged.resetCreditsDetailStale).toBe(false);
   });
 
