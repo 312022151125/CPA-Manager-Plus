@@ -45,6 +45,7 @@ export type AccountQuotaWindowSource =
   | 'antigravity'
   | 'devin'
   | 'kimi'
+  | 'meta'
   | 'xai'
   | 'summary';
 
@@ -859,6 +860,11 @@ export const buildAccountQuotaDisplayWindows = (
     if (windows.length) return windows;
   }
 
+  if (row.provider === 'meta') {
+    const windows = buildMetaQuotaDisplayWindows(row, options);
+    if (windows.length) return windows;
+  }
+
   return buildSummaryQuotaDisplayWindow(row, options);
 };
 
@@ -896,6 +902,48 @@ const buildDevinQuotaDisplayWindows = (
       source: 'devin',
       modelScope: { kind: 'all', complete: true },
       observedAtMs: quota.observedAtMs ?? quota.fetchedAtMs ?? null,
+      nowMs: options.nowMs,
+    });
+  });
+};
+
+const buildMetaQuotaDisplayWindows = (
+  row: AccountRow,
+  options: BuildAccountQuotaDisplayWindowsOptions
+): AccountQuotaDisplayWindow[] => {
+  const quota = getCredentialScopedQuotaState(options.stores.metaQuota, row.raw);
+  if (!quota || !quota.windows?.length) return [];
+  return quota.windows.map((window) => {
+    const remainingPercent =
+      typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent)
+        ? clampDisplayPercent(100 - window.usedPercent)
+        : null;
+    const usedPercent =
+      typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent)
+        ? clampDisplayPercent(window.usedPercent)
+        : null;
+    const hasReset = isValidQuotaResetAtMs(window.resetAtMs);
+    const resetLabel =
+      hasReset && window.resetAtMs !== null
+        ? formatQuotaResetTime(window.resetAtMs)
+        : '-';
+    const labelKey = window.id === 'window' ? 'meta_quota.window' : 'meta_quota.weekly';
+    const label = options.translateQuotaWindowLabel(undefined, labelKey);
+
+    return buildAccountQuotaDisplayWindow({
+      key: `meta:${window.id}`,
+      label,
+      remainingPercent,
+      usedPercent,
+      resetLabel,
+      resetAtMs: window.resetAtMs,
+      resetAccuracy: hasReset && window.resetAccuracy ? window.resetAccuracy : 'unknown',
+      limitWindowSeconds: window.id === 'weekly' ? null : (window.limitWindowSeconds ?? null),
+      windowMode: 'fixed',
+      source: 'meta',
+      modelScope: { kind: 'all', complete: true },
+      observedAtMs: quota.observedAtMs ?? quota.fetchedAtMs ?? null,
+      quotaProgressObservedAtMs: window.quotaProgressObservedAtMs ?? null,
       nowMs: options.nowMs,
     });
   });

@@ -36,6 +36,7 @@ import type {
   CredentialScopedQuotaState,
   DevinQuotaState,
   KimiQuotaState,
+  MetaQuotaState,
   XaiQuotaState,
 } from '@/types';
 import type { ModelInfo } from '@/utils/models';
@@ -62,6 +63,7 @@ export type DemoQuotaStoreState = {
   codexQuota: Record<string, CodexQuotaState>;
   devinQuota: Record<string, DevinQuotaState>;
   kimiQuota: Record<string, KimiQuotaState>;
+  metaQuota: Record<string, MetaQuotaState>;
   xaiQuota: Record<string, XaiQuotaState>;
 };
 
@@ -5837,6 +5839,7 @@ export const getDemoUsageServiceStatus = (): UsageServiceStatus => ({
 const getDemoQuotaStoreStateByFileName = (
   baseNow = getDemoEvidenceEpochMs()
 ): DemoQuotaStoreState => ({
+  metaQuota: {},
   codexQuota: {
     'codex-team-01.json': {
       status: 'success',
@@ -6535,6 +6538,7 @@ export const getDemoQuotaStoreState = (baseNow = getDemoEvidenceEpochMs()): Demo
     codexQuota: scopeDemoQuotaRecord(raw.codexQuota, filesByName),
     devinQuota: scopeDemoQuotaRecord(raw.devinQuota, filesByName),
     kimiQuota: scopeDemoQuotaRecord(raw.kimiQuota, filesByName),
+    metaQuota: scopeDemoQuotaRecord(raw.metaQuota, filesByName),
     xaiQuota: scopeDemoQuotaRecord(raw.xaiQuota, filesByName),
   };
 };

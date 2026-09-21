@@ -1953,6 +1953,23 @@
     "plan_start": "套餐生效时间",
     "plan_end": "套餐到期时间"
   },
+  "meta_quota": {
+    "title": "Meta 额度",
+    "window": "当前窗口",
+    "weekly": "周额度",
+    "missing_identity": "Meta 凭据缺少文件名或 auth_index",
+    "missing_auth_index": "Meta 凭据缺少 auth_index",
+    "missing_file": "Meta 凭据文件不存在或无效",
+    "invalid_auth_file": "Meta 凭据文件格式无效",
+    "missing_dca_token": "Meta 凭据文件中缺少或存在无效的 DCA 令牌",
+    "download_failed": "下载 Meta 凭据文件失败",
+    "stale_request": "由于凭据或连接变更，Meta 额度请求已取消",
+    "request_failed": "请求 Meta 额度失败",
+    "invalid_response": "Meta 额度接口返回无效响应",
+    "idle": "点击此处刷新额度",
+    "loading": "正在加载额度...",
+    "refresh_button": "刷新额度"
+  },
   "vertex_import": {
     "title": "Vertex JSON 登录",
     "description": "上传 Google 服务账号 JSON，使用 CLI vertex-import 同步规则写入 auth-dir/vertex-<project>.json。",

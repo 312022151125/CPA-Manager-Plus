@@ -476,7 +476,7 @@ export const buildAccountQuotaSnapshotQueryAccounts = (
   );
   return rows.flatMap((row) => {
     const target = targets.get(row.selectionKey);
-    if (!target || !['codex', 'claude', 'antigravity', 'kimi', 'xai', 'devin'].includes(row.provider)) {
+    if (!target || !['codex', 'claude', 'antigravity', 'kimi', 'xai', 'devin', 'meta'].includes(row.provider)) {
       return [];
     }
     return [
@@ -716,10 +716,21 @@ export const mergeAccountQuotaSnapshotWindows = (
     const snapshotQuotaProgressObservedAtMs = resolveSnapshotQuotaProgressObservedAtMs(snapshot);
     const snapshotQuotaEvidenceObservedAtMs = resolveSnapshotQuotaEvidenceObservedAtMs(snapshot);
     const liveQuotaEvidenceObservedAtMs = definitionQuotaProgressObservedAtMs;
+    const isMeta = definition.provider === 'meta' || options.provider === 'meta';
+    const liveObservedAtMs = definition.observedAtMs;
+    const isMetaNewerLiveUnknown =
+      isMeta &&
+      definition.quotaProgressObservedAtMs === null &&
+      typeof liveObservedAtMs === 'number' &&
+      Number.isFinite(liveObservedAtMs) &&
+      snapshotQuotaEvidenceObservedAtMs !== null &&
+      liveObservedAtMs > snapshotQuotaEvidenceObservedAtMs;
+
     const snapshotQuotaIsAtLeastLive =
-      liveQuotaEvidenceObservedAtMs === null ||
-      (snapshotQuotaEvidenceObservedAtMs !== null &&
-        snapshotQuotaEvidenceObservedAtMs >= liveQuotaEvidenceObservedAtMs);
+      !isMetaNewerLiveUnknown &&
+      (liveQuotaEvidenceObservedAtMs === null ||
+        (snapshotQuotaEvidenceObservedAtMs !== null &&
+          snapshotQuotaEvidenceObservedAtMs >= liveQuotaEvidenceObservedAtMs));
     const differentCodexCycle = cycleRelationship === 'different';
     const snapshotCanSupersedeDifferentCycle = differentCodexCycle && snapshotMetadataIsNewer;
     const quotaEvidenceKind = snapshotQuotaEvidenceKind(snapshot);
@@ -934,6 +945,7 @@ const snapshotDefinition = (
     options.provider === 'claude' ||
     options.provider === 'antigravity' ||
     options.provider === 'kimi' ||
+    options.provider === 'meta' ||
     options.provider === 'xai' ||
     options.provider === 'devin'
       ? options.provider

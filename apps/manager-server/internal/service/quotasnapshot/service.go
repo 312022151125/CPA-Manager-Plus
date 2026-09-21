@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	validProviders      = stringSet("codex", "claude", "antigravity", "kimi", "xai", "devin")
+	validProviders      = stringSet("codex", "claude", "antigravity", "kimi", "xai", "devin", "meta")
 	validModes          = stringSet("fixed", "calendar", "rolling", "non_window", "unknown")
 	validScopes         = stringSet("all", "family", "models", "product", "feature")
 	validSources        = stringSet("api_query", "response_header", "response_body", "inspection")

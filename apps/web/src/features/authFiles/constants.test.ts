@@ -70,8 +70,8 @@ describe('authFiles constants - meta', () => {
     expect(normalizeProviderKey('MUSE')).toBe('meta');
   });
 
-  it('does not include meta in QUOTA_PROVIDER_TYPES during phase 1', () => {
-    expect((QUOTA_PROVIDER_TYPES as Set<string>).has('meta')).toBe(false);
+  it('includes meta in QUOTA_PROVIDER_TYPES in phase 2', () => {
+    expect((QUOTA_PROVIDER_TYPES as Set<string>).has('meta')).toBe(true);
   });
 
   it('resolves type label for meta as Muse (Meta)', () => {
@@ -87,10 +87,10 @@ describe('authFiles constants - meta', () => {
   });
 
   it('correctly evaluates quota refresh eligibility via isQuotaRefreshSupportedProvider', () => {
-    // Meta / Muse is not quota-refreshable in phase 1
-    expect(isQuotaRefreshSupportedProvider('meta')).toBe(false);
-    expect(isQuotaRefreshSupportedProvider('muse')).toBe(false);
-    expect(isQuotaRefreshSupportedProvider('META')).toBe(false);
+    // Meta / Muse is quota-refreshable in phase 2
+    expect(isQuotaRefreshSupportedProvider('meta')).toBe(true);
+    expect(isQuotaRefreshSupportedProvider('muse')).toBe(true);
+    expect(isQuotaRefreshSupportedProvider('META')).toBe(true);
 
     // Supported providers (including Devin)
     expect(isQuotaRefreshSupportedProvider('devin')).toBe(true);

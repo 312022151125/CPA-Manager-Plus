@@ -1957,6 +1957,23 @@
     "plan_start": "Начало тарифа",
     "plan_end": "Окончание тарифа"
   },
+  "meta_quota": {
+    "title": "Квота Meta",
+    "window": "Текущее окно",
+    "weekly": "Недельный лимит",
+    "missing_identity": "В учетных данных Meta отсутствует имя файла или auth_index",
+    "missing_auth_index": "В учетных данных Meta отсутствует auth_index",
+    "missing_file": "Файл учетных данных Meta отсутствует или недействителен",
+    "invalid_auth_file": "Неверный формат файла учетных данных Meta",
+    "missing_dca_token": "В файле учетных данных Meta отсутствует или поврежден токен DCA",
+    "download_failed": "Не удалось загрузить файл учетных данных Meta",
+    "stale_request": "Запрос квоты Meta отменен из-за смены учетных данных или подключения",
+    "request_failed": "Не удалось запросить квоту Meta",
+    "invalid_response": "Недопустимый ответ API квоты Meta",
+    "idle": "Нажмите для обновления квоты",
+    "loading": "Загрузка квоты...",
+    "refresh_button": "Обновить квоту"
+  },
   "vertex_import": {
     "title": "Вход с Vertex JSON",
     "description": "Загрузите JSON ключа сервисного аккаунта Google, чтобы сохранить его как auth-dir/vertex-<project>.json по тем же правилам, что и помощник CLI vertex-import.",

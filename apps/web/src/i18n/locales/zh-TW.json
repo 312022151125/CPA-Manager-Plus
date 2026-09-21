@@ -1953,6 +1953,23 @@
     "plan_start": "方案生效時間",
     "plan_end": "方案到期時間"
   },
+  "meta_quota": {
+    "title": "Meta 配額",
+    "window": "目前週期",
+    "weekly": "每週上限",
+    "missing_identity": "Meta 憑證缺少檔案名稱或 auth_index",
+    "missing_auth_index": "Meta 憑證缺少 auth_index",
+    "missing_file": "Meta 憑證檔案不存在或無效",
+    "invalid_auth_file": "Meta 憑證檔案格式無效",
+    "missing_dca_token": "Meta 憑證檔案中缺少或存在無效的 DCA 權杖",
+    "download_failed": "下載 Meta 憑證檔案失敗",
+    "stale_request": "由於憑證或連線變更，Meta 配額請求已取消",
+    "request_failed": "請求 Meta 配額失敗",
+    "invalid_response": "Meta 配額介面回傳無效回應",
+    "idle": "點擊此處重新整理配額",
+    "loading": "正在載入配額...",
+    "refresh_button": "重新整理配額"
+  },
   "vertex_import": {
     "title": "Vertex JSON 登入",
     "description": "上傳 Google 服務帳號 JSON，使用 CLI vertex-import 同步規則寫入 auth-dir/vertex-<project>.json。",

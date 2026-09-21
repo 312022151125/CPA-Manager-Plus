@@ -10,6 +10,8 @@ import type {
   DevinQuotaData,
   DevinQuotaState,
   KimiQuotaState,
+  MetaQuotaData,
+  MetaQuotaState,
   XaiBillingSummary,
   XaiQuotaState,
 } from '@/types';
@@ -20,6 +22,7 @@ import type {
   ClaudeQuotaData,
   CodexQuotaData,
   KimiQuotaData,
+  QuotaFetchContext,
 } from '@/utils/quota';
 import {
   buildCodexQuotaWindows,
@@ -29,6 +32,7 @@ import {
   fetchCodexQuotaSummary,
   fetchDevinQuota,
   fetchKimiQuota,
+  fetchMetaQuota,
   fetchXaiQuota,
   filterFreshCodexQuotaWindows,
   findCodexProviderWindowMatch,
@@ -55,7 +59,9 @@ import {
   scopeQuotaStateToCredential,
 } from '@/utils/quota/credentialScope';
 
-type QuotaType = 'antigravity' | 'claude' | 'codex' | 'kimi' | 'xai' | 'devin';
+type QuotaType = 'antigravity' | 'claude' | 'codex' | 'kimi' | 'xai' | 'devin' | 'meta';
+
+export type { QuotaFetchContext };
 
 export interface QuotaConfig<TState, TData> {
   type: QuotaType;
@@ -63,7 +69,8 @@ export interface QuotaConfig<TState, TData> {
   fetchQuota: (
     file: AuthFileItem,
     t: TFunction,
-    requestScope?: AuthFilesApiRequestScope
+    requestScope?: AuthFilesApiRequestScope,
+    context?: QuotaFetchContext
   ) => Promise<TData>;
   getStoreKey?: (file: AuthFileItem) => string;
   buildLoadingState: (file?: AuthFileItem) => TState;
@@ -806,6 +813,45 @@ export const DEVIN_CONFIG: QuotaConfig<DevinQuotaState, DevinQuotaData> = {
     plan: null,
     planStartMs: null,
     planEndMs: null,
+    error: message,
+    errorStatus: status,
+    ...buildQuotaCredentialIdentity(file),
+    failedAtMs: Date.now(),
+  }),
+  scopeState: scopeCredentialQuotaState,
+};
+
+export const META_CONFIG: QuotaConfig<MetaQuotaState, MetaQuotaData> = {
+  type: 'meta',
+  i18nPrefix: 'meta_quota',
+  fetchQuota: fetchMetaQuota,
+  getStoreKey: getQuotaCredentialStoreKey,
+  buildLoadingState: (file) => ({
+    status: 'loading',
+    windows: [],
+    observedAtMs: Date.now(),
+    plan: null,
+    isSubscriptionActive: null,
+    quotaInventoryObserved: false,
+    ...buildQuotaCredentialIdentity(file),
+  }),
+  buildSuccessState: (data, file) => ({
+    status: 'success',
+    windows: data.windows,
+    observedAtMs: data.observedAtMs,
+    plan: data.plan,
+    isSubscriptionActive: data.isSubscriptionActive,
+    quotaInventoryObserved: data.quotaInventoryObserved,
+    ...buildQuotaCredentialIdentity(file),
+    fetchedAtMs: data.observedAtMs ?? Date.now(),
+  }),
+  buildErrorState: (message, status, file) => ({
+    status: 'error',
+    windows: [],
+    observedAtMs: Date.now(),
+    plan: null,
+    isSubscriptionActive: null,
+    quotaInventoryObserved: false,
     error: message,
     errorStatus: status,
     ...buildQuotaCredentialIdentity(file),

@@ -1955,6 +1955,23 @@
     "plan_start": "Plan start",
     "plan_end": "Plan end"
   },
+  "meta_quota": {
+    "title": "Meta Quota",
+    "window": "Current window",
+    "weekly": "Weekly limit",
+    "missing_identity": "Meta credential is missing its file name or auth_index",
+    "missing_auth_index": "Meta credential is missing its auth_index",
+    "missing_file": "Meta credential file is missing or invalid",
+    "invalid_auth_file": "Invalid Meta auth file format",
+    "missing_dca_token": "Missing or invalid DCA token in Meta auth file",
+    "download_failed": "Failed to download Meta auth file",
+    "stale_request": "Meta quota request cancelled due to credential or connection change",
+    "request_failed": "Failed to request Meta quota",
+    "invalid_response": "Invalid response from Meta quota API",
+    "idle": "Click here to refresh quota",
+    "loading": "Loading quota...",
+    "refresh_button": "Refresh Quota"
+  },
   "vertex_import": {
     "title": "Vertex JSON Login",
     "description": "Upload a Google service account JSON to store it as auth-dir/vertex-<project>.json using the same rules as the CLI vertex-import helper.",

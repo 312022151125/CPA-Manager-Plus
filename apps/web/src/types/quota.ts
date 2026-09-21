@@ -639,3 +639,28 @@ export interface DevinQuotaState
   errorStatus?: number;
 }
 
+export interface MetaQuotaWindow {
+  id: 'window' | 'weekly';
+  usedPercent: number | null;
+  resetAtMs: number | null;
+  resetAccuracy: QuotaResetAccuracy;
+  limitWindowSeconds: number | null;
+  quotaProgressObservedAtMs: number | null;
+}
+
+export interface MetaQuotaData {
+  windows: MetaQuotaWindow[];
+  observedAtMs: number;
+  plan: string | null;
+  isSubscriptionActive: boolean | null;
+  quotaInventoryObserved: boolean;
+}
+
+export interface MetaQuotaState
+  extends CredentialScopedQuotaState,
+    MetaQuotaData {
+  status: 'idle' | 'loading' | 'success' | 'error';
+  error?: string;
+  errorStatus?: number;
+}
+
