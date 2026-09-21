@@ -1,7 +1,12 @@
 import type { TFunction } from 'i18next';
 import type { AuthFilesApiRequestScope } from '@/services/api';
 import type { AuthFileItem } from '@/types';
-import { buildQuotaFailureState, getScopedQuotaState, type QuotaConfig } from './quotaConfigs';
+import {
+  buildQuotaFailureState,
+  getScopedQuotaState,
+  type QuotaConfig,
+  type QuotaFetchContext,
+} from './quotaConfigs';
 import {
   captureQuotaCacheGeneration,
   commitIfQuotaCacheCurrent,
@@ -73,9 +78,13 @@ export const refreshQuotaWithConfig = async <TState, TData>({
   }
 
   try {
-    const data = await config.fetchQuota(file, t, requestScope, {
+    const context: QuotaFetchContext = {
       isCurrent: isRefreshCurrent,
-    });
+    };
+    const data =
+      config.type === 'meta'
+        ? await config.fetchQuota(file, t, requestScope, context)
+        : await config.fetchQuota(file, t, requestScope);
     if (!isRefreshCurrent()) return null;
     const state = config.buildSuccessState(data, file);
     const committed = commitIfRefreshCurrent(() => {
