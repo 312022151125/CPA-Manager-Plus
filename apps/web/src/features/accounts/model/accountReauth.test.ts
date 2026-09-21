@@ -24,6 +24,16 @@ describe('accountReauth', () => {
       oauthProvider: 'devin',
       path: '/oauth#oauth-provider-devin',
     });
+    expect(resolveAccountReauthAction({ name: 'meta.json', type: 'meta' })).toEqual({
+      kind: 'navigate',
+      oauthProvider: 'meta',
+      path: '/oauth#oauth-provider-meta',
+    });
+    expect(resolveAccountReauthAction({ name: 'muse.json', provider: 'muse' })).toEqual({
+      kind: 'navigate',
+      oauthProvider: 'meta',
+      path: '/oauth#oauth-provider-meta',
+    });
   });
 
   it('returns an explicit unsupported action for providers without OAuth login', () => {

@@ -248,6 +248,7 @@ export const normalizeAccountProvider = (file: AuthFileItem): string => {
   const raw = readString(file.provider) || readString(file.type) || 'unknown';
   const key = raw.toLowerCase().replace(/_/g, '-');
   if (key === 'x-ai' || key === 'grok') return 'xai';
+  if (key === 'muse') return 'meta';
   return key || 'unknown';
 };
 

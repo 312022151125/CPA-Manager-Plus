@@ -14,6 +14,7 @@ const OAUTH_PROVIDER_BY_ACCOUNT_PROVIDER: Record<string, string> = {
   kimi: 'kimi',
   xai: 'xai',
   devin: 'devin',
+  meta: 'meta',
 };
 
 export const resolveAccountReauthAction = (file: AuthFileItem): AccountReauthAction => {

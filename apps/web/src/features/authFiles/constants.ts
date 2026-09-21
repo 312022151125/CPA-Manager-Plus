@@ -10,6 +10,7 @@ import iconGrokDark from '@/assets/icons/grok-dark.svg';
 import iconIflow from '@/assets/icons/iflow.svg';
 import iconKimiDark from '@/assets/icons/kimi-dark.svg';
 import iconKimiLight from '@/assets/icons/kimi-light.svg';
+import iconMeta from '@/assets/icons/meta.svg';
 import iconQwen from '@/assets/icons/qwen.svg';
 import iconVertex from '@/assets/icons/vertex.svg';
 import type { AuthFileItem } from '@/types';
@@ -114,6 +115,10 @@ export const TYPE_COLORS: Record<string, TypeColorSet> = {
     light: { bg: '#e8f4ff', text: '#155e9b' },
     dark: { bg: '#123b5d', text: '#8dc9f5' },
   },
+  meta: {
+    light: { bg: '#e5f2ff', text: '#0064e0' },
+    dark: { bg: '#0b3564', text: '#70b5ff' },
+  },
   empty: {
     light: { bg: '#f5f5f5', text: '#616161' },
     dark: { bg: '#424242', text: '#bdbdbd' },
@@ -134,6 +139,7 @@ export const AUTH_FILE_ICONS: Record<string, AuthFileIconAsset> = {
   xai: { light: iconGrok, dark: iconGrokDark },
   iflow: iconIflow,
   kimi: { light: iconKimiLight, dark: iconKimiDark },
+  meta: iconMeta,
   qwen: iconQwen,
   vertex: iconVertex,
 };
@@ -151,6 +157,7 @@ export const resolveQuotaErrorMessage = (
 export const normalizeProviderKey = (value: string) => {
   const key = value.trim().toLowerCase().replace(/_/g, '-');
   if (key === 'x-ai' || key === 'grok') return 'xai';
+  if (key === 'muse') return 'meta';
   return key;
 };
 
@@ -190,6 +197,7 @@ export const getTypeLabel = (t: TFunction, type: string): string => {
   const translated = t(key);
   if (translated !== key) return translated;
   if (providerKey === 'iflow') return 'iFlow';
+  if (providerKey === 'meta') return 'Muse (Meta)';
   return type.charAt(0).toUpperCase() + type.slice(1);
 };
 
