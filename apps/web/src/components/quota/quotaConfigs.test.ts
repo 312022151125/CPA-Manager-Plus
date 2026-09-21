@@ -198,6 +198,41 @@ describe('getCodexQuotaStoreKey', () => {
       expect(nextState.resetCreditsDetailEvidenceAtMs).toBeNull();
       expect(nextState.resetCreditsDetailStale).toBe(false);
     });
+
+    it('authoritatively clears conflicting credits when full detail receives available_count=0 with credits', () => {
+      const currentState: CodexQuotaState = {
+        status: 'success',
+        windows: [],
+        rateLimitResetCreditsAvailableCount: 1,
+        rateLimitResetCredits: [creditA],
+        rateLimitResetCreditsError: null,
+        resetCreditsCountEvidenceAtMs: 1_000,
+        resetCreditsDetailEvidenceAtMs: 1_000,
+        resetCreditsDetailStale: false,
+      };
+
+      const incomingData = {
+        planType: 'plus',
+        windows: [],
+        quotaInventoryObserved: true,
+        subscriptionActiveUntil: null,
+        rateLimitResetCreditsAvailableCount: 0,
+        rateLimitResetCredits: [creditA],
+        rateLimitResetCreditsError: null,
+        resetCreditsEvidenceAtMs: 2_000,
+        resetCreditsCountEvidenceAtMs: 2_000,
+        resetCreditsDetailEvidenceAtMs: 2_000,
+        observedAtMs: 2_000,
+      };
+
+      const nextState = CODEX_CONFIG.buildSuccessState(incomingData, file, currentState);
+
+      expect(nextState.rateLimitResetCreditsAvailableCount).toBe(0);
+      expect(nextState.resetCreditsCountEvidenceAtMs).toBe(2_000);
+      expect(nextState.rateLimitResetCredits).toEqual([]);
+      expect(nextState.resetCreditsDetailEvidenceAtMs).toBe(2_000);
+      expect(nextState.resetCreditsDetailStale).toBe(false);
+    });
   });
 });
 

@@ -189,9 +189,13 @@ export const mergeCodexResetCreditsEvidence = (
       ) ?? (previousState?.rateLimitResetCreditsAvailableCount ?? null);
     const countEvidence =
       incoming.resetCreditsCountEvidenceAtMs ?? incoming.resetCreditsEvidenceAtMs ?? observedAt;
+    const effectiveCredits =
+      count === 0
+        ? []
+        : (incoming.rateLimitResetCredits ?? []);
     return {
       rateLimitResetCreditsAvailableCount: count,
-      rateLimitResetCredits: incoming.rateLimitResetCredits ?? [],
+      rateLimitResetCredits: effectiveCredits,
       rateLimitResetCreditsError: null,
       resetCreditsEvidenceAtMs: observedAt,
       resetCreditsCountEvidenceAtMs: countEvidence,

@@ -374,6 +374,67 @@ describe('mergeCodexResetCreditsEvidence', () => {
     expect(merged.resetCreditsDetailStale).toBe(false);
   });
 
+  it('Test A: full detail explicit zero dominates conflicting records and clears credits to empty', () => {
+    const incoming = {
+      rateLimitResetCreditsAvailableCount: 0,
+      rateLimitResetCredits: [creditA],
+      resetCreditsCountEvidenceAtMs: 2000,
+      resetCreditsDetailEvidenceAtMs: 2000,
+      observedAtMs: 2000,
+    };
+
+    const merged = mergeCodexResetCreditsEvidence(undefined, incoming, {
+      isFullDetailObservation: true,
+    });
+
+    expect(merged.rateLimitResetCreditsAvailableCount).toBe(0);
+    expect(merged.rateLimitResetCredits).toEqual([]);
+    expect(merged.rateLimitResetCreditsError).toBeNull();
+    expect(merged.resetCreditsCountEvidenceAtMs).toBe(2000);
+    expect(merged.resetCreditsDetailEvidenceAtMs).toBe(2000);
+    expect(merged.resetCreditsDetailStale).toBe(false);
+  });
+
+  it('Test B: positive mismatch between available count and credits length remains allowed', () => {
+    const incoming = {
+      rateLimitResetCreditsAvailableCount: 5,
+      rateLimitResetCredits: [creditA],
+      resetCreditsCountEvidenceAtMs: 2000,
+      resetCreditsDetailEvidenceAtMs: 2000,
+      observedAtMs: 2000,
+    };
+
+    const merged = mergeCodexResetCreditsEvidence(undefined, incoming, {
+      isFullDetailObservation: true,
+    });
+
+    expect(merged.rateLimitResetCreditsAvailableCount).toBe(5);
+    expect(merged.rateLimitResetCredits).toEqual([creditA]);
+    expect(merged.resetCreditsCountEvidenceAtMs).toBe(2000);
+    expect(merged.resetCreditsDetailEvidenceAtMs).toBe(2000);
+    expect(merged.resetCreditsDetailStale).toBe(false);
+  });
+
+  it('Test C: inferred zero from explicit empty credits preserves fresh detail evidence and count 0', () => {
+    const incoming = {
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      resetCreditsCountEvidenceAtMs: 2000,
+      resetCreditsDetailEvidenceAtMs: 2000,
+      observedAtMs: 2000,
+    };
+
+    const merged = mergeCodexResetCreditsEvidence(undefined, incoming, {
+      isFullDetailObservation: true,
+    });
+
+    expect(merged.rateLimitResetCreditsAvailableCount).toBe(0);
+    expect(merged.rateLimitResetCredits).toEqual([]);
+    expect(merged.resetCreditsCountEvidenceAtMs).toBe(2000);
+    expect(merged.resetCreditsDetailEvidenceAtMs).toBe(2000);
+    expect(merged.resetCreditsDetailStale).toBe(false);
+  });
+
   it('Test 6: preserves trusted detail and records error when detail fetch fails and count is unchanged', () => {
     const previous = {
       rateLimitResetCreditsAvailableCount: 2,

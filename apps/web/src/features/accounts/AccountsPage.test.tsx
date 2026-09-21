@@ -18686,6 +18686,81 @@ describe('AccountsPage replacement flows', () => {
       expect(committed[storeKey]?.rateLimitResetCredits).toHaveLength(1);
     });
 
+    it('authoritatively clears conflicting detail records to empty when live verification returns available_count=0 with credits', async () => {
+      const file = makeCodexFile('codex-zero-with-credits.json', 'auth-zwc-1', 'zero-credits@example.com');
+      mocks.files = [file];
+      const storeKey = CODEX_CONFIG.getStoreKey?.(file) ?? file.name;
+      const initialDetailEvidence = Date.now() - 60_000;
+      const oldCredit = makeResetCredit('old-cred-1');
+      mocks.quotaState.codexQuota = {
+        [storeKey]: {
+          status: 'success',
+          windows: [],
+          quotaInventoryObserved: true,
+          rateLimitResetCreditsAvailableCount: 1,
+          rateLimitResetCredits: [oldCredit],
+          ...buildQuotaCredentialIdentity(file),
+          fetchedAtMs: 1,
+          resetCreditsCountEvidenceAtMs: initialDetailEvidence,
+          resetCreditsDetailEvidenceAtMs: initialDetailEvidence,
+        },
+      };
+
+      installCodexQuotaStoreMutationMock();
+      const rawCreditA = {
+        id: 'cred-a',
+        reset_type: 'codex_rate_limits',
+        status: 'available',
+        granted_at: new Date(Date.now() - 60_000).toISOString(),
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      };
+      mocks.apiRequest.mockImplementation(async (call?: { url?: string }) => {
+        if (call?.url === CODEX_RATE_LIMIT_RESET_CREDITS_URL) {
+          return {
+            statusCode: 200,
+            hasStatusCode: true,
+            header: {},
+            body: { available_count: 0, credits: [rawCreditA] },
+            bodyText: JSON.stringify({ available_count: 0, credits: [rawCreditA] }),
+          };
+        }
+        return { statusCode: 200, hasStatusCode: true, header: {}, body: {}, bodyText: '{}' };
+      });
+
+      const renderer = await renderAccountsPage();
+      await openCodexQuotaTab(renderer, file.name);
+      await flushPromises();
+
+      const resetAction = renderer.root.findByProps({ 'data-quota-reset-action': 'true' });
+      await act(async () => {
+        resetAction.props.onClick();
+        await Promise.resolve();
+      });
+      await flushPromises();
+
+      expect(mocks.showConfirmation).not.toHaveBeenCalled();
+      expect(mocks.consumeResetCredit).not.toHaveBeenCalled();
+      const committed = applyCodexQuotaCommits();
+      expect(committed[storeKey]?.rateLimitResetCreditsAvailableCount).toBe(0);
+      expect(committed[storeKey]?.rateLimitResetCredits).toEqual([]);
+      expect(committed[storeKey]?.resetCreditsCountEvidenceAtMs).toBeGreaterThan(initialDetailEvidence);
+      expect(committed[storeKey]?.resetCreditsDetailEvidenceAtMs).toBeGreaterThan(initialDetailEvidence);
+      expect(committed[storeKey]?.resetCreditsCountEvidenceAtMs).toBe(committed[storeKey]?.resetCreditsDetailEvidenceAtMs);
+      expect(committed[storeKey]?.resetCreditsDetailStale).toBe(false);
+      expect(mocks.showNotification).toHaveBeenCalledWith(
+        'codex_quota.reset_no_credits:zero-credits@example.com',
+        'info'
+      );
+      expect(
+        mocks.showNotification.mock.calls.some(
+          ([message, type]) =>
+            type === 'error' &&
+            typeof message === 'string' &&
+            (message.includes('reset_verify_failed') || message.includes('reset_credits_invalid_payload'))
+        )
+      ).toBe(false);
+    });
+
     it('Test 11: live verification succeeds on count-only payload and preserves existing trusted details when count is unchanged', async () => {
       const file = makeCodexFile('codex-live-count-only.json', 'auth-lco-1', 'livecount@example.com');
       mocks.files = [file];
