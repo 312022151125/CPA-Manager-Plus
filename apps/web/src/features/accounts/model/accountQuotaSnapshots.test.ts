@@ -2796,6 +2796,159 @@ describe('account quota snapshots', () => {
     expect(postRefreshState.resetCreditsDetailStale).toBe(false);
   });
 
+  it('derives effective count from newer detail when older count was zero (older zero + newer detail)', () => {
+    const snapshot = makeSnapshot({
+      observed_at_ms: 20_000,
+      reset_credits_available: 0,
+      reset_credits: [{ id: 'credit-a', expires_at_ms: 200_000 }],
+      field_sources: {
+        reset_credits_available: { source: 'api_query', observed_at_ms: 10_000 },
+        reset_credits: { source: 'api_query', observed_at_ms: 20_000 },
+      },
+    });
+
+    const merged = mergeCodexResetCreditsFromQuotaSnapshots(undefined, [snapshot]);
+
+    expect(merged?.rateLimitResetCreditsAvailableCount).toBe(1);
+    expect(merged?.resetCreditsCountEvidenceAtMs).toBe(20_000);
+    expect(merged?.rateLimitResetCredits).toHaveLength(1);
+    expect(merged?.rateLimitResetCredits?.[0].id).toBe('credit-a');
+    expect(merged?.resetCreditsDetailEvidenceAtMs).toBe(20_000);
+    expect(merged?.resetCreditsDetailStale).toBe(false);
+  });
+
+  it('derives effective count from newer snapshot detail when local count evidence is older zero', () => {
+    const quota = {
+      status: 'success' as const,
+      windows: [],
+      rateLimitResetCreditsAvailableCount: 0,
+      resetCreditsCountEvidenceAtMs: 10_000,
+      rateLimitResetCredits: [],
+      resetCreditsDetailEvidenceAtMs: null,
+      resetCreditsDetailStale: false,
+    };
+    const snapshot = makeSnapshot({
+      observed_at_ms: 20_000,
+      reset_credits: [{ id: 'credit-a', expires_at_ms: 200_000 }],
+      field_sources: {
+        reset_credits: { source: 'api_query', observed_at_ms: 20_000 },
+      },
+    });
+
+    const merged = mergeCodexResetCreditsFromQuotaSnapshots(quota, [snapshot]);
+
+    expect(merged?.rateLimitResetCreditsAvailableCount).toBe(1);
+    expect(merged?.resetCreditsCountEvidenceAtMs).toBe(20_000);
+    expect(merged?.rateLimitResetCredits).toHaveLength(1);
+    expect(merged?.rateLimitResetCredits?.[0].id).toBe('credit-a');
+    expect(merged?.resetCreditsDetailEvidenceAtMs).toBe(20_000);
+    expect(merged?.resetCreditsDetailStale).toBe(false);
+  });
+
+  it('derives effective count from newer detail when older count was positive (older positive count + newer detail)', () => {
+    const snapshot = makeSnapshot({
+      observed_at_ms: 20_000,
+      reset_credits_available: 5,
+      reset_credits: [
+        { id: 'credit-a', expires_at_ms: 200_000 },
+        { id: 'credit-b', expires_at_ms: 300_000 },
+      ],
+      field_sources: {
+        reset_credits_available: { source: 'api_query', observed_at_ms: 10_000 },
+        reset_credits: { source: 'api_query', observed_at_ms: 20_000 },
+      },
+    });
+
+    const merged = mergeCodexResetCreditsFromQuotaSnapshots(undefined, [snapshot]);
+
+    expect(merged?.rateLimitResetCreditsAvailableCount).toBe(2);
+    expect(merged?.resetCreditsCountEvidenceAtMs).toBe(20_000);
+    expect(merged?.rateLimitResetCredits).toHaveLength(2);
+    expect(merged?.resetCreditsDetailEvidenceAtMs).toBe(20_000);
+    expect(merged?.resetCreditsDetailStale).toBe(false);
+  });
+
+  it('keeps explicit count authoritative when count and detail share equal timestamp (equal timestamp explicit count wins)', () => {
+    const snapshot = makeSnapshot({
+      observed_at_ms: 20_000,
+      reset_credits_available: 5,
+      reset_credits: [{ id: 'credit-a', expires_at_ms: 200_000 }],
+      field_sources: {
+        reset_credits_available: { source: 'api_query', observed_at_ms: 20_000 },
+        reset_credits: { source: 'api_query', observed_at_ms: 20_000 },
+      },
+    });
+
+    const merged = mergeCodexResetCreditsFromQuotaSnapshots(undefined, [snapshot]);
+
+    expect(merged?.rateLimitResetCreditsAvailableCount).toBe(5);
+    expect(merged?.resetCreditsCountEvidenceAtMs).toBe(20_000);
+    expect(merged?.rateLimitResetCredits).toHaveLength(1);
+    expect(merged?.rateLimitResetCredits?.[0].id).toBe('credit-a');
+    expect(merged?.resetCreditsDetailEvidenceAtMs).toBe(20_000);
+  });
+
+  it('keeps explicit count authoritative and does not overwrite with older detail (newer count wins)', () => {
+    const snapshot = makeSnapshot({
+      observed_at_ms: 20_000,
+      reset_credits_available: 5,
+      reset_credits: [{ id: 'credit-a', expires_at_ms: 200_000 }],
+      field_sources: {
+        reset_credits_available: { source: 'api_query', observed_at_ms: 20_000 },
+        reset_credits: { source: 'api_query', observed_at_ms: 10_000 },
+      },
+    });
+
+    const merged = mergeCodexResetCreditsFromQuotaSnapshots(undefined, [snapshot]);
+
+    expect(merged?.rateLimitResetCreditsAvailableCount).toBe(5);
+    expect(merged?.resetCreditsCountEvidenceAtMs).toBe(20_000);
+    expect(merged?.rateLimitResetCredits).toHaveLength(1);
+    expect(merged?.resetCreditsDetailEvidenceAtMs).toBe(10_000);
+  });
+
+  it('derives effective count zero when newer detail is explicit empty (newer explicit empty)', () => {
+    const snapshot = makeSnapshot({
+      observed_at_ms: 20_000,
+      reset_credits_available: 5,
+      reset_credits: [],
+      field_sources: {
+        reset_credits_available: { source: 'api_query', observed_at_ms: 10_000 },
+        reset_credits: { source: 'api_query', observed_at_ms: 20_000 },
+      },
+    });
+
+    const merged = mergeCodexResetCreditsFromQuotaSnapshots(undefined, [snapshot]);
+
+    expect(merged?.rateLimitResetCreditsAvailableCount).toBe(0);
+    expect(merged?.resetCreditsCountEvidenceAtMs).toBe(20_000);
+    expect(merged?.rateLimitResetCredits).toEqual([]);
+    expect(merged?.resetCreditsDetailEvidenceAtMs).toBe(20_000);
+    expect(merged?.resetCreditsDetailStale).toBe(false);
+  });
+
+  it('derives effective count from detail when count evidence is absent (no count, only detail)', () => {
+    const snapshot = makeSnapshot({
+      observed_at_ms: 20_000,
+      reset_credits_available: undefined,
+      reset_credits: [
+        { id: 'credit-a', expires_at_ms: 200_000 },
+        { id: 'credit-b', expires_at_ms: 300_000 },
+      ],
+      field_sources: {
+        reset_credits: { source: 'api_query', observed_at_ms: 20_000 },
+      },
+    });
+
+    const merged = mergeCodexResetCreditsFromQuotaSnapshots(undefined, [snapshot]);
+
+    expect(merged?.rateLimitResetCreditsAvailableCount).toBe(2);
+    expect(merged?.resetCreditsCountEvidenceAtMs).toBe(20_000);
+    expect(merged?.rateLimitResetCredits).toHaveLength(2);
+    expect(merged?.resetCreditsDetailEvidenceAtMs).toBe(20_000);
+    expect(merged?.resetCreditsDetailStale).toBe(false);
+  });
+
   describe('Devin snapshot pipeline contract', () => {
     const observedAtMs = Date.parse('2026-09-15T14:00:00Z');
     const dailyResetAtMs = Date.parse('2026-09-16T12:00:00Z');

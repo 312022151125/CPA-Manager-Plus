@@ -289,7 +289,6 @@ export const mergeCodexResetCreditsFromQuotaSnapshots = (
   const clearCreditsFromZeroCount =
     activeCount === 0 && activeCountObservedAt >= activeCreditsObservedAt;
 
-  const finalCount = activeCount;
   const finalCredits = clearCreditsFromZeroCount
     ? []
     : useSnapshotCredits
@@ -301,10 +300,20 @@ export const mergeCodexResetCreditsFromQuotaSnapshots = (
         }))
       : (quota?.rateLimitResetCredits ?? []);
 
-  const finalCountEvidenceAtMs = Math.max(
-    localCountEvidenceAtMs,
-    useSnapshotCount ? countObservedAt : 0
-  );
+  const detailSupersedesCount =
+    useSnapshotCredits &&
+    !clearCreditsFromZeroCount &&
+    creditsObservedAt > 0 &&
+    creditsObservedAt > activeCountObservedAt;
+
+  const finalCount = detailSupersedesCount ? finalCredits.length : activeCount;
+  const finalCountEvidenceAtMs = detailSupersedesCount
+    ? creditsObservedAt
+    : Math.max(
+        localCountEvidenceAtMs,
+        useSnapshotCount ? countObservedAt : 0
+      );
+
   const finalDetailEvidenceAtMs = clearCreditsFromZeroCount
     ? null
     : useSnapshotCredits
@@ -330,7 +339,8 @@ export const mergeCodexResetCreditsFromQuotaSnapshots = (
       localDetailEvidenceAtMs,
       localResetInvalidationAtMs,
       useSnapshotCount ? countObservedAt : 0,
-      useSnapshotCredits ? creditsObservedAt : 0
+      useSnapshotCredits ? creditsObservedAt : 0,
+      finalCountEvidenceAtMs
     ),
   };
   return next;
