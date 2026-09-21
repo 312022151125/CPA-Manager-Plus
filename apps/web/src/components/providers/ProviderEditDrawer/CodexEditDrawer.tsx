@@ -111,6 +111,13 @@ const getErrorMessage = (err: unknown) => {
   return '';
 };
 
+const getMetaApiKeyValidationError = (value: string): 'required' | 'dca' | null => {
+  const apiKey = value.trim();
+  if (!apiKey) return 'required';
+  if (/^dca:/i.test(apiKey)) return 'dca';
+  return null;
+};
+
 export function CodexEditDrawer({
   open,
   editIndex,
@@ -378,8 +385,23 @@ export function CodexEditDrawer({
   );
 
   const fetchModelDiscovery = useCallback(async () => {
-    setModelDiscoveryFetching(true);
     setModelDiscoveryError('');
+
+    if (isMeta) {
+      const keyError = getMetaApiKeyValidationError(form.apiKey);
+      if (keyError === 'required') {
+        setDiscoveredModels([]);
+        setModelDiscoveryError(t('ai_providers.meta_key_required'));
+        return;
+      }
+      if (keyError === 'dca') {
+        setDiscoveredModels([]);
+        setModelDiscoveryError(t('ai_providers.meta_dca_not_accepted'));
+        return;
+      }
+    }
+
+    setModelDiscoveryFetching(true);
     try {
       const headerObject = buildHeaderObject(form.headers);
       const hasCustomAuthorization = Object.keys(headerObject).some(
@@ -402,7 +424,7 @@ export function CodexEditDrawer({
     } finally {
       setModelDiscoveryFetching(false);
     }
-  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, form.proxyUrl, t]);
+  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, form.proxyUrl, isMeta, t]);
 
   const runCodexConnectivityTest = useCallback(async () => {
     if (isTesting) return;
@@ -505,15 +527,15 @@ export function CodexEditDrawer({
   const runMetaConnectivityTest = useCallback(async () => {
     if (isTesting) return;
 
-    const apiKey = form.apiKey.trim();
-    if (!apiKey) {
+    const keyError = getMetaApiKeyValidationError(form.apiKey);
+    if (keyError === 'required') {
       const message = t('ai_providers.meta_key_required');
       setTestStatus('error');
       setTestMessage(message);
       showNotification(message, 'error');
       return;
     }
-    if (/^dca:/i.test(apiKey)) {
+    if (keyError === 'dca') {
       const message = t('ai_providers.meta_dca_not_accepted');
       setTestStatus('error');
       setTestMessage(message);
@@ -525,6 +547,7 @@ export function CodexEditDrawer({
     const hasAuthorization = hasHeader(customHeaders, 'authorization');
     const keyAuthIndex = normalizeAuthIndex(form.authIndex) ?? undefined;
     const baseUrl = (form.baseUrl ?? '').trim() || META_API_BASE_URL;
+    const apiKey = form.apiKey.trim();
 
     setIsTesting(true);
     setTestStatus('loading');
@@ -568,12 +591,12 @@ export function CodexEditDrawer({
   const handleSave = useCallback(async () => {
     if (!canSave) return;
     if (isMeta) {
-      const apiKey = form.apiKey.trim();
-      if (!apiKey) {
+      const keyError = getMetaApiKeyValidationError(form.apiKey);
+      if (keyError === 'required') {
         showNotification(t('ai_providers.meta_key_required'), 'error');
         return;
       }
-      if (/^dca:/i.test(apiKey)) {
+      if (keyError === 'dca') {
         showNotification(t('ai_providers.meta_dca_not_accepted'), 'error');
         return;
       }
@@ -762,8 +785,14 @@ export function CodexEditDrawer({
     setModelDiscoverySelected(new Set());
   }, []);
 
+  const isMetaKeyValid = !isMeta || getMetaApiKeyValidationError(form.apiKey) === null;
   const canOpenModelDiscovery =
-    !disabled && !saving && !loading && !invalidIndex && Boolean((form.baseUrl ?? '').trim());
+    !disabled &&
+    !saving &&
+    !loading &&
+    !invalidIndex &&
+    Boolean((form.baseUrl ?? '').trim()) &&
+    isMetaKeyValid;
   const canApplyModelDiscovery =
     !disabled && !saving && !modelDiscoveryFetching && modelDiscoverySelected.size > 0;
 

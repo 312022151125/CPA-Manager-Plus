@@ -5,6 +5,7 @@ import {
   hasModelThinkingLevelsEditMarker,
   markModelThinkingLevelsForClear,
   markModelThinkingLevelsForEdit,
+  type ProviderKeyConfig,
 } from '@/types';
 
 const { mocks } = vi.hoisted(() => ({
@@ -1960,6 +1961,7 @@ describe('providersApi meta provider management', () => {
         apiKey: 'meta-key-1-updated',
         baseUrl: 'https://api.meta.ai/v1',
         prefix: 'updated-prefix',
+        models: [{ name: 'llama-3.3-70b-instruct' }],
       }
     );
 
@@ -1968,6 +1970,12 @@ describe('providersApi meta provider management', () => {
         'api-key': 'meta-key-1-updated',
         prefix: 'updated-prefix',
         'future-meta-flag': 'keep-me',
+        models: [
+          expect.objectContaining({
+            name: 'llama-3.3-70b-instruct',
+            customProp: 'preserve',
+          }),
+        ],
       }),
     ]);
   });

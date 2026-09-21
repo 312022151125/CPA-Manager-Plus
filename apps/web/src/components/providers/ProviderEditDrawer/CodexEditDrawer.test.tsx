@@ -1,7 +1,7 @@
 import { createElement, type ReactNode } from 'react';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import '@/i18n';
+import i18n from '@/i18n';
 import { CoolingPolicySelect } from '@/components/providers/CoolingPolicySelect';
 
 const authState = vi.hoisted(() => ({
@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   createMetaConfig: vi.fn(),
   updateMetaConfig: vi.fn(),
   getMetaConfigs: vi.fn(),
+  fetchV1ModelsViaApiCall: vi.fn(),
 }));
 
 vi.mock('@/stores', () => ({
@@ -58,10 +59,22 @@ vi.mock('@/components/ui/Drawer', () => ({
       : null,
 }));
 
+vi.mock('@/components/ui/Modal', () => ({
+  Modal: ({
+    open,
+    children,
+    footer,
+  }: {
+    open: boolean;
+    children: ReactNode;
+    footer?: ReactNode;
+  }) => (open ? createElement('div', { 'data-modal': true }, children, footer) : null),
+}));
+
 vi.mock('@/services/api', () => ({
   apiCallApi: { request: vi.fn() },
   getApiCallErrorMessage: vi.fn(() => ''),
-  modelsApi: { fetchV1ModelsViaApiCall: vi.fn() },
+  modelsApi: { fetchV1ModelsViaApiCall: mocks.fetchV1ModelsViaApiCall },
   providersApi: {
     updateCodexConfig: mocks.updateCodexConfig,
     getCodexConfigs: mocks.getCodexConfigs,
@@ -83,6 +96,16 @@ const findSaveButton = (root: ReactTestInstance) =>
 const findDrawerCloseButton = (root: ReactTestInstance) =>
   root.findAllByType('button').find((button) => button.props['data-drawer-close'] === true);
 
+const findFetchModelsButton = (root: ReactTestInstance) =>
+  root
+    .findAllByType('button')
+    .find((button) =>
+      button.findAllByType('span').some((span) => {
+        const text = span.children.join('');
+        return text.includes('/v1/models');
+      })
+    );
+
 describe('CodexEditDrawer load baseline guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -90,6 +113,7 @@ describe('CodexEditDrawer load baseline guard', () => {
     mocks.fetchConfig.mockResolvedValue([]);
     mocks.updateCodexConfig.mockResolvedValue(undefined);
     mocks.getCodexConfigs.mockResolvedValue([]);
+    mocks.fetchV1ModelsViaApiCall.mockResolvedValue([]);
   });
 
   it('does not reuse a stale xAI edit baseline after a later load failure', async () => {
@@ -307,6 +331,161 @@ describe('CodexEditDrawer load baseline guard', () => {
       })
     );
     expect(onSaved).toHaveBeenCalledTimes(1);
+
+    act(() => renderer!.unmount());
+  });
+
+  it('rejects model discovery with DCA token for Meta provider', async () => {
+    mocks.getMetaConfigs.mockResolvedValue([]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const apiKeyInput = renderer!.root.findAllByType('input')[0];
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'dca:test-token' } }));
+
+    const fetchButton = findFetchModelsButton(renderer!.root);
+    expect(fetchButton?.props.disabled).toBe(true);
+
+    await act(async () => {
+      await fetchButton?.props.onClick();
+    });
+
+    expect(mocks.fetchV1ModelsViaApiCall).not.toHaveBeenCalled();
+    const errorBox = renderer!.root
+      .findAllByType('div')
+      .find((div) => div.props.className === 'error-box');
+    expect(errorBox).toBeDefined();
+    expect(errorBox?.children.join('')).toBe(i18n.t('ai_providers.meta_dca_not_accepted'));
+
+    act(() => renderer!.unmount());
+  });
+
+  it('rejects model discovery with empty API key for Meta provider', async () => {
+    mocks.getMetaConfigs.mockResolvedValue([]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const apiKeyInput = renderer!.root.findAllByType('input')[0];
+    act(() => apiKeyInput?.props.onChange({ target: { value: '' } }));
+
+    const fetchButton = findFetchModelsButton(renderer!.root);
+    expect(fetchButton?.props.disabled).toBe(true);
+
+    await act(async () => {
+      await fetchButton?.props.onClick();
+    });
+
+    expect(mocks.fetchV1ModelsViaApiCall).not.toHaveBeenCalled();
+    const errorBox = renderer!.root
+      .findAllByType('div')
+      .find((div) => div.props.className === 'error-box');
+    expect(errorBox).toBeDefined();
+    expect(errorBox?.children.join('')).toBe(i18n.t('ai_providers.meta_key_required'));
+
+    act(() => renderer!.unmount());
+  });
+
+  it('fetches models via /v1/models with valid API key for Meta provider', async () => {
+    mocks.getMetaConfigs.mockResolvedValue([]);
+    mocks.fetchV1ModelsViaApiCall.mockResolvedValueOnce([{ name: 'muse-model' }]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const apiKeyInput = renderer!.root.findAllByType('input')[0];
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'meta-valid-key' } }));
+
+    const fetchButton = findFetchModelsButton(renderer!.root);
+    expect(fetchButton?.props.disabled).toBe(false);
+
+    await act(async () => {
+      await fetchButton?.props.onClick();
+    });
+
+    expect(mocks.fetchV1ModelsViaApiCall).toHaveBeenCalledWith(
+      'https://api.meta.ai/v1',
+      'meta-valid-key',
+      expect.any(Object),
+      undefined,
+      ''
+    );
+    const errorBox = renderer!.root
+      .findAllByType('div')
+      .find((div) => div.props.className === 'error-box');
+    expect(errorBox).toBeUndefined();
+
+    act(() => renderer!.unmount());
+  });
+
+  it('allows model discovery without API key for Codex provider using auth index', async () => {
+    mocks.fetchConfig.mockResolvedValueOnce([
+      { apiKey: '', baseUrl: 'https://api.openai.com/v1', authIndex: 'codex-oauth' },
+    ]);
+    mocks.fetchV1ModelsViaApiCall.mockResolvedValueOnce([{ name: 'gpt-4o' }]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={0}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          providerKind="codex"
+        />
+      );
+    });
+
+    const fetchButton = findFetchModelsButton(renderer!.root);
+    expect(fetchButton?.props.disabled).toBe(false);
+
+    await act(async () => {
+      await fetchButton?.props.onClick();
+    });
+
+    expect(mocks.fetchV1ModelsViaApiCall).toHaveBeenCalledWith(
+      'https://api.openai.com/v1',
+      undefined,
+      expect.any(Object),
+      'codex-oauth',
+      undefined
+    );
 
     act(() => renderer!.unmount());
   });
