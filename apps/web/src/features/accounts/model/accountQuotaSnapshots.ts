@@ -388,8 +388,7 @@ const toSnapshotWindow = (
     definition.provider === 'codex' &&
     !detailIsStale &&
     detailEvidenceAtMs !== null &&
-    detailEvidenceAtMs >= snapshotObservedAtMs &&
-    resetCredits.length > 0;
+    detailEvidenceAtMs >= snapshotObservedAtMs;
 
   return {
     provider_window_id: definition.providerWindowId,

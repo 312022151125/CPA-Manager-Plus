@@ -245,6 +245,9 @@ export const getQuotaResetRemainingDuration = (
     return null;
   }
   const diffMs = expiresAtMs - nowMs;
+  if (diffMs <= 0) {
+    return null;
+  }
   if (diffMs >= QUOTA_RESET_DAY_MS) {
     return {
       unit: 'day',

@@ -2352,6 +2352,109 @@ describe('account quota snapshots', () => {
     expect(entry.windows[0].reset_credits).toBeUndefined();
   });
 
+  it('writes explicit empty reset_credits array when detail is genuinely observed as empty in current observation (Test H)', () => {
+    const row = {
+      selectionKey: 'codex.json\u0000auth-1',
+      authFileKey: 'codex.json::auth-1',
+      provider: 'codex',
+      fileName: 'codex.json',
+      authIndex: 'auth-1',
+      accountLabel: 'user@example.com',
+      raw: {
+        name: 'codex.json',
+        provider: 'codex',
+        type: 'codex',
+        auth_index: 'auth-1',
+        account: 'user@example.com',
+      },
+    } as unknown as AccountRow;
+
+    const t2 = 50_000;
+    const definition = makeDefinition({
+      observedAtMs: t2,
+    });
+
+    const codexQuotaFullDetailEmpty = {
+      status: 'success' as const,
+      windows: [],
+      fetchedAtMs: t2,
+      resetCreditsCountEvidenceAtMs: t2,
+      resetCreditsDetailEvidenceAtMs: t2,
+      resetCreditsDetailStale: false,
+      rateLimitResetCreditsAvailableCount: 2,
+      rateLimitResetCredits: [],
+    };
+
+    const [entry] = buildAccountQuotaSnapshotWriteEntries(
+      [row],
+      new Map([[row.selectionKey, [definition]]]),
+      {
+        getCodexQuota: () => codexQuotaFullDetailEmpty,
+        nowMs: t2,
+      }
+    );
+
+    expect(entry.windows).toHaveLength(1);
+    expect(entry.windows[0].reset_credits_available).toBe(2);
+    expect(entry.windows[0].reset_credits).toEqual([]);
+    expect(entry.windows[0].reset_credits).not.toBeUndefined();
+  });
+
+  it('omits reset_credits when detail evidence belongs to earlier observation (Test I)', () => {
+    const row = {
+      selectionKey: 'codex.json\u0000auth-1',
+      authFileKey: 'codex.json::auth-1',
+      provider: 'codex',
+      fileName: 'codex.json',
+      authIndex: 'auth-1',
+      accountLabel: 'user@example.com',
+      raw: {
+        name: 'codex.json',
+        provider: 'codex',
+        type: 'codex',
+        auth_index: 'auth-1',
+        account: 'user@example.com',
+      },
+    } as unknown as AccountRow;
+
+    const t1 = 20_000;
+    const t2 = 50_000;
+    const definition = makeDefinition({
+      observedAtMs: t2,
+    });
+
+    const codexQuotaSummaryRefreshed = {
+      status: 'success' as const,
+      windows: [],
+      fetchedAtMs: t2,
+      resetCreditsCountEvidenceAtMs: t2,
+      resetCreditsDetailEvidenceAtMs: t1,
+      resetCreditsDetailStale: false,
+      rateLimitResetCreditsAvailableCount: 2,
+      rateLimitResetCredits: [
+        {
+          id: 'credit-a',
+          status: 'available' as const,
+          grantedAt: '',
+          expiresAt: new Date(200_000).toISOString(),
+        },
+      ],
+    };
+
+    const [entry] = buildAccountQuotaSnapshotWriteEntries(
+      [row],
+      new Map([[row.selectionKey, [definition]]]),
+      {
+        getCodexQuota: () => codexQuotaSummaryRefreshed,
+        nowMs: t2,
+      }
+    );
+
+    expect(entry.windows).toHaveLength(1);
+    expect(entry.windows[0].reset_credits_available).toBe(2);
+    expect(entry.windows[0].reset_credits).toBeUndefined();
+  });
+
   it('does not revive stale reset-credit details when snapshot detail is from before the count invalidation boundary', () => {
     const quota = {
       status: 'success' as const,

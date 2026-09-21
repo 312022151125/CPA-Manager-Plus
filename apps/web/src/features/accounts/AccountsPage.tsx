@@ -6873,22 +6873,38 @@ export function AccountsPage() {
           endResetTransaction();
           return;
         }
-        if (
-          fresh.error ||
-          (fresh.availableCount === null && fresh.credits.length === 0)
-        ) {
+        if (fresh.error) {
           endResetTransaction();
           showNotification(
             t('codex_quota.reset_verify_failed', {
               name: displayName,
-              message: fresh.error || t('codex_quota.reset_credits_invalid_payload'),
+              message: fresh.error,
             }),
             'error'
           );
           return;
         }
-        const verifiedCount =
-          fresh.availableCount ?? fresh.credits.length;
+        const verifiedCount = resolveCodexResetCreditsObservationCount(
+          fresh.availableCount,
+          fresh.credits
+        );
+        if (verifiedCount === null) {
+          endResetTransaction();
+          showNotification(
+            t('codex_quota.reset_verify_failed', {
+              name: displayName,
+              message: t('codex_quota.reset_credits_invalid_payload'),
+            }),
+            'error'
+          );
+          return;
+        }
+        const observationAtMs =
+          fresh.resetCreditsDetailEvidenceAtMs ??
+          fresh.resetCreditsCountEvidenceAtMs ??
+          fresh.resetCreditsEvidenceAtMs ??
+          Date.now();
+        const effectiveCredits = verifiedCount === 0 ? [] : fresh.credits;
         commitIfQuotaCacheCurrent(cacheGeneration, () => {
           setCodexQuota((prev) => {
             const current = getScopedQuotaState(CODEX_CONFIG, prev, row.raw);
@@ -6901,18 +6917,12 @@ export function AccountsPage() {
               ...prev,
               [storeKey]: {
                 ...baseState,
-                rateLimitResetCreditsAvailableCount: fresh.availableCount,
-                rateLimitResetCredits: fresh.credits,
+                rateLimitResetCreditsAvailableCount: verifiedCount,
+                rateLimitResetCredits: effectiveCredits,
                 rateLimitResetCreditsError: null,
-                resetCreditsEvidenceAtMs: fresh.resetCreditsEvidenceAtMs ?? Date.now(),
-                resetCreditsCountEvidenceAtMs:
-                  fresh.resetCreditsCountEvidenceAtMs ??
-                  fresh.resetCreditsEvidenceAtMs ??
-                  Date.now(),
-                resetCreditsDetailEvidenceAtMs:
-                  fresh.resetCreditsDetailEvidenceAtMs ??
-                  fresh.resetCreditsEvidenceAtMs ??
-                  Date.now(),
+                resetCreditsEvidenceAtMs: observationAtMs,
+                resetCreditsCountEvidenceAtMs: observationAtMs,
+                resetCreditsDetailEvidenceAtMs: observationAtMs,
                 resetCreditsDetailStale: false,
               },
             };

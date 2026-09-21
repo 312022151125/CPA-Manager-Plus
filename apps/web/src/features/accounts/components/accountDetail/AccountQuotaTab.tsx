@@ -172,6 +172,9 @@ export function AccountQuotaTab({
   const shouldShowResetRecords = detailView.identity.provider === 'codex' && hasResetRecords;
   const [nowMs, setNowMs] = useState(() => Date.now());
   useInterval(() => setNowMs(Date.now()), shouldShowResetRecords ? 60_000 : null);
+  const visibleResetCreditExpiries = detailView.quota.resetCreditExpiries.filter(
+    (item) => item.expiresAtMs > nowMs
+  );
 
   return (
     <div className={styles.quotaTab} data-account-quota-tab="true">
@@ -364,13 +367,13 @@ export function AccountQuotaTab({
                 {t('codex_quota.reset_credits_unavailable_label')}
               </div>
             ) : null}
-            {detailView.quota.resetCreditExpiries.length > 0 ? (
+            {visibleResetCreditExpiries.length > 0 ? (
               <div className={styles.quotaResetExpirySection}>
                 <span className={styles.quotaResetExpiryLabel}>
                   {t('codex_quota.reset_credits_expected_expiry_label')}
                 </span>
                 <div className={styles.quotaResetExpiryList}>
-                  {detailView.quota.resetCreditExpiries.map((item, index) => (
+                  {visibleResetCreditExpiries.map((item, index) => (
                     <div
                       key={`${item.id}:${item.expiresAtMs}`}
                       className={styles.quotaResetExpiryItem}

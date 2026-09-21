@@ -1,4 +1,5 @@
 import type { TFunction } from 'i18next';
+import i18n from '@/i18n';
 import { describe, expect, it } from 'vitest';
 import type { MonitoringAccountHistoryItem } from '@/services/api';
 import {
@@ -179,12 +180,48 @@ describe('accountsPagePresentation', () => {
       value: 0,
     });
 
+    // expires = now + 1ms -> sub-minute
+    expect(getQuotaResetRemainingDuration(nowMs + 1, nowMs)).toEqual({
+      unit: 'subminute',
+      value: 0,
+    });
+
+    // expires = now (diffMs = 0) -> null
+    expect(getQuotaResetRemainingDuration(nowMs, nowMs)).toBeNull();
+
+    // expires = now - 1ms -> null
+    expect(getQuotaResetRemainingDuration(nowMs - 1, nowMs)).toBeNull();
+
+    // expires = now - 5m -> null
+    expect(getQuotaResetRemainingDuration(nowMs - 5 * oneMinute, nowMs)).toBeNull();
+
     // invalid timestamp -> null
     expect(getQuotaResetRemainingDuration(null, nowMs)).toBeNull();
     expect(getQuotaResetRemainingDuration(undefined, nowMs)).toBeNull();
     expect(getQuotaResetRemainingDuration(0, nowMs)).toBeNull();
     expect(getQuotaResetRemainingDuration(-100, nowMs)).toBeNull();
     expect(getQuotaResetRemainingDuration(Number.NaN, nowMs)).toBeNull();
+  });
+
+  it('correctly pluralizes reset credit remaining text in English without invalid plural forms', () => {
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_days', { lng: 'en', count: 1, days: 1 })
+    ).toBe('Remaining 1 day');
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_days', { lng: 'en', count: 2, days: 2 })
+    ).toBe('Remaining 2 days');
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_hours', { lng: 'en', count: 1, hours: 1 })
+    ).toBe('Remaining 1 hour');
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_hours', { lng: 'en', count: 2, hours: 2 })
+    ).toBe('Remaining 2 hours');
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_minutes', { lng: 'en', count: 1, minutes: 1 })
+    ).toBe('Remaining 1 minute');
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_minutes', { lng: 'en', count: 2, minutes: 2 })
+    ).toBe('Remaining 2 minutes');
   });
 
   it('formats relative quota resets with day, hour, and minute resolutions', () => {
