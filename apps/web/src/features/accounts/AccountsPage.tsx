@@ -327,6 +327,8 @@ import type {
 import {
   fetchCodexResetCredits,
   type CodexResetCreditsData,
+  shouldAutoFetchCodexResetCreditDetails,
+  buildCodexResetCreditAutoFetchSignature,
 } from '@/utils/quota';
 import type { AuthJsonInputType } from '@/features/authFiles/sessionAuthConverter';
 import {
@@ -1713,6 +1715,7 @@ export function AccountsPage() {
   const codexResetCreditDetailRequestsRef = useRef<
     Map<string, CodexResetCreditRequestEntry>
   >(new Map());
+  const codexResetCreditAutoFetchAttemptedSignaturesRef = useRef<Set<string>>(new Set());
   const identityCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accountSortDropdownRef = useRef<HTMLDivElement | null>(null);
   const accountSortTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -1755,6 +1758,7 @@ export function AccountsPage() {
     manualQuotaRefreshingKeysRef.current.clear();
     setManualQuotaRefreshingKeys(new Set());
     codexResetCreditDetailRequestsRef.current.clear();
+    codexResetCreditAutoFetchAttemptedSignaturesRef.current.clear();
     quotaRequestVersionsRef.current.forEach((version, key) => {
       quotaRequestVersionsRef.current.set(key, version + 1);
     });
@@ -5539,17 +5543,30 @@ export function AccountsPage() {
                   windows: [],
                   ...buildQuotaCredentialIdentity(row.raw),
                 };
+              const observedAt =
+                data.resetCreditsDetailEvidenceAtMs ??
+                data.resetCreditsEvidenceAtMs ??
+                data.observedAtMs ??
+                Date.now();
+              const countEvidence =
+                data.resetCreditsCountEvidenceAtMs ?? observedAt;
               return {
                 ...prev,
                 [storeKey]: {
                   ...base,
-                  rateLimitResetCreditsAvailableCount: data.availableCount,
+                  rateLimitResetCreditsAvailableCount:
+                    data.availableCount !== null
+                      ? data.availableCount
+                      : (base.rateLimitResetCreditsAvailableCount ?? null),
                   rateLimitResetCredits: data.credits,
                   rateLimitResetCreditsError: null,
-                  resetCreditsEvidenceAtMs:
-                    data.resetCreditsEvidenceAtMs ??
-                    data.observedAtMs ??
-                    Date.now(),
+                  resetCreditsEvidenceAtMs: observedAt,
+                  resetCreditsCountEvidenceAtMs:
+                    data.availableCount !== null
+                      ? countEvidence
+                      : (base.resetCreditsCountEvidenceAtMs ?? null),
+                  resetCreditsDetailEvidenceAtMs: observedAt,
+                  resetCreditsDetailStale: false,
                 },
               };
             });
@@ -5591,6 +5608,38 @@ export function AccountsPage() {
     },
     [authFilesRequestScope, connectionFingerprint, setCodexQuota, t]
   );
+
+  useEffect(() => {
+    if (!selectedRowKey) {
+      codexResetCreditAutoFetchAttemptedSignaturesRef.current.clear();
+    }
+  }, [selectedRowKey]);
+
+  useEffect(() => {
+    if (activeView !== 'accounts') return;
+    if (detailTab !== 'quota') return;
+    if (!selectedRow || selectedRow.provider !== CODEX_CONFIG.type) return;
+
+    const displayQuota = getDisplayCodexResetEvidenceQuota(selectedRow);
+    if (!shouldAutoFetchCodexResetCreditDetails(displayQuota)) return;
+
+    const signature = buildCodexResetCreditAutoFetchSignature(
+      selectedRow.selectionKey,
+      displayQuota
+    );
+    if (codexResetCreditAutoFetchAttemptedSignaturesRef.current.has(signature)) {
+      return;
+    }
+    codexResetCreditAutoFetchAttemptedSignaturesRef.current.add(signature);
+
+    void loadCodexResetCreditDetails(selectedRow);
+  }, [
+    activeView,
+    detailTab,
+    getDisplayCodexResetEvidenceQuota,
+    loadCodexResetCreditDetails,
+    selectedRow,
+  ]);
 
   useLayoutEffect(() => {
     if (detailDrawerBodyRef.current) {
@@ -6854,6 +6903,15 @@ export function AccountsPage() {
                 rateLimitResetCredits: fresh.credits,
                 rateLimitResetCreditsError: null,
                 resetCreditsEvidenceAtMs: fresh.resetCreditsEvidenceAtMs ?? Date.now(),
+                resetCreditsCountEvidenceAtMs:
+                  fresh.resetCreditsCountEvidenceAtMs ??
+                  fresh.resetCreditsEvidenceAtMs ??
+                  Date.now(),
+                resetCreditsDetailEvidenceAtMs:
+                  fresh.resetCreditsDetailEvidenceAtMs ??
+                  fresh.resetCreditsEvidenceAtMs ??
+                  Date.now(),
+                resetCreditsDetailStale: false,
               },
             };
           });
@@ -6925,6 +6983,7 @@ export function AccountsPage() {
                       windows: [],
                       ...buildQuotaCredentialIdentity(row.raw),
                     };
+                    const nowMs = Date.now();
                     return {
                       ...prev,
                       [storeKey]: {
@@ -6932,7 +6991,10 @@ export function AccountsPage() {
                         rateLimitResetCreditsAvailableCount: 0,
                         rateLimitResetCredits: [],
                         rateLimitResetCreditsError: null,
-                        resetCreditsEvidenceAtMs: Date.now(),
+                        resetCreditsEvidenceAtMs: nowMs,
+                        resetCreditsCountEvidenceAtMs: nowMs,
+                        resetCreditsDetailEvidenceAtMs: null,
+                        resetCreditsDetailStale: false,
                       },
                     };
                   });
@@ -6988,16 +7050,20 @@ export function AccountsPage() {
                   windows: [],
                   ...buildQuotaCredentialIdentity(row.raw),
                 };
-                return {
-                  ...prev,
-                  [storeKey]: {
-                    ...baseState,
-                    rateLimitResetCreditsAvailableCount: null,
-                    rateLimitResetCredits: [],
-                    rateLimitResetCreditsError: null,
-                    resetCreditsEvidenceAtMs: Date.now(),
-                  },
-                };
+                    const nowMs = Date.now();
+                    return {
+                      ...prev,
+                      [storeKey]: {
+                        ...baseState,
+                        rateLimitResetCreditsAvailableCount: null,
+                        rateLimitResetCredits: [],
+                        rateLimitResetCreditsError: null,
+                        resetCreditsEvidenceAtMs: nowMs,
+                        resetCreditsCountEvidenceAtMs: null,
+                        resetCreditsDetailEvidenceAtMs: null,
+                        resetCreditsDetailStale: true,
+                      },
+                    };
               });
             });
             setQuotaSnapshotWindowsByRowKey((current) => {
@@ -7078,6 +7144,7 @@ export function AccountsPage() {
     },
     [
       canResetCodexQuota,
+      connectionFingerprint,
       getDisplayAccount,
       invalidateCodexCredentialStatusForSelectionKeys,
       loadCodexResetCreditDetails,
@@ -8129,7 +8196,7 @@ export function AccountsPage() {
         size="sm"
         iconOnly
         className={`${styles.accountIconButton} ${styles.accountIconButtonRefresh}`}
-        onClick={() => void refreshAccountQuota(row)}
+        onClick={() => void refreshAccountQuota(row, 'summary')}
         disabled={
           disableControls || quotaRefreshing || isManualQuotaRefreshing(row) || row.runtimeOnly
         }
@@ -8499,7 +8566,9 @@ export function AccountsPage() {
       }),
     });
     const codexQuotaState =
-      row.provider === CODEX_CONFIG.type ? getActiveCodexQuota(row.raw) : undefined;
+      row.provider === CODEX_CONFIG.type
+        ? getDisplayCodexResetEvidenceQuota(row)
+        : undefined;
     const codexResetCreditsCount =
       codexQuotaState?.rateLimitResetCreditsAvailableCount ??
       codexQuotaState?.rateLimitResetCredits?.length ??

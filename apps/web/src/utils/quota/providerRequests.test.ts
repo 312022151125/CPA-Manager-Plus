@@ -138,8 +138,40 @@ describe('fetchCodexQuotaSummary', () => {
     expect(result.rateLimitResetCredits).toEqual([]);
     expect(result.rateLimitResetCreditsError).toBeNull();
     expect(result.resetCreditsEvidenceAtMs).toBeNull();
+    expect(result.resetCreditsCountEvidenceAtMs).toBeNull();
+    expect(result.resetCreditsDetailEvidenceAtMs).toBeNull();
     expect(result.windows).toHaveLength(1);
     expect(result.windows[0].usedPercent).toBe(45);
+  });
+
+  it('Test 1: records resetCreditsCountEvidenceAtMs from summary and keeps resetCreditsDetailEvidenceAtMs null', async () => {
+    mocks.request.mockResolvedValueOnce({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: {
+        plan_type: 'plus',
+        rate_limit_reset_credits: { available_count: 3 },
+        rate_limit: {
+          primary_window: { used_percent: 20, limit_window_seconds: 18_000 },
+        },
+      },
+    });
+
+    const result = await fetchCodexQuotaSummary(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    expect(result.rateLimitResetCreditsAvailableCount).toBe(3);
+    expect(result.rateLimitResetCredits).toEqual([]);
+    expect(result.resetCreditsCountEvidenceAtMs).toBe(result.observedAtMs);
+    expect(result.resetCreditsDetailEvidenceAtMs).toBeNull();
   });
 });
 
@@ -185,6 +217,8 @@ describe('fetchCodexResetCredits', () => {
     expect(result.error).toBeNull();
     expect(result.observedAtMs).toBeTypeOf('number');
     expect(result.resetCreditsEvidenceAtMs).toBeTypeOf('number');
+    expect(result.resetCreditsCountEvidenceAtMs).toBeTypeOf('number');
+    expect(result.resetCreditsDetailEvidenceAtMs).toBeTypeOf('number');
   });
 
   it('returns graceful error when reset credit endpoint returns 502', async () => {
@@ -300,6 +334,9 @@ describe('fetchCodexQuota', () => {
     expect(result.rateLimitResetCreditsAvailableCount).toBe(2);
     expect(result.rateLimitResetCredits).toHaveLength(1);
     expect(result.rateLimitResetCreditsError).toBeNull();
+    expect(result.resetCreditsEvidenceAtMs).toBeTypeOf('number');
+    expect(result.resetCreditsCountEvidenceAtMs).toBeTypeOf('number');
+    expect(result.resetCreditsDetailEvidenceAtMs).toBeTypeOf('number');
     expect(result.quotaInventoryObserved).toBe(false);
     expect(result.subscriptionActiveUntil).toBe(1_788_220_799);
     expect(result).toMatchObject({

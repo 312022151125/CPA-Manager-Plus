@@ -58,3 +58,209 @@ export const normalizeCodexResetCreditsPayload = (
     invalidPayload: !hasExpectedShape,
   };
 };
+
+export const RESET_CREDITS_DETAIL_TTL_MS = 5 * 60 * 1000;
+
+export const resolveCodexResetCreditsCountEvidenceAtMs = (
+  quota: Partial<import('@/types').CodexQuotaState> | null | undefined
+): number | null => {
+  if (!quota) return null;
+  if (
+    typeof quota.resetCreditsCountEvidenceAtMs === 'number' &&
+    Number.isFinite(quota.resetCreditsCountEvidenceAtMs) &&
+    quota.resetCreditsCountEvidenceAtMs > 0
+  ) {
+    return quota.resetCreditsCountEvidenceAtMs;
+  }
+  if (
+    typeof quota.resetCreditsEvidenceAtMs === 'number' &&
+    Number.isFinite(quota.resetCreditsEvidenceAtMs) &&
+    quota.resetCreditsEvidenceAtMs > 0
+  ) {
+    return quota.resetCreditsEvidenceAtMs;
+  }
+  const fallback = quota.fetchedAtMs ?? quota.observedAtMs;
+  return typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0 ? fallback : null;
+};
+
+export const resolveCodexResetCreditsDetailEvidenceAtMs = (
+  quota: Partial<import('@/types').CodexQuotaState> | null | undefined
+): number | null => {
+  if (!quota) return null;
+  if (
+    typeof quota.resetCreditsDetailEvidenceAtMs === 'number' &&
+    Number.isFinite(quota.resetCreditsDetailEvidenceAtMs) &&
+    quota.resetCreditsDetailEvidenceAtMs > 0
+  ) {
+    return quota.resetCreditsDetailEvidenceAtMs;
+  }
+  const hasCredits =
+    Array.isArray(quota.rateLimitResetCredits) && quota.rateLimitResetCredits.length > 0;
+  if (hasCredits) {
+    if (
+      typeof quota.resetCreditsEvidenceAtMs === 'number' &&
+      Number.isFinite(quota.resetCreditsEvidenceAtMs) &&
+      quota.resetCreditsEvidenceAtMs > 0
+    ) {
+      return quota.resetCreditsEvidenceAtMs;
+    }
+    const fallback = quota.fetchedAtMs ?? quota.observedAtMs;
+    return typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0
+      ? fallback
+      : null;
+  }
+  return null;
+};
+
+export interface CodexResetCreditsMergeInput {
+  rateLimitResetCreditsAvailableCount?: number | null;
+  rateLimitResetCredits?: CodexRateLimitResetCredit[];
+  rateLimitResetCreditsError?: string | null;
+  resetCreditsEvidenceAtMs?: number | null;
+  resetCreditsCountEvidenceAtMs?: number | null;
+  resetCreditsDetailEvidenceAtMs?: number | null;
+  resetCreditsDetailStale?: boolean;
+  observedAtMs?: number;
+}
+
+export interface CodexResetCreditsMergeResult {
+  rateLimitResetCreditsAvailableCount: number | null;
+  rateLimitResetCredits: CodexRateLimitResetCredit[];
+  rateLimitResetCreditsError: string | null;
+  resetCreditsEvidenceAtMs: number | null;
+  resetCreditsCountEvidenceAtMs: number | null;
+  resetCreditsDetailEvidenceAtMs: number | null;
+  resetCreditsDetailStale: boolean;
+}
+
+export const mergeCodexResetCreditsEvidence = (
+  previousState: Partial<import('@/types').CodexQuotaState> | undefined,
+  incoming: CodexResetCreditsMergeInput,
+  options?: { isFullDetailObservation?: boolean }
+): CodexResetCreditsMergeResult => {
+  const incomingDetailEvidence =
+    incoming.resetCreditsDetailEvidenceAtMs ?? incoming.resetCreditsEvidenceAtMs ?? null;
+  const isFullDetail =
+    options?.isFullDetailObservation ??
+    (!incoming.rateLimitResetCreditsError && incomingDetailEvidence != null);
+
+  if (isFullDetail) {
+    const observedAt =
+      incomingDetailEvidence ?? incoming.observedAtMs ?? Date.now();
+    const count =
+      incoming.rateLimitResetCreditsAvailableCount !== undefined
+        ? incoming.rateLimitResetCreditsAvailableCount
+        : (previousState?.rateLimitResetCreditsAvailableCount ?? null);
+    const countEvidence =
+      incoming.resetCreditsCountEvidenceAtMs ?? incoming.resetCreditsEvidenceAtMs ?? observedAt;
+    return {
+      rateLimitResetCreditsAvailableCount: count,
+      rateLimitResetCredits: incoming.rateLimitResetCredits ?? [],
+      rateLimitResetCreditsError: null,
+      resetCreditsEvidenceAtMs: observedAt,
+      resetCreditsCountEvidenceAtMs: countEvidence,
+      resetCreditsDetailEvidenceAtMs: observedAt,
+      resetCreditsDetailStale: false,
+    };
+  }
+
+  // Not a full detail observation (summary refresh, or full refresh where reset credits endpoint failed)
+  const incomingCount = incoming.rateLimitResetCreditsAvailableCount;
+  const detailError = incoming.rateLimitResetCreditsError ?? null;
+  const oldCount = previousState?.rateLimitResetCreditsAvailableCount ?? null;
+  const oldCredits = previousState?.rateLimitResetCredits ?? [];
+  const oldDetailEvidence = resolveCodexResetCreditsDetailEvidenceAtMs(previousState);
+  const oldDetailStale = previousState?.resetCreditsDetailStale ?? false;
+  const oldCountEvidence = resolveCodexResetCreditsCountEvidenceAtMs(previousState);
+
+  const hasNewCountObservation =
+    incomingCount !== undefined &&
+    incomingCount !== null &&
+    (typeof incoming.resetCreditsCountEvidenceAtMs === 'number' ||
+      typeof incoming.observedAtMs === 'number');
+  const incomingCountEvidence =
+    incoming.resetCreditsCountEvidenceAtMs ?? incoming.observedAtMs ?? Date.now();
+
+  // 1. New count was not observed in this request
+  if (!hasNewCountObservation && incomingCount === null) {
+    return {
+      rateLimitResetCreditsAvailableCount: oldCount,
+      rateLimitResetCredits: oldCredits,
+      rateLimitResetCreditsError: detailError,
+      resetCreditsEvidenceAtMs: previousState?.resetCreditsEvidenceAtMs ?? null,
+      resetCreditsCountEvidenceAtMs: oldCountEvidence,
+      resetCreditsDetailEvidenceAtMs: oldDetailEvidence,
+      resetCreditsDetailStale: oldDetailStale,
+    };
+  }
+
+  // 2. New count = 0: definitive evidence that there are no credits available
+  if (incomingCount === 0) {
+    return {
+      rateLimitResetCreditsAvailableCount: 0,
+      rateLimitResetCredits: [],
+      rateLimitResetCreditsError: detailError,
+      resetCreditsEvidenceAtMs: incomingCountEvidence,
+      resetCreditsCountEvidenceAtMs: incomingCountEvidence,
+      resetCreditsDetailEvidenceAtMs: null,
+      resetCreditsDetailStale: false,
+    };
+  }
+
+  // 3. New count equals old count (and count > 0)
+  if (oldCount !== null && incomingCount === oldCount) {
+    return {
+      rateLimitResetCreditsAvailableCount: incomingCount,
+      rateLimitResetCredits: oldCredits,
+      rateLimitResetCreditsError: detailError,
+      resetCreditsEvidenceAtMs:
+        previousState?.resetCreditsEvidenceAtMs ?? oldDetailEvidence ?? incomingCountEvidence,
+      resetCreditsCountEvidenceAtMs: incomingCountEvidence,
+      resetCreditsDetailEvidenceAtMs: oldDetailEvidence,
+      resetCreditsDetailStale: oldDetailStale,
+    };
+  }
+
+  // 4. New count changed and count > 0
+  return {
+    rateLimitResetCreditsAvailableCount: incomingCount ?? null,
+    rateLimitResetCredits: [],
+    rateLimitResetCreditsError: detailError,
+    resetCreditsEvidenceAtMs:
+      previousState?.resetCreditsEvidenceAtMs ?? incomingCountEvidence,
+    resetCreditsCountEvidenceAtMs: incomingCountEvidence,
+    resetCreditsDetailEvidenceAtMs: oldDetailEvidence,
+    resetCreditsDetailStale: true,
+  };
+};
+
+export const shouldAutoFetchCodexResetCreditDetails = (
+  quota: Partial<import('@/types').CodexQuotaState> | null | undefined,
+  nowMs = Date.now()
+): boolean => {
+  if (!quota) return false;
+  const count = quota.rateLimitResetCreditsAvailableCount;
+  if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) {
+    return false;
+  }
+  if (quota.resetCreditsDetailStale === true) {
+    return true;
+  }
+  const detailEvidenceAtMs = resolveCodexResetCreditsDetailEvidenceAtMs(quota);
+  if (detailEvidenceAtMs === null || detailEvidenceAtMs <= 0) {
+    return true;
+  }
+  return nowMs - detailEvidenceAtMs > RESET_CREDITS_DETAIL_TTL_MS;
+};
+
+export const buildCodexResetCreditAutoFetchSignature = (
+  selectionKey: string,
+  quota: Partial<import('@/types').CodexQuotaState> | null | undefined
+): string => {
+  const count = quota?.rateLimitResetCreditsAvailableCount ?? 'unknown';
+  const countEvidence = resolveCodexResetCreditsCountEvidenceAtMs(quota) ?? 'none';
+  const detailEvidence = resolveCodexResetCreditsDetailEvidenceAtMs(quota) ?? 'none';
+  const stale = quota?.resetCreditsDetailStale ? 'stale' : 'fresh';
+  return `${selectionKey}:${count}:${countEvidence}:${detailEvidence}:${stale}`;
+};
+

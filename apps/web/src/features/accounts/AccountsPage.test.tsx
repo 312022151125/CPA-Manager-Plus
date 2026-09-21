@@ -14424,6 +14424,8 @@ describe('AccountsPage replacement flows', () => {
         authFileKey: 'codex.json::auth-1',
         windows: [],
         rateLimitResetCreditsAvailableCount: 1,
+        resetCreditsDetailEvidenceAtMs: Date.now(),
+        rateLimitResetCredits: [makeResetCredit('credit-1')],
       },
     };
     mocks.apiRequest.mockResolvedValueOnce({
@@ -14459,6 +14461,8 @@ describe('AccountsPage replacement flows', () => {
         authFileKey: 'codex.json::auth-1',
         windows: [],
         rateLimitResetCreditsAvailableCount: 1,
+        resetCreditsDetailEvidenceAtMs: Date.now(),
+        rateLimitResetCredits: [makeResetCredit('credit-1')],
       },
     };
     mocks.apiRequest.mockRejectedValueOnce(new Error('reset endpoint unavailable'));
@@ -14594,6 +14598,8 @@ describe('AccountsPage replacement flows', () => {
         authFileKey: 'codex.json::auth-1',
         windows: [],
         rateLimitResetCreditsAvailableCount: 1,
+        resetCreditsDetailEvidenceAtMs: Date.now(),
+        rateLimitResetCredits: [makeResetCredit('credit-1')],
       },
     };
     const renderer = await renderAccountsPage();
@@ -17961,6 +17967,7 @@ describe('AccountsPage replacement flows', () => {
           ],
         }),
       };
+      vi.spyOn(CODEX_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
       vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
 
       let callCount = 0;
@@ -18275,8 +18282,8 @@ describe('AccountsPage replacement flows', () => {
   });
 
   describe('responsive quota presentation and split codex refresh flows', () => {
-    it('calls summary only on single row refresh for Codex (1 usage, 0 reset credits)', async () => {
-      const file = makeCodexFile('codex-row-summary.json', 'auth-summary-1', 'summary@example.com');
+    it('calls summary only on single row refresh for Codex', async () => {
+      const file = makeCodexFile('codex-row-summary.json', 'auth-detail-1', 'detail@example.com');
       mocks.files = [file];
       const summarySpy = vi.spyOn(CODEX_SUMMARY_CONFIG, 'fetchQuota').mockResolvedValue(makeCodexQuotaData());
       const detailSpy = vi.spyOn(CODEX_CONFIG, 'fetchQuota');

@@ -109,6 +109,9 @@ export type CodexQuotaData = {
   rateLimitResetCredits: CodexRateLimitResetCredit[];
   rateLimitResetCreditsError: string | null;
   resetCreditsEvidenceAtMs?: number | null;
+  resetCreditsCountEvidenceAtMs?: number | null;
+  resetCreditsDetailEvidenceAtMs?: number | null;
+  resetCreditsDetailStale?: boolean;
 };
 
 const isCodexRateLimitInventory = (value: unknown): boolean =>
@@ -461,6 +464,8 @@ export type CodexResetCreditsData = {
   error: string | null;
   observedAtMs?: number;
   resetCreditsEvidenceAtMs?: number | null;
+  resetCreditsCountEvidenceAtMs?: number | null;
+  resetCreditsDetailEvidenceAtMs?: number | null;
 };
 
 const resolveCodexResetCreditsAvailableCount = (
@@ -521,6 +526,8 @@ export const fetchCodexResetCredits = async (
       error: null,
       observedAtMs,
       resetCreditsEvidenceAtMs: observedAtMs,
+      resetCreditsCountEvidenceAtMs: payload.availableCount !== null ? observedAtMs : null,
+      resetCreditsDetailEvidenceAtMs: observedAtMs,
     };
   } catch (err: unknown) {
     return {
@@ -582,6 +589,9 @@ export const fetchCodexQuotaSummary = async (
     rateLimitResetCredits: [],
     rateLimitResetCreditsError: null,
     resetCreditsEvidenceAtMs: usageResetCreditsAvailableCount !== null ? observedAtMs : null,
+    resetCreditsCountEvidenceAtMs: usageResetCreditsAvailableCount !== null ? observedAtMs : null,
+    resetCreditsDetailEvidenceAtMs: null,
+    resetCreditsDetailStale: false,
   };
 };
 
@@ -609,6 +619,13 @@ export const fetchCodexQuota = async (
     resetCreditsEvidenceAtMs: hasValidResetDetail
       ? resetCredits.resetCreditsEvidenceAtMs
       : summary.resetCreditsEvidenceAtMs,
+    resetCreditsCountEvidenceAtMs: hasValidResetDetail
+      ? (resetCredits.resetCreditsCountEvidenceAtMs ?? resetCredits.observedAtMs ?? summary.resetCreditsCountEvidenceAtMs)
+      : summary.resetCreditsCountEvidenceAtMs,
+    resetCreditsDetailEvidenceAtMs: hasValidResetDetail
+      ? (resetCredits.resetCreditsDetailEvidenceAtMs ?? resetCredits.observedAtMs ?? null)
+      : null,
+    resetCreditsDetailStale: hasValidResetDetail ? false : undefined,
   };
 };
 
