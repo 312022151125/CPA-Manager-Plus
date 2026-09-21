@@ -14208,7 +14208,7 @@ describe('AccountsPage replacement flows', () => {
 
   it('uses the unified quota timestamp format for cooldown and reset-credit expiry', async () => {
     const cooldownRecoverAtMs = new Date(2026, 6, 30, 10, 5, 0, 0).getTime();
-    const resetCreditExpiresAtMs = Date.now() + 24 * 60 * 60 * 1000;
+    const resetCreditExpiresAtMs = Date.now() + 2 * 24 * 60 * 60 * 1000;
     mocks.quotaState.codexQuota = {
       'codex.json': {
         status: 'success',
@@ -14280,6 +14280,40 @@ describe('AccountsPage replacement flows', () => {
       expect.objectContaining({ title: 'codex_quota.reset_confirm_title' })
     );
     expect(mocks.consumeResetCredit).not.toHaveBeenCalled();
+  });
+
+  it('renders granular hours remaining for reset credits with less than 24 hours to expiry (Issue #845)', async () => {
+    const resetCreditExpiresAtMs = Date.now() + 12 * 60 * 60 * 1000;
+    mocks.quotaState.codexQuota = {
+      'codex.json': {
+        status: 'success',
+        authFileKey: 'codex.json::auth-1',
+        windows: [],
+        rateLimitResetCreditsAvailableCount: 1,
+        rateLimitResetCredits: [
+          {
+            id: 'reset-credit-12h',
+            status: 'available',
+            grantedAt: new Date(resetCreditExpiresAtMs - 24 * 60 * 60 * 1000).toISOString(),
+            expiresAt: new Date(resetCreditExpiresAtMs).toISOString(),
+          },
+        ],
+      },
+    };
+
+    const renderer = await renderAccountsPage();
+
+    await act(async () => {
+      findDetailButtonByName(renderer, 'codex.json').props.onClick();
+    });
+    await flushPromises();
+    await act(async () => {
+      findHostButtonByText(renderer, 'accounts.detail_tab_quota').props.onClick();
+    });
+    await flushPromises();
+
+    expect(treeText(renderer)).toContain('codex_quota.reset_credit_expiry_remaining_hours');
+    expect(treeText(renderer)).not.toContain('codex_quota.reset_credit_expiry_remaining_days');
   });
 
   it('keeps reset records visible but disables reset when no credits remain', async () => {

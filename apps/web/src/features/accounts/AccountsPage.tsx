@@ -7103,10 +7103,14 @@ export function AccountsPage() {
               const data = await CODEX_CONFIG.fetchQuota(row.raw, t, authFilesRequestScope);
               if (postMutationIsCurrent()) {
                 commitIfQuotaCacheCurrent(cacheGeneration, () => {
-                  setCodexQuota((prev) => ({
-                    ...prev,
-                    [storeKey]: CODEX_CONFIG.buildSuccessState(data, row.raw),
-                  }));
+                  setCodexQuota((prev) => {
+                    const currentState = getScopedQuotaState(CODEX_CONFIG, prev, row.raw);
+                    const nextState = CODEX_CONFIG.buildSuccessState(data, row.raw, currentState);
+                    return {
+                      ...prev,
+                      [storeKey]: nextState,
+                    };
+                  });
                 });
               }
               quotaRefreshSuccess = true;

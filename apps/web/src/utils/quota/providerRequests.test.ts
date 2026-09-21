@@ -59,6 +59,7 @@ import {
   probeXaiQuota,
 } from './providerRequests';
 import { XaiProbeError } from './xaiErrors';
+import { resolveCodexResetCreditsObservationCount } from './resetCredits';
 
 const t = ((key: string) => key) as TFunction;
 
@@ -519,6 +520,171 @@ describe('fetchCodexQuota', () => {
     expect(result.rateLimitResetCreditsAvailableCount).toBe(1);
     expect(result.rateLimitResetCredits).toEqual([]);
     expect(result.rateLimitResetCreditsError).toBe('codex_quota.reset_credits_invalid_payload');
+  });
+
+  it('Test F: resolves count to 0 when detail endpoint omits available_count but has empty credits array', async () => {
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          rate_limit: {
+            reset_credits: {
+              available_count: 2,
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          credits: [],
+        },
+      });
+
+    const result = await fetchCodexQuota(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    expect(result.rateLimitResetCreditsAvailableCount).toBe(0);
+    expect(result.rateLimitResetCredits).toEqual([]);
+    expect(result.rateLimitResetCreditsError).toBeNull();
+  });
+
+  it('Test G: standalone detail endpoint resolves count to 0 when available_count is omitted with empty credits', async () => {
+    mocks.request.mockResolvedValueOnce({
+      statusCode: 200,
+      hasStatusCode: true,
+      header: {},
+      bodyText: '',
+      body: {
+        credits: [],
+      },
+    });
+
+    const result = await fetchCodexResetCredits(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    const count = resolveCodexResetCreditsObservationCount(
+      result.availableCount,
+      result.credits
+    );
+    expect(count).toBe(0);
+    expect(result.credits).toEqual([]);
+    expect(result.error).toBeNull();
+  });
+
+  it('Test H: resolves count to credits.length when detail endpoint omits available_count with non-empty credits', async () => {
+    const creditA = {
+      id: 'c-1',
+      status: 'available',
+      reset_type: 'codex_rate_limits',
+      expires_at: '2026-08-01T00:00:00Z',
+    };
+    const creditB = {
+      id: 'c-2',
+      status: 'available',
+      reset_type: 'codex_rate_limits',
+      expires_at: '2026-08-02T00:00:00Z',
+    };
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          rate_limit: {
+            reset_credits: {
+              available_count: 1,
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          credits: [creditA, creditB],
+        },
+      });
+
+    const result = await fetchCodexQuota(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    expect(result.rateLimitResetCreditsAvailableCount).toBe(2);
+    expect(result.rateLimitResetCredits).toHaveLength(2);
+    expect(result.rateLimitResetCreditsError).toBeNull();
+  });
+
+  it('Test I: gives precedence to explicit available_count even if different from credits array length', async () => {
+    const creditA = {
+      id: 'c-1',
+      status: 'available',
+      reset_type: 'codex_rate_limits',
+      expires_at: '2026-08-01T00:00:00Z',
+    };
+    mocks.request
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          rate_limit: {
+            reset_credits: {
+              available_count: 1,
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '',
+        body: {
+          available_count: 5,
+          credits: [creditA],
+        },
+      });
+
+    const result = await fetchCodexQuota(
+      {
+        name: 'codex.json',
+        type: 'codex',
+        authIndex: 'auth-1',
+      },
+      t
+    );
+
+    expect(result.rateLimitResetCreditsAvailableCount).toBe(5);
+    expect(result.rateLimitResetCredits).toHaveLength(1);
+    expect(result.rateLimitResetCreditsError).toBeNull();
   });
 });
 

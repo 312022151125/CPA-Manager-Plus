@@ -208,9 +208,26 @@ export const mergeCodexResetCreditsFromQuotaSnapshots = (
   const localDetailEvidenceAtMs =
     resolveCodexResetCreditsDetailEvidenceAtMs(quota) ?? 0;
 
+  const localResetInvalidationAtMs =
+    quota?.resetCreditsDetailStale === true &&
+    typeof quota?.resetCreditsEvidenceAtMs === 'number' &&
+    Number.isFinite(quota.resetCreditsEvidenceAtMs) &&
+    quota.resetCreditsEvidenceAtMs > 0
+      ? quota.resetCreditsEvidenceAtMs
+      : 0;
+
+  const localCountInvalidationBoundaryAtMs = Math.max(
+    localCountEvidenceAtMs,
+    localResetInvalidationAtMs
+  );
+
   const localDetailInvalidationBoundaryAtMs =
     quota?.resetCreditsDetailStale === true
-      ? Math.max(localDetailEvidenceAtMs, localCountEvidenceAtMs)
+      ? Math.max(
+          localDetailEvidenceAtMs,
+          localCountEvidenceAtMs,
+          localResetInvalidationAtMs
+        )
       : localDetailEvidenceAtMs;
 
   const usableSnapshots = snapshots.filter(
@@ -245,16 +262,19 @@ export const mergeCodexResetCreditsFromQuotaSnapshots = (
     countSnapshot !== undefined &&
     ((quota?.rateLimitResetCreditsAvailableCount === undefined ||
       quota?.rateLimitResetCreditsAvailableCount === null) &&
-    !hasLocalCountEvidence
+    !hasLocalCountEvidence &&
+    localCountInvalidationBoundaryAtMs === 0
       ? true
-      : countObservedAt >= localCountEvidenceAtMs);
+      : countObservedAt >= localCountInvalidationBoundaryAtMs);
 
   const useSnapshotCredits =
     creditsSnapshot !== undefined &&
     !localIsZeroCountAtOrAfterSnapshot &&
     (quota?.resetCreditsDetailStale === true
       ? creditsObservedAt >= localDetailInvalidationBoundaryAtMs
-      : quota?.rateLimitResetCredits === undefined && !hasLocalDetailEvidence
+      : quota?.rateLimitResetCredits === undefined &&
+        !hasLocalDetailEvidence &&
+        localDetailInvalidationBoundaryAtMs === 0
         ? true
         : creditsObservedAt >= localDetailInvalidationBoundaryAtMs);
 
@@ -308,6 +328,7 @@ export const mergeCodexResetCreditsFromQuotaSnapshots = (
     resetCreditsEvidenceAtMs: Math.max(
       localCountEvidenceAtMs,
       localDetailEvidenceAtMs,
+      localResetInvalidationAtMs,
       useSnapshotCount ? countObservedAt : 0,
       useSnapshotCredits ? creditsObservedAt : 0
     ),

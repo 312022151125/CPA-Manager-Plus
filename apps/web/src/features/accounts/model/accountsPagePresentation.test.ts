@@ -11,6 +11,7 @@ import {
   formatQuotaResetDisplay,
   formatQuotaResetRelative,
   getQuotaResetRemainingDays,
+  getQuotaResetRemainingDuration,
   formatQuotaResetTimestamp,
   formatQuotaResetTooltipParams,
   formatTimestamp,
@@ -128,6 +129,62 @@ describe('accountsPagePresentation', () => {
     expect(getQuotaResetRemainingDays(nowMs + 10 * 24 * 60 * 60 * 1000 - 1, nowMs)).toBe(10);
     expect(getQuotaResetRemainingDays(nowMs - 1, nowMs)).toBe(0);
     expect(getQuotaResetRemainingDays(null, nowMs)).toBeNull();
+  });
+
+  it('calculates granular reset-credit remaining duration across day, hour, minute, and subminute units', () => {
+    const nowMs = new Date(2026, 8, 11, 10, 0, 0, 0).getTime();
+    const oneDay = 24 * 60 * 60 * 1000;
+    const oneHour = 60 * 60 * 1000;
+    const oneMinute = 60 * 1000;
+
+    // expires = now + 3d + 5h -> 3 days
+    expect(getQuotaResetRemainingDuration(nowMs + 3 * oneDay + 5 * oneHour, nowMs)).toEqual({
+      unit: 'day',
+      value: 3,
+    });
+
+    // expires = now + 24h -> 1 day
+    expect(getQuotaResetRemainingDuration(nowMs + oneDay, nowMs)).toEqual({
+      unit: 'day',
+      value: 1,
+    });
+
+    // expires = now + 23h59m -> 23 hours
+    expect(getQuotaResetRemainingDuration(nowMs + 23 * oneHour + 59 * oneMinute, nowMs)).toEqual({
+      unit: 'hour',
+      value: 23,
+    });
+
+    // expires = now + 1h -> 1 hour
+    expect(getQuotaResetRemainingDuration(nowMs + oneHour, nowMs)).toEqual({
+      unit: 'hour',
+      value: 1,
+    });
+
+    // expires = now + 59m -> 59 minutes
+    expect(getQuotaResetRemainingDuration(nowMs + 59 * oneMinute, nowMs)).toEqual({
+      unit: 'minute',
+      value: 59,
+    });
+
+    // expires = now + 1m -> 1 minute
+    expect(getQuotaResetRemainingDuration(nowMs + oneMinute, nowMs)).toEqual({
+      unit: 'minute',
+      value: 1,
+    });
+
+    // expires = now + 30s -> sub-minute
+    expect(getQuotaResetRemainingDuration(nowMs + 30 * 1000, nowMs)).toEqual({
+      unit: 'subminute',
+      value: 0,
+    });
+
+    // invalid timestamp -> null
+    expect(getQuotaResetRemainingDuration(null, nowMs)).toBeNull();
+    expect(getQuotaResetRemainingDuration(undefined, nowMs)).toBeNull();
+    expect(getQuotaResetRemainingDuration(0, nowMs)).toBeNull();
+    expect(getQuotaResetRemainingDuration(-100, nowMs)).toBeNull();
+    expect(getQuotaResetRemainingDuration(Number.NaN, nowMs)).toBeNull();
   });
 
   it('formats relative quota resets with day, hour, and minute resolutions', () => {

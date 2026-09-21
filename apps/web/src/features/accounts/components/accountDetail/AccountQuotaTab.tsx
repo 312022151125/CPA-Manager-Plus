@@ -13,7 +13,7 @@ import type { AccountDetailViewModel } from '@/features/accounts/model/accountDe
 import {
   formatPercent,
   formatQuotaResetTimestamp,
-  getQuotaResetRemainingDays,
+  getQuotaResetRemainingDuration,
 } from '@/features/accounts/model/accountsPagePresentation';
 import {
   getAccountQuotaSemanticGroup,
@@ -103,6 +103,34 @@ interface AccountQuotaTabProps {
   onResetQuota: () => void;
   resetQuotaDisabled: boolean;
 }
+
+const renderResetCreditRemainingText = (
+  expiresAtMs: number,
+  nowMs: number,
+  t: (key: string, options?: Record<string, unknown>) => string
+): string => {
+  const duration = getQuotaResetRemainingDuration(expiresAtMs, nowMs);
+  if (!duration) return '';
+  switch (duration.unit) {
+    case 'day':
+      return t('codex_quota.reset_credit_expiry_remaining_days', {
+        count: duration.value,
+        days: duration.value,
+      });
+    case 'hour':
+      return t('codex_quota.reset_credit_expiry_remaining_hours', {
+        count: duration.value,
+        hours: duration.value,
+      });
+    case 'minute':
+      return t('codex_quota.reset_credit_expiry_remaining_minutes', {
+        count: duration.value,
+        minutes: duration.value,
+      });
+    case 'subminute':
+      return t('codex_quota.reset_credit_expiry_remaining_less_than_minute');
+  }
+};
 
 export function AccountQuotaTab({
   detailView,
@@ -349,9 +377,7 @@ export function AccountQuotaTab({
                     >
                       <span>{t('codex_quota.reset_credit_expiry_item', { index: index + 1 })}</span>
                       <strong data-quota-reset-credit-expiry={item.id}>
-                        {t('codex_quota.reset_credit_expiry_remaining_days', {
-                          days: getQuotaResetRemainingDays(item.expiresAtMs, nowMs) ?? 0,
-                        })}{' '}
+                        {renderResetCreditRemainingText(item.expiresAtMs, nowMs, t)}{' '}
                         · {formatQuotaResetTimestamp(item.expiresAtMs, i18n.language)}
                       </strong>
                     </div>

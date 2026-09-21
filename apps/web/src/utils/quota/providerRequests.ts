@@ -84,7 +84,10 @@ import {
   buildCodexResetCreditsRequestHeaders,
   buildCodexUsageRequestHeaders,
 } from './codexRequestHeaders';
-import { normalizeCodexResetCreditsPayload } from './resetCredits';
+import {
+  normalizeCodexResetCreditsPayload,
+  resolveCodexResetCreditsObservationCount,
+} from './resetCredits';
 import { classifyXaiProbe, parseXaiErrorEnvelope, XaiProbeError } from './xaiErrors';
 
 const DEFAULT_ANTIGRAVITY_PROJECT_ID = 'bamboo-precept-lgxtn';
@@ -468,14 +471,6 @@ export type CodexResetCreditsData = {
   resetCreditsDetailEvidenceAtMs?: number | null;
 };
 
-const resolveCodexResetCreditsAvailableCount = (
-  resetCredits: CodexResetCreditsData,
-  usageAvailableCount: number | null
-): number | null => {
-  if (resetCredits.availableCount !== null) return resetCredits.availableCount;
-  if (resetCredits.credits.length > 0) return resetCredits.credits.length;
-  return usageAvailableCount;
-};
 
 export const fetchCodexResetCredits = async (
   file: AuthFileItem,
@@ -604,12 +599,14 @@ export const fetchCodexQuota = async (
   const resetCredits = await fetchCodexResetCredits(file, t, requestScope);
 
   const hasValidResetDetail = !resetCredits.error && resetCredits.resetCreditsEvidenceAtMs != null;
-  const rateLimitResetCreditsAvailableCount = hasValidResetDetail
-    ? resolveCodexResetCreditsAvailableCount(
-        resetCredits,
-        summary.rateLimitResetCreditsAvailableCount
-      )
-    : summary.rateLimitResetCreditsAvailableCount;
+  const detailCount = resolveCodexResetCreditsObservationCount(
+    resetCredits.availableCount,
+    resetCredits.credits
+  );
+  const rateLimitResetCreditsAvailableCount =
+    hasValidResetDetail && detailCount !== null
+      ? detailCount
+      : summary.rateLimitResetCreditsAvailableCount;
 
   return {
     ...summary,

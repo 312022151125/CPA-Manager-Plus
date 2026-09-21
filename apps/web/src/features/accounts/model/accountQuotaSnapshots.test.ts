@@ -15,6 +15,8 @@ import {
   mergeCodexResetCreditsFromQuotaSnapshots,
   mergeAccountQuotaSnapshotWindows,
 } from './accountQuotaSnapshots';
+import { CODEX_CONFIG } from '@/components/quota/quotaConfigs';
+import type { CodexQuotaData } from '@/utils/quota/providerRequests';
 import type { AccountRow } from './accountRows';
 import {
   buildAccountQuotaDisplayWindow,
@@ -2429,6 +2431,219 @@ describe('account quota snapshots', () => {
 
     expect(merged?.rateLimitResetCreditsAvailableCount).toBe(2);
     expect(merged?.resetCreditsCountEvidenceAtMs).toBe(20_000);
+  });
+
+  it('Test A: does not let older snapshots cross mutation invalidation boundary', () => {
+    const quota = {
+      status: 'success' as const,
+      windows: [],
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      resetCreditsEvidenceAtMs: 30_000,
+      resetCreditsCountEvidenceAtMs: null,
+      resetCreditsDetailEvidenceAtMs: null,
+      resetCreditsDetailStale: true,
+    };
+
+    const merged = mergeCodexResetCreditsFromQuotaSnapshots(quota, [
+      makeSnapshot({
+        observed_at_ms: 20_000,
+        reset_credits_available: 2,
+        reset_credits: [{ id: 'old-credit', expires_at_ms: 200_000 }],
+        field_sources: {
+          reset_credits_available: { source: 'api_query', observed_at_ms: 20_000 },
+          reset_credits: { source: 'api_query', observed_at_ms: 20_000 },
+        },
+      }),
+    ]);
+
+    expect(merged?.rateLimitResetCreditsAvailableCount).toBeNull();
+    expect(merged?.rateLimitResetCredits).toEqual([]);
+    expect(merged?.resetCreditsDetailStale).toBe(true);
+    expect(merged?.resetCreditsEvidenceAtMs).toBe(30_000);
+  });
+
+  it('Test B: allows newer snapshots observed after mutation invalidation to restore state', () => {
+    const quota = {
+      status: 'success' as const,
+      windows: [],
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      resetCreditsEvidenceAtMs: 30_000,
+      resetCreditsCountEvidenceAtMs: null,
+      resetCreditsDetailEvidenceAtMs: null,
+      resetCreditsDetailStale: true,
+    };
+
+    const merged = mergeCodexResetCreditsFromQuotaSnapshots(quota, [
+      makeSnapshot({
+        observed_at_ms: 40_000,
+        reset_credits_available: 1,
+        reset_credits: [{ id: 'new-credit', expires_at_ms: 400_000 }],
+        field_sources: {
+          reset_credits_available: { source: 'api_query', observed_at_ms: 40_000 },
+          reset_credits: { source: 'api_query', observed_at_ms: 40_000 },
+        },
+      }),
+    ]);
+
+    expect(merged?.rateLimitResetCreditsAvailableCount).toBe(1);
+    expect(merged?.rateLimitResetCredits).toEqual([
+      expect.objectContaining({ id: 'new-credit' }),
+    ]);
+    expect(merged?.resetCreditsCountEvidenceAtMs).toBe(40_000);
+    expect(merged?.resetCreditsDetailEvidenceAtMs).toBe(40_000);
+    expect(merged?.resetCreditsDetailStale).toBe(false);
+    expect(merged?.resetCreditsEvidenceAtMs).toBe(40_000);
+  });
+
+  it('Test C: adopts newer snapshot count while blocking older snapshot details when invalidation is active', () => {
+    const quota = {
+      status: 'success' as const,
+      windows: [],
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      resetCreditsEvidenceAtMs: 30_000,
+      resetCreditsCountEvidenceAtMs: null,
+      resetCreditsDetailEvidenceAtMs: null,
+      resetCreditsDetailStale: true,
+    };
+
+    const merged = mergeCodexResetCreditsFromQuotaSnapshots(quota, [
+      makeSnapshot({
+        reset_credits_available: 1,
+        reset_credits: [{ id: 'old-credit', expires_at_ms: 200_000 }],
+        field_sources: {
+          reset_credits_available: { source: 'api_query', observed_at_ms: 40_000 },
+          reset_credits: { source: 'api_query', observed_at_ms: 20_000 },
+        },
+      }),
+    ]);
+
+    expect(merged?.rateLimitResetCreditsAvailableCount).toBe(1);
+    expect(merged?.rateLimitResetCredits).toEqual([]);
+    expect(merged?.resetCreditsCountEvidenceAtMs).toBe(40_000);
+    expect(merged?.resetCreditsDetailEvidenceAtMs).toBeNull();
+    expect(merged?.resetCreditsDetailStale).toBe(true);
+    expect(merged?.resetCreditsEvidenceAtMs).toBe(40_000);
+  });
+
+  it('Test D: post-reset partial refresh retains invalidation boundary and blocks older snapshot recovery', () => {
+    const localInvalidated = {
+      status: 'success' as const,
+      windows: [],
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      resetCreditsEvidenceAtMs: 30_000,
+      resetCreditsCountEvidenceAtMs: null,
+      resetCreditsDetailEvidenceAtMs: null,
+      resetCreditsDetailStale: true,
+    };
+
+    const partialData: CodexQuotaData = {
+      windows: [],
+      quotaInventoryObserved: true,
+      planType: null,
+      subscriptionActiveUntil: null,
+      creditsHasCredits: null,
+      creditsUnlimited: null,
+      creditsBalance: null,
+      creditsOverageLimitReached: null,
+      creditsApproxLocalMessages: null,
+      creditsApproxCloudMessages: null,
+      spendControlReached: null,
+      spendControlIndividualLimit: null,
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      rateLimitResetCreditsError: 'credit endpoint timeout',
+      resetCreditsEvidenceAtMs: null,
+      resetCreditsCountEvidenceAtMs: null,
+      resetCreditsDetailEvidenceAtMs: null,
+      observedAtMs: 35_000,
+    };
+
+    const postRefreshState = CODEX_CONFIG.buildSuccessState(
+      partialData,
+      { name: 'codex.json', type: 'codex', authIndex: 'auth-1' } as Parameters<
+        typeof CODEX_CONFIG.buildSuccessState
+      >[1],
+      localInvalidated
+    );
+
+    expect(postRefreshState.resetCreditsEvidenceAtMs).toBe(30_000);
+    expect(postRefreshState.resetCreditsDetailStale).toBe(true);
+
+    const merged = mergeCodexResetCreditsFromQuotaSnapshots(postRefreshState, [
+      makeSnapshot({
+        observed_at_ms: 20_000,
+        reset_credits_available: 2,
+        reset_credits: [{ id: 'old-credit', expires_at_ms: 200_000 }],
+        field_sources: {
+          reset_credits_available: { source: 'api_query', observed_at_ms: 20_000 },
+          reset_credits: { source: 'api_query', observed_at_ms: 20_000 },
+        },
+      }),
+    ]);
+
+    expect(merged?.rateLimitResetCreditsAvailableCount).toBeNull();
+    expect(merged?.rateLimitResetCredits).toEqual([]);
+    expect(merged?.resetCreditsDetailStale).toBe(true);
+  });
+
+  it('Test E: post-reset full detail success establishes newer genuine evidence and clears stale state', () => {
+    const localInvalidated = {
+      status: 'success' as const,
+      windows: [],
+      rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      resetCreditsEvidenceAtMs: 30_000,
+      resetCreditsCountEvidenceAtMs: null,
+      resetCreditsDetailEvidenceAtMs: null,
+      resetCreditsDetailStale: true,
+    };
+
+    const fullDetailData: CodexQuotaData = {
+      windows: [],
+      quotaInventoryObserved: true,
+      planType: null,
+      subscriptionActiveUntil: null,
+      creditsHasCredits: null,
+      creditsUnlimited: null,
+      creditsBalance: null,
+      creditsOverageLimitReached: null,
+      creditsApproxLocalMessages: null,
+      creditsApproxCloudMessages: null,
+      spendControlReached: null,
+      spendControlIndividualLimit: null,
+      rateLimitResetCreditsAvailableCount: 1,
+      rateLimitResetCredits: [
+        {
+          id: 'new-credit',
+          status: 'available',
+          grantedAt: new Date(40_000).toISOString(),
+          expiresAt: new Date(400_000).toISOString(),
+        },
+      ],
+      rateLimitResetCreditsError: null,
+      resetCreditsEvidenceAtMs: 40_000,
+      resetCreditsCountEvidenceAtMs: 40_000,
+      resetCreditsDetailEvidenceAtMs: 40_000,
+      observedAtMs: 40_000,
+    };
+
+    const postRefreshState = CODEX_CONFIG.buildSuccessState(
+      fullDetailData,
+      { name: 'codex.json', type: 'codex', authIndex: 'auth-1' } as Parameters<
+        typeof CODEX_CONFIG.buildSuccessState
+      >[1],
+      localInvalidated
+    );
+
+    expect(postRefreshState.rateLimitResetCreditsAvailableCount).toBe(1);
+    expect(postRefreshState.rateLimitResetCredits).toHaveLength(1);
+    expect(postRefreshState.resetCreditsCountEvidenceAtMs).toBe(40_000);
+    expect(postRefreshState.resetCreditsDetailEvidenceAtMs).toBe(40_000);
+    expect(postRefreshState.resetCreditsDetailStale).toBe(false);
   });
 
   describe('Devin snapshot pipeline contract', () => {
