@@ -100,6 +100,27 @@ describe('provider health check model', () => {
     ]);
   });
 
+  it('builds Meta API key health-check items with Meta identity', () => {
+    const rows = buildProviderRows({
+      gemini: [],
+      codex: [],
+      xai: [],
+      meta: [{ apiKey: 'meta-key', baseUrl: 'https://api.meta.ai/v1' }],
+      claude: [],
+      vertex: [],
+      openai: [],
+      usageByProvider: emptyUsageByProvider,
+    });
+
+    expect(buildProviderHealthCheckItems(rows)).toEqual([
+      expect.objectContaining({
+        providerKind: 'meta',
+        providerLabel: expect.stringContaining('Muse (Meta)'),
+        providerSubtitle: 'https://api.meta.ai/v1',
+      }),
+    ]);
+  });
+
   it('summarizes progress from item statuses', () => {
     const items = [
       { status: 'success' },

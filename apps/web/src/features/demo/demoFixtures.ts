@@ -421,6 +421,17 @@ const initialRawConfig: Record<string, unknown> = {
       models: [{ name: 'grok-4.5', alias: 'Grok Team' }],
     },
   ],
+  'meta-api-key': [
+    {
+      'api-key': 'meta-demo-team-key',
+      'auth-index': 'meta-api-team-01',
+      prefix: 'meta-team',
+      'base-url': 'https://api.meta.ai/v1',
+      priority: 15,
+      weight: 3,
+      models: [{ name: 'llama-3.3-70b-instruct', alias: 'Meta Llama 3.3' }],
+    },
+  ],
   'claude-api-key': [
     {
       'api-key': 'claude-demo-team-key',

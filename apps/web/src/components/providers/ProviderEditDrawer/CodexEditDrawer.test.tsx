@@ -20,6 +20,9 @@ const mocks = vi.hoisted(() => ({
   showNotification: vi.fn(),
   updateCodexConfig: vi.fn(),
   getCodexConfigs: vi.fn(),
+  createMetaConfig: vi.fn(),
+  updateMetaConfig: vi.fn(),
+  getMetaConfigs: vi.fn(),
 }));
 
 vi.mock('@/stores', () => ({
@@ -62,6 +65,9 @@ vi.mock('@/services/api', () => ({
   providersApi: {
     updateCodexConfig: mocks.updateCodexConfig,
     getCodexConfigs: mocks.getCodexConfigs,
+    createMetaConfig: mocks.createMetaConfig,
+    updateMetaConfig: mocks.updateMetaConfig,
+    getMetaConfigs: mocks.getMetaConfigs,
   },
 }));
 
@@ -81,6 +87,7 @@ describe('CodexEditDrawer load baseline guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authState.serverVersion = 'v7.2.93';
+    mocks.fetchConfig.mockResolvedValue([]);
     mocks.updateCodexConfig.mockResolvedValue(undefined);
     mocks.getCodexConfigs.mockResolvedValue([]);
   });
@@ -219,4 +226,88 @@ describe('CodexEditDrawer load baseline guard', () => {
       act(() => renderer!.unmount());
     }
   );
+
+  it('rejects DCA tokens when editing or creating a Meta provider', async () => {
+    mocks.createMetaConfig.mockResolvedValue(undefined);
+    mocks.getMetaConfigs.mockResolvedValue([]);
+    const onSaved = vi.fn();
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const inputs = renderer!.root.findAllByType('input');
+    expect(inputs.length).toBeGreaterThan(0);
+    const apiKeyInput = inputs[0];
+
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'dca:test-token' } }));
+
+    const saveButton = findSaveButton(renderer!.root);
+    await act(async () => {
+      await saveButton?.props.onClick();
+    });
+
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      expect.stringContaining('Meta API Key'),
+      'error'
+    );
+    expect(mocks.createMetaConfig).not.toHaveBeenCalled();
+
+    act(() => renderer!.unmount());
+  });
+
+  it('creates a Meta provider with valid key and omits websockets toggle', async () => {
+    mocks.createMetaConfig.mockResolvedValue(undefined);
+    mocks.getMetaConfigs.mockResolvedValue([]);
+    const onSaved = vi.fn();
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+          providerKind="meta"
+        />
+      );
+    });
+
+    // Verify websockets toggle is not present
+    const labels = renderer!.root.findAllByType('label');
+    expect(labels.some((l) => l.props.children?.toString().includes('Websockets'))).toBe(false);
+
+    const inputs = renderer!.root.findAllByType('input');
+    expect(inputs.length).toBeGreaterThan(0);
+    const apiKeyInput = inputs[0];
+
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'meta-valid-key' } }));
+
+    const saveButton = findSaveButton(renderer!.root);
+    await act(async () => {
+      await saveButton?.props.onClick();
+    });
+
+    expect(mocks.createMetaConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'meta-valid-key',
+        baseUrl: 'https://api.meta.ai/v1',
+      })
+    );
+    expect(onSaved).toHaveBeenCalledTimes(1);
+
+    act(() => renderer!.unmount());
+  });
 });

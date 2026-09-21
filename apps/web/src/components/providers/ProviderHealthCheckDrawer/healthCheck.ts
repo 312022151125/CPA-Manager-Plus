@@ -44,7 +44,7 @@ export interface ProviderHealthCheckSummary {
 
 type ProviderHealthCheckTarget =
   | { kind: 'gemini' | 'interactions'; config: GeminiKeyConfig }
-  | { kind: 'codex' | 'xai' | 'claude' | 'vertex'; config: ProviderKeyConfig }
+  | { kind: 'codex' | 'xai' | 'meta' | 'claude' | 'vertex'; config: ProviderKeyConfig }
   | { kind: 'openai'; config: OpenAIProviderConfig; keyIndex: number };
 
 const EMPTY_MODELS_ERROR = 'No models returned';
@@ -147,7 +147,7 @@ const joinProviderLabel = (kindLabel: string, identity: string): string => {
 const getKeyProviderDisplay = (
   row: Extract<
     ProviderRow,
-    { kind: 'gemini' | 'interactions' | 'codex' | 'xai' | 'claude' | 'vertex' }
+    { kind: 'gemini' | 'interactions' | 'codex' | 'xai' | 'meta' | 'claude' | 'vertex' }
   >
 ): Pick<ProviderHealthCheckItem, 'providerLabel' | 'providerSubtitle'> => {
   const kindLabel = PROVIDER_KIND_LABELS[row.kind];
@@ -195,7 +195,7 @@ const requireCredential = (
 const buildKeyProviderItem = (
   row: Extract<
     ProviderRow,
-    { kind: 'gemini' | 'interactions' | 'codex' | 'xai' | 'claude' | 'vertex' }
+    { kind: 'gemini' | 'interactions' | 'codex' | 'xai' | 'meta' | 'claude' | 'vertex' }
   >
 ): ProviderHealthCheckItem => {
   const providerDisplay = getKeyProviderDisplay(row);
@@ -406,7 +406,7 @@ export const runProviderHealthCheckItem = async (
         target.config.proxyUrl
       );
       modelCount = ensureNonEmptyModels(models);
-    } else if (target.kind === 'codex' || target.kind === 'xai') {
+    } else if (target.kind === 'codex' || target.kind === 'xai' || target.kind === 'meta') {
       requireCredential(target.config.apiKey, target.config.authIndex, target.config.headers);
       const hasCustomAuthorization = hasHeader(target.config.headers, 'authorization');
       const models = await modelsApi.fetchV1ModelsViaApiCall(

@@ -11,6 +11,7 @@ const { mocks } = vi.hoisted(() => ({
   mocks: {
     get: vi.fn(),
     put: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
@@ -18,14 +19,21 @@ vi.mock('./client', () => ({
   apiClient: {
     get: mocks.get,
     put: mocks.put,
+    delete: mocks.delete,
   },
 }));
 
-import { providersApi, verifyClaudeFingerprintInRawConfig } from './providers';
+import {
+  assertValidMetaApiKey,
+  providersApi,
+  serializeMetaProviderKey,
+  verifyClaudeFingerprintInRawConfig,
+} from './providers';
 
 beforeEach(() => {
   mocks.get.mockReset();
   mocks.put.mockReset();
+  mocks.delete.mockReset();
 });
 
 describe('providersApi auth-index preservation', () => {
@@ -1839,3 +1847,139 @@ describe('verifyClaudeFingerprintInRawConfig', () => {
     ).toBe('confirmed');
   });
 });
+
+describe('providersApi meta provider management', () => {
+  it('assertValidMetaApiKey rejects empty key and DCA token format', () => {
+    expect(() => assertValidMetaApiKey('')).toThrow('Meta API key is required');
+    expect(() => assertValidMetaApiKey('   ')).toThrow('Meta API key is required');
+    expect(() => assertValidMetaApiKey(undefined)).toThrow('Meta API key is required');
+    expect(() => assertValidMetaApiKey('dca:eyJhbGciOi...')).toThrow(
+      'DCA tokens cannot be used as Meta API keys'
+    );
+    expect(() => assertValidMetaApiKey('DCA:token-123')).toThrow(
+      'DCA tokens cannot be used as Meta API keys'
+    );
+    expect(() => assertValidMetaApiKey('meta-valid-api-key')).not.toThrow();
+  });
+
+  it('serializeMetaProviderKey omits unsupported fields like websockets and cloak', () => {
+    const serialized = serializeMetaProviderKey({
+      apiKey: 'meta-test-key',
+      baseUrl: 'https://api.meta.ai/v1',
+      prefix: 'meta-team',
+      websockets: true,
+      cloak: {
+        sensitiveWords: ['secret'],
+      },
+      models: [{ name: 'llama-3.3-70b-instruct' }],
+      priority: 10,
+    } as unknown as ProviderKeyConfig);
+
+    expect(serialized).toEqual({
+      'api-key': 'meta-test-key',
+      'base-url': 'https://api.meta.ai/v1',
+      prefix: 'meta-team',
+      models: [{ name: 'llama-3.3-70b-instruct' }],
+      priority: 10,
+    });
+    expect(serialized).not.toHaveProperty('websockets');
+    expect(serialized).not.toHaveProperty('cloak');
+  });
+
+  it('getMetaConfigs reads and normalizes meta-api-key section', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'meta-api-key': [
+        {
+          'api-key': 'meta-key-1',
+          'base-url': 'https://api.meta.ai/v1',
+          prefix: 'team-meta',
+          priority: 5,
+        },
+      ],
+    });
+
+    const configs = await providersApi.getMetaConfigs();
+    expect(configs).toHaveLength(1);
+    expect(configs[0]).toMatchObject({
+      apiKey: 'meta-key-1',
+      baseUrl: 'https://api.meta.ai/v1',
+      prefix: 'team-meta',
+      priority: 5,
+    });
+  });
+
+  it('createMetaConfig appends a new record and rejects DCA tokens', async () => {
+    expect(() =>
+      providersApi.createMetaConfig({
+        apiKey: 'dca:forbidden-token',
+        baseUrl: 'https://api.meta.ai/v1',
+      })
+    ).toThrow('DCA tokens cannot be used as Meta API keys');
+
+    mocks.get.mockResolvedValueOnce({
+      'meta-api-key': [
+        {
+          'api-key': 'meta-key-existing',
+          'base-url': 'https://api.meta.ai/v1',
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.createMetaConfig({
+      apiKey: 'meta-key-new',
+      baseUrl: 'https://api.meta.ai/v1',
+      prefix: 'meta-new',
+    });
+
+    expect(mocks.put).toHaveBeenCalledWith(
+      '/meta-api-key',
+      expect.arrayContaining([
+        expect.objectContaining({ 'api-key': 'meta-key-existing' }),
+        expect.objectContaining({ 'api-key': 'meta-key-new', prefix: 'meta-new' }),
+      ])
+    );
+  });
+
+  it('updateMetaConfig preserves unknown fields in raw record', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'meta-api-key': [
+        {
+          'api-key': 'meta-key-1',
+          'base-url': 'https://api.meta.ai/v1',
+          'future-meta-flag': 'keep-me',
+          models: [{ name: 'llama-3.3-70b-instruct', customProp: 'preserve' }],
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.updateMetaConfig(
+      { apiKey: 'meta-key-1', baseUrl: 'https://api.meta.ai/v1' },
+      {
+        apiKey: 'meta-key-1-updated',
+        baseUrl: 'https://api.meta.ai/v1',
+        prefix: 'updated-prefix',
+      }
+    );
+
+    expect(mocks.put).toHaveBeenCalledWith('/meta-api-key', [
+      expect.objectContaining({
+        'api-key': 'meta-key-1-updated',
+        prefix: 'updated-prefix',
+        'future-meta-flag': 'keep-me',
+      }),
+    ]);
+  });
+
+  it('deleteMetaConfig removes the matching provider record', async () => {
+    mocks.delete.mockResolvedValue({});
+
+    await providersApi.deleteMetaConfig('meta-key-1', 'https://api.meta.ai/v1');
+
+    expect(mocks.delete).toHaveBeenCalledWith(
+      '/meta-api-key?api-key=meta-key-1&base-url=https%3A%2F%2Fapi.meta.ai%2Fv1'
+    );
+  });
+});
+
