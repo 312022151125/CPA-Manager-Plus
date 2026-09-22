@@ -560,6 +560,16 @@ const selectKimiQuotaListWindows = (
   return limits;
 };
 
+export const selectMetaQuotaListWindows = (
+  quotaWindows: AccountQuotaDisplayWindow[]
+): AccountQuotaDisplayWindow[] => {
+  const preferredKeys = ['meta:window', 'meta:weekly'];
+
+  return preferredKeys
+    .map((key) => quotaWindows.find((window) => window.key === key))
+    .filter((window): window is AccountQuotaDisplayWindow => Boolean(window));
+};
+
 export const resolveWindowDurationSeconds = (
   window: AccountQuotaDisplayWindow
 ): number => {
@@ -754,6 +764,9 @@ export const selectAccountQuotaMainListWindows = (
         candidates = quotaWindows.filter((window) => window.windowMode !== 'non_window');
       }
       break;
+    case 'meta':
+      candidates = selectMetaQuotaListWindows(quotaWindows);
+      break;
     case 'claude':
     default:
       candidates = standardQuotaWindows;
@@ -767,6 +780,9 @@ export const selectAccountQuotaMainListWindows = (
   }));
 
   indexed.sort((a, b) => {
+    if (row.provider === 'meta') {
+      return a.index - b.index;
+    }
     if (a.duration !== b.duration) {
       return a.duration - b.duration;
     }
@@ -805,6 +821,8 @@ export const selectAccountQuotaListWindows = (
       return standardQuotaWindows.length > 0
         ? standardQuotaWindows
         : quotaWindows.slice(0, 2);
+    case 'meta':
+      return selectMetaQuotaListWindows(quotaWindows);
     case 'claude':
       return standardQuotaWindows;
     default:

@@ -9009,6 +9009,114 @@ describe('AccountsPage replacement flows', () => {
     expect(windows.find((w: { providerWindowId: string }) => w.providerWindowId === 'meta:weekly')?.label).toBe('meta_quota.weekly');
   });
 
+  it('renders live Meta quota window and weekly in accounts list', async () => {
+    const file = {
+      name: 'meta-live.json',
+      type: 'meta',
+      provider: 'meta',
+      authIndex: 'meta-live-1',
+      account: 'meta-live@example.com',
+      priority: 0,
+      disabled: false,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.quotaState.metaQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      observedAtMs: 2_000,
+      plan: 'free',
+      isSubscriptionActive: null,
+      quotaInventoryObserved: true,
+      windows: [
+        {
+          id: 'window',
+          usedPercent: 20,
+          resetAtMs: 1_700_000_000_000,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: 3600,
+          quotaProgressObservedAtMs: 2_000,
+        },
+        {
+          id: 'weekly',
+          usedPercent: 40,
+          resetAtMs: 1_700_500_000_000,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: null,
+          quotaProgressObservedAtMs: 2_000,
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    const selectionKey = getAuthFileSelectionKey(file);
+    const card = findAccountCardByKey(renderer, selectionKey);
+    expect(card).toBeDefined();
+
+    const windowSpans = card.findAll((node) => Boolean(node.props['data-account-quota-window']));
+    expect(windowSpans).toHaveLength(2);
+    expect(windowSpans[0].props['data-account-quota-window']).toBe('meta:window');
+    expect(windowSpans[1].props['data-account-quota-window']).toBe('meta:weekly');
+
+    const cardText = readText(card);
+    expect(cardText).toContain('80%');
+    expect(cardText).toContain('Weekly');
+    expect(cardText).toContain('60%');
+    expect(cardText).not.toContain('accounts.quota_details_only');
+  });
+
+  it('renders Meta quota windows in accounts list when both windowMode are unknown', async () => {
+    const file = {
+      name: 'meta-unknown.json',
+      type: 'meta',
+      provider: 'meta',
+      authIndex: 'meta-unknown-1',
+      account: 'meta-unknown@example.com',
+      priority: 0,
+      disabled: false,
+    } as AuthFileItem;
+    mocks.files = [file];
+    mocks.quotaState.metaQuota = buildCredentialScopedQuotaRecord(file, {
+      status: 'success',
+      observedAtMs: 2_000,
+      plan: 'free',
+      isSubscriptionActive: null,
+      quotaInventoryObserved: true,
+      windows: [
+        {
+          id: 'window',
+          usedPercent: 25,
+          resetAtMs: 1_700_000_000_000,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: null,
+          quotaProgressObservedAtMs: 2_000,
+        },
+        {
+          id: 'weekly',
+          usedPercent: 50,
+          resetAtMs: 1_700_500_000_000,
+          resetAccuracy: 'exact',
+          limitWindowSeconds: null,
+          quotaProgressObservedAtMs: 2_000,
+        },
+      ],
+    });
+
+    const renderer = await renderAccountsPage();
+    const selectionKey = getAuthFileSelectionKey(file);
+    const card = findAccountCardByKey(renderer, selectionKey);
+    expect(card).toBeDefined();
+
+    const windowSpans = card.findAll((node) => Boolean(node.props['data-account-quota-window']));
+    expect(windowSpans).toHaveLength(2);
+    expect(windowSpans[0].props['data-account-quota-window']).toBe('meta:window');
+    expect(windowSpans[1].props['data-account-quota-window']).toBe('meta:weekly');
+
+    const cardText = readText(card);
+    expect(cardText).toContain('75%');
+    expect(cardText).toContain('Weekly');
+    expect(cardText).toContain('50%');
+    expect(cardText).not.toContain('accounts.quota_details_only');
+  });
+
   it('keeps Kimi standard windows alongside top-level summary data', async () => {
     const file = {
       name: 'kimi-standard.json',

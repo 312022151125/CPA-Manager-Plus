@@ -1840,6 +1840,7 @@ describe('accountQuotaDisplayWindows', () => {
         quotaProgressObservedAtMs: observedAtMs,
       });
       expect(isIntervalAccountQuotaWindow(windows[1])).toBe(false);
+      expect(isStandardAccountQuotaListWindow(windows[1])).toBe(false);
       expect(isIntervalAccountQuotaWindow(windows[0])).toBe(true);
     });
 
