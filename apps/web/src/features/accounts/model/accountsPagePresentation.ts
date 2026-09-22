@@ -227,6 +227,51 @@ export const formatQuotaResetDisplay = (
 const QUOTA_RESET_MINUTE_MS = 60 * 1000;
 const QUOTA_RESET_HOUR_MS = 60 * QUOTA_RESET_MINUTE_MS;
 
+export interface QuotaResetRemainingDuration {
+  unit: 'day' | 'hour' | 'minute' | 'subminute';
+  value: number;
+}
+
+export const getQuotaResetRemainingDuration = (
+  expiresAtMs: number | null | undefined,
+  nowMs = Date.now()
+): QuotaResetRemainingDuration | null => {
+  if (
+    typeof expiresAtMs !== 'number' ||
+    !Number.isFinite(expiresAtMs) ||
+    expiresAtMs <= 0 ||
+    !Number.isFinite(nowMs)
+  ) {
+    return null;
+  }
+  const diffMs = expiresAtMs - nowMs;
+  if (diffMs <= 0) {
+    return null;
+  }
+  if (diffMs >= QUOTA_RESET_DAY_MS) {
+    return {
+      unit: 'day',
+      value: Math.floor(diffMs / QUOTA_RESET_DAY_MS),
+    };
+  }
+  if (diffMs >= QUOTA_RESET_HOUR_MS) {
+    return {
+      unit: 'hour',
+      value: Math.floor(diffMs / QUOTA_RESET_HOUR_MS),
+    };
+  }
+  if (diffMs >= QUOTA_RESET_MINUTE_MS) {
+    return {
+      unit: 'minute',
+      value: Math.floor(diffMs / QUOTA_RESET_MINUTE_MS),
+    };
+  }
+  return {
+    unit: 'subminute',
+    value: 0,
+  };
+};
+
 export interface QuotaResetRelativeOptions {
   locale?: string;
   style?: 'long' | 'short';
