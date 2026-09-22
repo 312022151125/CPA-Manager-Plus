@@ -612,7 +612,7 @@
     "meta_add_modal_title": "Add Muse (Meta) API Config",
     "meta_edit_modal_title": "Edit Muse (Meta) API Config",
     "meta_key_required": "Please enter Meta API Key",
-    "meta_dca_not_accepted": "Meta API Key does not accept DCA token format. Please add OAuth credentials via Accounts page.",
+    "meta_dca_not_accepted": "DCA credentials cannot be used for Meta API provider authentication. Add DCA credentials through Meta OAuth instead.",
     "meta_test_hint": "Send a test request to Meta /v1/models to verify API Key availability.",
     "meta_test_running": "Testing Muse (Meta) connectivity...",
     "meta_test_no_models": "No available models returned",

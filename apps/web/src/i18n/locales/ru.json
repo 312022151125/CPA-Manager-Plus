@@ -616,7 +616,7 @@
     "meta_add_modal_title": "Добавить конфигурацию Muse (Meta) API",
     "meta_edit_modal_title": "Редактировать конфигурацию Muse (Meta) API",
     "meta_key_required": "Пожалуйста, введите Meta API Key",
-    "meta_dca_not_accepted": "Meta API Key не поддерживает формат DCA токена. Пожалуйста, добавьте учетные данные OAuth через страницу аккаунтов.",
+    "meta_dca_not_accepted": "Учетные данные DCA не могут использоваться для аутентификации Meta API провайдера. Добавьте учетные данные через Meta OAuth на странице аккаунтов.",
     "meta_test_hint": "Отправить тестовый запрос в Meta /v1/models для проверки доступности API Key.",
     "meta_test_running": "Проверка подключения Muse (Meta)...",
     "meta_test_no_models": "Список доступных моделей не возвращен",

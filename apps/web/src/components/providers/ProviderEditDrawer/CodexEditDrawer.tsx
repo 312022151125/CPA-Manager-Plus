@@ -11,6 +11,7 @@ import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { CoolingPolicySelect } from '@/components/providers/CoolingPolicySelect';
 import { apiCallApi, getApiCallErrorMessage, modelsApi, providersApi } from '@/services/api';
+import { hasMetaDcaAuthorizationHeader, isMetaDcaCredential } from '@/utils/metaProvider';
 import { useConfigStore, useNotificationStore } from '@/stores';
 import {
   coolingPolicyFromOverride,
@@ -114,7 +115,7 @@ const getErrorMessage = (err: unknown) => {
 const getMetaApiKeyValidationError = (value: string): 'required' | 'dca' | null => {
   const apiKey = value.trim();
   if (!apiKey) return 'required';
-  if (/^dca:/i.test(apiKey)) return 'dca';
+  if (isMetaDcaCredential(apiKey)) return 'dca';
   return null;
 };
 
@@ -399,6 +400,12 @@ export function CodexEditDrawer({
         setModelDiscoveryError(t('ai_providers.meta_dca_not_accepted'));
         return;
       }
+      const headerObject = buildHeaderObject(form.headers);
+      if (hasMetaDcaAuthorizationHeader(headerObject)) {
+        setDiscoveredModels([]);
+        setModelDiscoveryError(t('ai_providers.meta_dca_not_accepted'));
+        return;
+      }
     }
 
     setModelDiscoveryFetching(true);
@@ -544,6 +551,13 @@ export function CodexEditDrawer({
     }
 
     const customHeaders = buildHeaderObject(form.headers);
+    if (hasMetaDcaAuthorizationHeader(customHeaders)) {
+      const message = t('ai_providers.meta_dca_not_accepted');
+      setTestStatus('error');
+      setTestMessage(message);
+      showNotification(message, 'error');
+      return;
+    }
     const hasAuthorization = hasHeader(customHeaders, 'authorization');
     const keyAuthIndex = normalizeAuthIndex(form.authIndex) ?? undefined;
     const baseUrl = (form.baseUrl ?? '').trim() || META_API_BASE_URL;
@@ -597,6 +611,11 @@ export function CodexEditDrawer({
         return;
       }
       if (keyError === 'dca') {
+        showNotification(t('ai_providers.meta_dca_not_accepted'), 'error');
+        return;
+      }
+      const customHeaders = buildHeaderObject(form.headers);
+      if (hasMetaDcaAuthorizationHeader(customHeaders)) {
         showNotification(t('ai_providers.meta_dca_not_accepted'), 'error');
         return;
       }
@@ -786,13 +805,16 @@ export function CodexEditDrawer({
   }, []);
 
   const isMetaKeyValid = !isMeta || getMetaApiKeyValidationError(form.apiKey) === null;
+  const isMetaAuthorizationValid =
+    !isMeta || !hasMetaDcaAuthorizationHeader(buildHeaderObject(form.headers));
   const canOpenModelDiscovery =
     !disabled &&
     !saving &&
     !loading &&
     !invalidIndex &&
     Boolean((form.baseUrl ?? '').trim()) &&
-    isMetaKeyValid;
+    isMetaKeyValid &&
+    isMetaAuthorizationValid;
   const canApplyModelDiscovery =
     !disabled && !saving && !modelDiscoveryFetching && modelDiscoverySelected.size > 0;
 

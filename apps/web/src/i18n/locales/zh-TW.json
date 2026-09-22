@@ -610,7 +610,7 @@
     "meta_add_modal_title": "新增 Muse (Meta) API 設定",
     "meta_edit_modal_title": "編輯 Muse (Meta) API 設定",
     "meta_key_required": "請輸入 Meta API Key",
-    "meta_dca_not_accepted": "Meta API Key 不支援 DCA Token 格式，請透過帳號管理新增 OAuth 憑證",
+    "meta_dca_not_accepted": "Meta API Provider 不支援 DCA 憑證格式，請透過帳號管理新增 Meta OAuth 憑證",
     "meta_test_hint": "向 Meta /v1/models 發送測試請求，驗證 API Key 可用性。",
     "meta_test_running": "正在測試 Muse (Meta) 連線能力...",
     "meta_test_no_models": "未返回可用的模型清單",

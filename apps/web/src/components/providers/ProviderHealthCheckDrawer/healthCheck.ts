@@ -1,4 +1,5 @@
 import { modelsApi } from '@/services/api';
+import { hasMetaDcaAuthorizationHeader, isMetaDcaCredential } from '@/utils/metaProvider';
 import type { GeminiKeyConfig, OpenAIProviderConfig, ProviderKeyConfig } from '@/types';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { hasHeader } from '@/utils/headers';
@@ -408,6 +409,17 @@ export const runProviderHealthCheckItem = async (
       modelCount = ensureNonEmptyModels(models);
     } else if (target.kind === 'codex' || target.kind === 'xai' || target.kind === 'meta') {
       requireCredential(target.config.apiKey, target.config.authIndex, target.config.headers);
+      if (target.kind === 'meta') {
+        if (
+          isMetaDcaCredential(target.config.apiKey) ||
+          hasMetaDcaAuthorizationHeader(target.config.headers)
+        ) {
+          throw new HealthCheckError(
+            'DCA credentials cannot be used for Meta API provider authentication',
+            'ai_providers.meta_dca_not_accepted'
+          );
+        }
+      }
       const hasCustomAuthorization = hasHeader(target.config.headers, 'authorization');
       const models = await modelsApi.fetchV1ModelsViaApiCall(
         target.config.baseUrl ?? '',

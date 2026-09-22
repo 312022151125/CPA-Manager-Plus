@@ -26,6 +26,9 @@ vi.mock('./client', () => ({
 
 import {
   assertValidMetaApiKey,
+  assertValidMetaProviderConfig,
+  hasMetaDcaAuthorizationHeader,
+  isMetaDcaCredential,
   providersApi,
   serializeMetaProviderKey,
   verifyClaudeFingerprintInRawConfig,
@@ -1978,6 +1981,132 @@ describe('providersApi meta provider management', () => {
         ],
       }),
     ]);
+  });
+
+  it('isMetaDcaCredential correctly detects DCA credentials in plain and Bearer format', () => {
+    expect(isMetaDcaCredential('dca:test-token')).toBe(true);
+    expect(isMetaDcaCredential('DCA:test-token')).toBe(true);
+    expect(isMetaDcaCredential('Bearer dca:test-token')).toBe(true);
+    expect(isMetaDcaCredential('bearer   dca:test-token')).toBe(true);
+    expect(isMetaDcaCredential('BEARER DCA:TEST-TOKEN')).toBe(true);
+
+    expect(isMetaDcaCredential('Bearer meta-valid-token')).toBe(false);
+    expect(isMetaDcaCredential('meta-valid-token')).toBe(false);
+    expect(isMetaDcaCredential('Basic dca:test-token')).toBe(false);
+    expect(isMetaDcaCredential('Bearer ')).toBe(false);
+    expect(isMetaDcaCredential('')).toBe(false);
+    expect(isMetaDcaCredential(null)).toBe(false);
+    expect(isMetaDcaCredential(undefined)).toBe(false);
+  });
+
+  it('hasMetaDcaAuthorizationHeader is case-insensitive and ignores non-Authorization headers', () => {
+    expect(hasMetaDcaAuthorizationHeader({ Authorization: 'Bearer dca:test' })).toBe(true);
+    expect(hasMetaDcaAuthorizationHeader({ authorization: 'dca:test' })).toBe(true);
+    expect(hasMetaDcaAuthorizationHeader({ AUTHORIZATION: 'Bearer DCA:TEST' })).toBe(true);
+    expect(
+      hasMetaDcaAuthorizationHeader([{ key: 'Authorization', value: 'Bearer dca:test' }])
+    ).toBe(true);
+
+    expect(hasMetaDcaAuthorizationHeader({ Authorization: 'Bearer meta-valid-token' })).toBe(false);
+    expect(hasMetaDcaAuthorizationHeader({ 'X-Authorization': 'Bearer dca:test' })).toBe(false);
+    expect(hasMetaDcaAuthorizationHeader({ 'User-Agent': 'dca-client' })).toBe(false);
+    expect(hasMetaDcaAuthorizationHeader({})).toBe(false);
+    expect(hasMetaDcaAuthorizationHeader(null)).toBe(false);
+  });
+
+  it('assertValidMetaProviderConfig validates both apiKey and custom Authorization header', () => {
+    expect(() =>
+      assertValidMetaProviderConfig({
+        apiKey: 'dca:test',
+        baseUrl: 'https://api.meta.ai/v1',
+      })
+    ).toThrow('DCA tokens cannot be used as Meta API keys');
+
+    expect(() =>
+      assertValidMetaProviderConfig({
+        apiKey: 'meta-valid',
+        baseUrl: 'https://api.meta.ai/v1',
+        headers: { Authorization: 'Bearer dca:test' },
+      })
+    ).toThrow('DCA tokens cannot be used as Meta authorization headers');
+
+    expect(() =>
+      assertValidMetaProviderConfig({
+        apiKey: 'meta-valid',
+        baseUrl: 'https://api.meta.ai/v1',
+        headers: { authorization: 'dca:test' },
+      })
+    ).toThrow('DCA tokens cannot be used as Meta authorization headers');
+
+    expect(() =>
+      assertValidMetaProviderConfig({
+        apiKey: 'meta-valid',
+        baseUrl: 'https://api.meta.ai/v1',
+        headers: { Authorization: 'Bearer meta-valid-token' },
+      })
+    ).not.toThrow();
+  });
+
+  it('createMetaConfig rejects custom DCA Authorization header without calling put', async () => {
+    expect(() =>
+      providersApi.createMetaConfig({
+        apiKey: 'meta-valid-key',
+        baseUrl: 'https://api.meta.ai/v1',
+        headers: { Authorization: 'Bearer dca:forbidden' },
+      })
+    ).toThrow('DCA tokens cannot be used as Meta authorization headers');
+
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it('updateMetaConfig rejects custom DCA Authorization header without calling put', async () => {
+    expect(() =>
+      providersApi.updateMetaConfig(
+        { apiKey: 'meta-key-1', baseUrl: 'https://api.meta.ai/v1' },
+        {
+          apiKey: 'meta-key-1-updated',
+          baseUrl: 'https://api.meta.ai/v1',
+          headers: { authorization: 'dca:forbidden' },
+        }
+      )
+    ).toThrow('DCA tokens cannot be used as Meta authorization headers');
+
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it('saveMetaConfigs rejects DCA Authorization header and serializes valid custom Authorization', async () => {
+    await expect(
+      providersApi.saveMetaConfigs([
+        {
+          apiKey: 'meta-valid-key',
+          baseUrl: 'https://api.meta.ai/v1',
+          headers: { Authorization: 'Bearer dca:forbidden' },
+        },
+      ])
+    ).rejects.toThrow('DCA tokens cannot be used as Meta authorization headers');
+
+    expect(mocks.put).not.toHaveBeenCalled();
+
+    mocks.get.mockResolvedValueOnce({ 'meta-api-key': [] });
+    mocks.put.mockResolvedValueOnce({});
+
+    await providersApi.saveMetaConfigs([
+      {
+        apiKey: 'meta-valid-key',
+        baseUrl: 'https://api.meta.ai/v1',
+        headers: { Authorization: 'Bearer meta-custom-valid' },
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenCalledWith(
+      '/meta-api-key',
+      expect.arrayContaining([
+        expect.objectContaining({
+          'api-key': 'meta-valid-key',
+          headers: { Authorization: 'Bearer meta-custom-valid' },
+        }),
+      ])
+    );
   });
 
   it('deleteMetaConfig removes the matching provider record', async () => {

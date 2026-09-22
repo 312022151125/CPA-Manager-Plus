@@ -3,6 +3,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import i18n from '@/i18n';
 import { CoolingPolicySelect } from '@/components/providers/CoolingPolicySelect';
+import { HeaderInputList } from '@/components/ui/HeaderInputList';
 
 const authState = vi.hoisted(() => ({
   serverVersion: 'v7.2.93' as string | null,
@@ -104,6 +105,13 @@ const findFetchModelsButton = (root: ReactTestInstance) =>
         const text = span.children.join('');
         return text.includes('/v1/models');
       })
+    );
+
+const findConnectivityTestButton = (root: ReactTestInstance) =>
+  root
+    .findAllByType('button')
+    .find((button) =>
+      String(button.props.className ?? '').includes('modelTestAllButton')
     );
 
 describe('CodexEditDrawer load baseline guard', () => {
@@ -282,7 +290,7 @@ describe('CodexEditDrawer load baseline guard', () => {
     });
 
     expect(mocks.showNotification).toHaveBeenCalledWith(
-      expect.stringContaining('Meta API Key'),
+      i18n.t('ai_providers.meta_dca_not_accepted'),
       'error'
     );
     expect(mocks.createMetaConfig).not.toHaveBeenCalled();
@@ -485,6 +493,341 @@ describe('CodexEditDrawer load baseline guard', () => {
       expect.any(Object),
       'codex-oauth',
       undefined
+    );
+
+    act(() => renderer!.unmount());
+  });
+
+  it('rejects save when Meta provider has custom DCA Authorization header (Bearer dca:test)', async () => {
+    mocks.createMetaConfig.mockResolvedValue(undefined);
+    mocks.getMetaConfigs.mockResolvedValue([]);
+    const onSaved = vi.fn();
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const apiKeyInput = renderer!.root.findAllByType('input')[0];
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'meta-valid-key' } }));
+
+    const headerList = renderer!.root.findByType(HeaderInputList);
+    act(() =>
+      headerList.props.onChange([{ key: 'Authorization', value: 'Bearer dca:secret-token' }])
+    );
+
+    const saveButton = findSaveButton(renderer!.root);
+    await act(async () => {
+      await saveButton?.props.onClick();
+    });
+
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      i18n.t('ai_providers.meta_dca_not_accepted'),
+      'error'
+    );
+    expect(mocks.createMetaConfig).not.toHaveBeenCalled();
+
+    act(() => renderer!.unmount());
+  });
+
+  it('rejects save when Meta provider has custom DCA Authorization header (dca:test)', async () => {
+    mocks.createMetaConfig.mockResolvedValue(undefined);
+    mocks.getMetaConfigs.mockResolvedValue([]);
+    const onSaved = vi.fn();
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const apiKeyInput = renderer!.root.findAllByType('input')[0];
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'meta-valid-key' } }));
+
+    const headerList = renderer!.root.findByType(HeaderInputList);
+    act(() => headerList.props.onChange([{ key: 'authorization', value: 'dca:secret-token' }]));
+
+    const saveButton = findSaveButton(renderer!.root);
+    await act(async () => {
+      await saveButton?.props.onClick();
+    });
+
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      i18n.t('ai_providers.meta_dca_not_accepted'),
+      'error'
+    );
+    expect(mocks.createMetaConfig).not.toHaveBeenCalled();
+
+    act(() => renderer!.unmount());
+  });
+
+  it('allows save when Meta provider has valid custom Authorization header', async () => {
+    mocks.createMetaConfig.mockResolvedValue(undefined);
+    mocks.getMetaConfigs.mockResolvedValue([]);
+    const onSaved = vi.fn();
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const apiKeyInput = renderer!.root.findAllByType('input')[0];
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'meta-valid-key' } }));
+
+    const headerList = renderer!.root.findByType(HeaderInputList);
+    act(() =>
+      headerList.props.onChange([{ key: 'Authorization', value: 'Bearer meta-custom-token' }])
+    );
+
+    const saveButton = findSaveButton(renderer!.root);
+    await act(async () => {
+      await saveButton?.props.onClick();
+    });
+
+    expect(mocks.createMetaConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'meta-valid-key',
+        baseUrl: 'https://api.meta.ai/v1',
+        headers: { Authorization: 'Bearer meta-custom-token' },
+      })
+    );
+    expect(onSaved).toHaveBeenCalledTimes(1);
+
+    act(() => renderer!.unmount());
+  });
+
+  it('rejects model discovery when Meta provider has custom DCA Authorization header', async () => {
+    mocks.getMetaConfigs.mockResolvedValue([]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const apiKeyInput = renderer!.root.findAllByType('input')[0];
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'meta-valid-key' } }));
+
+    const headerList = renderer!.root.findByType(HeaderInputList);
+    act(() =>
+      headerList.props.onChange([{ key: 'Authorization', value: 'Bearer dca:secret-token' }])
+    );
+
+    const fetchButton = findFetchModelsButton(renderer!.root);
+    expect(fetchButton?.props.disabled).toBe(true);
+
+    await act(async () => {
+      await fetchButton?.props.onClick();
+    });
+
+    expect(mocks.fetchV1ModelsViaApiCall).not.toHaveBeenCalled();
+    const errorBox = renderer!.root
+      .findAllByType('div')
+      .find((div) => div.props.className === 'error-box');
+    expect(errorBox).toBeDefined();
+    expect(errorBox?.children.join('')).toBe(i18n.t('ai_providers.meta_dca_not_accepted'));
+
+    act(() => renderer!.unmount());
+  });
+
+  it('allows model discovery when Meta provider has valid custom Authorization header', async () => {
+    mocks.getMetaConfigs.mockResolvedValue([]);
+    mocks.fetchV1ModelsViaApiCall.mockResolvedValueOnce([{ name: 'llama-3.3-70b-instruct' }]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const apiKeyInput = renderer!.root.findAllByType('input')[0];
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'meta-valid-key' } }));
+
+    const headerList = renderer!.root.findByType(HeaderInputList);
+    act(() =>
+      headerList.props.onChange([{ key: 'Authorization', value: 'Bearer meta-custom-token' }])
+    );
+
+    const fetchButton = findFetchModelsButton(renderer!.root);
+    expect(fetchButton?.props.disabled).toBe(false);
+
+    await act(async () => {
+      await fetchButton?.props.onClick();
+    });
+
+    expect(mocks.fetchV1ModelsViaApiCall).toHaveBeenCalledWith(
+      'https://api.meta.ai/v1',
+      undefined,
+      expect.objectContaining({ Authorization: 'Bearer meta-custom-token' }),
+      undefined,
+      ''
+    );
+
+    act(() => renderer!.unmount());
+  });
+
+  it('rejects connectivity test when Meta provider has custom DCA Authorization header', async () => {
+    mocks.getMetaConfigs.mockResolvedValue([]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const apiKeyInput = renderer!.root.findAllByType('input')[0];
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'meta-valid-key' } }));
+
+    const headerList = renderer!.root.findByType(HeaderInputList);
+    act(() =>
+      headerList.props.onChange([{ key: 'Authorization', value: 'Bearer dca:secret-token' }])
+    );
+
+    const testButton = findConnectivityTestButton(renderer!.root);
+    expect(testButton).toBeDefined();
+
+    await act(async () => {
+      await testButton?.props.onClick();
+    });
+
+    expect(mocks.fetchV1ModelsViaApiCall).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      i18n.t('ai_providers.meta_dca_not_accepted'),
+      'error'
+    );
+
+    act(() => renderer!.unmount());
+  });
+
+  it('allows connectivity test when Meta provider has valid custom Authorization header', async () => {
+    mocks.getMetaConfigs.mockResolvedValue([]);
+    mocks.fetchV1ModelsViaApiCall.mockResolvedValueOnce([{ name: 'llama-3.3-70b-instruct' }]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const apiKeyInput = renderer!.root.findAllByType('input')[0];
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'meta-valid-key' } }));
+
+    const headerList = renderer!.root.findByType(HeaderInputList);
+    act(() =>
+      headerList.props.onChange([{ key: 'Authorization', value: 'Bearer meta-custom-token' }])
+    );
+
+    const testButton = findConnectivityTestButton(renderer!.root);
+    expect(testButton).toBeDefined();
+
+    await act(async () => {
+      await testButton?.props.onClick();
+    });
+
+    expect(mocks.fetchV1ModelsViaApiCall).toHaveBeenCalledWith(
+      'https://api.meta.ai/v1',
+      undefined,
+      expect.objectContaining({ Authorization: 'Bearer meta-custom-token' }),
+      undefined,
+      ''
+    );
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      i18n.t('ai_providers.meta_test_success'),
+      'success'
+    );
+
+    act(() => renderer!.unmount());
+  });
+
+  it('rejects connectivity test when Meta provider has DCA apiKey', async () => {
+    mocks.getMetaConfigs.mockResolvedValue([]);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <CodexEditDrawer
+          open
+          editIndex={null}
+          disabled={false}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          providerKind="meta"
+        />
+      );
+    });
+
+    const apiKeyInput = renderer!.root.findAllByType('input')[0];
+    act(() => apiKeyInput?.props.onChange({ target: { value: 'dca:secret-token' } }));
+
+    const testButton = findConnectivityTestButton(renderer!.root);
+    expect(testButton).toBeDefined();
+
+    await act(async () => {
+      await testButton?.props.onClick();
+    });
+
+    expect(mocks.fetchV1ModelsViaApiCall).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      i18n.t('ai_providers.meta_dca_not_accepted'),
+      'error'
     );
 
     act(() => renderer!.unmount());

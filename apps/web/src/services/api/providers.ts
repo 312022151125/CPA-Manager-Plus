@@ -884,15 +884,20 @@ export const serializeMetaProviderKey = (config: ProviderKeyConfig) => {
   return payload;
 };
 
-export const assertValidMetaApiKey = (apiKey?: string) => {
-  const trimmed = apiKey?.trim();
-  if (!trimmed) {
-    throw new Error('Meta API key is required');
-  }
-  if (/^dca:/i.test(trimmed)) {
-    throw new Error('DCA tokens cannot be used as Meta API keys');
-  }
+import {
+  assertValidMetaApiKey,
+  assertValidMetaProviderConfig,
+  hasMetaDcaAuthorizationHeader,
+  isMetaDcaCredential,
+} from '@/utils/metaProvider';
+
+export {
+  assertValidMetaApiKey,
+  assertValidMetaProviderConfig,
+  hasMetaDcaAuthorizationHeader,
+  isMetaDcaCredential,
 };
+
 
 const serializeVertexKey = (config: ProviderKeyConfig) => {
   const payload: Record<string, unknown> = {};
@@ -1127,7 +1132,7 @@ export const providersApi = {
   },
 
   saveMetaConfigs: async (configs: ProviderKeyConfig[]) => {
-    configs.forEach((c) => assertValidMetaApiKey(c.apiKey));
+    configs.forEach((c) => assertValidMetaProviderConfig(c));
     return apiClient.put(
       '/meta-api-key',
       await buildPreservedList(
@@ -1141,7 +1146,7 @@ export const providersApi = {
   },
 
   createMetaConfig: (config: ProviderKeyConfig) => {
-    assertValidMetaApiKey(config.apiKey);
+    assertValidMetaProviderConfig(config);
     return mutateLatestProviderList('meta-api-key', (latestItems) =>
       appendLatestProviderRecord(latestItems, serializeMetaProviderKey(config), (raw, payload) =>
         mergeMetaProviderKeyPayload(raw, payload)
@@ -1150,7 +1155,7 @@ export const providersApi = {
   },
 
   updateMetaConfig: (original: ProviderKeyConfig, value: ProviderKeyConfig) => {
-    assertValidMetaApiKey(value.apiKey);
+    assertValidMetaProviderConfig(value);
     return mutateLatestProviderList('meta-api-key', (latestItems) =>
       replaceLatestProviderRecord(
         latestItems,
