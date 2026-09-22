@@ -8,6 +8,7 @@ import type {
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate, type BlockerFunction } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Button } from '@/components/ui/Button';
 import { Drawer } from '@/components/ui/Drawer';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/DropdownMenu';
@@ -52,6 +53,7 @@ import {
   CODEX_SUMMARY_CONFIG,
   DEVIN_CONFIG,
   KIMI_CONFIG,
+  META_CONFIG,
   XAI_CONFIG,
   buildObservedCodexQuotaState,
   buildQuotaFailureState,
@@ -68,7 +70,7 @@ import { useInterval } from '@/hooks/useInterval';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
-import { getAuthFileIcon } from '@/features/authFiles/constants';
+import { getAuthFileIcon, isQuotaRefreshSupportedProvider } from '@/features/authFiles/constants';
 import {
   useAuthFilesData,
   type AuthFilesCredentialMutation,
@@ -322,6 +324,8 @@ import type {
   CodexQuotaState,
   DevinQuotaData,
   DevinQuotaState,
+  MetaQuotaData,
+  MetaQuotaState,
   XaiQuotaState,
 } from '@/types';
 import {
@@ -1232,6 +1236,33 @@ const getFallbackWindowBarClass = (
   return getWindowRemainingBarClass(remainingPercent);
 };
 
+const resolveAccountQuotaSnapshotLabel = (
+  snapshot: AccountQuotaSnapshotWindow,
+  provider: string | undefined,
+  t: TFunction
+): string => {
+  if (provider === 'claude' && snapshot.provider_window_id === 'extra-usage') {
+    return t('claude_quota.extra_usage_label');
+  }
+  if (provider === 'meta') {
+    if (snapshot.provider_window_id === 'meta:window') {
+      return t('meta_quota.window');
+    }
+    if (snapshot.provider_window_id === 'meta:weekly') {
+      return t('meta_quota.weekly');
+    }
+  }
+  const kind = snapshot.window_kind;
+  if (kind === 'rolling_24h') {
+    return t('accounts.detail_snapshot_window_rolling_24h');
+  }
+  if (kind === 'five_hour') return t('accounts.detail_snapshot_window_five_hour');
+  if (kind === 'daily') return t('accounts.detail_snapshot_window_daily');
+  if (kind === 'weekly') return t('accounts.detail_snapshot_window_weekly');
+  if (kind === 'monthly') return t('accounts.detail_snapshot_window_monthly');
+  return snapshot.provider_window_id;
+};
+
 export function AccountsPage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -1342,6 +1373,7 @@ export function AccountsPage() {
   const codexQuota = useQuotaStore((state) => state.codexQuota);
   const devinQuota = useQuotaStore((state) => state.devinQuota);
   const kimiQuota = useQuotaStore((state) => state.kimiQuota);
+  const metaQuota = useQuotaStore((state) => state.metaQuota);
   const xaiQuota = useQuotaStore((state) => state.xaiQuota);
   const baseQuotaStores = useMemo(
     () => ({
@@ -1350,15 +1382,17 @@ export function AccountsPage() {
       codexQuota,
       devinQuota,
       kimiQuota,
+      metaQuota,
       xaiQuota,
     }),
-    [antigravityQuota, claudeQuota, codexQuota, devinQuota, kimiQuota, xaiQuota]
+    [antigravityQuota, claudeQuota, codexQuota, devinQuota, kimiQuota, metaQuota, xaiQuota]
   );
   const setAntigravityQuota = useQuotaStore((state) => state.setAntigravityQuota);
   const setClaudeQuota = useQuotaStore((state) => state.setClaudeQuota);
   const setCodexQuota = useQuotaStore((state) => state.setCodexQuota);
   const setDevinQuota = useQuotaStore((state) => state.setDevinQuota);
   const setKimiQuota = useQuotaStore((state) => state.setKimiQuota);
+  const setMetaQuota = useQuotaStore((state) => state.setMetaQuota);
   const setXaiQuota = useQuotaStore((state) => state.setXaiQuota);
 
   const [activeView, setActiveView] = useState<AccountsView>(
@@ -3026,6 +3060,9 @@ export function AccountsPage() {
         case DEVIN_CONFIG.type:
           prune(DEVIN_CONFIG, setDevinQuota);
           break;
+        case META_CONFIG.type:
+          prune(META_CONFIG, setMetaQuota);
+          break;
         default:
           break;
       }
@@ -3040,6 +3077,7 @@ export function AccountsPage() {
       setCodexQuota,
       setDevinQuota,
       setKimiQuota,
+      setMetaQuota,
       setXaiQuota,
     ]
   );
@@ -3904,6 +3942,16 @@ export function AccountsPage() {
           }
           break;
         }
+        case META_CONFIG.type: {
+          const state = getCredentialScopedQuotaState(baseQuotaStores.metaQuota, row.raw);
+          if (state?.status === 'success' && state.windows.length > 0) {
+            fetchedAtMs = state.fetchedAtMs ?? state.observedAtMs ?? undefined;
+            if (!state.quotaInventoryObserved) {
+              inventoryMode = 'partial';
+            }
+          }
+          break;
+        }
         default:
           return undefined;
       }
@@ -4758,20 +4806,7 @@ export function AccountsPage() {
           quotaSnapshotWindowsByRowKey.get(rowKey) ?? [],
           {
             provider,
-            getLabel: (snapshot) => {
-              if (provider === 'claude' && snapshot.provider_window_id === 'extra-usage') {
-                return t('claude_quota.extra_usage_label');
-              }
-              const kind = snapshot.window_kind;
-              if (kind === 'rolling_24h') {
-                return t('accounts.detail_snapshot_window_rolling_24h');
-              }
-              if (kind === 'five_hour') return t('accounts.detail_snapshot_window_five_hour');
-              if (kind === 'daily') return t('accounts.detail_snapshot_window_daily');
-              if (kind === 'weekly') return t('accounts.detail_snapshot_window_weekly');
-              if (kind === 'monthly') return t('accounts.detail_snapshot_window_monthly');
-              return snapshot.provider_window_id;
-            },
+            getLabel: (snapshot) => resolveAccountQuotaSnapshotLabel(snapshot, provider, t),
           }
         )
       );
@@ -6349,7 +6384,9 @@ export function AccountsPage() {
       row: AccountRow,
       mode: AccountQuotaRefreshMode = 'summary'
     ): Promise<AccountQuotaRefreshOutcome> => {
-      if (row.runtimeOnly) return { status: 'ignored' };
+      if (row.runtimeOnly || !isQuotaRefreshSupportedProvider(row.provider)) {
+        return { status: 'ignored' };
+      }
       const refreshWithConfig = <TState, TData>(
         config: QuotaConfig<TState, TData>,
         setQuota: QuotaSetter<TState>,
@@ -6428,6 +6465,14 @@ export function AccountsPage() {
               getScopedQuotaState(DEVIN_CONFIG, baseQuotaStores.devinQuota, row.raw)
             )
           );
+        case META_CONFIG.type:
+          return toAccountQuotaRefreshOutcome(
+            await refreshWithConfig<MetaQuotaState, MetaQuotaData>(
+              META_CONFIG,
+              setMetaQuota,
+              getScopedQuotaState(META_CONFIG, baseQuotaStores.metaQuota, row.raw)
+            )
+          );
         default:
           return { status: 'error', error: t('common.unknown_error') };
       }
@@ -6439,6 +6484,7 @@ export function AccountsPage() {
       setCodexQuota,
       setDevinQuota,
       setKimiQuota,
+      setMetaQuota,
       setXaiQuota,
       t,
       authFilesRequestScope,
@@ -6452,7 +6498,9 @@ export function AccountsPage() {
       if (currentBatch?.connectionFingerprint === connectionFingerprint) {
         return currentBatch.promise;
       }
-      const refreshable = targets.filter((row) => !row.runtimeOnly);
+      const refreshable = targets.filter(
+        (row) => !row.runtimeOnly && isQuotaRefreshSupportedProvider(row.provider)
+      );
       if (refreshable.length === 0) {
         showNotification(t('accounts.no_refreshable_accounts'), 'warning');
         return Promise.resolve();
@@ -6601,7 +6649,7 @@ export function AccountsPage() {
 
   const refreshAccountQuota = useCallback(
     async (row: AccountRow, mode: AccountQuotaRefreshMode = 'summary'): Promise<void> => {
-      if (row.runtimeOnly) return;
+      if (row.runtimeOnly || !isQuotaRefreshSupportedProvider(row.provider)) return;
       const refreshKey = getAccountQuotaRefreshKey(row);
       if (manualQuotaRefreshingKeysRef.current.has(refreshKey)) return;
 
@@ -8032,6 +8080,9 @@ export function AccountsPage() {
   const renderBatchBar = () => {
     const hasSelection = selectionCount > 0;
     const refreshTargets = hasSelection ? selectedRows : pageRows;
+    const hasRefreshableTargets = refreshTargets.some(
+      (row) => !row.runtimeOnly && isQuotaRefreshSupportedProvider(row.provider)
+    );
     const showSelectionControls = isSelectionMode || hasSelection;
 
     return (
@@ -8075,7 +8126,7 @@ export function AccountsPage() {
               variant="secondary"
               size="sm"
               onClick={() => refreshQuotaRows(refreshTargets)}
-              disabled={disableControls || quotaRefreshing || refreshTargets.length === 0}
+              disabled={disableControls || quotaRefreshing || !hasRefreshableTargets}
               loading={quotaRefreshing}
               title={t('accounts.refresh_quota')}
             >
@@ -8190,7 +8241,13 @@ export function AccountsPage() {
               variant="secondary"
               size="sm"
               onClick={() => refreshQuotaRows(selectedRows)}
-              disabled={disableControls || quotaRefreshing || selectedRows.length === 0}
+              disabled={
+                disableControls ||
+                quotaRefreshing ||
+                !selectedRows.some(
+                  (row) => !row.runtimeOnly && isQuotaRefreshSupportedProvider(row.provider)
+                )
+              }
               loading={quotaRefreshing}
               title={t('accounts.refresh_quota')}
             >
@@ -8270,23 +8327,24 @@ export function AccountsPage() {
     ): AccountQuotaRefreshMode =>
       targetRow.provider === CODEX_CONFIG.type ? 'detail' : 'summary';
 
-    const refreshButton = (
-      <Button
-        variant="secondary"
-        size="sm"
-        iconOnly
-        className={`${styles.accountIconButton} ${styles.accountIconButtonRefresh}`}
-        onClick={() => void refreshAccountQuota(row, getAccountManualQuotaRefreshMode(row))}
-        disabled={
-          disableControls || quotaRefreshing || isManualQuotaRefreshing(row) || row.runtimeOnly
-        }
-        loading={isManualQuotaRefreshing(row)}
-        title={t('accounts.refresh_quota')}
-        aria-label={t('accounts.refresh_quota')}
-      >
-        {!isManualQuotaRefreshing(row) ? <IconRefreshCw size={15} /> : null}
-      </Button>
-    );
+    const refreshButton =
+      !row.runtimeOnly && isQuotaRefreshSupportedProvider(row.provider) ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          iconOnly
+          className={`${styles.accountIconButton} ${styles.accountIconButtonRefresh}`}
+          onClick={() => void refreshAccountQuota(row, getAccountManualQuotaRefreshMode(row))}
+          disabled={
+            disableControls || quotaRefreshing || isManualQuotaRefreshing(row) || row.runtimeOnly
+          }
+          loading={isManualQuotaRefreshing(row)}
+          title={t('accounts.refresh_quota')}
+          aria-label={t('accounts.refresh_quota')}
+        >
+          {!isManualQuotaRefreshing(row) ? <IconRefreshCw size={15} /> : null}
+        </Button>
+      ) : null;
 
     const settingsButton = (
       <Button
@@ -9889,15 +9947,17 @@ export function AccountsPage() {
                 {t('accounts.recommend_action_reauth')}
               </Button>
             ) : null}
-            <Button
-              variant="secondary"
-              onClick={() => void refreshAccountQuota(selectedRow, 'detail')}
-              loading={quotaRefreshing || selectedQuotaRefreshing}
-              disabled={disableControls || selectedQuotaRefreshing || selectedRow.runtimeOnly}
-            >
-              {!quotaRefreshing && !selectedQuotaRefreshing ? <IconRefreshCw size={16} /> : null}
-              {t('accounts.refresh_quota')}
-            </Button>
+            {!selectedRow.runtimeOnly && isQuotaRefreshSupportedProvider(selectedRow.provider) ? (
+              <Button
+                variant="secondary"
+                onClick={() => void refreshAccountQuota(selectedRow, 'detail')}
+                loading={quotaRefreshing || selectedQuotaRefreshing}
+                disabled={disableControls || selectedQuotaRefreshing || selectedRow.runtimeOnly}
+              >
+                {!quotaRefreshing && !selectedQuotaRefreshing ? <IconRefreshCw size={16} /> : null}
+                {t('accounts.refresh_quota')}
+              </Button>
+            ) : null}
             <Button
               variant={selectedRow.disabled ? 'secondary' : 'danger'}
               onClick={() => handleBatchStatus(selectedRow.disabled, [selectedRow])}

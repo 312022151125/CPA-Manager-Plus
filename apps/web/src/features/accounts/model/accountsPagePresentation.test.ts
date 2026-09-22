@@ -24,6 +24,7 @@ import {
   quotaStatusLabelKey,
   selectAccountQuotaListWindows,
   selectAccountQuotaMainListWindows,
+  selectMetaQuotaListWindows,
   getQuotaWindowReadableLabel,
 } from './accountsPagePresentation';
 import type { AccountRow } from './accountRows';
@@ -421,6 +422,24 @@ describe('accountsPagePresentation', () => {
         [fiveHour]
       )
     ).toEqual([fiveHour, topLevelWeekly]);
+  });
+
+  it('selects Meta canonical window and weekly in selectAccountQuotaListWindows', () => {
+    const current = makeQuotaWindow({
+      key: 'meta:window',
+      kind: 'five_hour',
+      source: 'meta',
+      windowMode: 'unknown',
+    });
+    const weekly = makeQuotaWindow({
+      key: 'meta:weekly',
+      kind: 'weekly',
+      source: 'meta',
+      windowMode: 'unknown',
+    });
+    expect(
+      selectAccountQuotaListWindows(makeAccountRow('meta'), [current, weekly], [])
+    ).toEqual([current, weekly]);
   });
 
   it('normalizes Antigravity fallback scope labels without labeling other providers', () => {
@@ -827,6 +846,114 @@ describe('accountsPagePresentation', () => {
 
       const selected = selectAccountQuotaMainListWindows(makeRow('codex'), [sparkScoped, main5h]);
       expect(selected).toEqual([main5h]);
+    });
+
+    it('selects Meta window (fixed) and weekly (unknown) in order (Case A)', () => {
+      const current = makeQuotaWindow({
+        key: 'meta:window',
+        kind: 'five_hour',
+        source: 'meta',
+        windowMode: 'fixed',
+        limitWindowSeconds: 3600,
+      });
+
+      const weekly = makeQuotaWindow({
+        key: 'meta:weekly',
+        kind: 'weekly',
+        source: 'meta',
+        windowMode: 'unknown',
+        limitWindowSeconds: null,
+      });
+
+      const selected = selectAccountQuotaMainListWindows(makeRow('meta'), [current, weekly]);
+      expect(selected).toEqual([current, weekly]);
+    });
+
+    it('selects Meta window and weekly when both are unknown windowMode (Case B)', () => {
+      const current = makeQuotaWindow({
+        key: 'meta:window',
+        kind: 'unknown',
+        source: 'meta',
+        windowMode: 'unknown',
+        limitWindowSeconds: null,
+      });
+
+      const weekly = makeQuotaWindow({
+        key: 'meta:weekly',
+        kind: 'weekly',
+        source: 'meta',
+        windowMode: 'unknown',
+        limitWindowSeconds: null,
+      });
+
+      const selected = selectAccountQuotaMainListWindows(makeRow('meta'), [current, weekly]);
+      expect(selected).toEqual([current, weekly]);
+    });
+
+    it('selects Meta weekly window when current window is absent (Case C)', () => {
+      const weekly = makeQuotaWindow({
+        key: 'meta:weekly',
+        kind: 'weekly',
+        source: 'meta',
+        windowMode: 'unknown',
+        limitWindowSeconds: null,
+      });
+
+      const selected = selectAccountQuotaMainListWindows(makeRow('meta'), [weekly]);
+      expect(selected).toEqual([weekly]);
+    });
+
+    it('selects Meta current window when weekly window is absent (Case D)', () => {
+      const current = makeQuotaWindow({
+        key: 'meta:window',
+        kind: 'five_hour',
+        source: 'meta',
+        windowMode: 'fixed',
+        limitWindowSeconds: 3600,
+      });
+
+      const selected = selectAccountQuotaMainListWindows(makeRow('meta'), [current]);
+      expect(selected).toEqual([current]);
+    });
+
+    it('restricts Meta list selection to canonical window and weekly, excluding extra windows (Case E)', () => {
+      const current = makeQuotaWindow({
+        key: 'meta:window',
+        kind: 'five_hour',
+        source: 'meta',
+        windowMode: 'fixed',
+        limitWindowSeconds: 3600,
+      });
+
+      const weekly = makeQuotaWindow({
+        key: 'meta:weekly',
+        kind: 'weekly',
+        source: 'meta',
+        windowMode: 'unknown',
+        limitWindowSeconds: null,
+      });
+
+      const extra = makeQuotaWindow({
+        key: 'meta:extra',
+        kind: 'monthly',
+        source: 'meta',
+        windowMode: 'unknown',
+        limitWindowSeconds: null,
+      });
+
+      const selected = selectAccountQuotaMainListWindows(makeRow('meta'), [extra, current, weekly]);
+      expect(selected).toEqual([current, weekly]);
+    });
+
+    it('selectMetaQuotaListWindows directly matches preferred keys in order', () => {
+      const current = makeQuotaWindow({ key: 'meta:window' });
+      const weekly = makeQuotaWindow({ key: 'meta:weekly' });
+      const extra = makeQuotaWindow({ key: 'meta:extra' });
+
+      expect(selectMetaQuotaListWindows([extra, weekly, current])).toEqual([current, weekly]);
+      expect(selectMetaQuotaListWindows([weekly])).toEqual([weekly]);
+      expect(selectMetaQuotaListWindows([current])).toEqual([current]);
+      expect(selectMetaQuotaListWindows([extra])).toEqual([]);
     });
   });
 

@@ -5924,3 +5924,117 @@ func TestDevinQuotaSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("devin:weekly previous cycle should still be nil: %#v", weekly2.PreviousCycle)
 	}
 }
+
+func TestQuotaSnapshotMetaWindowLifecycle(t *testing.T) {
+	baseMS := int64(1_773_000_000_000)
+	service := newQuotaSnapshotTestService(t, baseMS)
+
+	metaAccount := AccountTarget{
+		AuthFileSnapshot:     "meta.json",
+		AuthProviderSnapshot: "meta",
+		AuthIndex:            "auth-meta-1",
+		AccountSnapshot:      "meta-user@example.com",
+	}
+
+	windowDuration := int64(18000)
+	windowEndMS := baseMS + (windowDuration * 1000)
+	weeklyEndMS := baseMS + (7 * 24 * 3600 * 1000)
+	usedWindow := 25.0
+	usedWeekly := 10.0
+
+	entry := WriteEntry{
+		RowKey:   "row-meta",
+		Provider: "meta",
+		Account:  metaAccount,
+		Observation: &ObservationInput{
+			Source:              "api_query",
+			SourceObservationID: "meta-obs-1",
+			ObservedAtMS:        baseMS,
+			InventoryScopeKey:   "meta:quota-windows",
+			InventoryMode:       "complete",
+		},
+		Windows: []WindowInput{
+			{
+				ProviderWindowID: "meta:window",
+				WindowKind:       "window",
+				WindowMode:       "fixed",
+				ModelScopeKind:   "all",
+				Source:           "api_query",
+				ObservedAtMS:     baseMS,
+				BoundaryAccuracy: "exact",
+				CycleStartMS:     &baseMS,
+				CycleEndMS:       &windowEndMS,
+				DurationSeconds:  &windowDuration,
+				UsedPercent:      &usedWindow,
+			},
+			{
+				ProviderWindowID: "meta:weekly",
+				WindowKind:       "weekly",
+				WindowMode:       "unknown",
+				ModelScopeKind:   "all",
+				Source:           "api_query",
+				ObservedAtMS:     baseMS,
+				BoundaryAccuracy: "exact",
+				CycleEndMS:       &weeklyEndMS,
+				UsedPercent:      &usedWeekly,
+			},
+		},
+	}
+
+	res, err := service.Write(context.Background(), WriteRequest{
+		Entries: []WriteEntry{entry},
+	})
+	if err != nil {
+		t.Fatalf("meta snapshot write failed: %v", err)
+	}
+	if len(res.Items) != 1 || res.Items[0].InsertedCount != 2 {
+		t.Fatalf("meta write counts = %+v, want 1 item with 2 snapshots", res)
+	}
+
+	queryRes, err := service.Query(context.Background(), QueryRequest{
+		Accounts: []QueryAccount{
+			{
+				RowKey:   "row-meta",
+				Provider: "meta",
+				Account:  metaAccount,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("meta snapshot query failed: %v", err)
+	}
+	if len(queryRes.Items) != 1 || len(queryRes.Items[0].Windows) != 2 {
+		t.Fatalf("unexpected query windows count: %#v", queryRes.Items)
+	}
+
+	windows := map[string]Window{}
+	for _, w := range queryRes.Items[0].Windows {
+		windows[w.ProviderWindowID] = w
+	}
+
+	w1, ok := windows["meta:window"]
+	if !ok {
+		t.Fatalf("meta:window missing in query")
+	}
+	if w1.UsedPercent == nil || *w1.UsedPercent != usedWindow || w1.WindowMode != "fixed" {
+		t.Fatalf("meta:window properties invalid: %#v", w1)
+	}
+
+	w2, ok := windows["meta:weekly"]
+	if !ok {
+		t.Fatalf("meta:weekly missing in query")
+	}
+	if w2.UsedPercent == nil || *w2.UsedPercent != usedWeekly || w2.WindowMode != "unknown" {
+		t.Fatalf("meta:weekly properties invalid: %#v", w2)
+	}
+
+	// Reject unknown provider
+	unknownEntry := entry
+	unknownEntry.Provider = "unknown_provider"
+	_, err = service.Write(context.Background(), WriteRequest{
+		Entries: []WriteEntry{unknownEntry},
+	})
+	if err == nil {
+		t.Fatalf("expected unknown provider to be rejected")
+	}
+}

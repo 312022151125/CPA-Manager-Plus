@@ -28,6 +28,7 @@ const emptyStores = (): AccountQuotaStores => ({
   codexQuota: {},
   devinQuota: {},
   kimiQuota: {},
+  metaQuota: {},
   xaiQuota: {},
 });
 
@@ -59,6 +60,7 @@ const buildRow = (file: AuthFileItem, stores: AccountQuotaStores = emptyStores()
     stores.codexQuota,
     stores.devinQuota,
     stores.kimiQuota,
+    stores.metaQuota,
     stores.xaiQuota,
   ] as Array<Record<string, CredentialScopedQuotaState>>;
   records.forEach((record) => {
@@ -1754,5 +1756,139 @@ describe('accountQuotaDisplayWindows', () => {
         t,
       })
     ).toEqual([]);
+  });
+
+  describe('Meta quota display windows', () => {
+    it('builds display windows with fixed window duration and weekly duration null', () => {
+      const stores = emptyStores();
+      const file: AuthFileItem = { name: 'meta.json', type: 'meta', authIndex: 'm-1' };
+      const storeKey = 'meta.json::m-1';
+      const cycleStartMs = 1726396400000;
+      const cycleEndMs = 1726400000000;
+      const weeklyEndMs = 1726900000000;
+      const observedAtMs = 1726398000000;
+
+      stores.metaQuota[storeKey] = {
+        status: 'success',
+        authFileKey: storeKey,
+        authFileName: 'meta.json',
+        authIndex: 'm-1',
+        authFileIdentityVerified: true,
+        windows: [
+          {
+            id: 'window',
+            usedPercent: 15,
+            resetAtMs: cycleEndMs,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: 3600,
+            quotaProgressObservedAtMs: observedAtMs,
+          },
+          {
+            id: 'weekly',
+            usedPercent: 60,
+            resetAtMs: weeklyEndMs,
+            resetAccuracy: 'exact',
+            limitWindowSeconds: null,
+            quotaProgressObservedAtMs: observedAtMs,
+          },
+        ],
+        plan: 'Meta Pro',
+        isSubscriptionActive: true,
+        quotaInventoryObserved: true,
+        observedAtMs,
+        fetchedAtMs: observedAtMs,
+      };
+
+      const row = buildRow(file, stores);
+      const windows = buildAccountQuotaDisplayWindows(row, {
+        stores,
+        translateQuotaWindowLabel,
+        t,
+      });
+
+      expect(windows).toHaveLength(2);
+
+      // window
+      expect(windows[0]).toMatchObject({
+        key: 'meta:window',
+        source: 'meta',
+        windowMode: 'fixed',
+        remainingPercent: 85,
+        usedPercent: 15,
+        limitWindowSeconds: 3600,
+        resetAccuracy: 'exact',
+        resetAtMs: cycleEndMs,
+        fromMs: cycleStartMs,
+        toMs: cycleEndMs,
+        observedAtMs,
+        quotaProgressObservedAtMs: observedAtMs,
+      });
+
+      // weekly: limitWindowSeconds MUST be null, fromMs/toMs null because duration is unknown
+      expect(windows[1]).toMatchObject({
+        key: 'meta:weekly',
+        source: 'meta',
+        windowMode: 'unknown',
+        remainingPercent: 40,
+        usedPercent: 60,
+        limitWindowSeconds: null,
+        resetAccuracy: 'exact',
+        resetAtMs: weeklyEndMs,
+        fromMs: null,
+        toMs: null,
+        observedAtMs,
+        quotaProgressObservedAtMs: observedAtMs,
+      });
+      expect(isIntervalAccountQuotaWindow(windows[1])).toBe(false);
+      expect(isStandardAccountQuotaListWindow(windows[1])).toBe(false);
+      expect(isIntervalAccountQuotaWindow(windows[0])).toBe(true);
+    });
+
+    it('handles Meta quota with unknown remaining values', () => {
+      const stores = emptyStores();
+      const file: AuthFileItem = { name: 'meta-unknown.json', type: 'meta', authIndex: 'm-unknown' };
+      const storeKey = 'meta-unknown.json::m-unknown';
+
+      stores.metaQuota[storeKey] = {
+        status: 'idle',
+        authFileKey: storeKey,
+        authFileName: 'meta-unknown.json',
+        authIndex: 'm-unknown',
+        authFileIdentityVerified: true,
+        windows: [
+          {
+            id: 'window',
+            usedPercent: null,
+            resetAtMs: null,
+            resetAccuracy: 'unknown',
+            limitWindowSeconds: null,
+            quotaProgressObservedAtMs: null,
+          },
+        ],
+        plan: null,
+        isSubscriptionActive: null,
+        quotaInventoryObserved: false,
+        observedAtMs: 1000,
+        fetchedAtMs: 1000,
+      };
+
+      const row = buildRow(file, stores);
+      const windows = buildAccountQuotaDisplayWindows(row, {
+        stores,
+        translateQuotaWindowLabel,
+        t,
+      });
+
+      expect(windows).toHaveLength(1);
+      expect(windows[0]).toMatchObject({
+        key: 'meta:window',
+        source: 'meta',
+        remainingPercent: null,
+        usedPercent: null,
+        resetLabel: '-',
+        resetAtMs: null,
+        quotaProgressObservedAtMs: null,
+      });
+    });
   });
 });

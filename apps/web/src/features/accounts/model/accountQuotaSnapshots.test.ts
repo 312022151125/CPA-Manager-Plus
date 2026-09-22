@@ -116,7 +116,9 @@ const makeDefinitionCycle = (
   ...overrides,
 });
 
-const makeSnapshotRow = (provider: 'codex' | 'antigravity' = 'codex'): AccountRow =>
+const makeSnapshotRow = (
+  provider: 'codex' | 'antigravity' | 'meta' | 'devin' = 'codex'
+): AccountRow =>
   ({
     selectionKey: `${provider}.json\u0000auth-1`,
     fileName: `${provider}.json`,
@@ -3151,6 +3153,176 @@ describe('account quota snapshots', () => {
         usedPercent: 30,
         remainingPercent: 70,
       });
+    });
+  });
+
+  describe('Meta quota snapshot lifecycle and Freshness Guard', () => {
+    it('includes meta accounts in buildAccountQuotaSnapshotQueryAccounts', () => {
+      const metaRow = makeSnapshotRow('meta');
+      const accounts = buildAccountQuotaSnapshotQueryAccounts([metaRow]);
+      expect(accounts).toEqual([
+        {
+          row_key: metaRow.selectionKey,
+          provider: 'meta',
+          account: expect.objectContaining({
+            auth_file_snapshot: 'meta.json',
+            auth_index: 'auth-1',
+            auth_provider_snapshot: 'meta',
+          }),
+        },
+      ]);
+    });
+
+    it('builds write entries for Meta quota display windows', () => {
+      const metaRow = makeSnapshotRow('meta');
+      const metaDef: AccountQuotaWindowDefinition = makeDefinition({
+        key: 'meta:window',
+        providerWindowId: 'meta:window',
+        provider: 'meta',
+        remainingPercent: 75,
+        usedPercent: 25,
+        durationSeconds: 3600,
+        observedAtMs: 18_000,
+        quotaProgressObservedAtMs: 18_000,
+      });
+      const entries = buildAccountQuotaSnapshotWriteEntries(
+        [metaRow],
+        new Map([[metaRow.selectionKey, [metaDef]]]),
+        {
+          getObservation: () => ({
+            source: 'api_query',
+            inventory_scope_key: 'meta:quota',
+            inventory_mode: 'complete',
+            observed_at_ms: 18_000,
+          }),
+        }
+      );
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        account: expect.objectContaining({
+          auth_file_snapshot: 'meta.json',
+          auth_index: 'auth-1',
+          auth_provider_snapshot: 'meta',
+        }),
+        provider: 'meta',
+        windows: [
+          expect.objectContaining({
+            provider_window_id: 'meta:window',
+            remaining_percent: 75,
+            used_percent: 25,
+            source: 'api_query',
+          }),
+        ],
+      });
+    });
+
+    it('prevents older snapshot from overwriting newer live unknown (Freshness Guard)', () => {
+      // Live observation has quotaProgressObservedAtMs = null (authoritative unknown) at observedAtMs = 20_000
+      const liveMetaDef: AccountQuotaWindowDefinition = makeDefinition({
+        key: 'meta:window',
+        providerWindowId: 'meta:window',
+        provider: 'meta',
+        remainingPercent: null,
+        usedPercent: null,
+        observedAtMs: 20_000,
+        quotaProgressObservedAtMs: null,
+        display: {
+          key: 'meta:window',
+          label: 'Window limit',
+          kind: 'unknown',
+          remainingPercent: null,
+          usedPercent: null,
+          resetLabel: '-',
+          resetAccuracy: 'unknown',
+          limitWindowSeconds: 3600,
+          resetAtMs: null,
+          fromMs: null,
+          toMs: null,
+          source: 'meta',
+          observedAtMs: 20_000,
+          quotaProgressObservedAtMs: null,
+        },
+      });
+
+      // Older snapshot has remaining_percent = 70 at observed_at_ms = 10_000
+      const olderSnapshot: AccountQuotaSnapshotWindow = makeSnapshot({
+        provider_window_id: 'meta:window',
+        remaining_percent: 70,
+        used_percent: 30,
+        observed_at_ms: 10_000,
+        field_sources: {
+          quota: {
+            source: 'api_query',
+            observed_at_ms: 10_000,
+          },
+        },
+      });
+
+      const merged = mergeAccountQuotaSnapshotWindows(
+        [liveMetaDef],
+        [olderSnapshot],
+        { provider: 'meta' }
+      );
+
+      expect(merged).toHaveLength(1);
+      // Crucial: live unknown must NOT be overwritten by older 70%
+      expect(merged[0].remainingPercent).toBeNull();
+      expect(merged[0].usedPercent).toBeNull();
+      expect(merged[0].display.remainingPercent).toBeNull();
+      expect(merged[0].display.usedPercent).toBeNull();
+    });
+
+    it('allows newer snapshot to overlay older live unknown', () => {
+      // Live observation at 10_000 with unknown
+      const liveMetaDef: AccountQuotaWindowDefinition = makeDefinition({
+        key: 'meta:window',
+        providerWindowId: 'meta:window',
+        provider: 'meta',
+        remainingPercent: null,
+        usedPercent: null,
+        observedAtMs: 10_000,
+        quotaProgressObservedAtMs: null,
+        display: {
+          key: 'meta:window',
+          label: 'Window limit',
+          kind: 'unknown',
+          remainingPercent: null,
+          usedPercent: null,
+          resetLabel: '-',
+          resetAccuracy: 'unknown',
+          limitWindowSeconds: 3600,
+          resetAtMs: null,
+          fromMs: null,
+          toMs: null,
+          source: 'meta',
+          observedAtMs: 10_000,
+          quotaProgressObservedAtMs: null,
+        },
+      });
+
+      // Newer snapshot at 20_000 with remaining_percent = 85
+      const newerSnapshot: AccountQuotaSnapshotWindow = makeSnapshot({
+        provider_window_id: 'meta:window',
+        remaining_percent: 85,
+        used_percent: 15,
+        observed_at_ms: 20_000,
+        field_sources: {
+          quota: {
+            source: 'api_query',
+            observed_at_ms: 20_000,
+          },
+        },
+      });
+
+      const merged = mergeAccountQuotaSnapshotWindows(
+        [liveMetaDef],
+        [newerSnapshot],
+        { provider: 'meta' }
+      );
+
+      expect(merged).toHaveLength(1);
+      expect(merged[0].remainingPercent).toBe(85);
+      expect(merged[0].usedPercent).toBe(15);
     });
   });
 });
