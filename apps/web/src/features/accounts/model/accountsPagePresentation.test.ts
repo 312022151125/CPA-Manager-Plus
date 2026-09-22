@@ -1,4 +1,5 @@
 import type { TFunction } from 'i18next';
+import i18n from '@/i18n';
 import { describe, expect, it } from 'vitest';
 import type { MonitoringAccountHistoryItem } from '@/services/api';
 import {
@@ -11,6 +12,7 @@ import {
   formatQuotaResetDisplay,
   formatQuotaResetRelative,
   getQuotaResetRemainingDays,
+  getQuotaResetRemainingDuration,
   formatQuotaResetTimestamp,
   formatQuotaResetTooltipParams,
   formatTimestamp,
@@ -129,6 +131,98 @@ describe('accountsPagePresentation', () => {
     expect(getQuotaResetRemainingDays(nowMs + 10 * 24 * 60 * 60 * 1000 - 1, nowMs)).toBe(10);
     expect(getQuotaResetRemainingDays(nowMs - 1, nowMs)).toBe(0);
     expect(getQuotaResetRemainingDays(null, nowMs)).toBeNull();
+  });
+
+  it('calculates granular reset-credit remaining duration across day, hour, minute, and subminute units', () => {
+    const nowMs = new Date(2026, 8, 11, 10, 0, 0, 0).getTime();
+    const oneDay = 24 * 60 * 60 * 1000;
+    const oneHour = 60 * 60 * 1000;
+    const oneMinute = 60 * 1000;
+
+    // expires = now + 3d + 5h -> 3 days
+    expect(getQuotaResetRemainingDuration(nowMs + 3 * oneDay + 5 * oneHour, nowMs)).toEqual({
+      unit: 'day',
+      value: 3,
+    });
+
+    // expires = now + 24h -> 1 day
+    expect(getQuotaResetRemainingDuration(nowMs + oneDay, nowMs)).toEqual({
+      unit: 'day',
+      value: 1,
+    });
+
+    // expires = now + 23h59m -> 23 hours
+    expect(getQuotaResetRemainingDuration(nowMs + 23 * oneHour + 59 * oneMinute, nowMs)).toEqual({
+      unit: 'hour',
+      value: 23,
+    });
+
+    // expires = now + 1h -> 1 hour
+    expect(getQuotaResetRemainingDuration(nowMs + oneHour, nowMs)).toEqual({
+      unit: 'hour',
+      value: 1,
+    });
+
+    // expires = now + 59m -> 59 minutes
+    expect(getQuotaResetRemainingDuration(nowMs + 59 * oneMinute, nowMs)).toEqual({
+      unit: 'minute',
+      value: 59,
+    });
+
+    // expires = now + 1m -> 1 minute
+    expect(getQuotaResetRemainingDuration(nowMs + oneMinute, nowMs)).toEqual({
+      unit: 'minute',
+      value: 1,
+    });
+
+    // expires = now + 30s -> sub-minute
+    expect(getQuotaResetRemainingDuration(nowMs + 30 * 1000, nowMs)).toEqual({
+      unit: 'subminute',
+      value: 0,
+    });
+
+    // expires = now + 1ms -> sub-minute
+    expect(getQuotaResetRemainingDuration(nowMs + 1, nowMs)).toEqual({
+      unit: 'subminute',
+      value: 0,
+    });
+
+    // expires = now (diffMs = 0) -> null
+    expect(getQuotaResetRemainingDuration(nowMs, nowMs)).toBeNull();
+
+    // expires = now - 1ms -> null
+    expect(getQuotaResetRemainingDuration(nowMs - 1, nowMs)).toBeNull();
+
+    // expires = now - 5m -> null
+    expect(getQuotaResetRemainingDuration(nowMs - 5 * oneMinute, nowMs)).toBeNull();
+
+    // invalid timestamp -> null
+    expect(getQuotaResetRemainingDuration(null, nowMs)).toBeNull();
+    expect(getQuotaResetRemainingDuration(undefined, nowMs)).toBeNull();
+    expect(getQuotaResetRemainingDuration(0, nowMs)).toBeNull();
+    expect(getQuotaResetRemainingDuration(-100, nowMs)).toBeNull();
+    expect(getQuotaResetRemainingDuration(Number.NaN, nowMs)).toBeNull();
+  });
+
+  it('correctly pluralizes reset credit remaining text in English without invalid plural forms', () => {
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_days', { lng: 'en', count: 1, days: 1 })
+    ).toBe('Remaining 1 day');
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_days', { lng: 'en', count: 2, days: 2 })
+    ).toBe('Remaining 2 days');
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_hours', { lng: 'en', count: 1, hours: 1 })
+    ).toBe('Remaining 1 hour');
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_hours', { lng: 'en', count: 2, hours: 2 })
+    ).toBe('Remaining 2 hours');
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_minutes', { lng: 'en', count: 1, minutes: 1 })
+    ).toBe('Remaining 1 minute');
+    expect(
+      i18n.t('codex_quota.reset_credit_expiry_remaining_minutes', { lng: 'en', count: 2, minutes: 2 })
+    ).toBe('Remaining 2 minutes');
   });
 
   it('formats relative quota resets with day, hour, and minute resolutions', () => {
